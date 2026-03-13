@@ -7,13 +7,14 @@ import (
 	"regexp"
 )
 
-// botTokenRe matches the secret part of a Telegram bot token embedded in a URL
-// or log message: /bot<id>:<secret>/ → /bot<id>:****/
-var botTokenRe = regexp.MustCompile(`(bot\d+:)[A-Za-z0-9_-]{20,}`)
+// botTokenRe matches the bot ID prefix and the secret part of a Telegram bot token.
+// Groups: 1 = "bot<id>:", 2 = first 4 chars of secret, 3 = middle, 4 = last 4 chars.
+var botTokenRe = regexp.MustCompile(`(bot\d+:)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})`)
 
-// maskSecrets replaces any embedded bot tokens in s with a redacted placeholder.
+// maskSecrets replaces any embedded bot tokens in s with a redacted placeholder
+// that keeps the first and last 4 characters of the secret for identification.
 func maskSecrets(s string) string {
-	return botTokenRe.ReplaceAllString(s, "${1}****")
+	return botTokenRe.ReplaceAllString(s, "${1}${2}****${3}")
 }
 
 // Logger implements common Logger interface

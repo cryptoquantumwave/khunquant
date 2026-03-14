@@ -82,22 +82,19 @@ func isAllowedPath(path string, patterns []*regexp.Regexp) bool {
 	}
 
 	cleaned := filepath.Clean(path)
+	if !filepath.IsAbs(cleaned) {
+		return false
+	}
 	if !matchesAllowedPath(cleaned, patterns) {
 		return false
 	}
 
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err == nil {
-		return matchesAllowedPath(resolved, patterns)
-	}
-	if os.IsNotExist(err) {
-		parentResolved, parentErr := resolveExistingAncestor(filepath.Dir(cleaned))
-		if parentErr == nil {
-			return matchesAllowedPath(parentResolved, patterns)
-		}
+	resolved, err := resolvePathAgainstExistingAncestor(cleaned)
+	if err != nil {
+		return false
 	}
 
-	return false
+	return matchesAllowedPath(resolved, patterns)
 }
 
 func matchesAllowedPath(path string, patterns []*regexp.Regexp) bool {
@@ -114,6 +111,29 @@ func resolveExistingAncestor(path string) (string, error) {
 		if resolved, err := filepath.EvalSymlinks(current); err == nil {
 			return resolved, nil
 		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		if filepath.Dir(current) == current {
+			return "", os.ErrNotExist
+		}
+	}
+}
+
+func resolvePathAgainstExistingAncestor(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	for current := cleaned; ; current = filepath.Dir(current) {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			suffix, relErr := filepath.Rel(current, cleaned)
+			if relErr != nil {
+				return "", relErr
+			}
+			if suffix == "." {
+				return filepath.Clean(resolved), nil
+			}
+			return filepath.Clean(filepath.Join(resolved, suffix)), nil
+		}
+		if !os.IsNotExist(err) {
 			return "", err
 		}
 		if filepath.Dir(current) == current {
@@ -661,7 +681,7 @@ type whitelistFs struct {
 }
 
 func (w *whitelistFs) matches(path string) bool {
-	return matchesAllowedPath(path, w.patterns)
+	return isAllowedPath(path, w.patterns)
 }
 
 func (w *whitelistFs) ReadFile(path string) ([]byte, error) {

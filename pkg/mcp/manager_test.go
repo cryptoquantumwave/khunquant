@@ -9,7 +9,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 func TestLoadEnvFile(t *testing.T) {

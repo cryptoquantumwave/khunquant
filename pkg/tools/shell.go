@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/constants"
 )
 
 type ExecTool struct {

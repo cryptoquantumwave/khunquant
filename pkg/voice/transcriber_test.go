@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 // Ensure GroqTranscriber satisfies the Transcriber interface at compile time.

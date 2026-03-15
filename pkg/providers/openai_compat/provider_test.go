@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers/common"
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/khunquant/khunquant/pkg/providers/common"
+	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
 )
 
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {

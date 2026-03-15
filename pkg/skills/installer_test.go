@@ -25,47 +25,47 @@ func TestParseGitHubRef(t *testing.T) {
 	}{
 		{
 			name:         "simple owner/repo",
-			repo:         "sipeed/picoclaw",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "khunquant/khunquant",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:         "owner/repo with subpath",
-			repo:         "sipeed/picoclaw/skills/test",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "khunquant/khunquant/skills/test",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "main",
 			wantSubPath:  "skills/test",
 		},
 		{
 			name:         "full URL with tree",
-			repo:         "https://github.com/sipeed/picoclaw/tree/dev/skills/test",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "https://github.com/khunquant/khunquant/tree/dev/skills/test",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "dev",
 			wantSubPath:  "skills/test",
 		},
 		{
 			name:         "full URL with blob",
-			repo:         "https://github.com/sipeed/picoclaw/blob/main/README.md",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "https://github.com/khunquant/khunquant/blob/main/README.md",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "main",
 			wantSubPath:  "README.md",
 		},
 		{
 			name:         "full URL without ref",
-			repo:         "https://github.com/sipeed/picoclaw",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "https://github.com/khunquant/khunquant",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:           "invalid format - single part",
-			repo:           "sipeed",
+			repo:           "khunquant",
 			wantErr:        true,
 			wantErrContain: "expected 'owner/repo'",
 		},
@@ -77,15 +77,15 @@ func TestParseGitHubRef(t *testing.T) {
 		},
 		{
 			name:           "invalid GitHub URL - only one path part",
-			repo:           "https://github.com/sipeed",
+			repo:           "https://github.com/khunquant",
 			wantErr:        true,
 			wantErrContain: "invalid GitHub URL",
 		},
 		{
 			name:         "with whitespace",
-			repo:         "  sipeed/picoclaw  ",
-			wantOwner:    "sipeed",
-			wantRepoName: "picoclaw",
+			repo:         "  khunquant/khunquant  ",
+			wantOwner:    "khunquant",
+			wantRepoName: "khunquant",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
@@ -431,12 +431,12 @@ func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {
 	}
 
 	// Create an existing skill directory
-	existingSkill := filepath.Join(skillsDir, "picoclaw")
+	existingSkill := filepath.Join(skillsDir, "khunquant")
 	os.MkdirAll(existingSkill, 0o755)
 	os.WriteFile(filepath.Join(existingSkill, "SKILL.md"), []byte("existing"), 0o644)
 
 	// Try to install the same skill - should fail
-	err = installer.InstallFromGitHub(context.Background(), "sipeed/picoclaw")
+	err = installer.InstallFromGitHub(context.Background(), "khunquant/khunquant")
 	if err == nil {
 		t.Error("InstallFromGitHub() expected error for existing skill, got nil")
 	}

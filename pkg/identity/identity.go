@@ -1,4 +1,4 @@
-// Package identity provides unified user identity utilities for PicoClaw.
+// Package identity provides unified user identity utilities for KhunQuant.
 // It introduces a canonical "platform:id" format and matching logic
 // that is backward-compatible with all legacy allow-list formats.
 package identity
@@ -6,7 +6,7 @@ package identity
 import (
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/bus"
 )
 
 // BuildCanonicalID constructs a canonical "platform:id" identifier.

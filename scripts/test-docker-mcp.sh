@@ -4,7 +4,7 @@
 set -e
 
 COMPOSE_FILE="docker/docker-compose.full.yml"
-SERVICE="picoclaw-agent"
+SERVICE="khunquant-agent"
 
 echo "🧪 Testing MCP tools in Docker container (full-featured image)..."
 echo ""

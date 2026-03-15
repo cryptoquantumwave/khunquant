@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/constants"
-	"github.com/sipeed/picoclaw/pkg/devices/events"
-	"github.com/sipeed/picoclaw/pkg/devices/sources"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/constants"
+	"github.com/khunquant/khunquant/pkg/devices/events"
+	"github.com/khunquant/khunquant/pkg/devices/sources"
+	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/state"
 )
 
 type Service struct {

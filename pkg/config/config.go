@@ -9,7 +9,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 
-	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/khunquant/khunquant/pkg/fileutil"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -218,21 +218,21 @@ type RoutingConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace                 string         `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool           `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool           `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string         `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string         `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string         `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	Workspace                 string         `json:"workspace"                       env:"KHUNQUANT_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool           `json:"restrict_to_workspace"           env:"KHUNQUANT_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool           `json:"allow_read_outside_workspace"    env:"KHUNQUANT_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string         `json:"provider"                        env:"KHUNQUANT_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string         `json:"model_name"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                     string         `json:"model,omitempty"                 env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
 	ModelFallbacks            []string       `json:"model_fallbacks,omitempty"`
-	ImageModel                string         `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModel                string         `json:"image_model,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string       `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int            `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	Temperature               *float64       `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int            `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int            `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int            `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int            `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MaxTokens                 int            `json:"max_tokens"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOKENS"`
+	Temperature               *float64       `json:"temperature,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int            `json:"max_tool_iterations"             env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int            `json:"summarize_message_threshold"     env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int            `json:"summarize_token_percent"         env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int            `json:"max_media_size,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing                   *RoutingConfig `json:"routing,omitempty"`
 }
 
@@ -291,217 +291,217 @@ type PlaceholderConfig struct {
 }
 
 type WhatsAppConfig struct {
-	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_WHATSAPP_ENABLED"`
-	BridgeURL          string              `json:"bridge_url"           env:"PICOCLAW_CHANNELS_WHATSAPP_BRIDGE_URL"`
-	UseNative          bool                `json:"use_native"           env:"PICOCLAW_CHANNELS_WHATSAPP_USE_NATIVE"`
-	SessionStorePath   string              `json:"session_store_path"   env:"PICOCLAW_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_WHATSAPP_ALLOW_FROM"`
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_WHATSAPP_REASONING_CHANNEL_ID"`
+	Enabled            bool                `json:"enabled"              env:"KHUNQUANT_CHANNELS_WHATSAPP_ENABLED"`
+	BridgeURL          string              `json:"bridge_url"           env:"KHUNQUANT_CHANNELS_WHATSAPP_BRIDGE_URL"`
+	UseNative          bool                `json:"use_native"           env:"KHUNQUANT_CHANNELS_WHATSAPP_USE_NATIVE"`
+	SessionStorePath   string              `json:"session_store_path"   env:"KHUNQUANT_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"KHUNQUANT_CHANNELS_WHATSAPP_ALLOW_FROM"`
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"KHUNQUANT_CHANNELS_WHATSAPP_REASONING_CHANNEL_ID"`
 }
 
 type TelegramConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_TELEGRAM_ENABLED"`
-	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_TELEGRAM_TOKEN"`
-	BaseURL            string              `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
-	Proxy              string              `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_TELEGRAM_ENABLED"`
+	Token              string              `json:"token"                   env:"KHUNQUANT_CHANNELS_TELEGRAM_TOKEN"`
+	BaseURL            string              `json:"base_url"                env:"KHUNQUANT_CHANNELS_TELEGRAM_BASE_URL"`
+	Proxy              string              `json:"proxy"                   env:"KHUNQUANT_CHANNELS_TELEGRAM_PROXY"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_TELEGRAM_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
 }
 
 type FeishuConfig struct {
-	Enabled             bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_FEISHU_ENABLED"`
-	AppID               string              `json:"app_id"                  env:"PICOCLAW_CHANNELS_FEISHU_APP_ID"`
-	AppSecret           string              `json:"app_secret"              env:"PICOCLAW_CHANNELS_FEISHU_APP_SECRET"`
-	EncryptKey          string              `json:"encrypt_key"             env:"PICOCLAW_CHANNELS_FEISHU_ENCRYPT_KEY"`
-	VerificationToken   string              `json:"verification_token"      env:"PICOCLAW_CHANNELS_FEISHU_VERIFICATION_TOKEN"`
-	AllowFrom           FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_FEISHU_ALLOW_FROM"`
+	Enabled             bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_FEISHU_ENABLED"`
+	AppID               string              `json:"app_id"                  env:"KHUNQUANT_CHANNELS_FEISHU_APP_ID"`
+	AppSecret           string              `json:"app_secret"              env:"KHUNQUANT_CHANNELS_FEISHU_APP_SECRET"`
+	EncryptKey          string              `json:"encrypt_key"             env:"KHUNQUANT_CHANNELS_FEISHU_ENCRYPT_KEY"`
+	VerificationToken   string              `json:"verification_token"      env:"KHUNQUANT_CHANNELS_FEISHU_VERIFICATION_TOKEN"`
+	AllowFrom           FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_FEISHU_ALLOW_FROM"`
 	GroupTrigger        GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Placeholder         PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID  string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_FEISHU_REASONING_CHANNEL_ID"`
-	RandomReactionEmoji FlexibleStringSlice `json:"random_reaction_emoji"   env:"PICOCLAW_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
+	ReasoningChannelID  string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_FEISHU_REASONING_CHANNEL_ID"`
+	RandomReactionEmoji FlexibleStringSlice `json:"random_reaction_emoji"   env:"KHUNQUANT_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
 }
 
 type DiscordConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_DISCORD_ENABLED"`
-	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
-	Proxy              string              `json:"proxy"                   env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_FROM"`
-	MentionOnly        bool                `json:"mention_only"            env:"PICOCLAW_CHANNELS_DISCORD_MENTION_ONLY"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_DISCORD_ENABLED"`
+	Token              string              `json:"token"                   env:"KHUNQUANT_CHANNELS_DISCORD_TOKEN"`
+	Proxy              string              `json:"proxy"                   env:"KHUNQUANT_CHANNELS_DISCORD_PROXY"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_DISCORD_ALLOW_FROM"`
+	MentionOnly        bool                `json:"mention_only"            env:"KHUNQUANT_CHANNELS_DISCORD_MENTION_ONLY"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_DISCORD_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_DISCORD_REASONING_CHANNEL_ID"`
 }
 
 type MaixCamConfig struct {
-	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_MAIXCAM_ENABLED"`
-	Host               string              `json:"host"                 env:"PICOCLAW_CHANNELS_MAIXCAM_HOST"`
-	Port               int                 `json:"port"                 env:"PICOCLAW_CHANNELS_MAIXCAM_PORT"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_MAIXCAM_ALLOW_FROM"`
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_MAIXCAM_REASONING_CHANNEL_ID"`
+	Enabled            bool                `json:"enabled"              env:"KHUNQUANT_CHANNELS_MAIXCAM_ENABLED"`
+	Host               string              `json:"host"                 env:"KHUNQUANT_CHANNELS_MAIXCAM_HOST"`
+	Port               int                 `json:"port"                 env:"KHUNQUANT_CHANNELS_MAIXCAM_PORT"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"KHUNQUANT_CHANNELS_MAIXCAM_ALLOW_FROM"`
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"KHUNQUANT_CHANNELS_MAIXCAM_REASONING_CHANNEL_ID"`
 }
 
 type QQConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_QQ_ENABLED"`
-	AppID              string              `json:"app_id"                  env:"PICOCLAW_CHANNELS_QQ_APP_ID"`
-	AppSecret          string              `json:"app_secret"              env:"PICOCLAW_CHANNELS_QQ_APP_SECRET"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_QQ_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_QQ_ENABLED"`
+	AppID              string              `json:"app_id"                  env:"KHUNQUANT_CHANNELS_QQ_APP_ID"`
+	AppSecret          string              `json:"app_secret"              env:"KHUNQUANT_CHANNELS_QQ_APP_SECRET"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_QQ_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	MaxMessageLength   int                 `json:"max_message_length"      env:"PICOCLAW_CHANNELS_QQ_MAX_MESSAGE_LENGTH"`
-	SendMarkdown       bool                `json:"send_markdown"           env:"PICOCLAW_CHANNELS_QQ_SEND_MARKDOWN"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_QQ_REASONING_CHANNEL_ID"`
+	MaxMessageLength   int                 `json:"max_message_length"      env:"KHUNQUANT_CHANNELS_QQ_MAX_MESSAGE_LENGTH"`
+	SendMarkdown       bool                `json:"send_markdown"           env:"KHUNQUANT_CHANNELS_QQ_SEND_MARKDOWN"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_QQ_REASONING_CHANNEL_ID"`
 }
 
 type DingTalkConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_DINGTALK_ENABLED"`
-	ClientID           string              `json:"client_id"               env:"PICOCLAW_CHANNELS_DINGTALK_CLIENT_ID"`
-	ClientSecret       string              `json:"client_secret"           env:"PICOCLAW_CHANNELS_DINGTALK_CLIENT_SECRET"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_DINGTALK_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_DINGTALK_ENABLED"`
+	ClientID           string              `json:"client_id"               env:"KHUNQUANT_CHANNELS_DINGTALK_CLIENT_ID"`
+	ClientSecret       string              `json:"client_secret"           env:"KHUNQUANT_CHANNELS_DINGTALK_CLIENT_SECRET"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_DINGTALK_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_DINGTALK_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_DINGTALK_REASONING_CHANNEL_ID"`
 }
 
 type SlackConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_SLACK_ENABLED"`
-	BotToken           string              `json:"bot_token"               env:"PICOCLAW_CHANNELS_SLACK_BOT_TOKEN"`
-	AppToken           string              `json:"app_token"               env:"PICOCLAW_CHANNELS_SLACK_APP_TOKEN"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_SLACK_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_SLACK_ENABLED"`
+	BotToken           string              `json:"bot_token"               env:"KHUNQUANT_CHANNELS_SLACK_BOT_TOKEN"`
+	AppToken           string              `json:"app_token"               env:"KHUNQUANT_CHANNELS_SLACK_APP_TOKEN"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_SLACK_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_SLACK_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_SLACK_REASONING_CHANNEL_ID"`
 }
 
 type MatrixConfig struct {
-	Enabled            bool                `json:"enabled"                  env:"PICOCLAW_CHANNELS_MATRIX_ENABLED"`
-	Homeserver         string              `json:"homeserver"               env:"PICOCLAW_CHANNELS_MATRIX_HOMESERVER"`
-	UserID             string              `json:"user_id"                  env:"PICOCLAW_CHANNELS_MATRIX_USER_ID"`
-	AccessToken        string              `json:"access_token"             env:"PICOCLAW_CHANNELS_MATRIX_ACCESS_TOKEN"`
-	DeviceID           string              `json:"device_id,omitempty"      env:"PICOCLAW_CHANNELS_MATRIX_DEVICE_ID"`
-	JoinOnInvite       bool                `json:"join_on_invite"           env:"PICOCLAW_CHANNELS_MATRIX_JOIN_ON_INVITE"`
-	MessageFormat      string              `json:"message_format,omitempty" env:"PICOCLAW_CHANNELS_MATRIX_MESSAGE_FORMAT"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"               env:"PICOCLAW_CHANNELS_MATRIX_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                  env:"KHUNQUANT_CHANNELS_MATRIX_ENABLED"`
+	Homeserver         string              `json:"homeserver"               env:"KHUNQUANT_CHANNELS_MATRIX_HOMESERVER"`
+	UserID             string              `json:"user_id"                  env:"KHUNQUANT_CHANNELS_MATRIX_USER_ID"`
+	AccessToken        string              `json:"access_token"             env:"KHUNQUANT_CHANNELS_MATRIX_ACCESS_TOKEN"`
+	DeviceID           string              `json:"device_id,omitempty"      env:"KHUNQUANT_CHANNELS_MATRIX_DEVICE_ID"`
+	JoinOnInvite       bool                `json:"join_on_invite"           env:"KHUNQUANT_CHANNELS_MATRIX_JOIN_ON_INVITE"`
+	MessageFormat      string              `json:"message_format,omitempty" env:"KHUNQUANT_CHANNELS_MATRIX_MESSAGE_FORMAT"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"               env:"KHUNQUANT_CHANNELS_MATRIX_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"     env:"PICOCLAW_CHANNELS_MATRIX_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"     env:"KHUNQUANT_CHANNELS_MATRIX_REASONING_CHANNEL_ID"`
 }
 
 type LINEConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_LINE_ENABLED"`
-	ChannelSecret      string              `json:"channel_secret"          env:"PICOCLAW_CHANNELS_LINE_CHANNEL_SECRET"`
-	ChannelAccessToken string              `json:"channel_access_token"    env:"PICOCLAW_CHANNELS_LINE_CHANNEL_ACCESS_TOKEN"`
-	WebhookHost        string              `json:"webhook_host"            env:"PICOCLAW_CHANNELS_LINE_WEBHOOK_HOST"`
-	WebhookPort        int                 `json:"webhook_port"            env:"PICOCLAW_CHANNELS_LINE_WEBHOOK_PORT"`
-	WebhookPath        string              `json:"webhook_path"            env:"PICOCLAW_CHANNELS_LINE_WEBHOOK_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_LINE_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_LINE_ENABLED"`
+	ChannelSecret      string              `json:"channel_secret"          env:"KHUNQUANT_CHANNELS_LINE_CHANNEL_SECRET"`
+	ChannelAccessToken string              `json:"channel_access_token"    env:"KHUNQUANT_CHANNELS_LINE_CHANNEL_ACCESS_TOKEN"`
+	WebhookHost        string              `json:"webhook_host"            env:"KHUNQUANT_CHANNELS_LINE_WEBHOOK_HOST"`
+	WebhookPort        int                 `json:"webhook_port"            env:"KHUNQUANT_CHANNELS_LINE_WEBHOOK_PORT"`
+	WebhookPath        string              `json:"webhook_path"            env:"KHUNQUANT_CHANNELS_LINE_WEBHOOK_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_LINE_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_LINE_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_LINE_REASONING_CHANNEL_ID"`
 }
 
 type OneBotConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_ONEBOT_ENABLED"`
-	WSUrl              string              `json:"ws_url"                  env:"PICOCLAW_CHANNELS_ONEBOT_WS_URL"`
-	AccessToken        string              `json:"access_token"            env:"PICOCLAW_CHANNELS_ONEBOT_ACCESS_TOKEN"`
-	ReconnectInterval  int                 `json:"reconnect_interval"      env:"PICOCLAW_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string            `json:"group_trigger_prefix"    env:"PICOCLAW_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_ONEBOT_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_ONEBOT_ENABLED"`
+	WSUrl              string              `json:"ws_url"                  env:"KHUNQUANT_CHANNELS_ONEBOT_WS_URL"`
+	AccessToken        string              `json:"access_token"            env:"KHUNQUANT_CHANNELS_ONEBOT_ACCESS_TOKEN"`
+	ReconnectInterval  int                 `json:"reconnect_interval"      env:"KHUNQUANT_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
+	GroupTriggerPrefix []string            `json:"group_trigger_prefix"    env:"KHUNQUANT_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_ONEBOT_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_ONEBOT_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_ONEBOT_REASONING_CHANNEL_ID"`
 }
 
 type WeComConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_WECOM_ENABLED"`
-	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_WECOM_TOKEN"`
-	EncodingAESKey     string              `json:"encoding_aes_key"        env:"PICOCLAW_CHANNELS_WECOM_ENCODING_AES_KEY"`
-	WebhookURL         string              `json:"webhook_url"             env:"PICOCLAW_CHANNELS_WECOM_WEBHOOK_URL"`
-	WebhookHost        string              `json:"webhook_host"            env:"PICOCLAW_CHANNELS_WECOM_WEBHOOK_HOST"`
-	WebhookPort        int                 `json:"webhook_port"            env:"PICOCLAW_CHANNELS_WECOM_WEBHOOK_PORT"`
-	WebhookPath        string              `json:"webhook_path"            env:"PICOCLAW_CHANNELS_WECOM_WEBHOOK_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_WECOM_ALLOW_FROM"`
-	ReplyTimeout       int                 `json:"reply_timeout"           env:"PICOCLAW_CHANNELS_WECOM_REPLY_TIMEOUT"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_WECOM_ENABLED"`
+	Token              string              `json:"token"                   env:"KHUNQUANT_CHANNELS_WECOM_TOKEN"`
+	EncodingAESKey     string              `json:"encoding_aes_key"        env:"KHUNQUANT_CHANNELS_WECOM_ENCODING_AES_KEY"`
+	WebhookURL         string              `json:"webhook_url"             env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_URL"`
+	WebhookHost        string              `json:"webhook_host"            env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_HOST"`
+	WebhookPort        int                 `json:"webhook_port"            env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PORT"`
+	WebhookPath        string              `json:"webhook_path"            env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_WECOM_ALLOW_FROM"`
+	ReplyTimeout       int                 `json:"reply_timeout"           env:"KHUNQUANT_CHANNELS_WECOM_REPLY_TIMEOUT"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_WECOM_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_WECOM_REASONING_CHANNEL_ID"`
 }
 
 type WeComAppConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_WECOM_APP_ENABLED"`
-	CorpID             string              `json:"corp_id"                 env:"PICOCLAW_CHANNELS_WECOM_APP_CORP_ID"`
-	CorpSecret         string              `json:"corp_secret"             env:"PICOCLAW_CHANNELS_WECOM_APP_CORP_SECRET"`
-	AgentID            int64               `json:"agent_id"                env:"PICOCLAW_CHANNELS_WECOM_APP_AGENT_ID"`
-	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_WECOM_APP_TOKEN"`
-	EncodingAESKey     string              `json:"encoding_aes_key"        env:"PICOCLAW_CHANNELS_WECOM_APP_ENCODING_AES_KEY"`
-	WebhookHost        string              `json:"webhook_host"            env:"PICOCLAW_CHANNELS_WECOM_APP_WEBHOOK_HOST"`
-	WebhookPort        int                 `json:"webhook_port"            env:"PICOCLAW_CHANNELS_WECOM_APP_WEBHOOK_PORT"`
-	WebhookPath        string              `json:"webhook_path"            env:"PICOCLAW_CHANNELS_WECOM_APP_WEBHOOK_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_WECOM_APP_ALLOW_FROM"`
-	ReplyTimeout       int                 `json:"reply_timeout"           env:"PICOCLAW_CHANNELS_WECOM_APP_REPLY_TIMEOUT"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_WECOM_APP_ENABLED"`
+	CorpID             string              `json:"corp_id"                 env:"KHUNQUANT_CHANNELS_WECOM_APP_CORP_ID"`
+	CorpSecret         string              `json:"corp_secret"             env:"KHUNQUANT_CHANNELS_WECOM_APP_CORP_SECRET"`
+	AgentID            int64               `json:"agent_id"                env:"KHUNQUANT_CHANNELS_WECOM_APP_AGENT_ID"`
+	Token              string              `json:"token"                   env:"KHUNQUANT_CHANNELS_WECOM_APP_TOKEN"`
+	EncodingAESKey     string              `json:"encoding_aes_key"        env:"KHUNQUANT_CHANNELS_WECOM_APP_ENCODING_AES_KEY"`
+	WebhookHost        string              `json:"webhook_host"            env:"KHUNQUANT_CHANNELS_WECOM_APP_WEBHOOK_HOST"`
+	WebhookPort        int                 `json:"webhook_port"            env:"KHUNQUANT_CHANNELS_WECOM_APP_WEBHOOK_PORT"`
+	WebhookPath        string              `json:"webhook_path"            env:"KHUNQUANT_CHANNELS_WECOM_APP_WEBHOOK_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_WECOM_APP_ALLOW_FROM"`
+	ReplyTimeout       int                 `json:"reply_timeout"           env:"KHUNQUANT_CHANNELS_WECOM_APP_REPLY_TIMEOUT"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_WECOM_APP_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_WECOM_APP_REASONING_CHANNEL_ID"`
 }
 
 type WeComAIBotConfig struct {
-	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENABLED"`
-	Token              string              `json:"token"                env:"PICOCLAW_CHANNELS_WECOM_AIBOT_TOKEN"`
-	EncodingAESKey     string              `json:"encoding_aes_key"     env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENCODING_AES_KEY"`
-	WebhookPath        string              `json:"webhook_path"         env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WEBHOOK_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ALLOW_FROM"`
-	ReplyTimeout       int                 `json:"reply_timeout"        env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REPLY_TIMEOUT"`
-	MaxSteps           int                 `json:"max_steps"            env:"PICOCLAW_CHANNELS_WECOM_AIBOT_MAX_STEPS"`       // Maximum streaming steps
-	WelcomeMessage     string              `json:"welcome_message"      env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WELCOME_MESSAGE"` // Sent on enter_chat event; empty = no welcome
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REASONING_CHANNEL_ID"`
+	Enabled            bool                `json:"enabled"              env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_ENABLED"`
+	Token              string              `json:"token"                env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_TOKEN"`
+	EncodingAESKey     string              `json:"encoding_aes_key"     env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_ENCODING_AES_KEY"`
+	WebhookPath        string              `json:"webhook_path"         env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_WEBHOOK_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_ALLOW_FROM"`
+	ReplyTimeout       int                 `json:"reply_timeout"        env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_REPLY_TIMEOUT"`
+	MaxSteps           int                 `json:"max_steps"            env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_MAX_STEPS"`       // Maximum streaming steps
+	WelcomeMessage     string              `json:"welcome_message"      env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_WELCOME_MESSAGE"` // Sent on enter_chat event; empty = no welcome
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"KHUNQUANT_CHANNELS_WECOM_AIBOT_REASONING_CHANNEL_ID"`
 }
 
 type PicoConfig struct {
-	Enabled         bool                `json:"enabled"                     env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
-	Token           string              `json:"token"                       env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
+	Enabled         bool                `json:"enabled"                     env:"KHUNQUANT_CHANNELS_PICO_ENABLED"`
+	Token           string              `json:"token"                       env:"KHUNQUANT_CHANNELS_PICO_TOKEN"`
 	AllowTokenQuery bool                `json:"allow_token_query,omitempty"`
 	AllowOrigins    []string            `json:"allow_origins,omitempty"`
 	PingInterval    int                 `json:"ping_interval,omitempty"`
 	ReadTimeout     int                 `json:"read_timeout,omitempty"`
 	WriteTimeout    int                 `json:"write_timeout,omitempty"`
 	MaxConnections  int                 `json:"max_connections,omitempty"`
-	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
+	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"KHUNQUANT_CHANNELS_PICO_ALLOW_FROM"`
 	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
 }
 
 type IRCConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_IRC_ENABLED"`
-	Server             string              `json:"server"                  env:"PICOCLAW_CHANNELS_IRC_SERVER"`
-	TLS                bool                `json:"tls"                     env:"PICOCLAW_CHANNELS_IRC_TLS"`
-	Nick               string              `json:"nick"                    env:"PICOCLAW_CHANNELS_IRC_NICK"`
-	User               string              `json:"user,omitempty"          env:"PICOCLAW_CHANNELS_IRC_USER"`
-	RealName           string              `json:"real_name,omitempty"     env:"PICOCLAW_CHANNELS_IRC_REAL_NAME"`
-	Password           string              `json:"password"                env:"PICOCLAW_CHANNELS_IRC_PASSWORD"`
-	NickServPassword   string              `json:"nickserv_password"       env:"PICOCLAW_CHANNELS_IRC_NICKSERV_PASSWORD"`
-	SASLUser           string              `json:"sasl_user"               env:"PICOCLAW_CHANNELS_IRC_SASL_USER"`
-	SASLPassword       string              `json:"sasl_password"           env:"PICOCLAW_CHANNELS_IRC_SASL_PASSWORD"`
-	Channels           FlexibleStringSlice `json:"channels"                env:"PICOCLAW_CHANNELS_IRC_CHANNELS"`
-	RequestCaps        FlexibleStringSlice `json:"request_caps,omitempty"  env:"PICOCLAW_CHANNELS_IRC_REQUEST_CAPS"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_IRC_ALLOW_FROM"`
+	Enabled            bool                `json:"enabled"                 env:"KHUNQUANT_CHANNELS_IRC_ENABLED"`
+	Server             string              `json:"server"                  env:"KHUNQUANT_CHANNELS_IRC_SERVER"`
+	TLS                bool                `json:"tls"                     env:"KHUNQUANT_CHANNELS_IRC_TLS"`
+	Nick               string              `json:"nick"                    env:"KHUNQUANT_CHANNELS_IRC_NICK"`
+	User               string              `json:"user,omitempty"          env:"KHUNQUANT_CHANNELS_IRC_USER"`
+	RealName           string              `json:"real_name,omitempty"     env:"KHUNQUANT_CHANNELS_IRC_REAL_NAME"`
+	Password           string              `json:"password"                env:"KHUNQUANT_CHANNELS_IRC_PASSWORD"`
+	NickServPassword   string              `json:"nickserv_password"       env:"KHUNQUANT_CHANNELS_IRC_NICKSERV_PASSWORD"`
+	SASLUser           string              `json:"sasl_user"               env:"KHUNQUANT_CHANNELS_IRC_SASL_USER"`
+	SASLPassword       string              `json:"sasl_password"           env:"KHUNQUANT_CHANNELS_IRC_SASL_PASSWORD"`
+	Channels           FlexibleStringSlice `json:"channels"                env:"KHUNQUANT_CHANNELS_IRC_CHANNELS"`
+	RequestCaps        FlexibleStringSlice `json:"request_caps,omitempty"  env:"KHUNQUANT_CHANNELS_IRC_REQUEST_CAPS"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"KHUNQUANT_CHANNELS_IRC_ALLOW_FROM"`
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_IRC_REASONING_CHANNEL_ID"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"KHUNQUANT_CHANNELS_IRC_REASONING_CHANNEL_ID"`
 }
 
 type HeartbeatConfig struct {
-	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
-	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Enabled  bool `json:"enabled"  env:"KHUNQUANT_HEARTBEAT_ENABLED"`
+	Interval int  `json:"interval" env:"KHUNQUANT_HEARTBEAT_INTERVAL"` // minutes, min 5
 }
 
 type DevicesConfig struct {
-	Enabled    bool `json:"enabled"     env:"PICOCLAW_DEVICES_ENABLED"`
-	MonitorUSB bool `json:"monitor_usb" env:"PICOCLAW_DEVICES_MONITOR_USB"`
+	Enabled    bool `json:"enabled"     env:"KHUNQUANT_DEVICES_ENABLED"`
+	MonitorUSB bool `json:"monitor_usb" env:"KHUNQUANT_DEVICES_MONITOR_USB"`
 }
 
 type VoiceConfig struct {
-	EchoTranscription bool `json:"echo_transcription" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	EchoTranscription bool `json:"echo_transcription" env:"KHUNQUANT_VOICE_ECHO_TRANSCRIPTION"`
 }
 
 type ProvidersConfig struct {
@@ -571,17 +571,17 @@ func (p ProvidersConfig) MarshalJSON() ([]byte, error) {
 }
 
 type ProviderConfig struct {
-	APIKey         string `json:"api_key"                   env:"PICOCLAW_PROVIDERS_{{.Name}}_API_KEY"`
-	APIBase        string `json:"api_base"                  env:"PICOCLAW_PROVIDERS_{{.Name}}_API_BASE"`
-	Proxy          string `json:"proxy,omitempty"           env:"PICOCLAW_PROVIDERS_{{.Name}}_PROXY"`
-	RequestTimeout int    `json:"request_timeout,omitempty" env:"PICOCLAW_PROVIDERS_{{.Name}}_REQUEST_TIMEOUT"`
-	AuthMethod     string `json:"auth_method,omitempty"     env:"PICOCLAW_PROVIDERS_{{.Name}}_AUTH_METHOD"`
-	ConnectMode    string `json:"connect_mode,omitempty"    env:"PICOCLAW_PROVIDERS_{{.Name}}_CONNECT_MODE"` // only for Github Copilot, `stdio` or `grpc`
+	APIKey         string `json:"api_key"                   env:"KHUNQUANT_PROVIDERS_{{.Name}}_API_KEY"`
+	APIBase        string `json:"api_base"                  env:"KHUNQUANT_PROVIDERS_{{.Name}}_API_BASE"`
+	Proxy          string `json:"proxy,omitempty"           env:"KHUNQUANT_PROVIDERS_{{.Name}}_PROXY"`
+	RequestTimeout int    `json:"request_timeout,omitempty" env:"KHUNQUANT_PROVIDERS_{{.Name}}_REQUEST_TIMEOUT"`
+	AuthMethod     string `json:"auth_method,omitempty"     env:"KHUNQUANT_PROVIDERS_{{.Name}}_AUTH_METHOD"`
+	ConnectMode    string `json:"connect_mode,omitempty"    env:"KHUNQUANT_PROVIDERS_{{.Name}}_CONNECT_MODE"` // only for Github Copilot, `stdio` or `grpc`
 }
 
 type OpenAIProviderConfig struct {
 	ProviderConfig
-	WebSearch bool `json:"web_search" env:"PICOCLAW_PROVIDERS_OPENAI_WEB_SEARCH"`
+	WebSearch bool `json:"web_search" env:"KHUNQUANT_PROVIDERS_OPENAI_WEB_SEARCH"`
 }
 
 // ModelConfig represents a model-centric provider configuration.
@@ -623,16 +623,16 @@ func (c *ModelConfig) Validate() error {
 }
 
 type GatewayConfig struct {
-	Host string `json:"host" env:"PICOCLAW_GATEWAY_HOST"`
-	Port int    `json:"port" env:"PICOCLAW_GATEWAY_PORT"`
+	Host string `json:"host" env:"KHUNQUANT_GATEWAY_HOST"`
+	Port int    `json:"port" env:"KHUNQUANT_GATEWAY_PORT"`
 }
 
 type ToolDiscoveryConfig struct {
-	Enabled          bool `json:"enabled"            env:"PICOCLAW_TOOLS_DISCOVERY_ENABLED"`
-	TTL              int  `json:"ttl"                env:"PICOCLAW_TOOLS_DISCOVERY_TTL"`
-	MaxSearchResults int  `json:"max_search_results" env:"PICOCLAW_MAX_SEARCH_RESULTS"`
-	UseBM25          bool `json:"use_bm25"           env:"PICOCLAW_TOOLS_DISCOVERY_USE_BM25"`
-	UseRegex         bool `json:"use_regex"          env:"PICOCLAW_TOOLS_DISCOVERY_USE_REGEX"`
+	Enabled          bool `json:"enabled"            env:"KHUNQUANT_TOOLS_DISCOVERY_ENABLED"`
+	TTL              int  `json:"ttl"                env:"KHUNQUANT_TOOLS_DISCOVERY_TTL"`
+	MaxSearchResults int  `json:"max_search_results" env:"KHUNQUANT_MAX_SEARCH_RESULTS"`
+	UseBM25          bool `json:"use_bm25"           env:"KHUNQUANT_TOOLS_DISCOVERY_USE_BM25"`
+	UseRegex         bool `json:"use_regex"          env:"KHUNQUANT_TOOLS_DISCOVERY_USE_REGEX"`
 }
 
 type ToolConfig struct {
@@ -640,50 +640,50 @@ type ToolConfig struct {
 }
 
 type BraveConfig struct {
-	Enabled    bool     `json:"enabled"     env:"PICOCLAW_TOOLS_WEB_BRAVE_ENABLED"`
-	APIKey     string   `json:"api_key"     env:"PICOCLAW_TOOLS_WEB_BRAVE_API_KEY"`
-	APIKeys    []string `json:"api_keys"    env:"PICOCLAW_TOOLS_WEB_BRAVE_API_KEYS"`
-	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_BRAVE_MAX_RESULTS"`
+	Enabled    bool     `json:"enabled"     env:"KHUNQUANT_TOOLS_WEB_BRAVE_ENABLED"`
+	APIKey     string   `json:"api_key"     env:"KHUNQUANT_TOOLS_WEB_BRAVE_API_KEY"`
+	APIKeys    []string `json:"api_keys"    env:"KHUNQUANT_TOOLS_WEB_BRAVE_API_KEYS"`
+	MaxResults int      `json:"max_results" env:"KHUNQUANT_TOOLS_WEB_BRAVE_MAX_RESULTS"`
 }
 
 type TavilyConfig struct {
-	Enabled    bool     `json:"enabled"     env:"PICOCLAW_TOOLS_WEB_TAVILY_ENABLED"`
-	APIKey     string   `json:"api_key"     env:"PICOCLAW_TOOLS_WEB_TAVILY_API_KEY"`
-	APIKeys    []string `json:"api_keys"    env:"PICOCLAW_TOOLS_WEB_TAVILY_API_KEYS"`
-	BaseURL    string   `json:"base_url"    env:"PICOCLAW_TOOLS_WEB_TAVILY_BASE_URL"`
-	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_TAVILY_MAX_RESULTS"`
+	Enabled    bool     `json:"enabled"     env:"KHUNQUANT_TOOLS_WEB_TAVILY_ENABLED"`
+	APIKey     string   `json:"api_key"     env:"KHUNQUANT_TOOLS_WEB_TAVILY_API_KEY"`
+	APIKeys    []string `json:"api_keys"    env:"KHUNQUANT_TOOLS_WEB_TAVILY_API_KEYS"`
+	BaseURL    string   `json:"base_url"    env:"KHUNQUANT_TOOLS_WEB_TAVILY_BASE_URL"`
+	MaxResults int      `json:"max_results" env:"KHUNQUANT_TOOLS_WEB_TAVILY_MAX_RESULTS"`
 }
 
 type DuckDuckGoConfig struct {
-	Enabled    bool `json:"enabled"     env:"PICOCLAW_TOOLS_WEB_DUCKDUCKGO_ENABLED"`
-	MaxResults int  `json:"max_results" env:"PICOCLAW_TOOLS_WEB_DUCKDUCKGO_MAX_RESULTS"`
+	Enabled    bool `json:"enabled"     env:"KHUNQUANT_TOOLS_WEB_DUCKDUCKGO_ENABLED"`
+	MaxResults int  `json:"max_results" env:"KHUNQUANT_TOOLS_WEB_DUCKDUCKGO_MAX_RESULTS"`
 }
 
 type PerplexityConfig struct {
-	Enabled    bool     `json:"enabled"     env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_ENABLED"`
-	APIKey     string   `json:"api_key"     env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_API_KEY"`
-	APIKeys    []string `json:"api_keys"    env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_API_KEYS"`
-	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
+	Enabled    bool     `json:"enabled"     env:"KHUNQUANT_TOOLS_WEB_PERPLEXITY_ENABLED"`
+	APIKey     string   `json:"api_key"     env:"KHUNQUANT_TOOLS_WEB_PERPLEXITY_API_KEY"`
+	APIKeys    []string `json:"api_keys"    env:"KHUNQUANT_TOOLS_WEB_PERPLEXITY_API_KEYS"`
+	MaxResults int      `json:"max_results" env:"KHUNQUANT_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
 }
 
 type SearXNGConfig struct {
-	Enabled    bool   `json:"enabled"     env:"PICOCLAW_TOOLS_WEB_SEARXNG_ENABLED"`
-	BaseURL    string `json:"base_url"    env:"PICOCLAW_TOOLS_WEB_SEARXNG_BASE_URL"`
-	MaxResults int    `json:"max_results" env:"PICOCLAW_TOOLS_WEB_SEARXNG_MAX_RESULTS"`
+	Enabled    bool   `json:"enabled"     env:"KHUNQUANT_TOOLS_WEB_SEARXNG_ENABLED"`
+	BaseURL    string `json:"base_url"    env:"KHUNQUANT_TOOLS_WEB_SEARXNG_BASE_URL"`
+	MaxResults int    `json:"max_results" env:"KHUNQUANT_TOOLS_WEB_SEARXNG_MAX_RESULTS"`
 }
 
 type GLMSearchConfig struct {
-	Enabled bool   `json:"enabled"  env:"PICOCLAW_TOOLS_WEB_GLM_ENABLED"`
-	APIKey  string `json:"api_key"  env:"PICOCLAW_TOOLS_WEB_GLM_API_KEY"`
-	BaseURL string `json:"base_url" env:"PICOCLAW_TOOLS_WEB_GLM_BASE_URL"`
+	Enabled bool   `json:"enabled"  env:"KHUNQUANT_TOOLS_WEB_GLM_ENABLED"`
+	APIKey  string `json:"api_key"  env:"KHUNQUANT_TOOLS_WEB_GLM_API_KEY"`
+	BaseURL string `json:"base_url" env:"KHUNQUANT_TOOLS_WEB_GLM_BASE_URL"`
 	// SearchEngine specifies the search backend: "search_std" (default),
 	// "search_pro", "search_pro_sogou", or "search_pro_quark".
-	SearchEngine string `json:"search_engine" env:"PICOCLAW_TOOLS_WEB_GLM_SEARCH_ENGINE"`
-	MaxResults   int    `json:"max_results"   env:"PICOCLAW_TOOLS_WEB_GLM_MAX_RESULTS"`
+	SearchEngine string `json:"search_engine" env:"KHUNQUANT_TOOLS_WEB_GLM_SEARCH_ENGINE"`
+	MaxResults   int    `json:"max_results"   env:"KHUNQUANT_TOOLS_WEB_GLM_MAX_RESULTS"`
 }
 
 type WebToolsConfig struct {
-	ToolConfig `                 envPrefix:"PICOCLAW_TOOLS_WEB_"`
+	ToolConfig `                 envPrefix:"KHUNQUANT_TOOLS_WEB_"`
 	Brave      BraveConfig      `                                json:"brave"`
 	Tavily     TavilyConfig     `                                json:"tavily"`
 	DuckDuckGo DuckDuckGoConfig `                                json:"duckduckgo"`
@@ -692,36 +692,36 @@ type WebToolsConfig struct {
 	GLMSearch  GLMSearchConfig  `                                json:"glm_search"`
 	// Proxy is an optional proxy URL for web tools (http/https/socks5/socks5h).
 	// For authenticated proxies, prefer HTTP_PROXY/HTTPS_PROXY env vars instead of embedding credentials in config.
-	Proxy           string `json:"proxy,omitempty"             env:"PICOCLAW_TOOLS_WEB_PROXY"`
-	FetchLimitBytes int64  `json:"fetch_limit_bytes,omitempty" env:"PICOCLAW_TOOLS_WEB_FETCH_LIMIT_BYTES"`
+	Proxy           string `json:"proxy,omitempty"             env:"KHUNQUANT_TOOLS_WEB_PROXY"`
+	FetchLimitBytes int64  `json:"fetch_limit_bytes,omitempty" env:"KHUNQUANT_TOOLS_WEB_FETCH_LIMIT_BYTES"`
 }
 
 type CronToolsConfig struct {
-	ToolConfig         `    envPrefix:"PICOCLAW_TOOLS_CRON_"`
-	ExecTimeoutMinutes int `                                 env:"PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES" json:"exec_timeout_minutes"` // 0 means no timeout
+	ToolConfig         `    envPrefix:"KHUNQUANT_TOOLS_CRON_"`
+	ExecTimeoutMinutes int `                                 env:"KHUNQUANT_TOOLS_CRON_EXEC_TIMEOUT_MINUTES" json:"exec_timeout_minutes"` // 0 means no timeout
 }
 
 type ExecConfig struct {
-	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
-	EnableDenyPatterns  bool     `                                 env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"  json:"enable_deny_patterns"`
-	AllowRemote         bool     `                                 env:"PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE"          json:"allow_remote"`
-	CustomDenyPatterns  []string `                                 env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"  json:"custom_deny_patterns"`
-	CustomAllowPatterns []string `                                 env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS" json:"custom_allow_patterns"`
-	TimeoutSeconds      int      `                                 env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"       json:"timeout_seconds"` // 0 means use default (60s)
+	ToolConfig          `         envPrefix:"KHUNQUANT_TOOLS_EXEC_"`
+	EnableDenyPatterns  bool     `                                 env:"KHUNQUANT_TOOLS_EXEC_ENABLE_DENY_PATTERNS"  json:"enable_deny_patterns"`
+	AllowRemote         bool     `                                 env:"KHUNQUANT_TOOLS_EXEC_ALLOW_REMOTE"          json:"allow_remote"`
+	CustomDenyPatterns  []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"  json:"custom_deny_patterns"`
+	CustomAllowPatterns []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS" json:"custom_allow_patterns"`
+	TimeoutSeconds      int      `                                 env:"KHUNQUANT_TOOLS_EXEC_TIMEOUT_SECONDS"       json:"timeout_seconds"` // 0 means use default (60s)
 }
 
 type SkillsToolsConfig struct {
-	ToolConfig            `                       envPrefix:"PICOCLAW_TOOLS_SKILLS_"`
+	ToolConfig            `                       envPrefix:"KHUNQUANT_TOOLS_SKILLS_"`
 	Registries            SkillsRegistriesConfig `                                   json:"registries"`
 	Github                SkillsGithubConfig     `                                   json:"github"`
-	MaxConcurrentSearches int                    `                                   json:"max_concurrent_searches" env:"PICOCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
+	MaxConcurrentSearches int                    `                                   json:"max_concurrent_searches" env:"KHUNQUANT_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
 	SearchCache           SearchCacheConfig      `                                   json:"search_cache"`
 }
 
 type MediaCleanupConfig struct {
-	ToolConfig `    envPrefix:"PICOCLAW_MEDIA_CLEANUP_"`
-	MaxAge     int `                                    env:"PICOCLAW_MEDIA_CLEANUP_MAX_AGE"  json:"max_age_minutes"`
-	Interval   int `                                    env:"PICOCLAW_MEDIA_CLEANUP_INTERVAL" json:"interval_minutes"`
+	ToolConfig `    envPrefix:"KHUNQUANT_MEDIA_CLEANUP_"`
+	MaxAge     int `                                    env:"KHUNQUANT_MEDIA_CLEANUP_MAX_AGE"  json:"max_age_minutes"`
+	Interval   int `                                    env:"KHUNQUANT_MEDIA_CLEANUP_INTERVAL" json:"interval_minutes"`
 }
 
 type ReadFileToolConfig struct {
@@ -730,33 +730,33 @@ type ReadFileToolConfig struct {
 }
 
 type ToolsConfig struct {
-	AllowReadPaths  []string           `json:"allow_read_paths"  env:"PICOCLAW_TOOLS_ALLOW_READ_PATHS"`
-	AllowWritePaths []string           `json:"allow_write_paths" env:"PICOCLAW_TOOLS_ALLOW_WRITE_PATHS"`
+	AllowReadPaths  []string           `json:"allow_read_paths"  env:"KHUNQUANT_TOOLS_ALLOW_READ_PATHS"`
+	AllowWritePaths []string           `json:"allow_write_paths" env:"KHUNQUANT_TOOLS_ALLOW_WRITE_PATHS"`
 	Web             WebToolsConfig     `json:"web"`
 	Cron            CronToolsConfig    `json:"cron"`
 	Exec            ExecConfig         `json:"exec"`
 	Skills          SkillsToolsConfig  `json:"skills"`
 	MediaCleanup    MediaCleanupConfig `json:"media_cleanup"`
 	MCP             MCPConfig          `json:"mcp"`
-	AppendFile      ToolConfig         `json:"append_file"                                              envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
-	EditFile        ToolConfig         `json:"edit_file"                                                envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"PICOCLAW_TOOLS_I2C_"`
-	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
-	Message         ToolConfig         `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
-	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	SendFile        ToolConfig         `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
-	Spawn           ToolConfig         `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
-	SPI             ToolConfig         `json:"spi"                                                      envPrefix:"PICOCLAW_TOOLS_SPI_"`
-	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
+	AppendFile      ToolConfig         `json:"append_file"                                              envPrefix:"KHUNQUANT_TOOLS_APPEND_FILE_"`
+	EditFile        ToolConfig         `json:"edit_file"                                                envPrefix:"KHUNQUANT_TOOLS_EDIT_FILE_"`
+	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"KHUNQUANT_TOOLS_FIND_SKILLS_"`
+	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"KHUNQUANT_TOOLS_I2C_"`
+	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"KHUNQUANT_TOOLS_INSTALL_SKILL_"`
+	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"KHUNQUANT_TOOLS_LIST_DIR_"`
+	Message         ToolConfig         `json:"message"                                                  envPrefix:"KHUNQUANT_TOOLS_MESSAGE_"`
+	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"KHUNQUANT_TOOLS_READ_FILE_"`
+	SendFile        ToolConfig         `json:"send_file"                                                envPrefix:"KHUNQUANT_TOOLS_SEND_FILE_"`
+	Spawn           ToolConfig         `json:"spawn"                                                    envPrefix:"KHUNQUANT_TOOLS_SPAWN_"`
+	SPI             ToolConfig         `json:"spi"                                                      envPrefix:"KHUNQUANT_TOOLS_SPI_"`
+	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"KHUNQUANT_TOOLS_SUBAGENT_"`
+	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"KHUNQUANT_TOOLS_WEB_FETCH_"`
+	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"KHUNQUANT_TOOLS_WRITE_FILE_"`
 }
 
 type SearchCacheConfig struct {
-	MaxSize    int `json:"max_size"    env:"PICOCLAW_SKILLS_SEARCH_CACHE_MAX_SIZE"`
-	TTLSeconds int `json:"ttl_seconds" env:"PICOCLAW_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
+	MaxSize    int `json:"max_size"    env:"KHUNQUANT_SKILLS_SEARCH_CACHE_MAX_SIZE"`
+	TTLSeconds int `json:"ttl_seconds" env:"KHUNQUANT_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
 }
 
 type SkillsRegistriesConfig struct {
@@ -764,20 +764,20 @@ type SkillsRegistriesConfig struct {
 }
 
 type SkillsGithubConfig struct {
-	Token string `json:"token,omitempty" env:"PICOCLAW_TOOLS_SKILLS_GITHUB_AUTH_TOKEN"`
-	Proxy string `json:"proxy,omitempty" env:"PICOCLAW_TOOLS_SKILLS_GITHUB_PROXY"`
+	Token string `json:"token,omitempty" env:"KHUNQUANT_TOOLS_SKILLS_GITHUB_AUTH_TOKEN"`
+	Proxy string `json:"proxy,omitempty" env:"KHUNQUANT_TOOLS_SKILLS_GITHUB_PROXY"`
 }
 
 type ClawHubRegistryConfig struct {
-	Enabled         bool   `json:"enabled"           env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_ENABLED"`
-	BaseURL         string `json:"base_url"          env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_BASE_URL"`
-	AuthToken       string `json:"auth_token"        env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN"`
-	SearchPath      string `json:"search_path"       env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SEARCH_PATH"`
-	SkillsPath      string `json:"skills_path"       env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"`
-	DownloadPath    string `json:"download_path"     env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_DOWNLOAD_PATH"`
-	Timeout         int    `json:"timeout"           env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
-	MaxZipSize      int    `json:"max_zip_size"      env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
-	MaxResponseSize int    `json:"max_response_size" env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
+	Enabled         bool   `json:"enabled"           env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_ENABLED"`
+	BaseURL         string `json:"base_url"          env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_BASE_URL"`
+	AuthToken       string `json:"auth_token"        env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN"`
+	SearchPath      string `json:"search_path"       env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_SEARCH_PATH"`
+	SkillsPath      string `json:"skills_path"       env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"`
+	DownloadPath    string `json:"download_path"     env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_DOWNLOAD_PATH"`
+	Timeout         int    `json:"timeout"           env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
+	MaxZipSize      int    `json:"max_zip_size"      env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
+	MaxResponseSize int    `json:"max_response_size" env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
 }
 
 // MCPServerConfig defines configuration for a single MCP server
@@ -802,7 +802,7 @@ type MCPServerConfig struct {
 
 // MCPConfig defines configuration for all MCP servers
 type MCPConfig struct {
-	ToolConfig `                    envPrefix:"PICOCLAW_TOOLS_MCP_"`
+	ToolConfig `                    envPrefix:"KHUNQUANT_TOOLS_MCP_"`
 	Discovery  ToolDiscoveryConfig `                                json:"discovery"`
 	// Servers is a map of server name to server configuration
 	Servers map[string]MCPServerConfig `json:"servers,omitempty"`

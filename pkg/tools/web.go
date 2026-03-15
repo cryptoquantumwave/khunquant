@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/khunquant/khunquant/pkg/utils"
 )
 
 const (
@@ -513,7 +513,7 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 		result.Results = result.Results[:count]
 	}
 
-	// Format results in standard PicoClaw format
+	// Format results in standard KhunQuant format
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Results for: %s (via SearXNG)\n", query))
 	for i, r := range result.Results {

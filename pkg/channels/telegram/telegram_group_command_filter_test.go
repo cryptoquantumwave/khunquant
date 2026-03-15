@@ -10,9 +10,9 @@ import (
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/channels"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 type getMeCaller struct {

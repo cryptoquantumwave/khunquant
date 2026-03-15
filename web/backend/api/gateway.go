@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/web/backend/utils"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/web/backend/utils"
 )
 
 // gateway holds the state for the managed gateway process.
@@ -252,8 +252,8 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 	}
 	defaultModelName := strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 
-	// Locate the picoclaw executable
-	execPath := utils.FindPicoclawBinary()
+	// Locate the khunquant executable
+	execPath := utils.FindKhunquantBinary()
 
 	cmd := exec.Command(execPath, "gateway")
 	cmd.Env = os.Environ()
@@ -261,10 +261,10 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 	// GetConfigPath() already reads, so the gateway sub-process uses the same
 	// config file without requiring a --config flag on the gateway subcommand.
 	if h.configPath != "" {
-		cmd.Env = append(cmd.Env, "PICOCLAW_CONFIG="+h.configPath)
+		cmd.Env = append(cmd.Env, "KHUNQUANT_CONFIG="+h.configPath)
 	}
 	if host := h.gatewayHostOverride(); host != "" {
-		cmd.Env = append(cmd.Env, "PICOCLAW_GATEWAY_HOST="+host)
+		cmd.Env = append(cmd.Env, "KHUNQUANT_GATEWAY_HOST="+host)
 	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -294,7 +294,7 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 	gateway.bootDefaultModel = defaultModelName
 	setGatewayRuntimeStatusLocked(initialStatus)
 	pid := cmd.Process.Pid
-	log.Printf("Started picoclaw gateway (PID: %d) from %s", pid, execPath)
+	log.Printf("Started khunquant gateway (PID: %d) from %s", pid, execPath)
 
 	// Broadcast the launch state immediately so clients can reflect it without polling.
 	gateway.events.Broadcast(GatewayEvent{
@@ -382,7 +382,7 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 	return pid, nil
 }
 
-// handleGatewayStart starts the picoclaw gateway subprocess.
+// handleGatewayStart starts the khunquant gateway subprocess.
 //
 //	POST /api/gateway/start
 func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {

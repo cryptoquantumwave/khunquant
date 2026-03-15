@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/migrate/internal"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/migrate/internal"
 )
 
 var providerMapping = map[string]string{
@@ -91,7 +91,7 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 		return err
 	}
 
-	picoCfg, warnings, err := openclawCfg.ConvertToPicoClaw(o.opts.SourceHome)
+	picoCfg, warnings, err := openclawCfg.ConvertToKhunQuant(o.opts.SourceHome)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func findSourceConfig(sourceHome string) (string, error) {
 }
 
 func rewriteWorkspacePath(path string) string {
-	path = strings.Replace(path, ".openclaw", ".picoclaw", 1)
+	path = strings.Replace(path, ".openclaw", ".khunquant", 1)
 	return path
 }
 

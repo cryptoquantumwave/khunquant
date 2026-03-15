@@ -1,29 +1,29 @@
 services:
   # ─────────────────────────────────────────────
-  # PicoClaw Agent (one-shot query)
-  #   docker compose -f docker/docker-compose.yml run --rm picoclaw-agent -m "Hello"
+  # KhunQuant Agent (one-shot query)
+  #   docker compose -f docker/docker-compose.yml run --rm khunquant-agent -m "Hello"
   # ─────────────────────────────────────────────
-  picoclaw-agent:
-    image: docker.io/sipeed/picoclaw:latest
-    container_name: picoclaw-agent
+  khunquant-agent:
+    image: docker.io/khunquant/khunquant:latest
+    container_name: khunquant-agent
     profiles:
       - agent
     # Uncomment to access host network; leave commented unless needed.
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
-    entrypoint: ["picoclaw", "agent"]
+      - ./data:/root/.khunquant
+    entrypoint: ["khunquant", "agent"]
     stdin_open: true
     tty: true
 
   # ─────────────────────────────────────────────
-  # PicoClaw Gateway (Long-running Bot)
+  # KhunQuant Gateway (Long-running Bot)
   #   docker compose -f docker/docker-compose.yml --profile gateway up
   # ─────────────────────────────────────────────
-  picoclaw-gateway:
-    image: docker.io/sipeed/picoclaw:latest
-    container_name: picoclaw-gateway
+  khunquant-gateway:
+    image: docker.io/khunquant/khunquant:latest
+    container_name: khunquant-gateway
     restart: on-failure
     profiles:
       - gateway
@@ -31,22 +31,22 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/root/.khunquant
 
   # ─────────────────────────────────────────────
-  # PicoClaw Launcher (Web Console + Gateway)
+  # KhunQuant Launcher (Web Console + Gateway)
   #   docker compose -f docker/docker-compose.yml --profile launcher up
   # ─────────────────────────────────────────────
-  picoclaw-launcher:
-    image: docker.io/sipeed/picoclaw:launcher
-    container_name: picoclaw-launcher
+  khunquant-launcher:
+    image: docker.io/khunquant/khunquant:launcher
+    container_name: khunquant-launcher
     restart: on-failure
     profiles:
       - launcher
     environment:
-      - PICOCLAW_GATEWAY_HOST=0.0.0.0
+      - KHUNQUANT_GATEWAY_HOST=0.0.0.0
     ports:
       - "127.0.0.1:18800:18800"
       - "127.0.0.1:18790:18790"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/root/.khunquant

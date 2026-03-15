@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/logger"
 )
 
 const testFetchLimit = int64(10 * 1024 * 1024)

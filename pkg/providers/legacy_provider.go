@@ -1,14 +1,14 @@
-// PicoClaw - Ultra-lightweight personal AI agent
+// KhunQuant - Ultra-lightweight personal AI agent
 // License: MIT
 //
-// Copyright (c) 2026 PicoClaw contributors
+// Copyright (c) 2026 KhunQuant contributors
 
 package providers
 
 import (
 	"fmt"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 // CreateProvider creates a provider based on the configuration.

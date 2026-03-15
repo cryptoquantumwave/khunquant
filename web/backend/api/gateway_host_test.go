@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/web/backend/launcherconfig"
 )
 
 func TestGatewayHostOverrideUsesExplicitRuntimePublic(t *testing.T) {

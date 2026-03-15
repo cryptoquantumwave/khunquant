@@ -7,8 +7,8 @@ import (
 
 	"github.com/mymmrac/telego"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/channels"
 )
 
 func TestHandleMessage_DoesNotConsumeGenericCommandsLocally(t *testing.T) {

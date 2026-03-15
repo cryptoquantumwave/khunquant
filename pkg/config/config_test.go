@@ -67,7 +67,7 @@ func TestAgentConfig_FullParse(t *testing.T) {
 	jsonData := `{
 		"agents": {
 			"defaults": {
-				"workspace": "~/.picoclaw/workspace",
+				"workspace": "~/.khunquant/workspace",
 				"model": "glm-4.7",
 				"max_tokens": 8192,
 				"max_tool_iterations": 20
@@ -168,7 +168,7 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 	jsonData := `{
 		"agents": {
 			"defaults": {
-				"workspace": "~/.picoclaw/workspace",
+				"workspace": "~/.khunquant/workspace",
 				"model": "glm-4.7",
 				"max_tokens": 8192,
 				"max_tool_iterations": 20
@@ -483,26 +483,26 @@ func TestDefaultConfig_DMScope(t *testing.T) {
 
 func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	// Unset to ensure we test the default
-	t.Setenv("PICOCLAW_HOME", "")
+	t.Setenv("KHUNQUANT_HOME", "")
 	// Set a known home for consistent test results
 	t.Setenv("HOME", "/tmp/home")
 
 	cfg := DefaultConfig()
-	want := filepath.Join("/tmp/home", ".picoclaw", "workspace")
+	want := filepath.Join("/tmp/home", ".khunquant", "workspace")
 
 	if cfg.Agents.Defaults.Workspace != want {
 		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Workspace, want)
 	}
 }
 
-func TestDefaultConfig_WorkspacePath_WithPicoclawHome(t *testing.T) {
-	t.Setenv("PICOCLAW_HOME", "/custom/picoclaw/home")
+func TestDefaultConfig_WorkspacePath_WithKhunquantHome(t *testing.T) {
+	t.Setenv("KHUNQUANT_HOME", "/custom/khunquant/home")
 
 	cfg := DefaultConfig()
-	want := "/custom/picoclaw/home/workspace"
+	want := "/custom/khunquant/home/workspace"
 
 	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Workspace path with PICOCLAW_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+		t.Errorf("Workspace path with KHUNQUANT_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
 	}
 }
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=KhunQuant Launcher
+Comment=Web-based configuration and management UI for KhunQuant
+Exec=khunquant-launcher
+Icon=khunquant-launcher
+Terminal=true
+Type=Application
+Categories=Utility;Network;
+Keywords=khunquant;ai;agent;bot;

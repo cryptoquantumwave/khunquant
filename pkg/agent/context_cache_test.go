@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/khunquant/khunquant/pkg/providers"
 )
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.
 // Returns the tmpDir path; caller should defer os.RemoveAll(tmpDir).
 func setupWorkspace(t *testing.T, files map[string]string) string {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "picoclaw-test-*")
+	tmpDir, err := os.MkdirTemp("", "khunquant-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 			// System message must contain identity (static) and time (dynamic)
 			sys := msgs[0].Content
-			if !strings.Contains(sys, "picoclaw") {
+			if !strings.Contains(sys, "khunquant") {
 				t.Error("system message missing identity")
 			}
 			if !strings.Contains(sys, "Current Time") {
@@ -384,7 +384,7 @@ Updated content.`
 }
 
 // TestGlobalSkillFileContentChange verifies that modifying a global skill
-// (~/.picoclaw/skills) invalidates the cached system prompt.
+// (~/.khunquant/skills) invalidates the cached system prompt.
 func TestGlobalSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
@@ -392,7 +392,7 @@ func TestGlobalSkillFileContentChange(t *testing.T) {
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
 
-	globalSkillPath := filepath.Join(tmpHome, ".picoclaw", "skills", "global-skill", "SKILL.md")
+	globalSkillPath := filepath.Join(tmpHome, ".khunquant", "skills", "global-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(globalSkillPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestBuiltinSkillFileContentChange(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	builtinRoot := t.TempDir()
-	t.Setenv("PICOCLAW_BUILTIN_SKILLS", builtinRoot)
+	t.Setenv("KHUNQUANT_BUILTIN_SKILLS", builtinRoot)
 
 	builtinSkillPath := filepath.Join(builtinRoot, "builtin-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(builtinSkillPath), 0o755); err != nil {
@@ -570,7 +570,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 					errs <- "empty prompt returned"
 					return
 				}
-				if !strings.Contains(result, "picoclaw") {
+				if !strings.Contains(result, "khunquant") {
 					errs <- "prompt missing identity"
 					return
 				}
@@ -647,7 +647,7 @@ func TestEmptyWorkspaceBaselineDetectsNewFiles(t *testing.T) {
 
 // BenchmarkBuildMessagesWithCache measures caching performance.
 func BenchmarkBuildMessagesWithCache(b *testing.B) {
-	tmpDir, _ := os.MkdirTemp("", "picoclaw-bench-*")
+	tmpDir, _ := os.MkdirTemp("", "khunquant-bench-*")
 	defer os.RemoveAll(tmpDir)
 
 	os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755)

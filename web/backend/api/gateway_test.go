@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/web/backend/utils"
+	"github.com/khunquant/khunquant/pkg/auth"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/web/backend/utils"
 )
 
 func startLongRunningProcess(t *testing.T) *exec.Cmd {
@@ -671,11 +671,11 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
 
-	invalidBinaryPath := filepath.Join(t.TempDir(), "fake-picoclaw")
+	invalidBinaryPath := filepath.Join(t.TempDir(), "fake-khunquant")
 	if err := os.WriteFile(invalidBinaryPath, []byte("#!/bin/sh\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	t.Setenv("PICOCLAW_BINARY", invalidBinaryPath)
+	t.Setenv("KHUNQUANT_BINARY", invalidBinaryPath)
 
 	h := NewHandler(configPath)
 	mux := http.NewServeMux()
@@ -848,29 +848,29 @@ func TestGatewayClearLogsResetsBufferedHistory(t *testing.T) {
 	}
 }
 
-func TestFindPicoclawBinary_EnvOverride(t *testing.T) {
+func TestFindKhunquantBinary_EnvOverride(t *testing.T) {
 	// Create a temporary file to act as the mock binary
 	tmpDir := t.TempDir()
-	mockBinary := filepath.Join(tmpDir, "picoclaw-mock")
+	mockBinary := filepath.Join(tmpDir, "khunquant-mock")
 	if err := os.WriteFile(mockBinary, []byte("mock"), 0o755); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	t.Setenv("PICOCLAW_BINARY", mockBinary)
+	t.Setenv("KHUNQUANT_BINARY", mockBinary)
 
-	got := utils.FindPicoclawBinary()
+	got := utils.FindKhunquantBinary()
 	if got != mockBinary {
-		t.Errorf("FindPicoclawBinary() = %q, want %q", got, mockBinary)
+		t.Errorf("FindKhunquantBinary() = %q, want %q", got, mockBinary)
 	}
 }
 
-func TestFindPicoclawBinary_EnvOverride_InvalidPath(t *testing.T) {
-	// When PICOCLAW_BINARY points to a non-existent path, fall through to next strategy
-	t.Setenv("PICOCLAW_BINARY", "/nonexistent/picoclaw-binary")
+func TestFindKhunquantBinary_EnvOverride_InvalidPath(t *testing.T) {
+	// When KHUNQUANT_BINARY points to a non-existent path, fall through to next strategy
+	t.Setenv("KHUNQUANT_BINARY", "/nonexistent/khunquant-binary")
 
-	got := utils.FindPicoclawBinary()
-	// Should not return the invalid path; falls back to "picoclaw" or another found path
-	if got == "/nonexistent/picoclaw-binary" {
-		t.Errorf("FindPicoclawBinary() returned invalid env path %q, expected fallback", got)
+	got := utils.FindKhunquantBinary()
+	// Should not return the invalid path; falls back to "khunquant" or another found path
+	if got == "/nonexistent/khunquant-binary" {
+		t.Errorf("FindKhunquantBinary() returned invalid env path %q, expected fallback", got)
 	}
 }

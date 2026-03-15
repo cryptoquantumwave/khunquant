@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 // registerConfigRoutes binds configuration management endpoints to the ServeMux.

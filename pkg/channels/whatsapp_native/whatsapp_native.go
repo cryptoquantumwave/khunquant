@@ -1,9 +1,9 @@
 //go:build whatsapp_native
 
-// PicoClaw - Ultra-lightweight personal AI agent
+// KhunQuant - Ultra-lightweight personal AI agent
 // License: MIT
 //
-// Copyright (c) 2026 PicoClaw contributors
+// Copyright (c) 2026 KhunQuant contributors
 
 package whatsapp
 
@@ -28,12 +28,12 @@ import (
 	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/identity"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/channels"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/identity"
+	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/utils"
 )
 
 const (

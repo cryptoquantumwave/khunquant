@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/migrate/internal"
-	"github.com/sipeed/picoclaw/pkg/migrate/sources/openclaw"
+	"github.com/khunquant/khunquant/pkg/migrate/internal"
+	"github.com/khunquant/khunquant/pkg/migrate/sources/openclaw"
 )
 
 type (
@@ -96,7 +96,7 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	fmt.Println("Migrating from Source to PicoClaw")
+	fmt.Println("Migrating from Source to KhunQuant")
 	fmt.Printf("  Source:      %s\n", sourceHome)
 	fmt.Printf("  Target: %s\n", targetHome)
 	fmt.Println()
@@ -142,7 +142,7 @@ func (m *MigrateInstance) Plan(opts Options, sourceHome, targetHome string) ([]A
 				Type:        ActionConvertConfig,
 				Source:      configPath,
 				Target:      filepath.Join(targetHome, "config.json"),
-				Description: "convert Source config to PicoClaw format",
+				Description: "convert Source config to KhunQuant format",
 			})
 		}
 	}

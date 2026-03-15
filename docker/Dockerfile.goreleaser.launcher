@@ -4,9 +4,9 @@ ARG TARGETPLATFORM
 
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY $TARGETPLATFORM/picoclaw /usr/local/bin/picoclaw
-COPY $TARGETPLATFORM/picoclaw-launcher /usr/local/bin/picoclaw-launcher
-COPY $TARGETPLATFORM/picoclaw-launcher-tui /usr/local/bin/picoclaw-launcher-tui
+COPY $TARGETPLATFORM/khunquant /usr/local/bin/khunquant
+COPY $TARGETPLATFORM/khunquant-launcher /usr/local/bin/khunquant-launcher
+COPY $TARGETPLATFORM/khunquant-launcher-tui /usr/local/bin/khunquant-launcher-tui
 
-ENTRYPOINT ["picoclaw-launcher"]
+ENTRYPOINT ["khunquant-launcher"]
 CMD ["-public", "-no-browser"]

@@ -5,7 +5,7 @@
 *.dylib
 *.test
 *.out
-picoclaw-web
+khunquant-web
 
 # Frontend build artifacts (embedded by Go)
 dist/*

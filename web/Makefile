@@ -2,7 +2,7 @@
 
 # Run both frontend and backend dev servers
 dev:
-	@if [ ! -f backend/picoclaw-web ] || [ ! -d backend/dist ]; then \
+	@if [ ! -f backend/khunquant-web ] || [ ! -d backend/dist ]; then \
 		echo "Build artifacts not found, building..."; \
 		$(MAKE) build; \
 	fi
@@ -20,7 +20,7 @@ dev-backend:
 # Build frontend and embed into Go binary
 build:
 	cd frontend && pnpm build:backend
-	cd backend && go build -o picoclaw-web .
+	cd backend && go build -o khunquant-web .
 
 # Run all tests
 test:
@@ -34,5 +34,5 @@ lint:
 
 # Clean build artifacts
 clean:
-	rm -rf frontend/dist backend/dist backend/picoclaw-web
+	rm -rf frontend/dist backend/dist backend/khunquant-web
 	mkdir -p backend/dist && touch backend/dist/.gitkeep

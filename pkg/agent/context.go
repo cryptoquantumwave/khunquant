@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/skills"
-	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/khunquant/khunquant/pkg/utils"
 )
 
 type ContextBuilder struct {
@@ -52,20 +52,20 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 }
 
 func getGlobalConfigDir() string {
-	if home := os.Getenv("PICOCLAW_HOME"); home != "" {
+	if home := os.Getenv("KHUNQUANT_HOME"); home != "" {
 		return home
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".picoclaw")
+	return filepath.Join(home, ".khunquant")
 }
 
 func NewContextBuilder(workspace string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
-	builtinSkillsDir := strings.TrimSpace(os.Getenv("PICOCLAW_BUILTIN_SKILLS"))
+	builtinSkillsDir := strings.TrimSpace(os.Getenv("KHUNQUANT_BUILTIN_SKILLS"))
 	if builtinSkillsDir == "" {
 		wd, _ := os.Getwd()
 		builtinSkillsDir = filepath.Join(wd, "skills")
@@ -85,9 +85,9 @@ func (cb *ContextBuilder) getIdentity() string {
 	version := config.FormatVersion()
 
 	return fmt.Sprintf(
-		`# picoclaw 🦞 (%s)
+		`# khunquant 🦞 (%s)
 
-You are picoclaw, a helpful AI assistant.
+You are khunquant, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: %s

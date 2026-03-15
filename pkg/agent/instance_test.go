@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {

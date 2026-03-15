@@ -11,14 +11,14 @@ func ResolveTargetHome(override string) (string, error) {
 	if override != "" {
 		return ExpandHome(override), nil
 	}
-	if envHome := os.Getenv("PICOCLAW_HOME"); envHome != "" {
+	if envHome := os.Getenv("KHUNQUANT_HOME"); envHome != "" {
 		return ExpandHome(envHome), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home directory: %w", err)
 	}
-	return filepath.Join(home, ".picoclaw"), nil
+	return filepath.Join(home, ".khunquant"), nil
 }
 
 func ExpandHome(path string) string {

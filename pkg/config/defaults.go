@@ -1,7 +1,7 @@
-// PicoClaw - Ultra-lightweight personal AI agent
+// KhunQuant - Ultra-lightweight personal AI agent
 // License: MIT
 //
-// Copyright (c) 2026 PicoClaw contributors
+// Copyright (c) 2026 KhunQuant contributors
 
 package config
 
@@ -10,16 +10,16 @@ import (
 	"path/filepath"
 )
 
-// DefaultConfig returns the default configuration for PicoClaw.
+// DefaultConfig returns the default configuration for KhunQuant.
 func DefaultConfig() *Config {
 	// Determine the base path for the workspace.
-	// Priority: $PICOCLAW_HOME > ~/.picoclaw
+	// Priority: $KHUNQUANT_HOME > ~/.khunquant
 	var homePath string
-	if picoclawHome := os.Getenv("PICOCLAW_HOME"); picoclawHome != "" {
-		homePath = picoclawHome
+	if khunquantHome := os.Getenv("KHUNQUANT_HOME"); khunquantHome != "" {
+		homePath = khunquantHome
 	} else {
 		userHome, _ := os.UserHomeDir()
-		homePath = filepath.Join(userHome, ".picoclaw")
+		homePath = filepath.Join(userHome, ".khunquant")
 	}
 	workspacePath := filepath.Join(homePath, "workspace")
 

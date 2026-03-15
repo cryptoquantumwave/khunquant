@@ -1,6 +1,6 @@
 # QQ
 
-PicoClaw 通过 QQ 开放平台的官方机器人 API 提供对 QQ 的支持。
+KhunQuant 通过 QQ 开放平台的官方机器人 API 提供对 QQ 的支持。
 
 ## 配置
 

@@ -1,5 +1,5 @@
 package devices
 
-import "github.com/sipeed/picoclaw/pkg/devices/events"
+import "github.com/khunquant/khunquant/pkg/devices/events"
 
 type EventSource = events.EventSource

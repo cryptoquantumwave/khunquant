@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/khunquant/khunquant/pkg/providers"
 )
 
 type Session struct {

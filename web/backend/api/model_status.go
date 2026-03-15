@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/khunquant/khunquant/pkg/config"
 )
 
 const modelProbeTimeout = 800 * time.Millisecond

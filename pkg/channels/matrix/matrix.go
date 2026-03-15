@@ -21,12 +21,12 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/channels"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/identity"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/channels"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/identity"
+	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/media"
 )
 
 const (
@@ -36,7 +36,7 @@ const (
 	roomKindCacheCleanupPeriod = 1 * time.Minute
 	roomKindCacheMaxEntries    = 2048
 
-	matrixMediaTempDirName = "picoclaw_media"
+	matrixMediaTempDirName = "khunquant_media"
 )
 
 var matrixMentionHrefRegexp = regexp.MustCompile(`(?i)<a[^>]+href=["']([^"']+)["']`)
@@ -1125,8 +1125,8 @@ func localpartMentionRegexp(localpart string) *regexp.Regexp {
 	}
 
 	// Match Matrix mentions in plain text while avoiding false positives:
-	//   "@picoclaw" and "@picoclaw:matrix.org" should match,
-	//   "test@example.com" and "hellopicoclawworld" should not.
+	//   "@khunquant" and "@khunquant:matrix.org" should match,
+	//   "test@example.com" and "hellokhunquantworld" should not.
 	pattern := `(?i)(^|[^[:alnum:]_])@` + regexp.QuoteMeta(localpart) + `(?::[A-Za-z0-9._:-]+)?([^[:alnum:]_]|$)`
 	return regexp.MustCompile(pattern)
 }

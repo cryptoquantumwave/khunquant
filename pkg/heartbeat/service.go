@@ -1,8 +1,8 @@
-// PicoClaw - Ultra-lightweight personal AI agent
+// KhunQuant - Ultra-lightweight personal AI agent
 // Inspired by and based on nanobot: https://github.com/HKUDS/nanobot
 // License: MIT
 //
-// Copyright (c) 2026 PicoClaw contributors
+// Copyright (c) 2026 KhunQuant contributors
 
 package heartbeat
 
@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/constants"
-	"github.com/sipeed/picoclaw/pkg/fileutil"
-	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/state"
-	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/khunquant/khunquant/pkg/constants"
+	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/state"
+	"github.com/khunquant/khunquant/pkg/tools"
 )
 
 const (

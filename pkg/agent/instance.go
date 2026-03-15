@@ -9,12 +9,12 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/memory"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/routing"
-	"github.com/sipeed/picoclaw/pkg/session"
-	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/memory"
+	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/khunquant/khunquant/pkg/routing"
+	"github.com/khunquant/khunquant/pkg/session"
+	"github.com/khunquant/khunquant/pkg/tools"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -244,7 +244,7 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
 		return expandHome(strings.TrimSpace(agentCfg.Workspace))
 	}
-	// Use the configured default workspace (respects PICOCLAW_HOME)
+	// Use the configured default workspace (respects KHUNQUANT_HOME)
 	if agentCfg == nil || agentCfg.Default || agentCfg.ID == "" || routing.NormalizeAgentID(agentCfg.ID) == "main" {
 		return expandHome(defaults.Workspace)
 	}

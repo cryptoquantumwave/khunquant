@@ -36,6 +36,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 	allowedCommands := []string{
 		"agent",
 		"auth",
+		"clean",
 		"cron",
 		"gateway",
 		"migrate",

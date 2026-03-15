@@ -15,6 +15,8 @@ import (
 	"github.com/khunquant/khunquant/pkg/routing"
 	"github.com/khunquant/khunquant/pkg/session"
 	"github.com/khunquant/khunquant/pkg/tools"
+
+	_ "github.com/khunquant/khunquant/pkg/exchanges/binance"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -94,6 +96,13 @@ func NewAgentInstance(
 	}
 	if cfg.Tools.IsToolEnabled("append_file") {
 		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+	}
+
+	if cfg.Tools.IsToolEnabled("exchange_balance") {
+		toolsRegistry.Register(tools.NewExchangeBalanceTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("exchange_total_value") {
+		toolsRegistry.Register(tools.NewExchangeTotalValueTool(cfg))
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")

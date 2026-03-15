@@ -188,6 +188,14 @@ func validateConfig(cfg *config.Config) []string {
 		errs = append(errs, "channels.discord.token is required when discord channel is enabled")
 	}
 
+	// Binance: credentials required when enabled
+	if cfg.Exchanges.Binance.Enabled && cfg.Exchanges.Binance.APIKey == "" {
+		errs = append(errs, "exchanges.binance.api_key required when Binance is enabled")
+	}
+	if cfg.Exchanges.Binance.Enabled && cfg.Exchanges.Binance.Secret == "" {
+		errs = append(errs, "exchanges.binance.secret required when Binance is enabled")
+	}
+
 	return errs
 }
 

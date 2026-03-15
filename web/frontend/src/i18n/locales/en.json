@@ -11,6 +11,8 @@
     "channels_group": "Channels",
     "show_more_channels": "More",
     "show_less_channels": "Less",
+    "portfolios_group": "Portfolios",
+    "portfolios_binance": "Binance",
     "config": "Config",
     "logs": "Logs"
   },
@@ -455,6 +457,29 @@
     "logs": {
       "clear": "Clear logs",
       "empty": "Waiting for logs..."
+    }
+  },
+  "portfolios": {
+    "edit": "Configure {{name}}",
+    "enableLabel": "Enable",
+    "saveSuccess": "Portfolio settings saved.",
+    "saveError": "Failed to save portfolio settings.",
+    "loadError": "Failed to load portfolio settings.",
+    "notFound": "Exchange \"{{name}}\" not found.",
+    "status": {
+      "enabled": "Enabled",
+      "configured": "Configured"
+    },
+    "binance": {
+      "api_key": "API Key",
+      "api_key_hint": "Your Binance API key with read permissions.",
+      "api_key_placeholder": "Enter API key",
+      "secret": "API Secret",
+      "secret_hint": "Your Binance API secret. Stored locally in config.",
+      "secret_placeholder": "Enter API secret",
+      "credential_set": "Already set — enter new value to update",
+      "testnet": "Use Testnet",
+      "testnet_hint": "Connect to Binance testnet instead of mainnet."
     }
   }
 }

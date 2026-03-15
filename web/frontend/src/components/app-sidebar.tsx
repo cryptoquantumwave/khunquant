@@ -1,6 +1,7 @@
 import { IconChevronRight } from "@tabler/icons-react"
 import {
   IconAtom,
+  IconBuildingBank,
   IconChevronsDown,
   IconChevronsUp,
   IconKey,
@@ -116,6 +117,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           translateTitle: false,
         })),
         isChannelsGroup: true,
+      },
+      {
+        label: "navigation.portfolios_group",
+        defaultOpen: true,
+        items: [
+          {
+            title: "navigation.portfolios_binance",
+            url: "/portfolios/binance",
+            icon: IconBuildingBank,
+            translateTitle: true,
+          },
+        ],
       },
       {
         ...baseNavGroups[2],

@@ -196,6 +196,14 @@ install: build
 	@echo "Installed binary to $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
 	@echo "Installation complete!"
 
+## sync-bin: Copy the last build to ~/.local/bin without rebuilding
+sync-bin:
+	@mkdir -p $(INSTALL_BIN_DIR)
+	@cp $(BINARY_PATH) $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX)
+	@chmod +x $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX)
+	@mv -f $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX) $(INSTALL_BIN_DIR)/$(BINARY_NAME)
+	@echo "Synced $(BINARY_PATH) → $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
+
 ## uninstall: Remove khunquant from system
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."

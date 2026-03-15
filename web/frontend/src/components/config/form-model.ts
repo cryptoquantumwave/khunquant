@@ -107,7 +107,6 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
   const devices = asRecord(root.devices)
   const tools = asRecord(root.tools)
   const exec = asRecord(tools.exec)
-
   return {
     workspace: asString(defaults.workspace) || EMPTY_FORM.workspace,
     restrictToWorkspace:

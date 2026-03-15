@@ -533,6 +533,17 @@ func DefaultConfig() *Config {
 			WriteFile: ToolConfig{
 				Enabled: true,
 			},
+			ExchangeBalance: ToolConfig{
+				Enabled: true,
+			},
+			ExchangeTotalValue: ToolConfig{
+				Enabled: true,
+			},
+		},
+		Exchanges: ExchangesConfig{
+			Binance: BinanceExchangeConfig{
+				Enabled: false,
+			},
 		},
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,

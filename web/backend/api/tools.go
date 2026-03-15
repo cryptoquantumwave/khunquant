@@ -119,6 +119,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "spawn",
 	},
 	{
+		Name:        "exchange_balance",
+		Description: "Retrieve asset balances from a configured cryptocurrency exchange.",
+		Category:    "portfolios",
+		ConfigKey:   "exchange_balance",
+	},
+	{
 		Name:        "i2c",
 		Description: "Interact with I2C hardware devices exposed on the host.",
 		Category:    "hardware",
@@ -300,6 +306,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Subagent.Enabled = true
 		}
+	case "exchange_balance":
+		cfg.Tools.ExchangeBalance.Enabled = enabled
 	case "i2c":
 		cfg.Tools.I2C.Enabled = enabled
 	case "spi":

@@ -15,6 +15,7 @@ import (
 	"github.com/khunquant/khunquant/cmd/khunquant/internal"
 	"github.com/khunquant/khunquant/cmd/khunquant/internal/agent"
 	"github.com/khunquant/khunquant/cmd/khunquant/internal/auth"
+	"github.com/khunquant/khunquant/cmd/khunquant/internal/clean"
 	"github.com/khunquant/khunquant/cmd/khunquant/internal/cron"
 	"github.com/khunquant/khunquant/cmd/khunquant/internal/gateway"
 	"github.com/khunquant/khunquant/cmd/khunquant/internal/migrate"
@@ -42,6 +43,7 @@ func NewKhunquantCommand() *cobra.Command {
 		gateway.NewGatewayCommand(),
 		status.NewStatusCommand(),
 		cron.NewCronCommand(),
+		clean.NewCleanCommand(),
 		migrate.NewMigrateCommand(),
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),

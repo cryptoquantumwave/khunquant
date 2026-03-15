@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	_ "github.com/khunquant/khunquant/pkg/channels/wecom"
 	_ "github.com/khunquant/khunquant/pkg/channels/whatsapp"
 	_ "github.com/khunquant/khunquant/pkg/channels/whatsapp_native"
+	_ "github.com/khunquant/khunquant/pkg/exchanges/binance"
 	"github.com/khunquant/khunquant/pkg/config"
 	"github.com/khunquant/khunquant/pkg/cron"
 	"github.com/khunquant/khunquant/pkg/devices"
@@ -89,7 +91,8 @@ func gatewayCmd(debug bool) error {
 	startupInfo := agentLoop.GetStartupInfo()
 	toolsInfo := startupInfo["tools"].(map[string]any)
 	skillsInfo := startupInfo["skills"].(map[string]any)
-	fmt.Printf("  • Tools: %d loaded\n", toolsInfo["count"])
+	toolNames, _ := toolsInfo["names"].([]string)
+	fmt.Printf("  • Tools: %d loaded (%s)\n", toolsInfo["count"], strings.Join(toolNames, ", "))
 	fmt.Printf("  • Skills: %d/%d available\n",
 		skillsInfo["available"],
 		skillsInfo["total"])
@@ -98,6 +101,7 @@ func gatewayCmd(debug bool) error {
 	logger.InfoCF("agent", "Agent initialized",
 		map[string]any{
 			"tools_count":      toolsInfo["count"],
+			"tools":            toolNames,
 			"skills_total":     skillsInfo["total"],
 			"skills_available": skillsInfo["available"],
 		})
@@ -386,8 +390,9 @@ func restartServices(
 	services *gatewayServices,
 	msgBus *bus.MessageBus,
 ) error {
-	// Create an independent context with timeout for service restart
-	// This prevents cancellation from the main loop context during reload
+	// Create an independent context with timeout for service restart operations
+	// (cron, heartbeat, device startup). This is intentionally separate from the
+	// context passed to StartAll below, which must outlive this function.
 	ctx, cancel := context.WithTimeout(context.Background(), serviceRestartTimeout)
 	defer cancel()
 
@@ -477,7 +482,10 @@ func restartServices(
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
 
-	if err := services.ChannelManager.StartAll(ctx); err != nil {
+	// Use context.Background() so channel goroutines (e.g. pico WebSocket readLoops)
+	// are not cancelled when this function returns. Channels are stopped explicitly
+	// via StopAll() on the next reload or shutdown.
+	if err := services.ChannelManager.StartAll(context.Background()); err != nil {
 		return fmt.Errorf("error restarting channels: %w", err)
 	}
 	fmt.Printf(

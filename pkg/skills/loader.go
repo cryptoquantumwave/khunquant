@@ -191,6 +191,31 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
+// BuildSkillsFullContent returns the full content of all available skills,
+// ready to embed directly in the system prompt so the LLM can act without
+// a separate read_file iteration.
+func (sl *SkillsLoader) BuildSkillsFullContent() string {
+	allSkills := sl.ListSkills()
+	if len(allSkills) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, skill := range allSkills {
+		content, ok := sl.LoadSkill(skill.Name)
+		if !ok {
+			continue
+		}
+		header := fmt.Sprintf("### Skill: %s", skill.Name)
+		if skill.Description != "" {
+			header += fmt.Sprintf("\n\n> %s", skill.Description)
+		}
+		parts = append(parts, fmt.Sprintf("%s\n\n%s", header, content))
+	}
+
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
 func (sl *SkillsLoader) BuildSkillsSummary() string {
 	allSkills := sl.ListSkills()
 	if len(allSkills) == 0 {

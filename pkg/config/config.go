@@ -83,11 +83,25 @@ type Config struct {
 	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"`
 	Tools     ToolsConfig     `json:"tools"`
+	Exchanges ExchangesConfig `json:"exchanges"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
 	Voice     VoiceConfig     `json:"voice"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
+}
+
+// ExchangesConfig holds configuration for all supported exchanges.
+type ExchangesConfig struct {
+	Binance BinanceExchangeConfig `json:"binance"`
+}
+
+// BinanceExchangeConfig holds the Binance exchange credentials and settings.
+type BinanceExchangeConfig struct {
+	Enabled bool   `json:"enabled"  env:"KHUNQUANT_EXCHANGES_BINANCE_ENABLED"`
+	APIKey  string `json:"api_key"  env:"KHUNQUANT_EXCHANGES_BINANCE_API_KEY"`
+	Secret  string `json:"secret"   env:"KHUNQUANT_EXCHANGES_BINANCE_SECRET"`
+	Testnet bool   `json:"testnet"  env:"KHUNQUANT_EXCHANGES_BINANCE_TESTNET"`
 }
 
 // BuildInfo contains build-time version information
@@ -752,6 +766,8 @@ type ToolsConfig struct {
 	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"KHUNQUANT_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"KHUNQUANT_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"KHUNQUANT_TOOLS_WRITE_FILE_"`
+	ExchangeBalance    ToolConfig         `json:"exchange_balance"                                         envPrefix:"KHUNQUANT_TOOLS_EXCHANGE_BALANCE_"`
+	ExchangeTotalValue ToolConfig         `json:"exchange_total_value"                                     envPrefix:"KHUNQUANT_TOOLS_EXCHANGE_TOTAL_VALUE_"`
 }
 
 type SearchCacheConfig struct {
@@ -1055,6 +1071,10 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.WriteFile.Enabled
 	case "mcp":
 		return t.MCP.Enabled
+	case "exchange_balance":
+		return t.ExchangeBalance.Enabled
+	case "exchange_total_value":
+		return t.ExchangeTotalValue.Enabled
 	default:
 		return true
 	}

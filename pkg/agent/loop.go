@@ -1497,6 +1497,10 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, c
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
 //
+// If the history is a single Turn with no safe split point, the function
+// falls back to keeping only the most recent user message. This breaks
+// Turn atomicity as a last resort to avoid a context-exceeded loop.
+//
 // Session history contains only user/assistant/tool messages — the system
 // prompt is built dynamically by BuildMessages and is NOT stored here.
 // The compression note is recorded in the session summary so that
@@ -1519,12 +1523,24 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
 		// aligned to the nearest Turn boundary.
 		mid = findSafeBoundary(history, len(history)/2)
 	}
+	var keptHistory []providers.Message
 	if mid <= 0 {
-		return
+		// No safe Turn boundary — the entire history is a single Turn
+		// (e.g. one user message followed by a massive tool response).
+		// Keeping everything would leave the agent stuck in a context-
+		// exceeded loop, so fall back to keeping only the most recent
+		// user message. This breaks Turn atomicity as a last resort.
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role == "user" {
+				keptHistory = []providers.Message{history[i]}
+				break
+			}
+		}
+	} else {
+		keptHistory = history[mid:]
 	}
 
-	droppedCount := mid
-	keptHistory := history[mid:]
+	droppedCount := len(history) - len(keptHistory)
 
 	// Record compression in the session summary so BuildMessages includes it
 	// in the system prompt. We do not modify history messages themselves.

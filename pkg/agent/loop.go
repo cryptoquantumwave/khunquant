@@ -239,7 +239,17 @@ func registerSharedTools(
 				spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
 					return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 				})
+
+				// Set SubTurnSpawner for direct sub-turn execution
+				spawner := NewSubTurnSpawner(al)
+				spawnTool.SetSpawner(spawner)
+
 				agent.Tools.Register(spawnTool)
+
+				// Also register the synchronous subagent tool
+				subagentTool := tools.NewSubagentTool(subagentManager)
+				subagentTool.SetSpawner(spawner)
+				agent.Tools.Register(subagentTool)
 			} else {
 				logger.WarnCF("agent", "spawn tool requires subagent to be enabled", nil)
 			}
@@ -886,6 +896,7 @@ func (al *AgentLoop) runAgentLoop(
 			concurrencySem:       make(chan struct{}, 5), // maxConcurrentSubTurns
 		}
 		ctx = withTurnState(ctx, rootTS)
+		ctx = WithAgentLoop(ctx, al) // Inject AgentLoop for tool access
 		isRootTurn = true
 
 		// Register this root turn state so HardAbort can find it

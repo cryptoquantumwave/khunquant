@@ -7,7 +7,10 @@ import (
 )
 
 type SpawnTool struct {
-	manager        *SubagentManager
+	spawner        SubTurnSpawner
+	defaultModel   string
+	maxTokens      int
+	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
 }
 
@@ -16,8 +19,15 @@ var _ AsyncExecutor = (*SpawnTool)(nil)
 
 func NewSpawnTool(manager *SubagentManager) *SpawnTool {
 	return &SpawnTool{
-		manager: manager,
+		defaultModel: manager.defaultModel,
+		maxTokens:    manager.maxTokens,
+		temperature:  manager.temperature,
 	}
+}
+
+// SetSpawner sets the SubTurnSpawner for direct sub-turn execution.
+func (t *SpawnTool) SetSpawner(spawner SubTurnSpawner) {
+	t.spawner = spawner
 }
 
 func (t *SpawnTool) Name() string {
@@ -79,28 +89,47 @@ func (t *SpawnTool) execute(ctx context.Context, args map[string]any, cb AsyncCa
 		}
 	}
 
-	if t.manager == nil {
-		return ErrorResult("Subagent manager not configured")
+	// Build system prompt for spawned subagent
+	systemPrompt := fmt.Sprintf(`You are a spawned subagent running in the background. Complete the given task independently and report back when done.
+
+Task: %s`, task)
+
+	if label != "" {
+		systemPrompt = fmt.Sprintf(`You are a spawned subagent labeled "%s" running in the background. Complete the given task independently and report back when done.
+
+Task: %s`, label, task)
 	}
 
-	// Read channel/chatID from context (injected by registry).
-	// Fall back to "cli"/"direct" for non-conversation callers (e.g., CLI, tests)
-	// to preserve the same defaults as the original NewSpawnTool constructor.
-	channel := ToolChannel(ctx)
-	if channel == "" {
-		channel = "cli"
-	}
-	chatID := ToolChatID(ctx)
-	if chatID == "" {
-		chatID = "direct"
+	// Use spawner if available (direct SpawnSubTurn call)
+	if t.spawner != nil {
+		// Launch async sub-turn in goroutine
+		go func() {
+			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
+				Model:        t.defaultModel,
+				Tools:        nil, // Will inherit from parent via context
+				SystemPrompt: systemPrompt,
+				MaxTokens:    t.maxTokens,
+				Temperature:  t.temperature,
+				Async:        true, // Async execution
+			})
+
+			if err != nil {
+				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+			}
+
+			// Call callback if provided
+			if cb != nil {
+				cb(ctx, result)
+			}
+		}()
+
+		// Return immediate acknowledgment
+		if label != "" {
+			return AsyncResult(fmt.Sprintf("Spawned subagent '%s' for task: %s", label, task))
+		}
+		return AsyncResult(fmt.Sprintf("Spawned subagent for task: %s", task))
 	}
 
-	// Pass callback to manager for async completion notification
-	result, err := t.manager.Spawn(ctx, task, label, agentID, channel, chatID, cb)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to spawn subagent: %v", err))
-	}
-
-	// Return AsyncResult since the task runs in background
-	return AsyncResult(result)
+	// Fallback: spawner not configured
+	return ErrorResult("SpawnTool: spawner not configured - call SetSpawner() during initialization")
 }

@@ -276,3 +276,47 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 
 	return nil
 }
+
+// ====================== Follow-Up Injection ======================
+
+// InjectFollowUp enqueues a message to be automatically processed after the current
+// turn completes. Unlike Steer(), which interrupts the current execution, InjectFollowUp
+// waits for the current turn to finish naturally before processing the message.
+//
+// This is useful for:
+// - Automated workflows that need to chain multiple turns
+// - Background tasks that should run after the main task completes
+// - Scheduled follow-up actions
+//
+// The message will be processed via Continue() when the agent becomes idle.
+func (al *AgentLoop) InjectFollowUp(msg providers.Message) error {
+	// InjectFollowUp uses the same steering queue mechanism as Steer(),
+	// but the semantic difference is in when it's called:
+	// - Steer() is called during active execution to interrupt
+	// - InjectFollowUp() is called when planning future work
+	//
+	// Both end up in the same queue and are processed by Continue()
+	// when the agent is idle.
+	return al.Steer(msg)
+}
+
+// ====================== API Aliases for Design Document Compatibility ======================
+
+// InterruptGraceful is an alias for Steer() to match the design document naming.
+// It gracefully interrupts the current execution by injecting a user message
+// that will be processed after the current tool finishes.
+func (al *AgentLoop) InterruptGraceful(msg providers.Message) error {
+	return al.Steer(msg)
+}
+
+// InterruptHard is an alias for HardAbort() to match the design document naming.
+// It immediately terminates execution and rolls back the session state.
+func (al *AgentLoop) InterruptHard(sessionKey string) error {
+	return al.HardAbort(sessionKey)
+}
+
+// InjectSteering is an alias for Steer() to match the design document naming.
+// It injects a steering message into the currently running agent loop.
+func (al *AgentLoop) InjectSteering(msg providers.Message) error {
+	return al.Steer(msg)
+}

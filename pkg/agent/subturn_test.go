@@ -632,11 +632,12 @@ func TestDeliverSubTurnResultNoDeadlock(t *testing.T) {
 	}
 
 	// Concurrently read from the channel to prevent blocking
+	// and to actually retrieve the matched number of results
 	go func() {
 		for i := 0; i < numChildren; i++ {
 			select {
 			case <-parent.pendingResults:
-			case <-time.After(2 * time.Second):
+			case <-time.After(5 * time.Second):
 				t.Error("timeout waiting for result")
 				return
 			}
@@ -714,48 +715,48 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 	}
 }
 
-// TestFinishClosesChannel verifies that Finish() closes the pendingResults channel
-// and that deliverSubTurnResult handles closed channels gracefully.
-func TestFinishClosesChannel(t *testing.T) {
+// TestFinishedChannelClosedState verifies that Finish() closes the Finished() channel
+// so that child turns can safely abort waiting.
+func TestFinishedChannelClosedState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ts := &turnState{
 		ctx:            ctx,
 		cancelFunc:     cancel,
-		turnID:         "test-finish-channel",
+		turnID:         "test-finished-channel",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 2),
 		isFinished:     false,
 	}
 
-	// Verify channel is open initially
+	// Verify Finished channel is blocking initially
 	select {
-	case ts.pendingResults <- &tools.ToolResult{ForLLM: "test"}:
-		// Good - channel is open
-		// Drain the message we just sent
-		<-ts.pendingResults
+	case <-ts.Finished():
+		t.Fatal("finished channel should block initially")
 	default:
-		t.Fatal("channel should be open initially")
+		// Good
 	}
 
 	// Call Finish() with graceful finish
 	ts.Finish(false)
 
-	// Verify channel is closed
-	_, ok := <-ts.pendingResults
-	if ok {
-		t.Error("expected channel to be closed after Finish()")
+	// Verify Finished channel is closed
+	select {
+	case _, ok := <-ts.Finished():
+		if ok {
+			t.Error("expected Finished() channel to be closed after Finish()")
+		}
+	default:
+		t.Fatal("expected <-ts.Finished() to not block")
 	}
 
-	// Verify Finish() is idempotent (can be called multiple times)
+	// Verify Finish() is idempotent
 	ts.Finish(false) // Should not panic
 
-	// Verify deliverSubTurnResult doesn't panic when sending to closed channel
+	// Verify deliverSubTurnResult correctly uses Finished() channel and treats as orphan
 	result := &tools.ToolResult{ForLLM: "late result"}
-
-	// This should not panic - it should recover and emit OrphanResultEvent
-	deliverSubTurnResult(ts, "child-1", result)
+	deliverSubTurnResult(ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
 }
 
 // TestFinalPollCapturesLateResults verifies that the final poll before Finish()
@@ -1159,14 +1160,14 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify the channel is closed
+	// Verify the Finished() channel is closed
 	select {
-	case _, ok := <-parentTS.pendingResults:
+	case _, ok := <-parentTS.Finished():
 		if ok {
-			t.Error("Expected channel to be closed")
+			t.Error("Expected Finished() channel to be closed")
 		}
 	default:
-		t.Error("Expected channel to be closed and readable")
+		t.Error("Expected Finished() channel to be closed and readable without blocking")
 	}
 
 	// Verify isFinished is set
@@ -1413,73 +1414,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 	t.Log("Context wrapping test passed - no redundant layers detected")
 }
 
-// TestFinish_DrainsChannel verifies that Finish() drains remaining results
-// from the pendingResults channel and emits them as orphan events.
-func TestFinish_DrainsChannel(t *testing.T) {
-	// Save original MockEventBus.Emit
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
 
-	// Collect orphan events
-	var mu sync.Mutex
-	var orphanEvents []SubTurnOrphanResultEvent
-	MockEventBus.Emit = func(e any) {
-		mu.Lock()
-		defer mu.Unlock()
-		if orphan, ok := e.(SubTurnOrphanResultEvent); ok {
-			orphanEvents = append(orphanEvents, orphan)
-		}
-	}
-
-	ctx := context.Background()
-	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-drain-test",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, maxConcurrentSubTurns),
-	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
-
-	// Add some results to the channel before calling Finish()
-	const numResults = 5
-	for i := 0; i < numResults; i++ {
-		parentTS.pendingResults <- &tools.ToolResult{
-			ForLLM: fmt.Sprintf("result-%d", i),
-		}
-	}
-
-	// Verify results are in the channel
-	if len(parentTS.pendingResults) != numResults {
-		t.Errorf("Expected %d results in channel, got %d", numResults, len(parentTS.pendingResults))
-	}
-
-	// Call Finish() - it should drain the channel
-	parentTS.Finish(false)
-
-	// Verify all results were drained and emitted as orphan events
-	mu.Lock()
-	drainedCount := len(orphanEvents)
-	mu.Unlock()
-
-	if drainedCount != numResults {
-		t.Errorf("Expected %d orphan events from drain, got %d", numResults, drainedCount)
-	}
-
-	// Verify the channel is closed and empty
-	select {
-	case _, ok := <-parentTS.pendingResults:
-		if ok {
-			t.Error("Expected channel to be closed")
-		}
-	default:
-		t.Error("Expected channel to be closed and readable")
-	}
-
-	t.Logf("Successfully drained %d results from channel", drainedCount)
-}
 
 // TestSyncSubTurn_NoChannelDelivery verifies that synchronous sub-turns
 // do NOT deliver results to the pendingResults channel (only return directly).
@@ -1591,72 +1526,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 	}
 }
 
-// TestChannelFull_OrphanResults verifies behavior when the pendingResults channel
-// is full (16+ async results). Results that cannot be delivered should become orphans.
-func TestChannelFull_OrphanResults(t *testing.T) {
-	// Save original MockEventBus.Emit
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
 
-	// Collect events
-	var mu sync.Mutex
-	var deliveredCount, orphanCount int
-	MockEventBus.Emit = func(e any) {
-		mu.Lock()
-		defer mu.Unlock()
-		switch e.(type) {
-		case SubTurnResultDeliveredEvent:
-			deliveredCount++
-		case SubTurnOrphanResultEvent:
-			orphanCount++
-		}
-	}
-
-	ctx := context.Background()
-	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-full-channel",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, maxConcurrentSubTurns),
-	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
-	defer parentTS.Finish(false)
-
-	// Send more results than the channel capacity (16)
-	const numResults = 25
-	for i := 0; i < numResults; i++ {
-		result := &tools.ToolResult{
-			ForLLM: fmt.Sprintf("result-%d", i),
-		}
-		deliverSubTurnResult(parentTS, fmt.Sprintf("child-%d", i), result)
-	}
-
-	// Get final counts
-	mu.Lock()
-	finalDelivered := deliveredCount
-	finalOrphan := orphanCount
-	mu.Unlock()
-
-	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
-
-	// Should have delivered exactly 16 (channel capacity)
-	if finalDelivered != 16 {
-		t.Errorf("Expected 16 delivered results (channel capacity), got %d", finalDelivered)
-	}
-
-	// Should have 9 orphan results (25 - 16)
-	if finalOrphan != 9 {
-		t.Errorf("Expected 9 orphan results, got %d", finalOrphan)
-	}
-
-	// Total should equal numResults
-	if finalDelivered+finalOrphan != numResults {
-		t.Errorf("Expected %d total events, got %d", numResults, finalDelivered+finalOrphan)
-	}
-}
 
 // TestGrandchildAbort_CascadingCancellation verifies that when a grandparent turn
 // is hard aborted, the cancellation cascades down to grandchild turns.
@@ -1720,7 +1590,7 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 	}
 
 	// Hard abort the grandparent
-	grandparentTS.Finish(false)
+	grandparentTS.Finish(true)
 
 	// Wait a bit for cancellation to propagate
 	time.Sleep(10 * time.Millisecond)

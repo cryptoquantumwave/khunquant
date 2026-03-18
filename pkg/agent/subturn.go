@@ -344,7 +344,24 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 //   - SubTurnResultDeliveredEvent: successful delivery to channel
 //   - SubTurnOrphanResultEvent: delivery failed (parent finished or channel full)
 func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.ToolResult) {
-	// Check parent state under lock, but don't hold lock while sending to channel
+	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
+	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
+	defer func() {
+		if r := recover(); r != nil {
+			logger.WarnCF("subturn", "recovered panic sending to pendingResults", map[string]any{
+				"parent_id": parentTS.turnID,
+				"child_id":  childID,
+				"recover":   r,
+			})
+			if result != nil {
+				MockEventBus.Emit(SubTurnOrphanResultEvent{
+					ParentID: parentTS.turnID,
+					ChildID:  childID,
+					Result:   result,
+				})
+			}
+		}
+	}()
 	parentTS.mu.Lock()
 	isFinished := parentTS.isFinished
 	resultChan := parentTS.pendingResults
@@ -363,8 +380,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	}
 
 	// Parent Turn is still running → attempt to deliver result
-	// Note: There's still a small race window between the isFinished check above and the send below,
-	// but this is acceptable - worst case the result becomes an orphan, which is handled gracefully.
+	// We use a select statement with parentTS.Finished() to ensure that if the
+	// parent turn finishes while we are waiting to send the result (e.g. channel
+	// is full), we don't leak this goroutine by blocking forever.
 	select {
 	case resultChan <- result:
 		// Successfully delivered
@@ -373,9 +391,10 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 			ChildID:  childID,
 			Result:   result,
 		})
-	default:
-		// Channel is full - treat as orphan result
-		logger.WarnCF("subturn", "pendingResults channel full", map[string]any{
+	case <-parentTS.Finished():
+		// Parent finished while we were waiting to deliver.
+		// The result cannot be delivered to the LLM, so it becomes an orphan.
+		logger.WarnCF("subturn", "parent finished before result could be delivered", map[string]any{
 			"parent_id": parentTS.turnID,
 			"child_id":  childID,
 		})
@@ -474,6 +493,7 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 	truncationRetryCount := 0
 	contextRetryCount := 0
 	currentPrompt := cfg.SystemPrompt
+	promptAlreadyAdded := false
 
 	for {
 		// Soft context limit: check and truncate before LLM call
@@ -512,8 +532,12 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 			DefaultResponse:    "",
 			EnableSummary:      false,
 			SendResponse:       false,
-			SkipAddUserMessage: contextRetryCount > 0,
+			SkipAddUserMessage: promptAlreadyAdded,
 		})
+
+		// Mark the prompt as added so subsequent truncation retries
+		// won't duplicate it in the history.
+		promptAlreadyAdded = true
 
 		// 1. Handle context length errors
 		if err != nil && isContextLengthError(err) {
@@ -562,6 +586,7 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 			// Inject recovery prompt - it will be added by runAgentLoop on next iteration
 			recoveryPrompt := "Your previous response was truncated due to length. Please provide a shorter, complete response that finishes your thought."
 			currentPrompt = recoveryPrompt
+			promptAlreadyAdded = false // We need this new recovery prompt to be added
 
 			truncationRetryCount++
 			continue // Retry with recovery prompt

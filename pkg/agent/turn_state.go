@@ -45,6 +45,7 @@ type turnState struct {
 	isFinished           bool          // MUST be accessed under mu lock
 	closeOnce            sync.Once     // Ensures pendingResults channel is closed exactly once
 	concurrencySem       chan struct{} // Limits concurrent child sub-turns
+	finishedChan         chan struct{} // Lazily initialized, closed when turn finishes
 
 	// parentEnded signals that the parent turn has finished gracefully.
 	// Child SubTurns should check this via IsParentEnded() to decide whether
@@ -158,6 +159,21 @@ func (ts *turnState) GetLastFinishReason() string {
 // IsParentEnded is a convenience method to check if parent ended.
 // It returns the value of the parent's parentEnded atomic flag.
 
+// Finished returns a channel that is closed when the turn finishes.
+// This allows child turns to safely block on delivering results without leaking
+// if the parent finishes before they can deliver.
+func (ts *turnState) Finished() <-chan struct{} {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.finishedChan == nil {
+		ts.finishedChan = make(chan struct{})
+		if ts.isFinished {
+			close(ts.finishedChan)
+		}
+	}
+	return ts.finishedChan
+}
+
 // Finish marks the turn as finished.
 //
 // If isHardAbort is true (Hard Abort):
@@ -170,12 +186,20 @@ func (ts *turnState) GetLastFinishReason() string {
 //   - Critical SubTurns continue running and deliver orphan results
 //   - Non-Critical SubTurns exit gracefully without error
 //
-// In both cases, the pendingResults channel is closed to signal
-// that no more results will be delivered.
+// In both cases, the pendingResults channel is NOT closed.
+// It is left open to be garbage collected when no longer used, avoiding
+// "send on closed channel" panics from concurrently finishing async subturns.
 func (ts *turnState) Finish(isHardAbort bool) {
+	var fc chan struct{}
+
 	ts.mu.Lock()
-	ts.isFinished = true
-	resultChan := ts.pendingResults
+	if !ts.isFinished {
+		ts.isFinished = true
+		if ts.finishedChan == nil {
+			ts.finishedChan = make(chan struct{})
+		}
+		fc = ts.finishedChan
+	}
 	ts.mu.Unlock()
 
 	if isHardAbort {
@@ -188,30 +212,15 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		ts.parentEnded.Store(true)
 	}
 
-	// Use sync.Once to ensure the channel is closed exactly once, even if Finish() is called concurrently.
-	// This prevents "close of closed channel" panics.
-	ts.closeOnce.Do(func() {
-		if resultChan != nil {
-			close(resultChan)
-			// Drain any remaining results from the channel and emit them as orphan events.
-			// This prevents goroutine leaks and ensures all results are accounted for.
-			ts.drainPendingResults(resultChan)
-		}
-	})
-}
-
-// drainPendingResults drains all remaining results from the closed channel
-// and emits them as orphan events. This must be called after the channel is closed.
-func (ts *turnState) drainPendingResults(ch chan *tools.ToolResult) {
-	for result := range ch {
-		if result != nil {
-			MockEventBus.Emit(SubTurnOrphanResultEvent{
-				ParentID: ts.turnID,
-				ChildID:  "unknown", // We don't know which child this came from
-				Result:   result,
-			})
-		}
+	// Safely close the finishedChan exactly once
+	if fc != nil {
+		ts.closeOnce.Do(func() {
+			close(fc)
+		})
 	}
+
+	// We no longer close(ts.pendingResults) here to avoid panicking any
+	// concurrent deliverSubTurnResult calls. We rely on GC to clean up the channel.
 }
 
 // ====================== Ephemeral Session Store ======================

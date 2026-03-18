@@ -188,15 +188,48 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult
 	start := time.Now()
-	if asyncExec, ok := tool.(AsyncExecutor); ok && asyncCallback != nil {
-		logger.DebugCF("tool", "Executing async tool via ExecuteAsync",
-			map[string]any{
-				"tool": name,
-			})
-		result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
-	} else {
-		result = tool.Execute(ctx, args)
+
+	// Use recover to catch any panics during tool execution
+	// This prevents tool crashes from killing the entire agent
+	func() {
+		defer func() {
+			if re := recover(); re != nil {
+				errMsg := fmt.Sprintf("Tool '%s' crashed with panic: %v", name, re)
+				logger.ErrorCF("tool", "Tool execution panic recovered",
+					map[string]any{
+						"tool":  name,
+						"panic": fmt.Sprintf("%v", re),
+					})
+				result = &ToolResult{
+					ForLLM:  errMsg,
+					ForUser: errMsg,
+					IsError: true,
+					Err:     fmt.Errorf("panic: %v", re),
+				}
+			}
+		}()
+
+		if asyncExec, ok := tool.(AsyncExecutor); ok && asyncCallback != nil {
+			logger.DebugCF("tool", "Executing async tool via ExecuteAsync",
+				map[string]any{
+					"tool": name,
+				})
+			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
+		} else {
+			result = tool.Execute(ctx, args)
+		}
+	}()
+
+	// Handle nil result (should not happen, but defensive)
+	if result == nil {
+		result = &ToolResult{
+			ForLLM:  fmt.Sprintf("Tool '%s' returned nil result unexpectedly", name),
+			ForUser: fmt.Sprintf("Tool '%s' returned nil result unexpectedly", name),
+			IsError: true,
+			Err:     fmt.Errorf("nil result from tool"),
+		}
 	}
+
 	duration := time.Since(start)
 
 	// Log based on result type

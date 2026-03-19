@@ -3,13 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/logger"
 	"github.com/khunquant/khunquant/pkg/media"
 	"github.com/khunquant/khunquant/pkg/memory"
 	"github.com/khunquant/khunquant/pkg/providers"
@@ -95,9 +95,11 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("exec") {
 		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
 		if err != nil {
-			log.Fatalf("Critical error: unable to initialize exec tool: %v", err)
+			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
+				map[string]any{"error": err.Error()})
+		} else {
+			toolsRegistry.Register(execTool)
 		}
-		toolsRegistry.Register(execTool)
 	}
 
 	if cfg.Tools.IsToolEnabled("edit_file") {
@@ -283,8 +285,8 @@ func NewAgentInstance(
 			})
 			lightCandidates = resolved
 		} else {
-			log.Printf("routing: light_model %q not found in model_list — routing disabled for agent %q",
-				rc.LightModel, agentID)
+			logger.WarnCF("agent", "Routing light model not found; routing disabled",
+				map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
 		}
 	}
 
@@ -397,7 +399,8 @@ func (a *AgentInstance) Close() error {
 func initSessionStore(dir string) session.SessionStore {
 	store, err := memory.NewJSONLStore(dir)
 	if err != nil {
-		log.Printf("memory: init store: %v; using json sessions", err)
+		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
+			map[string]any{"error": err.Error()})
 		return session.NewSessionManager(dir)
 	}
 
@@ -405,11 +408,12 @@ func initSessionStore(dir string) session.SessionStore {
 		// Migration failure means the store could not write data.
 		// Fall back to SessionManager to avoid a split state where
 		// some sessions are in JSONL and others remain in JSON.
-		log.Printf("memory: migration failed: %v; falling back to json sessions", merr)
+		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
+			map[string]any{"error": merr.Error()})
 		store.Close()
 		return session.NewSessionManager(dir)
 	} else if n > 0 {
-		log.Printf("memory: migrated %d session(s) to jsonl", n)
+		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
 	}
 
 	return session.NewJSONLBackend(store)

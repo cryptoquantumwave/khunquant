@@ -8,17 +8,25 @@ import (
 )
 
 func init() {
-	exchanges.RegisterFactory("binanceth", func(cfg *config.Config) (exchanges.Exchange, error) {
+	exchanges.RegisterFactory(Name, func(cfg *config.Config) (exchanges.Exchange, error) {
 		acc, ok := cfg.Exchanges.BinanceTH.ResolveAccount("")
 		if !ok {
-			return nil, fmt.Errorf("binanceth: no accounts configured")
+			return nil, fmt.Errorf("%s: no accounts configured", Name)
 		}
 		return NewBinanceTHExchange(acc)
 	})
-	exchanges.RegisterAccountFactory("binanceth", func(cfg *config.Config, accountName string) (exchanges.Exchange, error) {
+	exchanges.RegisterAccountFactory(Name, func(cfg *config.Config, accountName string) (exchanges.Exchange, error) {
 		acc, ok := cfg.Exchanges.BinanceTH.ResolveAccount(accountName)
 		if !ok {
-			return nil, fmt.Errorf("binanceth: account %q not found", accountName)
+			var names []string
+			for i, a := range cfg.Exchanges.BinanceTH.Accounts {
+				n := a.Name
+				if n == "" {
+					n = fmt.Sprintf("%d", i+1)
+				}
+				names = append(names, n)
+			}
+			return nil, exchanges.ErrAccountNotFound(Name, accountName, names)
 		}
 		return NewBinanceTHExchange(acc)
 	})

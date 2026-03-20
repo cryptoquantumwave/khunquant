@@ -21,7 +21,7 @@ func NewExchangeBalanceTool(cfg *config.Config) *ExchangeBalanceTool {
 }
 
 func (t *ExchangeBalanceTool) Name() string {
-	return "exchange_balance"
+	return "get_assets_list"
 }
 
 func (t *ExchangeBalanceTool) Description() string {
@@ -78,7 +78,7 @@ func (t *ExchangeBalanceTool) Execute(ctx context.Context, args map[string]any) 
 
 	ex, err := exchanges.CreateExchangeForAccount(exchangeName, accountName, t.cfg)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("exchange_balance: %v", err))
+		return ErrorResult(fmt.Sprintf("get_assets_list: %v", err))
 	}
 
 	// Use WalletExchange if available, otherwise fall back to basic GetBalances.
@@ -89,7 +89,7 @@ func (t *ExchangeBalanceTool) Execute(ctx context.Context, args map[string]any) 
 
 	balances, err := we.GetWalletBalances(ctx, walletType)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("exchange_balance: %v", err))
+		return ErrorResult(fmt.Sprintf("get_assets_list: %v", err))
 	}
 
 	// Apply asset filter.
@@ -124,7 +124,7 @@ func (t *ExchangeBalanceTool) Execute(ctx context.Context, args map[string]any) 
 func (t *ExchangeBalanceTool) fallbackGetBalances(ctx context.Context, ex exchanges.Exchange, exchangeName, accountName, assetFilter string) *ToolResult {
 	balances, err := ex.GetBalances(ctx)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("exchange_balance: %v", err))
+		return ErrorResult(fmt.Sprintf("get_assets_list: %v", err))
 	}
 
 	if assetFilter != "" {

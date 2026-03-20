@@ -20,7 +20,7 @@ func NewExchangeTotalValueTool(cfg *config.Config) *ExchangeTotalValueTool {
 	return &ExchangeTotalValueTool{cfg: cfg}
 }
 
-func (t *ExchangeTotalValueTool) Name() string { return "exchange_total_value" }
+func (t *ExchangeTotalValueTool) Name() string { return "get_total_value" }
 
 func (t *ExchangeTotalValueTool) Description() string {
 	return "Estimate the total portfolio value in a quote currency (default USDT) by fetching all wallet balances and looking up live prices for each asset."
@@ -41,7 +41,7 @@ func (t *ExchangeTotalValueTool) Parameters() map[string]any {
 			},
 			"wallet_type": map[string]any{
 				"type":        "string",
-				"description": "Wallet scope. Same options as exchange_balance: all, spot, funding, futures_usdt, futures_coin, margin, earn_flexible, earn_locked, earn. Default: \"all\".",
+				"description": "Wallet scope. Same options as get_assets_list: all, spot, funding, futures_usdt, futures_coin, margin, earn_flexible, earn_locked, earn. Default: \"all\".",
 				"enum":        []string{"spot", "funding", "futures_usdt", "futures_coin", "margin", "earn_flexible", "earn_locked", "earn", "all"},
 			},
 			"quote": map[string]any{
@@ -73,12 +73,12 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 
 	ex, err := exchanges.CreateExchangeForAccount(exchangeName, accountName, t.cfg)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("exchange_total_value: %v", err))
+		return ErrorResult(fmt.Sprintf("get_total_value: %v", err))
 	}
 
 	pe, ok := ex.(exchanges.PricedExchange)
 	if !ok {
-		return ErrorResult(fmt.Sprintf("exchange_total_value: exchange %q does not support price lookup", exchangeName))
+		return ErrorResult(fmt.Sprintf("get_total_value: exchange %q does not support price lookup", exchangeName))
 	}
 
 	// Probe that the quote currency is supported (skip for BTC since BTC/BTC is a self-pair returning 0).
@@ -91,7 +91,7 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 	// Fetch all balances for the requested wallet scope.
 	balances, err := pe.GetWalletBalances(ctx, walletType)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("exchange_total_value: fetch balances: %v", err))
+		return ErrorResult(fmt.Sprintf("get_total_value: fetch balances: %v", err))
 	}
 
 	exchangeHeader := exchangeName

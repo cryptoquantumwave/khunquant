@@ -7,6 +7,13 @@ import (
 	"github.com/khunquant/khunquant/pkg/config"
 )
 
+// ErrAccountNotFound returns a standardised error when a named account does not exist
+// for a given exchange. All exchange packages should use this instead of a hand-crafted
+// fmt.Errorf so that the message format is maintained in a single place.
+func ErrAccountNotFound(exchange, accountName string, available []string) error {
+	return fmt.Errorf("%s: account %q not found (available: %v)", exchange, accountName, available)
+}
+
 // ExchangeFactory is a constructor function that creates an Exchange from config.
 // Each exchange subpackage registers one factory via init().
 type ExchangeFactory func(cfg *config.Config) (Exchange, error)

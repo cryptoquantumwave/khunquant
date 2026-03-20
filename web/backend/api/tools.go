@@ -119,16 +119,22 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "spawn",
 	},
 	{
-		Name:        "exchange_balance",
+		Name:        "get_assets_list",
 		Description: "Retrieve asset balances from a configured cryptocurrency exchange.",
 		Category:    "portfolios",
-		ConfigKey:   "exchange_balance",
+		ConfigKey:   "get_assets_list",
 	},
 	{
-		Name:        "exchange_total_value",
+		Name:        "get_total_value",
 		Description: "Estimate the total portfolio value in a quote currency by fetching all wallet balances and looking up live prices.",
 		Category:    "portfolios",
-		ConfigKey:   "exchange_total_value",
+		ConfigKey:   "get_total_value",
+	},
+	{
+		Name:        "list_portfolios",
+		Description: "List all available portfolio accounts (exchange + account name pairs) that are enabled and have credentials configured.",
+		Category:    "portfolios",
+		ConfigKey:   "list_portfolios",
 	},
 	{
 		Name:        "i2c",
@@ -312,10 +318,12 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Subagent.Enabled = true
 		}
-	case "exchange_balance":
-		cfg.Tools.ExchangeBalance.Enabled = enabled
-	case "exchange_total_value":
-		cfg.Tools.ExchangeTotalValue.Enabled = enabled
+	case "get_assets_list":
+		cfg.Tools.GetAssetsList.Enabled = enabled
+	case "get_total_value":
+		cfg.Tools.GetTotalValue.Enabled = enabled
+	case "list_portfolios":
+		cfg.Tools.ListPortfolios.Enabled = enabled
 	case "i2c":
 		cfg.Tools.I2C.Enabled = enabled
 	case "spi":

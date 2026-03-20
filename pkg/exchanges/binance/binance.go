@@ -12,6 +12,9 @@ import (
 	"github.com/khunquant/khunquant/pkg/exchanges"
 )
 
+// Name is the canonical identifier for this exchange.
+const Name = "binance"
+
 // BinanceExchange implements exchanges.WalletExchange using the CCXT Go library.
 type BinanceExchange struct {
 	spot      *ccxt.Binance     // spot / funding / cross-margin
@@ -50,7 +53,7 @@ func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExc
 }
 
 // Name returns the exchange identifier.
-func (b *BinanceExchange) Name() string { return "binance" }
+func (b *BinanceExchange) Name() string { return Name }
 
 // SupportedWalletTypes returns all wallet types this exchange supports.
 func (b *BinanceExchange) SupportedWalletTypes() []string {

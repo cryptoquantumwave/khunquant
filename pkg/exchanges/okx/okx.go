@@ -11,6 +11,9 @@ import (
 	"github.com/khunquant/khunquant/pkg/exchanges"
 )
 
+// Name is the canonical identifier for this exchange.
+const Name = "okx"
+
 // OKXExchange implements exchanges.WalletExchange using the CCXT Go library.
 type OKXExchange struct {
 	client    *ccxt.Okx
@@ -42,7 +45,7 @@ func NewOKXExchange(creds config.OKXExchangeAccount, testnet bool) (*OKXExchange
 }
 
 // Name returns the exchange identifier.
-func (o *OKXExchange) Name() string { return "okx" }
+func (o *OKXExchange) Name() string { return Name }
 
 // SupportedWalletTypes returns all wallet types this exchange supports.
 func (o *OKXExchange) SupportedWalletTypes() []string {

@@ -18,6 +18,9 @@ import (
 	"github.com/khunquant/khunquant/pkg/exchanges"
 )
 
+// Name is the canonical identifier for this exchange.
+const Name = "binanceth"
+
 // BinanceTHExchange implements exchanges.PricedExchange using the Binance Thailand REST API.
 type BinanceTHExchange struct {
 	apiKey    string
@@ -38,7 +41,7 @@ func NewBinanceTHExchange(creds config.ExchangeAccount) (*BinanceTHExchange, err
 }
 
 // Name returns the exchange identifier.
-func (b *BinanceTHExchange) Name() string { return "binanceth" }
+func (b *BinanceTHExchange) Name() string { return Name }
 
 // SupportedWalletTypes returns all wallet types this exchange supports.
 func (b *BinanceTHExchange) SupportedWalletTypes() []string {

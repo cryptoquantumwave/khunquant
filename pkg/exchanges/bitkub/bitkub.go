@@ -17,6 +17,9 @@ import (
 	"github.com/khunquant/khunquant/pkg/exchanges"
 )
 
+// Name is the canonical identifier for this exchange.
+const Name = "bitkub"
+
 // BitkubExchange implements exchanges.PricedExchange using Bitkub REST API.
 type BitkubExchange struct {
 	apiKey    string
@@ -37,7 +40,7 @@ func NewBitkubExchange(creds config.ExchangeAccount) (*BitkubExchange, error) {
 }
 
 // Name returns the exchange identifier.
-func (b *BitkubExchange) Name() string { return "bitkub" }
+func (b *BitkubExchange) Name() string { return Name }
 
 // SupportedWalletTypes returns all wallet types this exchange supports.
 func (b *BitkubExchange) SupportedWalletTypes() []string {

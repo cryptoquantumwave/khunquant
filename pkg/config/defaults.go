@@ -534,10 +534,25 @@ func DefaultConfig() *Config {
 			WriteFile: ToolConfig{
 				Enabled: true,
 			},
-			ExchangeBalance: ToolConfig{
+			GetAssetsList: ToolConfig{
 				Enabled: true,
 			},
-			ExchangeTotalValue: ToolConfig{
+			GetTotalValue: ToolConfig{
+				Enabled: true,
+			},
+			ListPortfolios: ToolConfig{
+				Enabled: true,
+			},
+			TakeSnapshot: ToolConfig{
+				Enabled: true,
+			},
+			QuerySnapshots: ToolConfig{
+				Enabled: true,
+			},
+			SnapshotSummary: ToolConfig{
+				Enabled: true,
+			},
+			DeleteSnapshots: ToolConfig{
 				Enabled: true,
 			},
 		},

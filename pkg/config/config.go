@@ -851,8 +851,13 @@ type ToolsConfig struct {
 	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"KHUNQUANT_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"KHUNQUANT_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"KHUNQUANT_TOOLS_WRITE_FILE_"`
-	ExchangeBalance    ToolConfig         `json:"exchange_balance"                                         envPrefix:"KHUNQUANT_TOOLS_EXCHANGE_BALANCE_"`
-	ExchangeTotalValue ToolConfig         `json:"exchange_total_value"                                     envPrefix:"KHUNQUANT_TOOLS_EXCHANGE_TOTAL_VALUE_"`
+	GetAssetsList  ToolConfig         `json:"get_assets_list"                                          envPrefix:"KHUNQUANT_TOOLS_GET_ASSETS_LIST_"`
+	GetTotalValue  ToolConfig         `json:"get_total_value"                                          envPrefix:"KHUNQUANT_TOOLS_GET_TOTAL_VALUE_"`
+	ListPortfolios     ToolConfig         `json:"list_portfolios"                                          envPrefix:"KHUNQUANT_TOOLS_LIST_PORTFOLIOS_"`
+	TakeSnapshot       ToolConfig         `json:"take_snapshot"                                            envPrefix:"KHUNQUANT_TOOLS_TAKE_SNAPSHOT_"`
+	QuerySnapshots     ToolConfig         `json:"query_snapshots"                                          envPrefix:"KHUNQUANT_TOOLS_QUERY_SNAPSHOTS_"`
+	SnapshotSummary    ToolConfig         `json:"snapshot_summary"                                         envPrefix:"KHUNQUANT_TOOLS_SNAPSHOT_SUMMARY_"`
+	DeleteSnapshots    ToolConfig         `json:"delete_snapshots"                                         envPrefix:"KHUNQUANT_TOOLS_DELETE_SNAPSHOTS_"`
 }
 
 type SearchCacheConfig struct {
@@ -1157,10 +1162,20 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.WriteFile.Enabled
 	case "mcp":
 		return t.MCP.Enabled
-	case "exchange_balance":
-		return t.ExchangeBalance.Enabled
-	case "exchange_total_value":
-		return t.ExchangeTotalValue.Enabled
+	case "get_assets_list":
+		return t.GetAssetsList.Enabled
+	case "get_total_value":
+		return t.GetTotalValue.Enabled
+	case "list_portfolios":
+		return t.ListPortfolios.Enabled
+	case "take_snapshot":
+		return t.TakeSnapshot.Enabled
+	case "query_snapshots":
+		return t.QuerySnapshots.Enabled
+	case "snapshot_summary":
+		return t.SnapshotSummary.Enabled
+	case "delete_snapshots":
+		return t.DeleteSnapshots.Enabled
 	default:
 		return true
 	}

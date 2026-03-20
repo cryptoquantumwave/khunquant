@@ -14,6 +14,7 @@ import (
 	"github.com/khunquant/khunquant/pkg/providers"
 	"github.com/khunquant/khunquant/pkg/routing"
 	"github.com/khunquant/khunquant/pkg/session"
+	"github.com/khunquant/khunquant/pkg/snapshot"
 	"github.com/khunquant/khunquant/pkg/tools"
 
 	_ "github.com/khunquant/khunquant/pkg/exchanges/binance"
@@ -44,6 +45,9 @@ type AgentInstance struct {
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
 	Candidates                []providers.FallbackCandidate
+
+	// snapshotStore is the shared snapshot database, closed when the agent shuts down.
+	snapshotStore *snapshot.Store
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -101,11 +105,39 @@ func NewAgentInstance(
 		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 	}
 
-	if cfg.Tools.IsToolEnabled("exchange_balance") {
+	if cfg.Tools.IsToolEnabled("get_assets_list") {
 		toolsRegistry.Register(tools.NewExchangeBalanceTool(cfg))
 	}
-	if cfg.Tools.IsToolEnabled("exchange_total_value") {
+	if cfg.Tools.IsToolEnabled("get_total_value") {
 		toolsRegistry.Register(tools.NewExchangeTotalValueTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("list_portfolios") {
+		toolsRegistry.Register(tools.NewListPortfoliosTool(cfg))
+	}
+
+	// Snapshot tools — share a single Store instance.
+	var snapshotStore *snapshot.Store
+	if cfg.Tools.IsToolEnabled("take_snapshot") || cfg.Tools.IsToolEnabled("query_snapshots") ||
+		cfg.Tools.IsToolEnabled("snapshot_summary") || cfg.Tools.IsToolEnabled("delete_snapshots") {
+		var err error
+		snapshotStore, err = snapshot.NewStore(workspace)
+		if err != nil {
+			log.Printf("snapshot: init store: %v; snapshot tools disabled", err)
+		}
+	}
+	if snapshotStore != nil {
+		if cfg.Tools.IsToolEnabled("take_snapshot") {
+			toolsRegistry.Register(tools.NewTakeSnapshotTool(cfg, snapshotStore))
+		}
+		if cfg.Tools.IsToolEnabled("query_snapshots") {
+			toolsRegistry.Register(tools.NewQuerySnapshotsTool(snapshotStore))
+		}
+		if cfg.Tools.IsToolEnabled("snapshot_summary") {
+			toolsRegistry.Register(tools.NewSnapshotSummaryTool(snapshotStore))
+		}
+		if cfg.Tools.IsToolEnabled("delete_snapshots") {
+			toolsRegistry.Register(tools.NewDeleteSnapshotsTool(snapshotStore))
+		}
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
@@ -227,6 +259,7 @@ func NewAgentInstance(
 	}
 
 	return &AgentInstance{
+		snapshotStore:             snapshotStore,
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -294,8 +327,11 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 	return compiled
 }
 
-// Close releases resources held by the agent's session store.
+// Close releases resources held by the agent's session store and snapshot store.
 func (a *AgentInstance) Close() error {
+	if a.snapshotStore != nil {
+		a.snapshotStore.Close()
+	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}

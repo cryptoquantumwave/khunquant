@@ -8,17 +8,25 @@ import (
 )
 
 func init() {
-	exchanges.RegisterFactory("bitkub", func(cfg *config.Config) (exchanges.Exchange, error) {
+	exchanges.RegisterFactory(Name, func(cfg *config.Config) (exchanges.Exchange, error) {
 		acc, ok := cfg.Exchanges.Bitkub.ResolveAccount("")
 		if !ok {
-			return nil, fmt.Errorf("bitkub: no accounts configured")
+			return nil, fmt.Errorf("%s: no accounts configured", Name)
 		}
 		return NewBitkubExchange(acc)
 	})
-	exchanges.RegisterAccountFactory("bitkub", func(cfg *config.Config, accountName string) (exchanges.Exchange, error) {
+	exchanges.RegisterAccountFactory(Name, func(cfg *config.Config, accountName string) (exchanges.Exchange, error) {
 		acc, ok := cfg.Exchanges.Bitkub.ResolveAccount(accountName)
 		if !ok {
-			return nil, fmt.Errorf("bitkub: account %q not found", accountName)
+			var names []string
+			for i, a := range cfg.Exchanges.Bitkub.Accounts {
+				n := a.Name
+				if n == "" {
+					n = fmt.Sprintf("%d", i+1)
+				}
+				names = append(names, n)
+			}
+			return nil, exchanges.ErrAccountNotFound(Name, accountName, names)
 		}
 		return NewBitkubExchange(acc)
 	})

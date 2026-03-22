@@ -342,6 +342,76 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	return nil
 }
 
+// drainBusToSteering consumes inbound messages and redirects messages from the
+// active scope into the steering queue. Messages from other scopes are requeued
+// so they can be processed normally after the active turn. It drains all
+// immediately available messages, blocking for the first one until ctx is done.
+func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) {
+	blocking := true
+	for {
+		var msg bus.InboundMessage
+
+		if blocking {
+			// Block waiting for the first available message or ctx cancellation.
+			select {
+			case <-ctx.Done():
+				return
+			case m, ok := <-al.bus.InboundChan():
+				if !ok {
+					return
+				}
+				msg = m
+			}
+		} else {
+			// Non-blocking: drain any remaining queued messages, return when empty.
+			select {
+			case m, ok := <-al.bus.InboundChan():
+				if !ok {
+					return
+				}
+				msg = m
+			default:
+				return
+			}
+		}
+		blocking = false
+
+		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
+		if !scopeOK || msgScope != activeScope {
+			if err := al.requeueInboundMessage(msg); err != nil {
+				logger.WarnCF("agent", "Failed to requeue non-steering inbound message", map[string]any{
+					"error":     err.Error(),
+					"channel":   msg.Channel,
+					"sender_id": msg.SenderID,
+				})
+			}
+			continue
+		}
+
+		// Transcribe audio if needed before steering, so the agent sees text.
+		msg, _ = al.transcribeAudioInMessage(ctx, msg)
+
+		logger.InfoCF("agent", "Redirecting inbound message to steering queue",
+			map[string]any{
+				"channel":     msg.Channel,
+				"sender_id":   msg.SenderID,
+				"content_len": len(msg.Content),
+				"scope":       activeScope,
+			})
+
+		if err := al.enqueueSteeringMessage(activeScope, activeAgentID, providers.Message{
+			Role:    "user",
+			Content: msg.Content,
+			Media:   append([]string(nil), msg.Media...),
+		}); err != nil {
+			logger.WarnCF("agent", "Failed to steer message, will be lost",
+				map[string]any{
+					"error":   err.Error(),
+					"channel": msg.Channel,
+				})
+		}
+	}
+}
 func (al *AgentLoop) Stop() {
 	al.running.Store(false)
 }

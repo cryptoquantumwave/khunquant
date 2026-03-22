@@ -298,6 +298,7 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("subturn panicked: %v", r)
+			result = nil
 			logger.ErrorCF("subturn", "SubTurn panicked", map[string]any{
 				"child_id":  childID,
 				"parent_id": parentTS.turnID,

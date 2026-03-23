@@ -22,6 +22,41 @@ const (
 	FATAL = zerolog.FatalLevel
 )
 
+// secretsMu guards the set of registered secret strings that must be redacted
+// from all log output.
+var (
+	secretsMu sync.RWMutex
+	secrets   []string // ordered list; values are never empty
+)
+
+// RegisterSecret registers a sensitive value (e.g. an API key or secret) so
+// that it is automatically redacted in all log output. Call this once per key
+// at adapter initialisation time. Empty strings are silently ignored.
+func RegisterSecret(s string) {
+	if s == "" {
+		return
+	}
+	secretsMu.Lock()
+	defer secretsMu.Unlock()
+	for _, existing := range secrets {
+		if existing == s {
+			return // already registered
+		}
+	}
+	secrets = append(secrets, s)
+}
+
+// Redact replaces all registered secret values in s with "***REDACTED***".
+// It is safe to call concurrently.
+func Redact(s string) string {
+	secretsMu.RLock()
+	defer secretsMu.RUnlock()
+	for _, sec := range secrets {
+		s = strings.ReplaceAll(s, sec, "***REDACTED***")
+	}
+	return s
+}
+
 var (
 	logLevelNames = map[LogLevel]string{
 		DEBUG: "DEBUG",
@@ -65,12 +100,14 @@ func formatFieldValue(i any) string {
 	case []byte:
 		s = string(val)
 	default:
-		return fmt.Sprintf("%v", i)
+		return Redact(fmt.Sprintf("%v", i))
 	}
 
 	if unquoted, err := strconv.Unquote(s); err == nil {
 		s = unquoted
 	}
+
+	s = Redact(s)
 
 	if strings.Contains(s, "\n") {
 		return fmt.Sprintf("\n%s", s)

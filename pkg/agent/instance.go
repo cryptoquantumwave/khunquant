@@ -23,6 +23,7 @@ import (
 	_ "github.com/khunquant/khunquant/pkg/exchanges/okx"
 )
 
+
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
@@ -138,6 +139,68 @@ func NewAgentInstance(
 		if cfg.Tools.IsToolEnabled("delete_snapshots") {
 			toolsRegistry.Register(tools.NewDeleteSnapshotsTool(snapshotStore))
 		}
+	}
+
+	// Market intelligence tools (Track A).
+	if cfg.Tools.IsToolEnabled("get_ticker") {
+		toolsRegistry.Register(tools.NewGetTickerTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_tickers") {
+		toolsRegistry.Register(tools.NewGetTickersTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_ohlcv") {
+		toolsRegistry.Register(tools.NewGetOHLCVTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_orderbook") {
+		toolsRegistry.Register(tools.NewGetOrderBookTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_markets") {
+		toolsRegistry.Register(tools.NewGetMarketsTool(cfg))
+	}
+
+	// Order execution tools (Track B).
+	if cfg.Tools.IsToolEnabled("create_order") {
+		toolsRegistry.Register(tools.NewCreateOrderTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("cancel_order") {
+		toolsRegistry.Register(tools.NewCancelOrderTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_order") {
+		toolsRegistry.Register(tools.NewGetOrderTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_open_orders") {
+		toolsRegistry.Register(tools.NewGetOpenOrdersTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_order_history") {
+		toolsRegistry.Register(tools.NewGetOrderHistoryTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_trade_history") {
+		toolsRegistry.Register(tools.NewGetTradeHistoryTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("emergency_stop") {
+		toolsRegistry.Register(tools.NewEmergencyStopTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("paper_trade") {
+		toolsRegistry.Register(tools.NewPaperTradeTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_order_rate_status") {
+		toolsRegistry.Register(tools.NewGetOrderRateStatusTool())
+	}
+
+	// Technical analysis tools (Track C).
+	if cfg.Tools.IsToolEnabled("calculate_indicators") {
+		toolsRegistry.Register(tools.NewCalculateIndicatorsTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("market_analysis") {
+		toolsRegistry.Register(tools.NewMarketAnalysisTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("portfolio_allocation") {
+		toolsRegistry.Register(tools.NewPortfolioAllocationTool(cfg))
+	}
+
+	// Transfer tools (Track D — alert tools require cron service, registered in gateway).
+	if cfg.Tools.IsToolEnabled("transfer_funds") {
+		toolsRegistry.Register(tools.NewTransferFundsTool(cfg))
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")

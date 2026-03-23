@@ -27,6 +27,34 @@ const (
 	NameSPI             = "spi"
 	NameToolSearchRegex = "tool_search_tool_regex"
 	NameToolSearchBM25  = "tool_search_tool_bm25"
+
+	// Market intelligence (Track A)
+	NameGetTicker    = "get_ticker"
+	NameGetTickers   = "get_tickers"
+	NameGetOHLCV     = "get_ohlcv"
+	NameGetOrderBook = "get_orderbook"
+	NameGetMarkets   = "get_markets"
+
+	// Order execution (Track B)
+	NameCreateOrder        = "create_order"
+	NameCancelOrder        = "cancel_order"
+	NameGetOrder           = "get_order"
+	NameGetOpenOrders      = "get_open_orders"
+	NameGetOrderHistory    = "get_order_history"
+	NameGetTradeHistory    = "get_trade_history"
+	NameEmergencyStop      = "emergency_stop"
+	NamePaperTrade         = "paper_trade"
+	NameGetOrderRateStatus = "get_order_rate_status"
+
+	// Technical analysis (Track C)
+	NameCalculateIndicators = "calculate_indicators"
+	NameMarketAnalysis      = "market_analysis"
+	NamePortfolioAllocation = "portfolio_allocation"
+
+	// Alerts and transfers (Track D)
+	NameSetPriceAlert     = "set_price_alert"
+	NameSetIndicatorAlert = "set_indicator_alert"
+	NameTransferFunds     = "transfer_funds"
 )
 
 // Category constants for the web UI tool catalog.
@@ -40,6 +68,10 @@ const (
 	CatPortfolios    = "portfolios"
 	CatHardware      = "hardware"
 	CatDiscovery     = "discovery"
+	CatMarkets       = "markets"
+	CatOrders        = "orders"
+	CatAnalysis      = "analysis"
+	CatAlerts        = "alerts"
 )
 
 // Catalog description constants — short, UI-facing summaries for the web tool catalog.

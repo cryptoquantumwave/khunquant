@@ -82,8 +82,9 @@ type Config struct {
 	Providers ProvidersConfig `json:"providers,omitempty"`
 	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"`
-	Tools     ToolsConfig     `json:"tools"`
-	Exchanges ExchangesConfig `json:"exchanges"`
+	Tools       ToolsConfig       `json:"tools"`
+	Exchanges   ExchangesConfig   `json:"exchanges"`
+	TradingRisk TradingRiskConfig `json:"trading_risk,omitempty"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
 	Voice     VoiceConfig     `json:"voice"`
@@ -91,11 +92,70 @@ type Config struct {
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 }
 
+// PermissionScope restricts what operations an exchange account may perform.
+// Multiple scopes may be combined. An empty slice means full access.
+type PermissionScope string
+
+const (
+	// ScopeMarketData allows read-only market data fetching only.
+	ScopeMarketData PermissionScope = "market_data"
+	// ScopeTrade allows order placement and cancellation.
+	ScopeTrade PermissionScope = "trade"
+	// ScopeTransfer allows internal fund transfers between wallets.
+	ScopeTransfer PermissionScope = "transfer"
+)
+
 // ExchangeAccount holds credentials for a single named exchange sub-account.
 type ExchangeAccount struct {
-	Name   string `json:"name,omitempty"`
-	APIKey string `json:"api_key"`
-	Secret string `json:"secret"`
+	Name        string            `json:"name,omitempty"`
+	APIKey      string            `json:"api_key"`
+	Secret      string            `json:"secret"`
+	Permissions []PermissionScope `json:"permissions,omitempty"` // empty = all permissions
+}
+
+// HasPermission returns true if the account has the requested scope.
+// An empty Permissions list grants all scopes (backward-compatible default).
+func (a ExchangeAccount) HasPermission(scope PermissionScope) bool {
+	if len(a.Permissions) == 0 {
+		return true
+	}
+	for _, p := range a.Permissions {
+		if p == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactedAPIKey returns the API key with all but the last 4 characters masked,
+// safe for logging. Returns "***" for keys shorter than 4 characters.
+func (a ExchangeAccount) RedactedAPIKey() string {
+	if len(a.APIKey) <= 4 {
+		return "***"
+	}
+	return strings.Repeat("*", len(a.APIKey)-4) + a.APIKey[len(a.APIKey)-4:]
+}
+
+// TradingRiskConfig holds per-exchange risk controls for order execution.
+type TradingRiskConfig struct {
+	// PaperTradingMode forces all create_order calls to simulate without real execution.
+	PaperTradingMode bool `json:"paper_trading_mode" env:"KHUNQUANT_TRADING_PAPER_MODE"`
+
+	// MaxOrderValueUSD rejects any single order whose notional exceeds this value (USD).
+	// 0 means no limit. Recommended: 10000.
+	MaxOrderValueUSD float64 `json:"max_order_value_usd" env:"KHUNQUANT_TRADING_MAX_ORDER_USD"`
+
+	// DailyLossLimitUSD pauses order execution when the day's realised losses
+	// exceed this value (USD). 0 means no limit.
+	DailyLossLimitUSD float64 `json:"daily_loss_limit_usd" env:"KHUNQUANT_TRADING_DAILY_LOSS_USD"`
+
+	// AllowMargin enables margin / cross-collateral order types.
+	// Default false — must explicitly opt-in.
+	AllowMargin bool `json:"allow_margin" env:"KHUNQUANT_TRADING_ALLOW_MARGIN"`
+
+	// AllowLeverage enables leveraged / futures order types.
+	// Default false — must explicitly opt-in.
+	AllowLeverage bool `json:"allow_leverage" env:"KHUNQUANT_TRADING_ALLOW_LEVERAGE"`
 }
 
 // OKXExchangeAccount extends ExchangeAccount with the OKX-specific passphrase.
@@ -858,6 +918,34 @@ type ToolsConfig struct {
 	QuerySnapshots     ToolConfig         `json:"query_snapshots"                                          envPrefix:"KHUNQUANT_TOOLS_QUERY_SNAPSHOTS_"`
 	SnapshotSummary    ToolConfig         `json:"snapshot_summary"                                         envPrefix:"KHUNQUANT_TOOLS_SNAPSHOT_SUMMARY_"`
 	DeleteSnapshots    ToolConfig         `json:"delete_snapshots"                                         envPrefix:"KHUNQUANT_TOOLS_DELETE_SNAPSHOTS_"`
+
+	// Market intelligence tools (Track A)
+	GetTicker    ToolConfig `json:"get_ticker"    envPrefix:"KHUNQUANT_TOOLS_GET_TICKER_"`
+	GetTickers   ToolConfig `json:"get_tickers"   envPrefix:"KHUNQUANT_TOOLS_GET_TICKERS_"`
+	GetOHLCV     ToolConfig `json:"get_ohlcv"     envPrefix:"KHUNQUANT_TOOLS_GET_OHLCV_"`
+	GetOrderBook ToolConfig `json:"get_orderbook" envPrefix:"KHUNQUANT_TOOLS_GET_ORDERBOOK_"`
+	GetMarkets   ToolConfig `json:"get_markets"   envPrefix:"KHUNQUANT_TOOLS_GET_MARKETS_"`
+
+	// Order execution tools (Track B)
+	CreateOrder       ToolConfig `json:"create_order"         envPrefix:"KHUNQUANT_TOOLS_CREATE_ORDER_"`
+	CancelOrder       ToolConfig `json:"cancel_order"         envPrefix:"KHUNQUANT_TOOLS_CANCEL_ORDER_"`
+	GetOrder          ToolConfig `json:"get_order"            envPrefix:"KHUNQUANT_TOOLS_GET_ORDER_"`
+	GetOpenOrders     ToolConfig `json:"get_open_orders"      envPrefix:"KHUNQUANT_TOOLS_GET_OPEN_ORDERS_"`
+	GetOrderHistory   ToolConfig `json:"get_order_history"    envPrefix:"KHUNQUANT_TOOLS_GET_ORDER_HISTORY_"`
+	GetTradeHistory   ToolConfig `json:"get_trade_history"    envPrefix:"KHUNQUANT_TOOLS_GET_TRADE_HISTORY_"`
+	EmergencyStop     ToolConfig `json:"emergency_stop"       envPrefix:"KHUNQUANT_TOOLS_EMERGENCY_STOP_"`
+	PaperTrade        ToolConfig `json:"paper_trade"          envPrefix:"KHUNQUANT_TOOLS_PAPER_TRADE_"`
+	GetOrderRateStatus ToolConfig `json:"get_order_rate_status" envPrefix:"KHUNQUANT_TOOLS_GET_ORDER_RATE_STATUS_"`
+
+	// Technical analysis tools (Track C)
+	CalculateIndicators ToolConfig `json:"calculate_indicators" envPrefix:"KHUNQUANT_TOOLS_CALCULATE_INDICATORS_"`
+	MarketAnalysis      ToolConfig `json:"market_analysis"      envPrefix:"KHUNQUANT_TOOLS_MARKET_ANALYSIS_"`
+	PortfolioAllocation ToolConfig `json:"portfolio_allocation" envPrefix:"KHUNQUANT_TOOLS_PORTFOLIO_ALLOCATION_"`
+
+	// Alert and transfer tools (Track D)
+	SetPriceAlert     ToolConfig `json:"set_price_alert"     envPrefix:"KHUNQUANT_TOOLS_SET_PRICE_ALERT_"`
+	SetIndicatorAlert ToolConfig `json:"set_indicator_alert" envPrefix:"KHUNQUANT_TOOLS_SET_INDICATOR_ALERT_"`
+	TransferFunds     ToolConfig `json:"transfer_funds"      envPrefix:"KHUNQUANT_TOOLS_TRANSFER_FUNDS_"`
 }
 
 type SearchCacheConfig struct {
@@ -1176,6 +1264,46 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.SnapshotSummary.Enabled
 	case "delete_snapshots":
 		return t.DeleteSnapshots.Enabled
+	case "get_ticker":
+		return t.GetTicker.Enabled
+	case "get_tickers":
+		return t.GetTickers.Enabled
+	case "get_ohlcv":
+		return t.GetOHLCV.Enabled
+	case "get_orderbook":
+		return t.GetOrderBook.Enabled
+	case "get_markets":
+		return t.GetMarkets.Enabled
+	case "create_order":
+		return t.CreateOrder.Enabled
+	case "cancel_order":
+		return t.CancelOrder.Enabled
+	case "get_order":
+		return t.GetOrder.Enabled
+	case "get_open_orders":
+		return t.GetOpenOrders.Enabled
+	case "get_order_history":
+		return t.GetOrderHistory.Enabled
+	case "get_trade_history":
+		return t.GetTradeHistory.Enabled
+	case "emergency_stop":
+		return t.EmergencyStop.Enabled
+	case "paper_trade":
+		return t.PaperTrade.Enabled
+	case "get_order_rate_status":
+		return t.GetOrderRateStatus.Enabled
+	case "calculate_indicators":
+		return t.CalculateIndicators.Enabled
+	case "market_analysis":
+		return t.MarketAnalysis.Enabled
+	case "portfolio_allocation":
+		return t.PortfolioAllocation.Enabled
+	case "set_price_alert":
+		return t.SetPriceAlert.Enabled
+	case "set_indicator_alert":
+		return t.SetIndicatorAlert.Enabled
+	case "transfer_funds":
+		return t.TransferFunds.Enabled
 	default:
 		return true
 	}

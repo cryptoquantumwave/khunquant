@@ -524,7 +524,11 @@
           "agents": "Agents",
           "portfolios": "Portfolios",
           "hardware": "Hardware",
-          "discovery": "Discovery"
+          "discovery": "Discovery",
+          "markets": "Market Data",
+          "orders": "Order Execution",
+          "analysis": "Technical Analysis",
+          "alerts": "Alerts & Transfers"
         },
         "reasons": {
           "requires_linux": "This tool only works on Linux hosts with the required device files exposed.",

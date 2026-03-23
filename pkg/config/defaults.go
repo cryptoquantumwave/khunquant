@@ -555,6 +555,74 @@ func DefaultConfig() *Config {
 			DeleteSnapshots: ToolConfig{
 				Enabled: true,
 			},
+
+			// Market intelligence tools (Track A)
+			GetTicker: ToolConfig{
+				Enabled: true,
+			},
+			GetTickers: ToolConfig{
+				Enabled: true,
+			},
+			GetOHLCV: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderBook: ToolConfig{
+				Enabled: true,
+			},
+			GetMarkets: ToolConfig{
+				Enabled: true,
+			},
+
+			// Order execution tools (Track B) — disabled by default; opt-in for live trading
+			CreateOrder: ToolConfig{
+				Enabled: false,
+			},
+			CancelOrder: ToolConfig{
+				Enabled: false,
+			},
+			GetOrder: ToolConfig{
+				Enabled: true,
+			},
+			GetOpenOrders: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderHistory: ToolConfig{
+				Enabled: true,
+			},
+			GetTradeHistory: ToolConfig{
+				Enabled: true,
+			},
+			EmergencyStop: ToolConfig{
+				Enabled: false,
+			},
+			PaperTrade: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderRateStatus: ToolConfig{
+				Enabled: true,
+			},
+
+			// Technical analysis tools (Track C)
+			CalculateIndicators: ToolConfig{
+				Enabled: true,
+			},
+			MarketAnalysis: ToolConfig{
+				Enabled: true,
+			},
+			PortfolioAllocation: ToolConfig{
+				Enabled: true,
+			},
+
+			// Alert and transfer tools (Track D)
+			SetPriceAlert: ToolConfig{
+				Enabled: true,
+			},
+			SetIndicatorAlert: ToolConfig{
+				Enabled: true,
+			},
+			TransferFunds: ToolConfig{
+				Enabled: false,
+			},
 		},
 		Exchanges: ExchangesConfig{
 			Binance: BinanceExchangeConfig{

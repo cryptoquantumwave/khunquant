@@ -644,11 +644,27 @@ func setupCronTool(
 		agentLoop.RegisterTool(cronTool)
 	}
 
-	// Set onJob handler
-	if cronTool != nil {
-		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+	// Set onJob handler — alert jobs are handled directly in code;
+	// all other jobs are routed through the agent LLM via cronTool.
+	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+		if strings.HasPrefix(job.Name, "price_alert:") {
+			return handlePriceAlertJob(context.Background(), job, cfg, cronService, msgBus)
+		}
+		if strings.HasPrefix(job.Name, "indicator_alert:") {
+			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
+		}
+		if cronTool != nil {
 			return cronTool.ExecuteJob(context.Background(), job)
-		})
+		}
+		return "", fmt.Errorf("no executor configured for job %q", job.Name)
+	})
+
+	// Alert tools (Track D) — require cron service, registered after it is created.
+	if cfg.Tools.IsToolEnabled("set_price_alert") {
+		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService))
+	}
+	if cfg.Tools.IsToolEnabled("set_indicator_alert") {
+		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService))
 	}
 
 	return cronService

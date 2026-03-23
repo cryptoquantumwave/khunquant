@@ -185,6 +185,134 @@ var toolCatalog = []toolCatalogEntry{
 		Category:    tools.CatDiscovery,
 		ConfigKey:   "mcp.discovery.use_bm25",
 	},
+
+	// Market intelligence tools (Track A)
+	{
+		Name:        tools.NameGetTicker,
+		Description: "Fetch the latest ticker for a single trading pair (price, bid, ask, 24h stats).",
+		Category:    tools.CatMarkets,
+		ConfigKey:   tools.NameGetTicker,
+	},
+	{
+		Name:        tools.NameGetTickers,
+		Description: "Fetch tickers for multiple symbols at once (max 20).",
+		Category:    tools.CatMarkets,
+		ConfigKey:   tools.NameGetTickers,
+	},
+	{
+		Name:        tools.NameGetOHLCV,
+		Description: "Fetch OHLCV candlestick data for chart analysis.",
+		Category:    tools.CatMarkets,
+		ConfigKey:   tools.NameGetOHLCV,
+	},
+	{
+		Name:        tools.NameGetOrderBook,
+		Description: "Fetch the current order book bid/ask depth.",
+		Category:    tools.CatMarkets,
+		ConfigKey:   tools.NameGetOrderBook,
+	},
+	{
+		Name:        tools.NameGetMarkets,
+		Description: "List all tradeable markets on a provider with lot size, tick size and fees.",
+		Category:    tools.CatMarkets,
+		ConfigKey:   tools.NameGetMarkets,
+	},
+
+	// Technical analysis tools (Track C)
+	{
+		Name:        tools.NameCalculateIndicators,
+		Description: "Compute technical indicators (SMA, EMA, RSI, MACD, BB, ATR, Stochastic, VWAP) from live OHLCV data.",
+		Category:    tools.CatAnalysis,
+		ConfigKey:   tools.NameCalculateIndicators,
+	},
+	{
+		Name:        tools.NameMarketAnalysis,
+		Description: "Produce a structured market analysis combining price, 24h stats, and key indicators.",
+		Category:    tools.CatAnalysis,
+		ConfigKey:   tools.NameMarketAnalysis,
+	},
+	{
+		Name:        tools.NamePortfolioAllocation,
+		Description: "Compute portfolio allocation weights across all configured accounts with concentration warnings.",
+		Category:    tools.CatAnalysis,
+		ConfigKey:   tools.NamePortfolioAllocation,
+	},
+
+	// Order execution tools (Track B)
+	{
+		Name:        tools.NamePaperTrade,
+		Description: "Simulate an order using live market price without placing a real order.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NamePaperTrade,
+	},
+	{
+		Name:        tools.NameGetOrderRateStatus,
+		Description: "Show current rate-limit token counts per provider.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameGetOrderRateStatus,
+	},
+	{
+		Name:        tools.NameGetOrder,
+		Description: "Retrieve a single order by ID.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameGetOrder,
+	},
+	{
+		Name:        tools.NameGetOpenOrders,
+		Description: "List all currently open orders, optionally filtered by symbol.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameGetOpenOrders,
+	},
+	{
+		Name:        tools.NameGetOrderHistory,
+		Description: "Retrieve closed/filled order history.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameGetOrderHistory,
+	},
+	{
+		Name:        tools.NameGetTradeHistory,
+		Description: "Retrieve personal trade execution history.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameGetTradeHistory,
+	},
+	{
+		Name:        tools.NameCreateOrder,
+		Description: "Place a new order with 7 safety gates. Requires explicit confirmation.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameCreateOrder,
+	},
+	{
+		Name:        tools.NameCancelOrder,
+		Description: "Cancel an open order by ID.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameCancelOrder,
+	},
+	{
+		Name:        tools.NameEmergencyStop,
+		Description: "Cancel ALL open orders across all providers and pause automation. Irreversible.",
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameEmergencyStop,
+	},
+
+	// Alert and transfer tools (Track D)
+	{
+		Name:        tools.NameSetPriceAlert,
+		Description: "Create, list, or cancel price alerts that fire when a symbol crosses a threshold.",
+		Category:    tools.CatAlerts,
+		ConfigKey:   tools.NameSetPriceAlert,
+	},
+	{
+		Name:        tools.NameSetIndicatorAlert,
+		Description: "Create, list, or cancel indicator-based alerts (RSI, MACD, EMA, SMA).",
+		Category:    tools.CatAlerts,
+		ConfigKey:   tools.NameSetIndicatorAlert,
+	},
+	{
+		Name:        tools.NameTransferFunds,
+		Description: "Transfer funds between internal sub-accounts (e.g. spot → futures). Requires confirmation.",
+		Category:    tools.CatAlerts,
+		ConfigKey:   tools.NameTransferFunds,
+	},
 }
 
 func (h *Handler) registerToolRoutes(mux *http.ServeMux) {

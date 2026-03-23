@@ -84,7 +84,7 @@ func probeLocalModelAvailability(m config.ModelConfig) bool {
 	case "ollama":
 		return probeOllamaModelFunc(apiBase, modelID)
 	case "vllm":
-		return probeOpenAICompatibleModelFunc(apiBase, modelID)
+		return probeOpenAICompatibleModelFunc(apiBase, modelID, m.APIKey)
 	case "llamacpp":
 		return probeLlamaCppHealthFunc(apiBase)
 	case "mlx_lm":
@@ -95,7 +95,7 @@ func probeLocalModelAvailability(m config.ModelConfig) bool {
 		return true
 	default:
 		if hasLocalAPIBase(apiBase) {
-			return probeOpenAICompatibleModelFunc(apiBase, modelID)
+			return probeOpenAICompatibleModelFunc(apiBase, modelID, m.APIKey)
 		}
 		return false
 	}
@@ -219,7 +219,7 @@ func probeOllamaModel(apiBase, modelID string) bool {
 			Model string `json:"model"`
 		} `json:"models"`
 	}
-	if err := getJSON(root+"/api/tags", &resp); err != nil {
+	if err := getJSON(root+"/api/tags", &resp, ""); err != nil {
 		return false
 	}
 
@@ -231,7 +231,7 @@ func probeOllamaModel(apiBase, modelID string) bool {
 	return false
 }
 
-func probeOpenAICompatibleModel(apiBase, modelID string) bool {
+func probeOpenAICompatibleModel(apiBase, modelID, apiKey string) bool {
 	if strings.TrimSpace(apiBase) == "" {
 		return false
 	}
@@ -241,7 +241,7 @@ func probeOpenAICompatibleModel(apiBase, modelID string) bool {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp); err != nil {
+	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp, apiKey); err != nil {
 		return false
 	}
 
@@ -262,7 +262,7 @@ func probeLlamaCppHealth(apiBase string) bool {
 	var resp struct {
 		Status string `json:"status"`
 	}
-	if err := getJSON(root+"/health", &resp); err != nil {
+	if err := getJSON(root+"/health", &resp, ""); err != nil {
 		return false
 	}
 	return resp.Status == "ok"
@@ -280,16 +280,19 @@ func probeMLXLMHealth(apiBase string) bool {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp); err != nil {
+	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp, ""); err != nil {
 		return false
 	}
 	return len(resp.Data) > 0
 }
 
-func getJSON(rawURL string, out any) error {
+func getJSON(rawURL string, out any, apiKey string) error {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
+	}
+	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	client := &http.Client{Timeout: modelProbeTimeout}

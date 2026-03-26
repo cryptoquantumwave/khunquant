@@ -22,6 +22,22 @@ var rrCounter atomic.Uint64
 type FlexibleStringSlice []string
 
 func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
+	// Accept a single JSON string for convenience, e.g.:
+	// "text": "Thinking..."
+	var singleString string
+	if err := json.Unmarshal(data, &singleString); err == nil {
+		*f = FlexibleStringSlice{singleString}
+		return nil
+	}
+
+	// Accept a single JSON number too, to keep symmetry with mixed allow_from
+	// payloads that may contain numeric identifiers.
+	var singleNumber float64
+	if err := json.Unmarshal(data, &singleNumber); err == nil {
+		*f = FlexibleStringSlice{fmt.Sprintf("%.0f", singleNumber)}
+		return nil
+	}
+
 	// Try []string first
 	var ss []string
 	if err := json.Unmarshal(data, &ss); err == nil {

@@ -652,3 +652,49 @@ func TestFlexibleStringSlice_UnmarshalText_EmptySliceConsistency(t *testing.T) {
 		}
 	})
 }
+
+func TestFlexibleStringSlice_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "single string",
+			input:    `"Thinking..."`,
+			expected: []string{"Thinking..."},
+		},
+		{
+			name:     "single number",
+			input:    `123`,
+			expected: []string{"123"},
+		},
+		{
+			name:     "string array",
+			input:    `["Thinking...", "Still working..."]`,
+			expected: []string{"Thinking...", "Still working..."},
+		},
+		{
+			name:     "mixed array",
+			input:    `["123", 456]`,
+			expected: []string{"123", "456"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var f FlexibleStringSlice
+			if err := json.Unmarshal([]byte(tt.input), &f); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", tt.input, err)
+			}
+			if len(f) != len(tt.expected) {
+				t.Fatalf("json.Unmarshal(%s) len = %d, want %d", tt.input, len(f), len(tt.expected))
+			}
+			for i, want := range tt.expected {
+				if f[i] != want {
+					t.Fatalf("json.Unmarshal(%s)[%d] = %q, want %q", tt.input, i, f[i], want)
+				}
+			}
+		})
+	}
+}

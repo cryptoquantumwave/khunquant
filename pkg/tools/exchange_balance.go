@@ -167,11 +167,24 @@ func formatWalletBalances(exchangeName, accountName, walletType string, balances
 
 	if walletType == "all" {
 		// Group by wallet type, preserving a stable order.
-		order := []string{"spot", "funding", "futures_usdt", "futures_coin", "margin", "earn_flexible", "earn_locked"}
+		// Known types first; any remaining types (e.g. "cash", "stock" for Settrade) appended after.
+		knownOrder := []string{"spot", "funding", "futures_usdt", "futures_coin", "margin", "earn_flexible", "earn_locked", "cash", "stock"}
+		knownSet := make(map[string]struct{}, len(knownOrder))
+		for _, wt := range knownOrder {
+			knownSet[wt] = struct{}{}
+		}
+
 		groups := make(map[string][]exchanges.WalletBalance)
+		var extraTypes []string
 		for _, b := range balances {
+			if _, seen := groups[b.WalletType]; !seen {
+				if _, known := knownSet[b.WalletType]; !known {
+					extraTypes = append(extraTypes, b.WalletType)
+				}
+			}
 			groups[b.WalletType] = append(groups[b.WalletType], b)
 		}
+		order := append(knownOrder, extraTypes...)
 
 		sb.WriteString(fmt.Sprintf("Balances on %s:\n", header))
 
@@ -265,6 +278,10 @@ func walletTypeLabel(wt string) string {
 		return "Simple Earn (Locked)"
 	case "earn":
 		return "Simple Earn"
+	case "cash":
+		return "Cash"
+	case "stock":
+		return "Stock Holdings"
 	default:
 		return wt
 	}

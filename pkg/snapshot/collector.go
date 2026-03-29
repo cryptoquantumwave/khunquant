@@ -32,6 +32,19 @@ type CollectResult struct {
 	Errors   []string // per-account errors (e.g. "binance/main: connection refused")
 }
 
+// acctEx pairs a resolved exchangeAccount with its live exchange instance.
+type acctEx struct {
+	ea exchangeAccount
+	ex exchanges.Exchange
+}
+
+// pendingPos holds a position together with the native quote used to price it,
+// before cross-exchange conversion to the snapshot quote.
+type pendingPos struct {
+	pos         Position
+	nativeQuote string
+}
+
 // CollectFromExchanges gathers balances from configured exchanges and
 // assembles a Snapshot ready to be saved. Errors from individual accounts
 // are collected in CollectResult.Errors so the caller can surface them to the user.
@@ -66,23 +79,39 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 	}
 
 	result := &CollectResult{Snapshot: snap}
-	var totalValue float64
 
+	// Pass 1: create exchange instances so they can be reused for cross-rate lookups.
+	var acctExchanges []acctEx
 	for _, ea := range accounts {
+		ex, err := exchanges.CreateExchangeForAccount(ea.exchange, ea.account, cfg)
+		if err != nil {
+			acctLabel := ea.exchange
+			if ea.account != "" {
+				acctLabel += "/" + ea.account
+			}
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", acctLabel, err))
+			continue
+		}
+		acctExchanges = append(acctExchanges, acctEx{ea, ex})
+	}
+
+	// Pass 2: collect positions, pricing each asset in the exchange's effective quote.
+	var pending []pendingPos
+
+	for _, ae := range acctExchanges {
+		ea := ae.ea
+		ex := ae.ex
+
 		acctLabel := ea.exchange
 		if ea.account != "" {
 			acctLabel += "/" + ea.account
 		}
 
-		ex, err := exchanges.CreateExchangeForAccount(ea.exchange, ea.account, cfg)
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", acctLabel, err))
-			continue
-		}
+		eQuote := effectiveQuote(ex, quote)
 
 		we, ok := ex.(exchanges.WalletExchange)
 		if !ok {
-			// Basic exchange: use GetBalances.
+			// Basic exchange: use GetBalances (no pricing support).
 			balances, err := ex.GetBalances(ctx)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s: get balances: %v", acctLabel, err))
@@ -99,12 +128,12 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 					Category: "spot",
 					Asset:    b.Asset,
 					Quantity: qty,
-					Quote:    quote,
+					Quote:    eQuote,
 				}
 				if b.Locked > 0 {
 					pos.Meta = map[string]string{"locked": fmt.Sprintf("%f", b.Locked)}
 				}
-				snap.Positions = append(snap.Positions, pos)
+				pending = append(pending, pendingPos{pos, eQuote})
 			}
 			continue
 		}
@@ -113,6 +142,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 		// iterate each supported type individually and merge results.
 		supportedTypes := we.SupportedWalletTypes()
 		var balances []exchanges.WalletBalance
+		var err error
 
 		if sliceContains(supportedTypes, "all") {
 			balances, err = we.GetWalletBalances(ctx, "all")
@@ -131,7 +161,6 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 			}
 		}
 
-		// Try to price assets if exchange supports it.
 		pe, canPrice := ex.(exchanges.PricedExchange)
 		var unpriced []string
 
@@ -147,11 +176,11 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 				Category: b.WalletType,
 				Asset:    b.Asset,
 				Quantity: qty,
-				Quote:    quote,
+				Quote:    eQuote,
 			}
 
 			if canPrice {
-				price, err := pe.FetchPrice(ctx, b.Asset, quote)
+				price, err := pe.FetchPrice(ctx, b.Asset, eQuote)
 				if err == nil {
 					pos.Price = price
 					if price == 0 {
@@ -160,7 +189,6 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 					} else {
 						pos.Value = qty * price
 					}
-					totalValue += pos.Value
 				} else {
 					unpriced = append(unpriced, b.Asset)
 				}
@@ -179,7 +207,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 				pos.Meta[k] = v
 			}
 
-			snap.Positions = append(snap.Positions, pos)
+			pending = append(pending, pendingPos{pos, eQuote})
 		}
 
 		if len(unpriced) > 0 {
@@ -188,8 +216,60 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 		}
 	}
 
+	// Pass 3: build conversion rates — for each native quote ≠ snap.Quote, find
+	// the exchange rate using any available PricedExchange.
+	// convRates[nativeQuote] = multiplier to convert native quote value → snap.Quote value.
+	convRates := map[string]float64{quote: 1.0}
+	for _, pp := range pending {
+		if _, known := convRates[pp.nativeQuote]; known {
+			continue
+		}
+		for _, ae := range acctExchanges {
+			pe, ok := ae.ex.(exchanges.PricedExchange)
+			if !ok {
+				continue
+			}
+			rate, err := pe.FetchPrice(ctx, pp.nativeQuote, quote)
+			if err == nil && rate > 0 {
+				convRates[pp.nativeQuote] = rate
+				break
+			}
+		}
+	}
+
+	// Pass 4: accumulate TotalValue (with cross-rate conversion) and commit positions.
+	var totalValue float64
+	for _, pp := range pending {
+		if pp.pos.Value > 0 {
+			if rate, ok := convRates[pp.nativeQuote]; ok {
+				totalValue += pp.pos.Value * rate
+			}
+		}
+		snap.Positions = append(snap.Positions, pp.pos)
+	}
+
 	snap.TotalValue = totalValue
 	return result, nil
+}
+
+// effectiveQuote returns the best quote currency to use for pricing on ex.
+// If ex implements QuoteLister and requestedQuote is not in its supported list,
+// the first supported quote is returned as a fallback.
+func effectiveQuote(ex exchanges.Exchange, requestedQuote string) string {
+	ql, ok := ex.(exchanges.QuoteLister)
+	if !ok {
+		return requestedQuote
+	}
+	supported := ql.SupportedQuotes()
+	for _, q := range supported {
+		if strings.EqualFold(q, requestedQuote) {
+			return requestedQuote
+		}
+	}
+	if len(supported) > 0 {
+		return supported[0]
+	}
+	return requestedQuote
 }
 
 // listExchangeAccounts returns all configured exchange/account pairs from config.
@@ -215,6 +295,11 @@ func listExchangeAccounts(cfg *config.Config) []exchangeAccount {
 	if ex.OKX.Enabled {
 		for _, acc := range ex.OKX.Accounts {
 			result = append(result, exchangeAccount{"okx", acc.Name})
+		}
+	}
+	if ex.Settrade.Enabled {
+		for _, acc := range ex.Settrade.Accounts {
+			result = append(result, exchangeAccount{"settrade", acc.Name})
 		}
 	}
 

@@ -21,6 +21,7 @@ import (
 	_ "github.com/khunquant/khunquant/pkg/exchanges/binanceth"
 	_ "github.com/khunquant/khunquant/pkg/exchanges/bitkub"
 	_ "github.com/khunquant/khunquant/pkg/exchanges/okx"
+	_ "github.com/khunquant/khunquant/pkg/exchanges/settrade"
 )
 
 

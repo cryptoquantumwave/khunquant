@@ -38,6 +38,10 @@ func NewOKXExchange(creds config.OKXExchangeAccount, testnet bool) (*OKXExchange
 		client.SetSandboxMode(true)
 	}
 
+	if _, err := client.LoadMarkets(); err != nil {
+		return nil, fmt.Errorf("okx: load markets: %w", err)
+	}
+
 	return &OKXExchange{
 		client:    client,
 		isTestnet: testnet,
@@ -83,6 +87,11 @@ func (o *OKXExchange) GetWalletBalances(ctx context.Context, walletType string) 
 var usdLike = map[string]bool{
 	"USDT": true, "USDC": true, "BUSD": true, "FDUSD": true,
 	"TUSD": true, "DAI": true, "USD": true, "USDP": true, "GUSD": true,
+}
+
+// SupportedQuotes implements exchanges.QuoteLister.
+func (o *OKXExchange) SupportedQuotes() []string {
+	return []string{"USDT", "USDC", "BTC", "ETH"}
 }
 
 // FetchPrice implements PricedExchange.

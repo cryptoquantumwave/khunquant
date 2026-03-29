@@ -164,12 +164,46 @@ type OKXExchangeAccount struct {
 	Passphrase string `json:"passphrase"`
 }
 
+// SettradeExchangeAccount extends ExchangeAccount with SETTRADE-specific fields.
+// APIKey = Settrade app login ID; Secret = base64-encoded PKCS#8 ECDSA P-256 private key.
+type SettradeExchangeAccount struct {
+	ExchangeAccount
+	BrokerID  string `json:"broker_id"`      // e.g. "FSSVP"
+	AppCode   string `json:"app_code"`        // e.g. "ALGO" — used in all OAM URL paths
+	AccountNo string `json:"account_no"`      // trading account number
+	PIN       string `json:"pin,omitempty"`   // trading PIN; stored in config for auto-verify
+}
+
+// SettradeExchangeConfig holds the SETTRADE exchange credentials and settings.
+type SettradeExchangeConfig struct {
+	Enabled  bool                      `json:"enabled" env:"KHUNQUANT_EXCHANGES_SETTRADE_ENABLED"`
+	Accounts []SettradeExchangeAccount `json:"accounts,omitempty"`
+}
+
+// ResolveAccount returns the SETTRADE account matching name, or the first account when name is "".
+func (c *SettradeExchangeConfig) ResolveAccount(name string) (SettradeExchangeAccount, bool) {
+	for i, acc := range c.Accounts {
+		effectiveName := acc.Name
+		if effectiveName == "" {
+			effectiveName = fmt.Sprintf("%d", i+1)
+		}
+		if name == "" || strings.EqualFold(effectiveName, name) {
+			if acc.Name == "" {
+				acc.Name = effectiveName
+			}
+			return acc, true
+		}
+	}
+	return SettradeExchangeAccount{}, false
+}
+
 // ExchangesConfig holds configuration for all supported exchanges.
 type ExchangesConfig struct {
 	Binance   BinanceExchangeConfig   `json:"binance"`
 	OKX       OKXExchangeConfig       `json:"okx"`
 	Bitkub    BitkubExchangeConfig    `json:"bitkub"`
 	BinanceTH BinanceTHExchangeConfig `json:"binanceth"`
+	Settrade  SettradeExchangeConfig  `json:"settrade"`
 }
 
 // BinanceExchangeConfig holds the Binance exchange credentials and settings.

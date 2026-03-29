@@ -49,6 +49,15 @@ func ListConfiguredAccounts(cfg *config.Config) []AccountRef {
 			refs = append(refs, AccountRef{ProviderID: "okx", Account: name})
 		}
 	}
+	if ex.Settrade.Enabled {
+		for i, acc := range ex.Settrade.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, AccountRef{ProviderID: "settrade", Account: name})
+		}
+	}
 
 	return refs
 }

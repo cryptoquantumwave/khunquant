@@ -84,14 +84,22 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 	// Probe that the quote currency is supported (skip for BTC since BTC/BTC is a self-pair returning 0).
 	if quote != "BTC" {
 		if _, err := pe.FetchPrice(ctx, "BTC", quote); err != nil {
-			return ErrorResult(fmt.Sprintf("Quote %q is not supported on %s", quote, exchangeName))
+			clean := trimCCXTError(err)
+			if isNetworkError(clean) {
+				return ErrorResult(fmt.Sprintf("Exchange %q is unreachable (network error): %s", exchangeName, clean))
+			}
+			msg := fmt.Sprintf("Quote %q is not supported on %s: %s", quote, exchangeName, clean)
+			if ql, ok := pe.(exchanges.QuoteLister); ok {
+				msg += fmt.Sprintf(". Supported quotes: %s", strings.Join(ql.SupportedQuotes(), ", "))
+			}
+			return ErrorResult(msg)
 		}
 	}
 
 	// Fetch all balances for the requested wallet scope.
 	balances, err := pe.GetWalletBalances(ctx, walletType)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("get_total_value: fetch balances: %v", err))
+		return ErrorResult(fmt.Sprintf("get_total_value: fetch balances: %s", trimCCXTError(err)))
 	}
 
 	exchangeHeader := exchangeName
@@ -143,4 +151,29 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 	}
 
 	return UserResult(result)
+}
+
+// trimCCXTError strips CCXT stack trace noise from an error, keeping only the
+// first meaningful line (e.g. "[ccxtError]::[NetworkError]::[...]").
+func trimCCXTError(err error) string {
+	s := err.Error()
+	if idx := strings.Index(s, "\nStack:"); idx >= 0 {
+		s = s[:idx]
+	}
+	// Also trim at the first bare newline to drop any secondary goroutine dumps.
+	if idx := strings.Index(s, "\n"); idx >= 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+	return s
+}
+
+// isNetworkError reports whether the error message indicates a network/connectivity
+// failure rather than an unsupported-quote error.
+func isNetworkError(msg string) bool {
+	for _, kw := range []string{"NetworkError", "no such host", "dial tcp", "connection refused", "i/o timeout", "network error"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
 }

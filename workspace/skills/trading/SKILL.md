@@ -69,5 +69,15 @@ Cancel ALL open orders across all configured providers. Irreversible.
 
 ## Notes
 - Binance and OKX support full order execution. Bitkub and BinanceTH do not.
+- **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares (must be a multiple of 100). PIN is required in config.
 - The default rate limit is 5 orders per minute per provider.
 - Never place orders over $10,000 notional without explicit user confirmation.
+
+## Settrade Order Notes
+- `symbol`: use SET ticker format e.g. "PTT/THB" or just "PTT"
+- `type`: "limit" (Limit order) or "market" (ATO — At The Open)
+- `amount`: number of shares, must be multiple of 100 (1 round lot)
+- `price`: required for limit orders, ignored for market/ATO
+- Settrade orders require `pin` to be set in config — it is sent automatically
+- Price is automatically rounded to the SET tick size grid (e.g. ฿0.01 below ฿2, ฿1.00 above ฿100)
+- To modify a pending order (change price or volume), use `cancel_order` then place a new one — Settrade's change_order is handled internally

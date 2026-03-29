@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test
+.PHONY: all build install uninstall clean help test sync-workspace
 
 # Build variables
 BINARY_NAME=khunquant
@@ -204,6 +204,18 @@ sync-bin:
 	@mv -f $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX) $(INSTALL_BIN_DIR)/$(BINARY_NAME)
 	@echo "Synced $(BINARY_PATH) → $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
 
+## sync-workspace: Sync all .md files from workspace/ to WORKSPACE_DIR (overwrites duplicates)
+sync-workspace:
+	@echo "Syncing workspace .md files to $(WORKSPACE_DIR)..."
+	@mkdir -p $(WORKSPACE_DIR)
+	@cd $(CURDIR)/workspace && find . -name "*.md" | while read f; do \
+		dest="$(WORKSPACE_DIR)/$$f"; \
+		mkdir -p "$$(dirname $$dest)"; \
+		cp "$$f" "$$dest"; \
+		echo "  synced: $$f"; \
+	done
+	@echo "Sync complete → $(WORKSPACE_DIR)"
+
 ## uninstall: Remove khunquant from system
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."
@@ -314,7 +326,7 @@ help:
 	@echo "  make build              # Build for current platform"
 	@echo "  make install            # Install to ~/.local/bin"
 	@echo "  make uninstall          # Remove from /usr/local/bin"
-	@echo "  make install-skills     # Install skills to workspace"
+	@echo "  make sync-workspace     # Sync workspace .md files to ~/.khunquant/workspace"
 	@echo "  make docker-build       # Build minimal Docker image"
 	@echo "  make docker-test        # Test MCP tools in Docker"
 	@echo ""

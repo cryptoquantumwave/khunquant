@@ -36,6 +36,8 @@ Fetch OHLCV candlestick data.
 - `limit`: number of candles (max 500, default 100)
 - `since`: start time in Unix milliseconds (optional)
 
+**Settrade timeframe mapping**: 1m→1m, 5m→5m, 15m→15m, 1h→60m, 4h→240m, 1d→1d, 1w→1w
+
 ### get_orderbook
 Fetch the current order book.
 - `provider`, `account`, `symbol`: as above
@@ -51,3 +53,4 @@ List all tradeable markets on a provider.
 ## Notes
 - All symbols use CCXT unified format with "/" separator (e.g. "BTC/USDT").
 - BinanceTH and Bitkub have limited market data capabilities (price feed only).
+- **Settrade (SET equity)**: use "PTT/THB" or just "PTT" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.

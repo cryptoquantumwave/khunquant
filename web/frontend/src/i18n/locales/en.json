@@ -16,6 +16,7 @@
     "portfolios_okx": "OKX",
     "portfolios_bitkub": "Bitkub",
     "portfolios_binanceth": "Binance TH",
+    "portfolios_settrade": "Settrade",
     "config": "Config",
     "logs": "Logs",
     "cron": "Cron Jobs",
@@ -606,6 +607,10 @@
     },
     "logs": {
       "clear": "Clear logs",
+      "export": "Export logs",
+      "export_file": "Export as .log file",
+      "export_clipboard": "Copy to clipboard",
+      "export_clipboard_success": "Logs copied to clipboard",
       "empty": "Waiting for logs...",
       "tabs": {
         "all": "All",
@@ -666,6 +671,28 @@
       "credential_set": "Already set — enter new value to update",
       "testnet": "Use Demo Trading",
       "testnet_hint": "Connect to OKX demo trading environment instead of live."
+    },
+    "settrade": {
+      "api_key": "App ID",
+      "api_key_hint": "Your SETTRADE app ID (from the developer portal).",
+      "api_key_placeholder": "Enter App ID",
+      "secret": "App Secret",
+      "secret_hint": "Base64-encoded raw ECDSA P-256 private key scalar provided by your broker.",
+      "secret_placeholder": "Enter App Secret",
+      "credential_set": "Already set — enter new value to update",
+      "broker_id": "Broker ID",
+      "broker_id_hint": "Your broker code assigned by SETTRADE (e.g. FSSVP).",
+      "broker_id_placeholder": "e.g. FSSVP",
+      "app_code": "App Code",
+      "app_code_hint": "Application code from the developer portal (e.g. ALGO).",
+      "app_code_placeholder": "e.g. ALGO",
+      "account_no": "Account Number",
+      "account_no_hint": "Your SETTRADE trading account number.",
+      "account_no_placeholder": "Enter account number",
+      "pin": "Trading PIN",
+      "pin_hint": "Trading PIN used to authorize order placement.",
+      "pin_placeholder": "Enter PIN",
+      "pin_set": "Already set — enter new value to update"
     }
   }
 }

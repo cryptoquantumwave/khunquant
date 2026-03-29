@@ -50,6 +50,11 @@ func (b *BitkubExchange) SupportedWalletTypes() []string {
 	return []string{"spot"}
 }
 
+// SupportedQuotes implements exchanges.QuoteLister.
+func (b *BitkubExchange) SupportedQuotes() []string {
+	return []string{"THB", "USDT"}
+}
+
 // GetBalances implements the basic Exchange interface.
 func (b *BitkubExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
 	wb, err := b.getSpotBalances(ctx)

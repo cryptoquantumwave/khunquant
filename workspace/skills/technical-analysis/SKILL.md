@@ -53,3 +53,4 @@ Compute portfolio allocation weights across all configured accounts.
 - All indicators are computed from local OHLCV data — no external API calls for computation.
 - More bars → more reliable indicators. Use at least 50 bars for SMA(50).
 - Confluence of signals (e.g. RSI oversold + MACD bullish crossover) is more reliable than any single indicator.
+- **Settrade (SET equity)**: fully supported. Use symbol "PTT/THB" and `provider: "settrade"`. Supported timeframes: 1m, 5m, 15m, 1h (→60m), 4h (→240m), 1d, 1w.

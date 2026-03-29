@@ -60,6 +60,11 @@ func (b *BinanceExchange) SupportedWalletTypes() []string {
 	return []string{"spot", "funding", "futures_usdt", "futures_coin", "margin", "earn_flexible", "earn_locked", "earn", "all"}
 }
 
+// SupportedQuotes implements exchanges.QuoteLister.
+func (b *BinanceExchange) SupportedQuotes() []string {
+	return []string{"USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB"}
+}
+
 // GetBalances implements the basic Exchange interface (spot only, for backward compat).
 func (b *BinanceExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
 	wb, err := b.getSpotBalances(ctx)

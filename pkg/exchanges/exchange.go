@@ -37,3 +37,10 @@ type PricedExchange interface {
 	WalletExchange
 	FetchPrice(ctx context.Context, asset, quote string) (float64, error)
 }
+
+// QuoteLister is an optional extension for PricedExchange implementations
+// that can enumerate which quote currencies they support.
+// Used to produce actionable error messages when an unsupported quote is requested.
+type QuoteLister interface {
+	SupportedQuotes() []string
+}

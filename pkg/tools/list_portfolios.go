@@ -87,6 +87,16 @@ func (t *ListPortfoliosTool) Execute(_ context.Context, _ map[string]any) *ToolR
 		}
 	}
 
+	if ex.Settrade.Enabled {
+		for i, acc := range ex.Settrade.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			rows = append(rows, row{exchange: "settrade", account: name})
+		}
+	}
+
 	if len(rows) == 0 {
 		return UserResult("No exchange accounts are configured. Enable an exchange and add credentials to get started.")
 	}

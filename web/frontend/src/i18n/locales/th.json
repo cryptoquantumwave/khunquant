@@ -16,6 +16,7 @@
     "portfolios_okx": "OKX",
     "portfolios_bitkub": "Bitkub",
     "portfolios_binanceth": "Binance TH",
+    "portfolios_settrade": "Settrade",
     "config": "การตั้งค่า",
     "logs": "บันทึก",
     "cron": "งานตามตาราง",
@@ -606,6 +607,10 @@
     },
     "logs": {
       "clear": "ล้างบันทึก",
+      "export": "ส่งออกบันทึก",
+      "export_file": "ส่งออกเป็นไฟล์ .log",
+      "export_clipboard": "คัดลอกไปยังคลิปบอร์ด",
+      "export_clipboard_success": "คัดลอกบันทึกไปยังคลิปบอร์ดแล้ว",
       "empty": "กำลังรอบันทึก...",
       "tabs": {
         "all": "ทั้งหมด",
@@ -666,6 +671,28 @@
       "credential_set": "มีค่าที่ตั้งไว้แล้ว — กรอกค่าใหม่เพื่ออัปเดต",
       "testnet": "ใช้ Demo Trading",
       "testnet_hint": "เชื่อมต่อกับสภาพแวดล้อม Demo Trading ของ OKX แทน Live"
+    },
+    "settrade": {
+      "api_key": "App ID",
+      "api_key_hint": "App ID ของ SETTRADE (จากพอร์ทัลนักพัฒนา)",
+      "api_key_placeholder": "กรอก App ID",
+      "secret": "App Secret",
+      "secret_hint": "Raw ECDSA P-256 private key scalar แบบ Base64 ที่ได้จากโบรกเกอร์",
+      "secret_placeholder": "กรอก App Secret",
+      "credential_set": "มีค่าที่ตั้งไว้แล้ว — กรอกค่าใหม่เพื่ออัปเดต",
+      "broker_id": "Broker ID",
+      "broker_id_hint": "รหัสโบรกเกอร์ที่ได้รับจาก SETTRADE (เช่น FSSVP)",
+      "broker_id_placeholder": "เช่น FSSVP",
+      "app_code": "App Code",
+      "app_code_hint": "App Code จากพอร์ทัลนักพัฒนา (เช่น ALGO)",
+      "app_code_placeholder": "เช่น ALGO",
+      "account_no": "เลขบัญชี",
+      "account_no_hint": "เลขบัญชีซื้อขาย SETTRADE ของคุณ",
+      "account_no_placeholder": "กรอกเลขบัญชี",
+      "pin": "PIN ซื้อขาย",
+      "pin_hint": "PIN ที่ใช้ยืนยันการส่งคำสั่งซื้อขาย",
+      "pin_placeholder": "กรอก PIN",
+      "pin_set": "มีค่าที่ตั้งไว้แล้ว — กรอกค่าใหม่เพื่ออัปเดต"
     }
   }
 }

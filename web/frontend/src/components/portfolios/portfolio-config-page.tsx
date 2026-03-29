@@ -42,6 +42,14 @@ interface OKXAccountDraft extends AccountDraft {
   passphraseEdit: string
 }
 
+interface SettradeAccountDraft extends AccountDraft {
+  brokerId: string
+  appCode: string
+  accountNo: string
+  pin: string
+  pinEdit: string
+}
+
 // ── Exchange-level form ────────────────────────────────────────────────────
 
 interface ExchangeForm {
@@ -65,6 +73,10 @@ interface BinanceTHForm extends ExchangeForm {
   accounts: AccountDraft[]
 }
 
+interface SettradeForm extends ExchangeForm {
+  accounts: SettradeAccountDraft[]
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function emptyAccount(): AccountDraft {
@@ -73,6 +85,17 @@ function emptyAccount(): AccountDraft {
 
 function emptyOKXAccount(): OKXAccountDraft {
   return { ...emptyAccount(), passphrase: "", passphraseEdit: "" }
+}
+
+function emptySettradeAccount(): SettradeAccountDraft {
+  return {
+    ...emptyAccount(),
+    brokerId: "",
+    appCode: "",
+    accountNo: "",
+    pin: "",
+    pinEdit: "",
+  }
 }
 
 function parseAccounts(raw: unknown): AccountDraft[] {
@@ -122,6 +145,36 @@ function serializeOKXAccount(acc: OKXAccountDraft) {
   return { ...serializeAccount(acc), passphrase }
 }
 
+function serializeSettradeAccount(acc: SettradeAccountDraft) {
+  const pin = acc.pinEdit.trim() !== "" ? acc.pinEdit : acc.pin
+  return {
+    ...serializeAccount(acc),
+    broker_id: acc.brokerId,
+    app_code: acc.appCode,
+    account_no: acc.accountNo,
+    ...(pin !== "" ? { pin } : {}),
+  }
+}
+
+function parseSettradeAccounts(raw: unknown): SettradeAccountDraft[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => {
+    const r = asRecord(item)
+    return {
+      name: typeof r.name === "string" ? r.name : "",
+      apiKey: typeof r.api_key === "string" ? r.api_key : "",
+      apiKeyEdit: "",
+      secret: typeof r.secret === "string" ? r.secret : "",
+      secretEdit: "",
+      brokerId: typeof r.broker_id === "string" ? r.broker_id : "",
+      appCode: typeof r.app_code === "string" ? r.app_code : "",
+      accountNo: typeof r.account_no === "string" ? r.account_no : "",
+      pin: typeof r.pin === "string" ? r.pin : "",
+      pinEdit: "",
+    }
+  })
+}
+
 function getExchangeDisplayName(name: string): string {
   switch (name) {
     case "binance":
@@ -132,6 +185,8 @@ function getExchangeDisplayName(name: string): string {
       return "Bitkub"
     case "binanceth":
       return "Binance TH"
+    case "settrade":
+      return "Settrade"
     default:
       return name.charAt(0).toUpperCase() + name.slice(1)
   }
@@ -143,18 +198,34 @@ function AccountCard({
   index,
   account,
   hasPassphrase,
+  isSettrade,
   onChange,
   onRemove,
 }: {
   index: number
-  account: AccountDraft | OKXAccountDraft
+  account: AccountDraft | OKXAccountDraft | SettradeAccountDraft
   hasPassphrase?: boolean
-  onChange: (patch: Partial<OKXAccountDraft>) => void
+  isSettrade?: boolean
+  onChange: (patch: Partial<OKXAccountDraft & SettradeAccountDraft>) => void
   onRemove: () => void
 }) {
   const { t } = useTranslation()
   const placeholder = `Account ${index + 1}`
   const okxAcc = account as OKXAccountDraft
+  const stAcc = account as SettradeAccountDraft
+
+  const apiKeyLabel = isSettrade
+    ? t("portfolios.settrade.api_key")
+    : t("portfolios.binance.api_key")
+  const apiKeyPlaceholder = isSettrade
+    ? (account.apiKey ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.api_key_placeholder"))
+    : (account.apiKey ? t("portfolios.binance.credential_set") : t("portfolios.binance.api_key_placeholder"))
+  const secretLabel = isSettrade
+    ? t("portfolios.settrade.secret")
+    : t("portfolios.binance.secret")
+  const secretPlaceholder = isSettrade
+    ? (account.secret ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.secret_placeholder"))
+    : (account.secret ? t("portfolios.binance.credential_set") : t("portfolios.binance.secret_placeholder"))
 
   return (
     <div className="border-border/60 rounded-lg border">
@@ -178,32 +249,24 @@ function AccountCard({
 
       <div className="divide-border/70 divide-y border-t">
         <div className="flex items-center justify-between px-4 py-3">
-          <p className="text-sm">{t("portfolios.binance.api_key")}</p>
+          <p className="text-sm">{apiKeyLabel}</p>
           <div className="w-64">
             <Input
               type="password"
               value={account.apiKeyEdit}
-              placeholder={
-                account.apiKey
-                  ? t("portfolios.binance.credential_set")
-                  : t("portfolios.binance.api_key_placeholder")
-              }
+              placeholder={apiKeyPlaceholder}
               onChange={(e) => onChange({ apiKeyEdit: e.target.value })}
             />
           </div>
         </div>
 
         <div className="flex items-center justify-between px-4 py-3">
-          <p className="text-sm">{t("portfolios.binance.secret")}</p>
+          <p className="text-sm">{secretLabel}</p>
           <div className="w-64">
             <Input
               type="password"
               value={account.secretEdit}
-              placeholder={
-                account.secret
-                  ? t("portfolios.binance.credential_set")
-                  : t("portfolios.binance.secret_placeholder")
-              }
+              placeholder={secretPlaceholder}
               onChange={(e) => onChange({ secretEdit: e.target.value })}
             />
           </div>
@@ -226,6 +289,56 @@ function AccountCard({
             </div>
           </div>
         )}
+
+        {isSettrade && (
+          <>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.settrade.broker_id")}</p>
+              <div className="w-64">
+                <Input
+                  value={stAcc.brokerId ?? ""}
+                  placeholder={t("portfolios.settrade.broker_id_placeholder")}
+                  onChange={(e) => onChange({ brokerId: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.settrade.app_code")}</p>
+              <div className="w-64">
+                <Input
+                  value={stAcc.appCode ?? ""}
+                  placeholder={t("portfolios.settrade.app_code_placeholder")}
+                  onChange={(e) => onChange({ appCode: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.settrade.account_no")}</p>
+              <div className="w-64">
+                <Input
+                  value={stAcc.accountNo ?? ""}
+                  placeholder={t("portfolios.settrade.account_no_placeholder")}
+                  onChange={(e) => onChange({ accountNo: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.settrade.pin")}</p>
+              <div className="w-64">
+                <Input
+                  type="password"
+                  value={stAcc.pinEdit ?? ""}
+                  placeholder={
+                    stAcc.pin
+                      ? t("portfolios.settrade.pin_set")
+                      : t("portfolios.settrade.pin_placeholder")
+                  }
+                  onChange={(e) => onChange({ pinEdit: e.target.value })}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -233,7 +346,7 @@ function AccountCard({
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-type AnyForm = BinanceForm | OKXForm | BitkubForm | BinanceTHForm
+type AnyForm = BinanceForm | OKXForm | BitkubForm | BinanceTHForm | SettradeForm
 
 const EMPTY_FORM: BinanceForm = { enabled: false, testnet: false, accounts: [] }
 
@@ -250,7 +363,7 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
   const [form, setForm] = useState<AnyForm>(EMPTY_FORM)
 
   const loadData = useCallback(async () => {
-    if (!["binance", "okx", "bitkub", "binanceth"].includes(exchangeName)) {
+    if (!["binance", "okx", "bitkub", "binanceth", "settrade"].includes(exchangeName)) {
       setFetchError(t("portfolios.notFound", { name: exchangeName }))
       setLoading(false)
       return
@@ -282,6 +395,12 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
           enabled: asBool(d.enabled),
           accounts: parseAccounts(d.accounts),
         } satisfies BitkubForm
+      } else if (exchangeName === "settrade") {
+        const d = asRecord(exchangesData.settrade)
+        loaded = {
+          enabled: asBool(d.enabled),
+          accounts: parseSettradeAccounts(d.accounts),
+        } satisfies SettradeForm
       } else {
         const d = asRecord(exchangesData.binanceth)
         loaded = {
@@ -322,7 +441,7 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
 
   const handleAccountChange = (
     index: number,
-    patch: Partial<OKXAccountDraft>,
+    patch: Partial<OKXAccountDraft & SettradeAccountDraft>,
   ) => {
     setForm((prev) => {
       const accounts = [...(prev as BinanceForm).accounts]
@@ -334,9 +453,10 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
   const handleAddAccount = () => {
     setForm((prev) => {
       const isOKX = exchangeName === "okx"
+      const isSettrade = exchangeName === "settrade"
       const accounts = [
         ...(prev as BinanceForm).accounts,
-        isOKX ? emptyOKXAccount() : emptyAccount(),
+        isOKX ? emptyOKXAccount() : isSettrade ? emptySettradeAccount() : emptyAccount(),
       ]
       return { ...prev, accounts }
     })
@@ -399,6 +519,16 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
             binanceth: {
               enabled: f.enabled,
               accounts: f.accounts.map(serializeAccount),
+            },
+          },
+        })
+      } else if (exchangeName === "settrade") {
+        const f = form as SettradeForm
+        await patchAppConfig({
+          exchanges: {
+            settrade: {
+              enabled: f.enabled,
+              accounts: f.accounts.map(serializeSettradeAccount),
             },
           },
         })
@@ -495,6 +625,7 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
                   index={i}
                   account={acc}
                   hasPassphrase={exchangeName === "okx"}
+                  isSettrade={exchangeName === "settrade"}
                   onChange={(patch) => handleAccountChange(i, patch)}
                   onRemove={() => handleRemoveAccount(i)}
                 />

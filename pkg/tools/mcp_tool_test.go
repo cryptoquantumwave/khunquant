@@ -10,7 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/khunquant/khunquant/pkg/media"
 )
 
 // MockMCPManager is a mock implementation of MCPManager interface for testing

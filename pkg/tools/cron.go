@@ -16,6 +16,9 @@ import (
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
 	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	// PublishResponseIfNeeded sends response to the outbound bus only when the
+	// agent did not already deliver content through the message tool in this round.
+	PublishResponseIfNeeded(ctx context.Context, channel, chatID, response string)
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -24,15 +27,16 @@ type CronTool struct {
 	executor    JobExecutor
 	msgBus      *bus.MessageBus
 	execTool    *ExecTool
+	cfg         *config.Config
 }
 
 // NewCronTool creates a new CronTool
 // execTimeout: 0 means no timeout, >0 sets the timeout duration
 func NewCronTool(
 	cronService *cron.CronService, executor JobExecutor, msgBus *bus.MessageBus, workspace string, restrict bool,
-	execTimeout time.Duration, config *config.Config,
+	execTimeout time.Duration, cfg *config.Config,
 ) (*CronTool, error) {
-	execTool, err := NewExecToolWithConfig(workspace, restrict, config)
+	execTool, err := NewExecToolWithConfig(workspace, restrict, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to configure exec tool: %w", err)
 	}
@@ -43,6 +47,7 @@ func NewCronTool(
 		executor:    executor,
 		msgBus:      msgBus,
 		execTool:    execTool,
+		cfg:         cfg,
 	}, nil
 }
 
@@ -93,6 +98,11 @@ func (t *CronTool) Parameters() map[string]any {
 			"job_id": map[string]any{
 				"type":        "string",
 				"description": "Job ID (for remove/enable/disable)",
+			},
+			"type": map[string]any{
+				"type":        "string",
+				"enum":        []string{"message", "directive"},
+				"description": "Message generation strategy. 'message' (default): content is sent directly as-is. 'directive': content is treated as instructions for an AI agent to execute before delivery.",
 			},
 			"deliver": map[string]any{
 				"type":        "boolean",
@@ -180,8 +190,15 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		deliver = d
 	}
 
-	// GHSA-pv8c-p6jf-3fpp: command scheduling requires internal channel + explicit confirm.
-	// Non-command reminders (plain messages) remain open to all channels.
+	// Validate type parameter (server-side whitelist, not just LLM schema hint)
+	msgType, _ := args["type"].(string)
+	if msgType != "" && msgType != "message" && msgType != "directive" {
+		return ErrorResult(fmt.Sprintf("invalid type %q, must be 'message' or 'directive'", msgType))
+	}
+
+	// GHSA-pv8c-p6jf-3fpp: command scheduling requires internal channel. When
+	// allow_command is disabled, explicit confirmation is required as an override.
+	// Non-command reminders remain open to all channels.
 	command, _ := args["command"].(string)
 	commandConfirm, _ := args["command_confirm"].(bool)
 	if command != "" {
@@ -209,9 +226,17 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
 	}
 
+	// Apply optional payload fields and persist in a single UpdateJob call
+	needsUpdate := false
 	if command != "" {
 		job.Payload.Command = command
-		// Need to save the updated payload
+		needsUpdate = true
+	}
+	if msgType != "" {
+		job.Payload.Type = msgType
+		needsUpdate = true
+	}
+	if needsUpdate {
 		t.cronService.UpdateJob(job)
 	}
 
@@ -275,7 +300,7 @@ func (t *CronTool) enableJob(args map[string]any, enable bool) *ToolResult {
 }
 
 // ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -290,6 +315,17 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 
 	// Execute command if present
 	if job.Payload.Command != "" {
+		if t.cfg != nil && !t.cfg.Tools.Exec.Enabled {
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pubCancel()
+			_ = t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+				Channel: channel,
+				ChatID:  chatID,
+				Content: fmt.Sprintf("Scheduled command '%s' skipped: command execution is disabled", job.Payload.Command),
+			})
+			return "ok"
+		}
+
 		args := map[string]any{
 			"command":   job.Payload.Command,
 			"__channel": channel,
@@ -311,13 +347,18 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 			ChatID:  chatID,
 			Content: output,
 		}); err != nil {
-			return "", err
+			return err.Error()
 		}
-		return "ok", nil
+		return "ok"
 	}
 
-	// If deliver=true, send message directly without agent processing
-	if job.Payload.Deliver {
+	// Determine message generation strategy
+	// Type="directive": treat message as instructions for AI agent to execute
+	// Type="" or "message" (default): static message content
+	isDirective := job.Payload.Type == "directive"
+
+	// If deliver=true and not directive, send message directly without agent processing
+	if job.Payload.Deliver && !isDirective {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		if err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
@@ -325,27 +366,38 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 			ChatID:  chatID,
 			Content: job.Payload.Message,
 		}); err != nil {
-			return "", err
+			return err.Error()
 		}
-		return "ok", nil
+		return "ok"
 	}
 
-	// For deliver=false, process through agent (for complex tasks)
+	// For deliver=false OR directive mode, process through agent
 	sessionKey := fmt.Sprintf("cron-%s", job.ID)
 
-	// Call agent with job's message
+	// Prepare the prompt based on type
+	prompt := job.Payload.Message
+	if isDirective {
+		// For directive type, prefix to clarify this is an instruction
+		prompt = fmt.Sprintf(
+			"Please execute the following directive and provide the result:\n\n%s",
+			job.Payload.Message,
+		)
+	}
+
+	// Call agent with the prepared prompt
 	response, err := t.executor.ProcessDirectWithChannel(
 		ctx,
-		job.Payload.Message,
+		prompt,
 		sessionKey,
 		channel,
 		chatID,
 	)
 	if err != nil {
-		return "", err
+		return err.Error()
 	}
 
-	// Response is automatically sent via MessageBus by AgentLoop
-	_ = response // Will be sent by AgentLoop
-	return "ok", nil
+	if response != "" {
+		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, response)
+	}
+	return "ok"
 }

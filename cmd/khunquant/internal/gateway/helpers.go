@@ -654,7 +654,7 @@ func setupCronTool(
 			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
 		}
 		if cronTool != nil {
-			return cronTool.ExecuteJob(context.Background(), job)
+			return cronTool.ExecuteJob(context.Background(), job), nil
 		}
 		return "", fmt.Errorf("no executor configured for job %q", job.Name)
 	})

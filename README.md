@@ -6,7 +6,7 @@
 
 KhunQuant bridges Thai equity markets (SET) and global digital assets through a single AI-powered orchestrator. It runs locally on your machine, keeping your API keys and strategy parameters under your full control.
 
-Built on [PicoClaw](https://github.com/sipeed/picoclaw) — an ultra-lightweight Go AI assistant.
+Built on [khunquant](https://github.com/armmer016/khunquant) — an ultra-lightweight Go AI assistant.
 
 ---
 
@@ -90,7 +90,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT — see [LICENSE](LICENSE).
-KhunQuant is a fork of [PicoClaw](https://github.com/sipeed/picoclaw).
+KhunQuant — [github.com/armmer016/khunquant](https://github.com/armmer016/khunquant).
 
 ---
 
@@ -152,4 +152,4 @@ make dev   # เปิด frontend ที่ localhost:5173 และ backend �
 ## สัญญาอนุญาต
 
 MIT — ดู [LICENSE](LICENSE)
-KhunQuant พัฒนาต่อจาก [PicoClaw](https://github.com/sipeed/picoclaw)
+KhunQuant — [github.com/armmer016/khunquant](https://github.com/armmer016/khunquant)

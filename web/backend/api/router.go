@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/khunquant/khunquant/pkg/config"
 	"github.com/khunquant/khunquant/web/backend/launcherconfig"
 )
 
@@ -17,15 +18,19 @@ type Handler struct {
 	oauthMu              sync.Mutex
 	oauthFlows           map[string]*oauthFlow
 	oauthState           map[string]string
+	updateChecker        *updateChecker
 }
 
 // NewHandler creates an instance of the API handler.
 func NewHandler(configPath string) *Handler {
+	uc := &updateChecker{}
+	uc.start(config.GetVersion())
 	return &Handler{
-		configPath: configPath,
-		serverPort: launcherconfig.DefaultPort,
-		oauthFlows: make(map[string]*oauthFlow),
-		oauthState: make(map[string]string),
+		configPath:    configPath,
+		serverPort:    launcherconfig.DefaultPort,
+		oauthFlows:    make(map[string]*oauthFlow),
+		oauthState:    make(map[string]string),
+		updateChecker: uc,
 	}
 }
 
@@ -84,4 +89,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Launcher service parameters (port/public)
 	h.registerLauncherConfigRoutes(mux)
+
+	// Update availability check
+	h.registerUpdateRoutes(mux)
 }

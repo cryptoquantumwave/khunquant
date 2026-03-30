@@ -646,5 +646,8 @@ func DefaultConfig() *Config {
 			BuildTime: BuildTime,
 			GoVersion: GoVersion,
 		},
+		Update: UpdateConfig{
+			CheckOnStart: true,
+		},
 	}
 }

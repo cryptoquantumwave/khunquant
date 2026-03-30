@@ -90,6 +90,12 @@ type Config struct {
 	Voice     VoiceConfig     `json:"voice"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
+	Update    UpdateConfig `json:"update,omitempty"`
+}
+
+// UpdateConfig controls the automatic update-check behaviour.
+type UpdateConfig struct {
+	CheckOnStart bool `json:"check_on_start"`
 }
 
 // PermissionScope restricts what operations an exchange account may perform.

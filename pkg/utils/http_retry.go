@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -36,7 +37,7 @@ func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response,
 		}
 
 		if i < maxRetries-1 {
-			if err = sleepWithCtx(req.Context(), retryDelayUnit*time.Duration(i+1)); err != nil {
+			if err = sleepWithCtx(req.Context(), retryDelayForAttempt(resp, i)); err != nil {
 				if resp != nil {
 					resp.Body.Close()
 				}
@@ -45,6 +46,32 @@ func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response,
 		}
 	}
 	return resp, err
+}
+
+func retryDelayForAttempt(resp *http.Response, attempt int) time.Duration {
+	fallback := retryDelayUnit * time.Duration(attempt+1)
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return fallback
+	}
+
+	retryAfter := resp.Header.Get("Retry-After")
+	if retryAfter == "" {
+		return fallback
+	}
+
+	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	if when, err := http.ParseTime(retryAfter); err == nil {
+		delay := time.Until(when)
+		if delay < 0 {
+			return 0
+		}
+		return delay
+	}
+
+	return fallback
 }
 
 func sleepWithCtx(ctx context.Context, d time.Duration) error {

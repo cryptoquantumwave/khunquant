@@ -1,9 +1,13 @@
-import { IconDownload, IconX } from "@tabler/icons-react"
+import { IconDownload, IconLoader2, IconX } from "@tabler/icons-react"
 import * as React from "react"
+import { toast } from "sonner"
 
+import { applyUpdate } from "@/api/update"
 import { useUpdateCheck } from "@/hooks/use-update-check"
 
 const DISMISS_KEY = "update-banner-dismissed"
+
+type UpdateState = "idle" | "updating" | "error"
 
 export function UpdateBanner() {
   const update = useUpdateCheck()
@@ -14,6 +18,8 @@ export function UpdateBanner() {
       return false
     }
   })
+  const [state, setState] = React.useState<UpdateState>("idle")
+  const [errorMsg, setErrorMsg] = React.useState<string>("")
 
   // Reset dismiss state when a new version becomes available so the banner
   // reappears after a previously dismissed version is superseded.
@@ -37,9 +43,30 @@ export function UpdateBanner() {
     setDismissed(true)
   }
 
+  const handleUpdate = async () => {
+    setState("updating")
+    setErrorMsg("")
+    try {
+      const result = await applyUpdate()
+      // Mark dismissed so banner doesn't flicker while gateway restarts.
+      try {
+        localStorage.setItem(DISMISS_KEY, update.latest_version)
+      } catch {
+        // ignore
+      }
+      setDismissed(true)
+      toast.success(
+        `Updated to ${result.version} — gateway is restarting…`,
+      )
+    } catch (err) {
+      setState("error")
+      setErrorMsg(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <div className="flex items-center justify-between gap-2 bg-blue-600 px-4 py-2 text-sm text-white">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <IconDownload className="size-4 shrink-0" />
         <span>
           New version available:{" "}
@@ -48,15 +75,37 @@ export function UpdateBanner() {
             <span className="opacity-75"> (current: {update.current_version})</span>
           )}
         </span>
-        <a
-          href={update.release_url}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-2 rounded bg-white/20 px-2 py-0.5 font-medium hover:bg-white/30"
-        >
-          Download
-        </a>
+
+        {state === "error" ? (
+          <>
+            <span className="opacity-90 text-red-200">{errorMsg}</span>
+            <a
+              href={update.release_url}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-1 rounded bg-white/20 px-2 py-0.5 font-medium hover:bg-white/30"
+            >
+              Download manually
+            </a>
+          </>
+        ) : (
+          <button
+            onClick={handleUpdate}
+            disabled={state === "updating"}
+            className="ml-2 flex items-center gap-1 rounded bg-white/20 px-2 py-0.5 font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {state === "updating" ? (
+              <>
+                <IconLoader2 className="size-3 animate-spin" />
+                Updating…
+              </>
+            ) : (
+              "Update"
+            )}
+          </button>
+        )}
       </div>
+
       <button
         onClick={handleDismiss}
         aria-label="Dismiss update banner"

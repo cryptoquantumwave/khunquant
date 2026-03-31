@@ -1,0 +1,101 @@
+package update
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/khunquant/khunquant/cmd/khunquant/internal"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/updater"
+)
+
+const (
+	updateOwner = "armmer016"
+	updateRepo  = "khunquant"
+)
+
+func NewUpdateCommand() *cobra.Command {
+	var yes bool
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update khunquant to the latest version",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runUpdate(yes)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
+	return cmd
+}
+
+func runUpdate(skipConfirm bool) error {
+	currentVersion := config.GetVersion()
+
+	fmt.Printf("%s Checking for updates (current: %s)…\n", internal.Logo, currentVersion)
+
+	info, err := updater.CheckForUpdate(context.Background(), updateOwner, updateRepo, currentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
+	}
+	if info == nil || !info.IsOutdated {
+		fmt.Printf("%s Already up to date (%s)\n", internal.Logo, currentVersion)
+		return nil
+	}
+
+	fmt.Printf("%s New version available: %s\n", internal.Logo, info.LatestVersion)
+
+	if runtime.GOOS == "windows" {
+		fmt.Printf("   Automatic update is not supported on Windows.\n")
+		fmt.Printf("   Download manually: %s\n", info.ReleaseURL)
+		return nil
+	}
+
+	if !skipConfirm {
+		fmt.Printf("   Update now? [y/N] ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if answer != "y" && answer != "yes" {
+			fmt.Println("   Aborted.")
+			return nil
+		}
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("could not determine binary path: %w", err)
+	}
+	// Resolve symlinks so we replace the real file.
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+
+	binaryName := "khunquant"
+	if runtime.GOOS == "windows" {
+		binaryName = "khunquant.exe"
+	}
+
+	fmt.Printf("%s Downloading %s…\n", internal.Logo, info.LatestVersion)
+	updated, err := updater.SelfUpdate(context.Background(), updateOwner, updateRepo, currentVersion, binaryName, exePath)
+	if err != nil {
+		fmt.Printf("   Update failed: %v\n", err)
+		fmt.Printf("   Download manually: %s\n", info.ReleaseURL)
+		return nil
+	}
+	if updated == nil {
+		fmt.Printf("%s Already up to date.\n", internal.Logo)
+		return nil
+	}
+
+	fmt.Printf("%s Updated to %s successfully!\n", internal.Logo, updated.LatestVersion)
+	fmt.Println("   Restart the gateway (or run 'khunquant gateway') to apply the update.")
+	return nil
+}

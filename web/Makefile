@@ -1,5 +1,8 @@
 .PHONY: dev dev-frontend dev-backend build test lint clean
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LD_FLAGS := -X github.com/khunquant/khunquant/pkg/config.Version=$(VERSION)
+
 # Run both frontend and backend dev servers
 dev:
 	@if [ ! -f backend/khunquant-web ] || [ ! -d backend/dist ]; then \
@@ -15,12 +18,12 @@ dev-frontend:
 
 # Start backend dev server
 dev-backend:
-	cd backend && go run .
+	cd backend && go run -ldflags "$(LD_FLAGS)" .
 
 # Build frontend and embed into Go binary
 build:
 	cd frontend && pnpm build:backend
-	cd backend && go build -o khunquant-web .
+	cd backend && go build -ldflags "$(LD_FLAGS)" -o khunquant-web .
 
 # Run all tests
 test:

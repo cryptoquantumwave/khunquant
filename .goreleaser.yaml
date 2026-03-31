@@ -237,6 +237,7 @@ changelog:
 
 release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'
+  prerelease: auto
   footer: >-
 
     ---

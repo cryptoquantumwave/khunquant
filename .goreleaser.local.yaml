@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Slim release config for local machines — builds only the 5 main platforms.
+# Used by: make release-local RELEASE_TAG=v0.2.0-rc.1
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - sh -c 'cd web/frontend && pnpm install && pnpm build:backend'
+
+builds:
+  - id: khunquant
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - stdjson
+    ldflags:
+      - -s -w
+      - -X github.com/khunquant/khunquant/pkg/config.Version={{ .Version }}
+      - -X github.com/khunquant/khunquant/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/khunquant/khunquant/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/khunquant/khunquant/pkg/config.GoVersion={{ .Env.GOVERSION }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: ./cmd/khunquant
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+  - id: khunquant-launcher
+    binary: khunquant-launcher
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - stdjson
+    ldflags:
+      - -s -w
+      - -X github.com/khunquant/khunquant/pkg/config.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: ./web/backend
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+  - id: khunquant-launcher-tui
+    binary: khunquant-launcher-tui
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - stdjson
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: ./cmd/khunquant-launcher-tui
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  prerelease: auto

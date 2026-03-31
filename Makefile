@@ -231,17 +231,29 @@ uninstall-all:
 	@echo "Removed workspace: $(KHUNQUANT_HOME)"
 	@echo "Complete uninstallation done!"
 
-## release: Tag and publish a GitHub release via GoReleaser (requires GITHUB_TOKEN and RELEASE_TAG)
-## Usage: make release RELEASE_TAG=v0.2.0-rc.1
+## release-local: Tag and publish using slim config (5 platforms, low RAM). Use this on a dev machine.
+## Usage: make release-local RELEASE_TAG=v0.2.0-rc.1
+release-local:
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "ERROR: set RELEASE_TAG, e.g. make release-local RELEASE_TAG=v0.2.0-rc.1"; exit 1; fi
+	@if [ -z "$$GITHUB_TOKEN" ]; then echo "ERROR: GITHUB_TOKEN is not set"; exit 1; fi
+	@which goreleaser > /dev/null 2>&1 || (echo "ERROR: goreleaser not installed. Run: brew install goreleaser"; exit 1)
+	@echo "Tagging $(RELEASE_TAG)..."
+	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
+	git push origin $(RELEASE_TAG)
+	@echo "Running GoReleaser (slim build, 2 parallel jobs)..."
+	GOVERSION=$$(go version | awk '{print $$3}') goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=sign,announce
+
+## release: Tag and publish a full release via GoReleaser (all platforms — needs a powerful CI machine).
+## Usage: make release RELEASE_TAG=v0.2.0
 release:
-	@if [ -z "$(RELEASE_TAG)" ]; then echo "ERROR: set RELEASE_TAG, e.g. make release RELEASE_TAG=v0.2.0-rc.1"; exit 1; fi
+	@if [ -z "$(RELEASE_TAG)" ]; then echo "ERROR: set RELEASE_TAG, e.g. make release RELEASE_TAG=v0.2.0"; exit 1; fi
 	@if [ -z "$$GITHUB_TOKEN" ]; then echo "ERROR: GITHUB_TOKEN is not set"; exit 1; fi
 	@which goreleaser > /dev/null 2>&1 || (echo "ERROR: goreleaser not installed. Run: brew install goreleaser"; exit 1)
 	@echo "Tagging $(RELEASE_TAG)..."
 	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
 	git push origin $(RELEASE_TAG)
 	@echo "Running GoReleaser for $(RELEASE_TAG)..."
-	GOVERSION=$$(go version | awk '{print $$3}') goreleaser release --clean --skip=docker,sign,announce
+	GOVERSION=$$(go version | awk '{print $$3}') goreleaser release --clean --parallelism 2 --skip=docker,sign,announce
 
 ## clean: Remove build artifacts
 clean:

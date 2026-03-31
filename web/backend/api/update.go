@@ -19,7 +19,9 @@ import (
 
 const updateInterval = 1 * time.Hour
 
-var versionRe = regexp.MustCompile(`v\d+\.\d+\.\d+[^\s]*`)
+// versionRe extracts the version from the "khunquant vX.Y.Z" line,
+// ignoring the "Update available: vX.Y.Z" line that may appear before it.
+var versionRe = regexp.MustCompile(`khunquant (v\d+\.\d+\.\d+[^\s]*)`)
 
 // updateChecker polls GitHub Releases on a background goroutine and caches the
 // result so that /api/update/status responds instantly.
@@ -139,10 +141,12 @@ func gatewayBinaryVersion() string {
 		return ""
 	}
 
-	// Output includes the ASCII banner and then e.g. "🦞 khunquant v0.2.0-rc.1"
-	match := versionRe.Find(out)
+	// Output includes the ASCII banner, possibly an "Update available: vX.Y.Z"
+	// line, and then the actual version line "🦞 khunquant v0.2.0-rc.1".
+	// We match "khunquant vX.Y.Z" to avoid picking up the update notice version.
+	match := versionRe.FindSubmatch(out)
 	if match != nil {
-		return string(match)
+		return string(match[1])
 	}
 	return ""
 }

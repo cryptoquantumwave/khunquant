@@ -6,10 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
 )
+
+const (
+	// DefaultOwner is the GitHub repository owner for khunquant releases.
+	DefaultOwner = "armmer016"
+	// DefaultRepo is the GitHub repository name for khunquant releases.
+	DefaultRepo = "khunquant"
+)
+
+// ProgressFunc is called during download with bytes downloaded so far and the
+// total size (-1 if unknown).
+type ProgressFunc func(downloaded, total int64)
 
 // UpdateInfo describes an available update.
 type UpdateInfo struct {
@@ -112,45 +124,16 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (*githubRelease
 	return nil, nil
 }
 
-// compareVersions compares two semver-like version strings (e.g. "v1.2.3" or
-// "1.2.3"). Returns negative if a < b, zero if equal, positive if a > b.
-// Non-numeric segments are compared lexicographically.
+// compareVersions compares two semver version strings (e.g. "v1.2.3" or
+// "1.2.3-rc1"). Returns negative if a < b, zero if equal, positive if a > b.
+// Pre-release versions are correctly ordered below their release counterparts
+// per the semver spec (e.g. "1.2.0-rc1" < "1.2.0"). Falls back to lexicographic
+// comparison for non-semver strings.
 func compareVersions(a, b string) int {
-	a = strings.TrimPrefix(a, "v")
-	b = strings.TrimPrefix(b, "v")
-
-	partsA := strings.Split(a, ".")
-	partsB := strings.Split(b, ".")
-
-	maxLen := len(partsA)
-	if len(partsB) > maxLen {
-		maxLen = len(partsB)
+	va, errA := semver.NewVersion(a)
+	vb, errB := semver.NewVersion(b)
+	if errA != nil || errB != nil {
+		return strings.Compare(a, b)
 	}
-
-	for i := 0; i < maxLen; i++ {
-		var sa, sb string
-		if i < len(partsA) {
-			sa = partsA[i]
-		}
-		if i < len(partsB) {
-			sb = partsB[i]
-		}
-
-		na, errA := strconv.Atoi(sa)
-		nb, errB := strconv.Atoi(sb)
-
-		if errA == nil && errB == nil {
-			if na != nb {
-				return na - nb
-			}
-		} else {
-			if sa != sb {
-				if sa < sb {
-					return -1
-				}
-				return 1
-			}
-		}
-	}
-	return 0
+	return va.Compare(vb)
 }

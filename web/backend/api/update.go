@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync"
 	"time"
@@ -14,11 +17,9 @@ import (
 	"github.com/khunquant/khunquant/web/backend/utils"
 )
 
-const (
-	updateOwner    = "armmer016"
-	updateRepo     = "khunquant"
-	updateInterval = 1 * time.Hour
-)
+const updateInterval = 1 * time.Hour
+
+var versionRe = regexp.MustCompile(`v\d+\.\d+\.\d+[^\s]*`)
 
 // updateChecker polls GitHub Releases on a background goroutine and caches the
 // result so that /api/update/status responds instantly.
@@ -44,7 +45,7 @@ func (u *updateChecker) start(currentVersion string) {
 }
 
 func (u *updateChecker) check(currentVersion string) {
-	info, err := updater.CheckForUpdate(context.Background(), updateOwner, updateRepo, currentVersion)
+	info, err := updater.CheckForUpdate(context.Background(), updater.DefaultOwner, updater.DefaultRepo, currentVersion)
 	if err != nil {
 		log.Printf("update check failed: %v", err)
 		return
@@ -61,19 +62,30 @@ func (u *updateChecker) get() *updater.UpdateInfo {
 	return u.info
 }
 
+// markUpToDate clears the outdated status after a successful self-update so the
+// banner disappears immediately without waiting for the next hourly poll.
+func (u *updateChecker) markUpToDate(newVersion string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.info = &updater.UpdateInfo{
+		CurrentVersion: newVersion,
+		LatestVersion:  newVersion,
+		IsOutdated:     false,
+	}
+}
+
 // registerUpdateRoutes binds update-check endpoints to the ServeMux.
 func (h *Handler) registerUpdateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/update/status", h.handleUpdateStatus)
 	mux.HandleFunc("GET /api/version", h.handleVersion)
+	mux.HandleFunc("GET /api/gateway/binary-version", h.handleGatewayBinaryVersion)
 	mux.HandleFunc("POST /api/update/apply", h.handleUpdateApply)
 }
 
 // handleUpdateStatus returns the cached update check result.
-// Response JSON matches the UpdateInfo struct fields.
 func (h *Handler) handleUpdateStatus(w http.ResponseWriter, _ *http.Request) {
 	info := h.updateChecker.get()
 	if info == nil {
-		// Not yet checked or already up-to-date — return a "not outdated" stub.
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"is_outdated":     false,
@@ -87,12 +99,52 @@ func (h *Handler) handleUpdateStatus(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(info)
 }
 
-// handleVersion returns the current binary version.
+// handleVersion returns the launcher binary version.
 func (h *Handler) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"version": config.GetVersion(),
 	})
+}
+
+// handleGatewayBinaryVersion returns the version baked into the khunquant
+// binary on disk (which may differ from the launcher's own version after a
+// self-update).
+//
+//	GET /api/gateway/binary-version
+func (h *Handler) handleGatewayBinaryVersion(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"version": gatewayBinaryVersion(),
+	})
+}
+
+// gatewayBinaryVersion runs `khunquant version` and extracts the version string.
+// Returns an empty string if the binary cannot be found or executed.
+func gatewayBinaryVersion() string {
+	binary := utils.FindKhunquantBinary()
+	if !filepath.IsAbs(binary) {
+		if abs, err := exec.LookPath(binary); err == nil {
+			binary = abs
+		} else {
+			return ""
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, binary, "version").Output()
+	if err != nil {
+		return ""
+	}
+
+	// Output includes the ASCII banner and then e.g. "🦞 khunquant v0.2.0-rc.1"
+	match := versionRe.Find(out)
+	if match != nil {
+		return string(match)
+	}
+	return ""
 }
 
 // handleUpdateApply downloads the latest release, replaces the khunquant binary,
@@ -107,7 +159,21 @@ func (h *Handler) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	binaryPath := utils.FindKhunquantBinary()
 
-	info, err := updater.SelfUpdate(r.Context(), updateOwner, updateRepo, config.GetVersion(), "khunquant", binaryPath)
+	// FindKhunquantBinary may return a bare name ("khunquant") when it falls
+	// back to PATH resolution. Resolve it to an absolute path now so SelfUpdate
+	// replaces the same binary that the gateway subprocess actually executes.
+	if !filepath.IsAbs(binaryPath) {
+		if abs, err := exec.LookPath(binaryPath); err == nil {
+			binaryPath = abs
+		} else {
+			http.Error(w, "could not locate khunquant binary: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	log.Printf("Updating khunquant binary at %s", binaryPath)
+
+	info, err := updater.SelfUpdate(r.Context(), updater.DefaultOwner, updater.DefaultRepo, config.GetVersion(), "khunquant", binaryPath, nil, nil)
 	if err != nil {
 		log.Printf("self-update failed: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -116,14 +182,17 @@ func (h *Handler) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if info == nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success":      true,
-			"up_to_date":   true,
-			"version":      config.GetVersion(),
+			"success":    true,
+			"up_to_date": true,
+			"version":    config.GetVersion(),
 		})
 		return
 	}
 
 	log.Printf("Updated khunquant binary to %s, restarting gateway…", info.LatestVersion)
+
+	// Clear the outdated status so the banner disappears immediately.
+	h.updateChecker.markUpToDate(info.LatestVersion)
 
 	// Restart the gateway so the new binary takes effect.
 	go h.restartGatewayAfterUpdate()

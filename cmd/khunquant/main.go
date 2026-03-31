@@ -7,10 +7,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -62,30 +60,19 @@ func NewKhunquantCommand() *cobra.Command {
 var banner = "\r\n" + brand.SideBySide(brand.ANSIBlue, brand.ANSIRed, brand.ANSIReset) + "\r\n"
 
 func main() {
-	// Start update check immediately so it runs in parallel with banner print.
-	updateCh := make(chan *updater.UpdateInfo, 1)
-	go func() {
-		info, _ := updater.CheckForUpdate(context.Background(), "armmer016", "khunquant", config.GetVersion())
-		updateCh <- info
-	}()
-
 	fmt.Printf("%s", banner)
 
-	// Wait up to 1 s for the update check before running any command.
-	// This covers --help and other fast commands as well as interactive ones.
-	select {
-	case info := <-updateCh:
-		if info != nil && info.IsOutdated {
-			fmt.Printf(
-				"%s Update available: %s (you have %s)\n   → %s\n\n",
-				internal.Logo,
-				info.LatestVersion,
-				info.CurrentVersion,
-				info.ReleaseURL,
-			)
-		}
-	case <-time.After(1 * time.Second):
-		// slow network — proceed silently
+	// Read the cached update result instantly (no network wait), and kick off
+	// a background refresh so the cache stays fresh for the next invocation.
+	info := updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
+	if info != nil && info.IsOutdated {
+		fmt.Printf(
+			"%s Update available: %s (you have %s)\n   → %s\n\n",
+			internal.Logo,
+			info.LatestVersion,
+			info.CurrentVersion,
+			info.ReleaseURL,
+		)
 	}
 
 	cmd := NewKhunquantCommand()

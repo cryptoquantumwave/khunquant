@@ -44,6 +44,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"onboard",
 		"skills",
 		"status",
+		"update",
 		"version",
 	}
 

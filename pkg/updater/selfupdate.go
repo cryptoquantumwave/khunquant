@@ -21,17 +21,31 @@ import (
 // SelfUpdate downloads the latest release for the current platform and atomically
 // replaces destPath with the updated binary named binaryName.
 //
+// If existing is non-nil and already indicates an outdated version, the GitHub
+// API call is skipped (avoids a redundant round-trip when the caller already
+// checked). Pass nil to let SelfUpdate check on its own.
+//
+// progress may be nil. When provided it is called periodically during the
+// binary download with bytes downloaded so far and the total size (-1 if unknown).
+//
 // Returns (info, nil) on successful update, (nil, nil) if already up-to-date or
 // currentVersion is "dev". Returns an error if the update fails.
-func SelfUpdate(ctx context.Context, owner, repo, currentVersion, binaryName, destPath string) (*UpdateInfo, error) {
+func SelfUpdate(ctx context.Context, owner, repo, currentVersion, binaryName, destPath string, existing *UpdateInfo, progress ProgressFunc) (*UpdateInfo, error) {
 	if runtime.GOOS == "windows" {
 		return nil, fmt.Errorf("automatic update is not supported on Windows — please download manually")
 	}
 
-	info, err := CheckForUpdate(ctx, owner, repo, currentVersion)
-	if err != nil {
-		return nil, fmt.Errorf("checking for update: %w", err)
+	var info *UpdateInfo
+	if existing != nil && existing.IsOutdated {
+		info = existing
+	} else {
+		var err error
+		info, err = CheckForUpdate(ctx, owner, repo, currentVersion)
+		if err != nil {
+			return nil, fmt.Errorf("checking for update: %w", err)
+		}
 	}
+
 	if info == nil || !info.IsOutdated {
 		return nil, nil // already up-to-date
 	}
@@ -52,9 +66,13 @@ func SelfUpdate(ctx context.Context, owner, repo, currentVersion, binaryName, de
 		)
 	}
 
-	if err := downloadVerifyReplace(ctx, dlURL, csURL, assetName, assetExt, binaryName, destPath); err != nil {
+	if err := downloadVerifyReplace(ctx, dlURL, csURL, assetName, assetExt, binaryName, destPath, progress); err != nil {
 		return nil, err
 	}
+
+	// Clear the disk cache so the next CLI invocation doesn't show a stale notice.
+	ClearUpdateCache()
+
 	return info, nil
 }
 
@@ -91,7 +109,7 @@ func platformAsset() (name, ext string, err error) {
 
 // downloadVerifyReplace downloads the archive, verifies the SHA256 checksum,
 // extracts binaryName, and atomically replaces destPath.
-func downloadVerifyReplace(ctx context.Context, dlURL, csURL, assetName, assetExt, binaryName, destPath string) error {
+func downloadVerifyReplace(ctx context.Context, dlURL, csURL, assetName, assetExt, binaryName, destPath string, progress ProgressFunc) error {
 	dlCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -103,7 +121,7 @@ func downloadVerifyReplace(ctx context.Context, dlURL, csURL, assetName, assetEx
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	if err := httpDownload(dlCtx, dlURL, tmp); err != nil {
+	if err := httpDownload(dlCtx, dlURL, tmp, progress); err != nil {
 		tmp.Close()
 		return fmt.Errorf("downloading archive: %w", err)
 	}
@@ -111,7 +129,7 @@ func downloadVerifyReplace(ctx context.Context, dlURL, csURL, assetName, assetEx
 		return err
 	}
 
-	// Verify SHA256 against checksums.txt (best-effort; skip if unavailable).
+	// Verify SHA256 against checksums.txt (strict — refuse if unavailable).
 	if err := verifyChecksums(dlCtx, csURL, assetName, tmpPath); err != nil {
 		return err
 	}
@@ -146,7 +164,7 @@ func downloadVerifyReplace(ctx context.Context, dlURL, csURL, assetName, assetEx
 	return nil
 }
 
-func httpDownload(ctx context.Context, url string, w io.Writer) error {
+func httpDownload(ctx context.Context, url string, w io.Writer, progress ProgressFunc) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -160,30 +178,59 @@ func httpDownload(ctx context.Context, url string, w io.Writer) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+
+	if progress == nil {
+		_, err = io.Copy(w, resp.Body)
+		return err
+	}
+
+	total := resp.ContentLength
+	var downloaded int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, wErr := w.Write(buf[:n]); wErr != nil {
+				return wErr
+			}
+			downloaded += int64(n)
+			progress(downloaded, total)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	return nil
 }
 
-// verifyChecksums fetches checksums.txt and verifies the SHA256 of localPath.
-// Silently skips if the checksum file is unavailable.
+// verifyChecksums fetches the checksums file and verifies the SHA256 of localPath.
+// Returns an error if the checksum file is unavailable, the asset is not listed,
+// or the checksum does not match.
 func verifyChecksums(ctx context.Context, csURL, assetName, localPath string) error {
+	if csURL == "" {
+		return fmt.Errorf("no checksum file found in release assets — refusing to install unverified binary")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, csURL, nil)
 	if err != nil {
-		return nil
+		return fmt.Errorf("creating checksum request: %w", err)
 	}
 	req.Header.Set("User-Agent", "khunquant/selfupdate")
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return nil // checksums unavailable — skip
+	if err != nil {
+		return fmt.Errorf("downloading checksum file: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checksum file returned HTTP %d — refusing to install unverified binary", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil
+		return fmt.Errorf("reading checksum file: %w", err)
 	}
 
 	// Find line: "<sha256>  <assetName>"
@@ -196,7 +243,7 @@ func verifyChecksums(ctx context.Context, csURL, assetName, localPath string) er
 		}
 	}
 	if expected == "" {
-		return nil // asset not listed — skip
+		return fmt.Errorf("asset %q not found in checksum file — refusing to install unverified binary", assetName)
 	}
 
 	f, err := os.Open(localPath)
@@ -266,7 +313,7 @@ func extractFromZip(archivePath, binaryName, destPath string) error {
 }
 
 // fetchReleaseAssetURLs looks up the download URL for assetName and the
-// checksums.txt file in the given release tag via the GitHub Releases API.
+// checksums file in the given release tag via the GitHub Releases API.
 // Returns ("", "", nil) when the release exists but has no assets yet.
 func fetchReleaseAssetURLs(ctx context.Context, owner, repo, tag, assetName string) (dlURL, csURL string, err error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", owner, repo, tag)
@@ -297,10 +344,9 @@ func fetchReleaseAssetURLs(ctx context.Context, owner, repo, tag, assetName stri
 	}
 
 	for _, a := range release.Assets {
-		switch a.Name {
-		case assetName:
+		if a.Name == assetName {
 			dlURL = a.BrowserDownloadURL
-		case "checksums.txt":
+		} else if strings.HasSuffix(a.Name, "_checksums.txt") || a.Name == "checksums.txt" {
 			csURL = a.BrowserDownloadURL
 		}
 	}

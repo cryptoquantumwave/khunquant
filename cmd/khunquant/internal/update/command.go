@@ -16,11 +16,6 @@ import (
 	"github.com/khunquant/khunquant/pkg/updater"
 )
 
-const (
-	updateOwner = "armmer016"
-	updateRepo  = "khunquant"
-)
-
 func NewUpdateCommand() *cobra.Command {
 	var yes bool
 
@@ -41,7 +36,7 @@ func runUpdate(skipConfirm bool) error {
 
 	fmt.Printf("%s Checking for updates (current: %s)…\n", internal.Logo, currentVersion)
 
-	info, err := updater.CheckForUpdate(context.Background(), updateOwner, updateRepo, currentVersion)
+	info, err := updater.CheckForUpdate(context.Background(), updater.DefaultOwner, updater.DefaultRepo, currentVersion)
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %w", err)
 	}
@@ -84,7 +79,18 @@ func runUpdate(skipConfirm bool) error {
 	}
 
 	fmt.Printf("%s Downloading %s…\n", internal.Logo, info.LatestVersion)
-	updated, err := updater.SelfUpdate(context.Background(), updateOwner, updateRepo, currentVersion, binaryName, exePath)
+
+	// Track download progress in-place.
+	progress := func(downloaded, total int64) {
+		if total > 0 {
+			pct := float64(downloaded) / float64(total) * 100
+			fmt.Fprintf(os.Stderr, "\r   Progress: %.0f%%  ", pct)
+		}
+	}
+
+	// Pass the already-fetched info to avoid a redundant API call inside SelfUpdate.
+	updated, err := updater.SelfUpdate(context.Background(), updater.DefaultOwner, updater.DefaultRepo, currentVersion, binaryName, exePath, info, progress)
+	fmt.Fprintln(os.Stderr) // newline after progress output
 	if err != nil {
 		fmt.Printf("   Update failed: %v\n", err)
 		fmt.Printf("   Download manually: %s\n", info.ReleaseURL)

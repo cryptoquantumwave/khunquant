@@ -1114,7 +1114,12 @@ func (c *Config) migrateChannelConfigs() {
 }
 
 func SaveConfig(path string, cfg *Config) error {
+	// Clear BuildInfo so stale version data is never persisted to disk.
+	// LoadConfig always restores it from the build-time variables.
+	saved := cfg.BuildInfo
+	cfg.BuildInfo = BuildInfo{}
 	data, err := json.MarshalIndent(cfg, "", "  ")
+	cfg.BuildInfo = saved
 	if err != nil {
 		return err
 	}

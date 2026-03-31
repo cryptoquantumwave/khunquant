@@ -1,8 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-
-import { getGatewayBinaryVersion } from "@/api/update"
 
 import {
   type CoreConfigForm,
@@ -71,25 +68,9 @@ export function AgentDefaultsSection({
   onFieldChange,
 }: AgentDefaultsSectionProps) {
   const { t } = useTranslation()
-  const [version, setVersion] = useState<string>("")
-
-  useEffect(() => {
-    const fetch = () => {
-      getGatewayBinaryVersion()
-        .then((v) => { if (v) setVersion(v) })
-        .catch(() => {})
-    }
-    fetch()
-    // Re-fetch every 15s so the version updates after a gateway restart.
-    const id = setInterval(fetch, 15_000)
-    return () => clearInterval(id)
-  }, [])
 
   return (
     <ConfigSectionCard title={t("pages.config.sections.agent")}>
-      <Field label="Version" layout="setting-row">
-        <Input value={version || "…"} readOnly className="cursor-default" />
-      </Field>
       <Field
         label={t("pages.config.workspace")}
         hint={t("pages.config.workspace_hint")}

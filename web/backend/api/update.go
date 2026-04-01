@@ -3,13 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/khunquant/khunquant/pkg/config"
@@ -147,6 +150,34 @@ func gatewayBinaryVersion() string {
 	return ""
 }
 
+// findLauncherBinary returns the absolute, symlink-resolved path of the
+// currently running khunquant-launcher binary, or an error.
+func findLauncherBinary() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("could not determine launcher binary path: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+	return exePath, nil
+}
+
+// launcherRestart stops the running gateway subprocess (if any) and re-execs
+// the launcher binary in-place with syscall.Exec. This function does not return
+// on success — the OS replaces the current process image with the new binary.
+func (h *Handler) launcherRestart(launcherPath string) error {
+	gateway.mu.Lock()
+	previousCmd := gateway.cmd
+	gateway.mu.Unlock()
+	if previousCmd != nil {
+		_ = stopGatewayProcessForRestart(previousCmd)
+	}
+	// Replace the current process with the new launcher binary.
+	// os.Args preserves flags like -port, -public, config path.
+	return syscall.Exec(launcherPath, os.Args, os.Environ())
+}
+
 // handleUpdateApply downloads the latest release, replaces the khunquant binary,
 // and restarts the gateway subprocess.
 //
@@ -189,19 +220,55 @@ func (h *Handler) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Updated khunquant binary to %s, restarting gateway…", info.LatestVersion)
+	log.Printf("Updated khunquant binary to %s, now updating launcher…", info.LatestVersion)
+
+	// Self-update the launcher binary. Pass info as existing to skip a redundant
+	// GitHub API round-trip — the version check was already done above.
+	launcherPath, launcherPathErr := findLauncherBinary()
+	launcherUpdated := false
+	if launcherPathErr != nil {
+		log.Printf("launcher self-update skipped: %v", launcherPathErr)
+	} else {
+		log.Printf("Updating khunquant-launcher binary at %s", launcherPath)
+		_, launcherErr := updater.SelfUpdate(r.Context(), updater.DefaultOwner, updater.DefaultRepo,
+			config.GetVersion(), "khunquant-launcher", launcherPath, info, nil)
+		if launcherErr != nil {
+			log.Printf("launcher self-update failed (non-fatal): %v", launcherErr)
+		} else {
+			launcherUpdated = true
+			log.Printf("Updated khunquant-launcher binary to %s", info.LatestVersion)
+		}
+	}
 
 	// Clear the outdated status so the banner disappears immediately.
 	h.updateChecker.markUpToDate(info.LatestVersion)
 
-	// Restart the gateway so the new binary takes effect.
-	go h.restartGatewayAfterUpdate()
-
+	// Write and flush the response BEFORE any restart so the client receives it.
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"success": true,
-		"version": info.LatestVersion,
+		"success":          true,
+		"version":          info.LatestVersion,
+		"launcher_updated": launcherUpdated,
 	})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	if launcherUpdated {
+		// Brief sleep lets the TCP send buffer drain before syscall.Exec
+		// tears down the process's file descriptors.
+		time.Sleep(200 * time.Millisecond)
+		log.Printf("Re-execing launcher with new binary…")
+		if err := h.launcherRestart(launcherPath); err != nil {
+			// syscall.Exec failed — fall back to gateway-only restart.
+			log.Printf("launcher re-exec failed: %v — falling back to gateway-only restart", err)
+			go h.restartGatewayAfterUpdate()
+		}
+		return
+	}
+
+	// Launcher was not updated; just restart the gateway subprocess.
+	go h.restartGatewayAfterUpdate()
 }
 
 // restartGatewayAfterUpdate performs a background gateway restart after a

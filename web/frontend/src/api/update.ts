@@ -33,6 +33,7 @@ export interface ApplyUpdateResult {
   success: boolean
   up_to_date?: boolean
   version: string
+  launcher_updated?: boolean
 }
 
 export async function applyUpdate(): Promise<ApplyUpdateResult> {

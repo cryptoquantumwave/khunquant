@@ -7,7 +7,24 @@ import { useUpdateCheck } from "@/hooks/use-update-check"
 
 const DISMISS_KEY = "update-banner-dismissed"
 
-type UpdateState = "idle" | "updating" | "error"
+type UpdateState = "idle" | "updating" | "launcher-restarting" | "error"
+
+async function pollUntilReachable(timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    try {
+      const res = await fetch("/api/update/status")
+      if (res.ok) {
+        window.location.reload()
+        return
+      }
+    } catch {
+      // server not yet up — keep polling
+    }
+  }
+  window.location.reload()
+}
 
 export function UpdateBanner() {
   const { status: update, refetch } = useUpdateCheck()
@@ -47,9 +64,14 @@ export function UpdateBanner() {
     setErrorMsg("")
     try {
       const result = await applyUpdate()
+      if (result.launcher_updated === true) {
+        // The launcher process is restarting with a new binary that includes
+        // the updated web UI. Poll until the new server responds, then reload.
+        setState("launcher-restarting")
+        await pollUntilReachable(30_000)
+        return
+      }
       toast.success(`Updated to ${result.version} — gateway is restarting…`)
-      // Immediately refresh the update status so the banner disappears
-      // without waiting for the next polling cycle.
       refetch()
       setState("idle")
     } catch (err) {
@@ -85,10 +107,15 @@ export function UpdateBanner() {
         ) : (
           <button
             onClick={handleUpdate}
-            disabled={state === "updating"}
+            disabled={state === "updating" || state === "launcher-restarting"}
             className="ml-2 flex items-center gap-1 rounded bg-white/20 px-2 py-0.5 font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {state === "updating" ? (
+            {state === "launcher-restarting" ? (
+              <>
+                <IconLoader2 className="size-3 animate-spin" />
+                Reconnecting…
+              </>
+            ) : state === "updating" ? (
               <>
                 <IconLoader2 className="size-3 animate-spin" />
                 Updating…

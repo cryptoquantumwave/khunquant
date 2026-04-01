@@ -353,6 +353,7 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
 	defer func() {
 		if r := recover(); r != nil {
+			logger.RecoverPanicNoExit(r)
 			logger.WarnCF("subturn", "recovered panic sending to pendingResults", map[string]any{
 				"parent_id": parentTS.turnID,
 				"child_id":  childID,

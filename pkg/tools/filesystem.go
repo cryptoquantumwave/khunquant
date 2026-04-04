@@ -496,7 +496,7 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file"
+	return "Write content to a file. In `function.arguments`, use \\n for a newline and \\\\n for a literal backslash-n sequence. Content is written byte-for-byte after argument decoding. If the file already exists, you must set overwrite=true to replace it."
 }
 
 func (t *WriteFileTool) Parameters() map[string]any {
@@ -509,7 +509,7 @@ func (t *WriteFileTool) Parameters() map[string]any {
 			},
 			"content": map[string]any{
 				"type":        "string",
-				"description": "Content to write to the file",
+				"description": "Content to write to the file. In `function.arguments`, use \\n for newline and \\\\n for literal backslash-n.",
 			},
 		},
 		"required": []string{"path", "content"},

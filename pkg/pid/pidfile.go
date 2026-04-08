@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/khunquant/khunquant/pkg/logger"
 )
 
 const pidFileName = ".picoclaw.pid"
@@ -61,7 +61,7 @@ func WritePidFile(homePath, host string, port int) (*PidFileData, error) {
 			if isProcessRunning(data.PID) {
 				return nil, fmt.Errorf("gateway is already running (PID: %d, version: %s)", data.PID, data.Version)
 			}
-			logger.Warnf("not running (PID: %d) so will remove the pid file: %s", data.PID, pidPath)
+			logger.Warn(fmt.Sprintf("not running (PID: %d) so will remove the pid file: %s", data.PID, pidPath))
 		}
 		// Stale PID file; process no longer exists → clean up.
 		os.Remove(pidPath)
@@ -116,7 +116,7 @@ func ReadPidFileWithCheck(homePath string) *PidFileData {
 			return nil
 		}
 		if errors.Is(err, errInvalidPidFile) {
-			logger.Warnf("invalid pid file, remove it: %s (%v)", pidPath, err)
+			logger.Warn(fmt.Sprintf("invalid pid file, remove it: %s (%v)", pidPath, err))
 			_ = os.Remove(pidPath)
 			return nil
 		}
@@ -149,6 +149,30 @@ func RemovePidFile(homePath string) {
 
 	logger.Infof("remove pid file: %s", pidPath)
 	os.Remove(pidPath)
+}
+
+// RemovePidFileIfPID deletes the PID file only when the recorded PID matches
+// expectedPID. It returns true when the file is removed successfully.
+func RemovePidFileIfPID(homePath string, expectedPID int) bool {
+	if expectedPID <= 0 {
+		return false
+	}
+
+	pidMu.Lock()
+	defer pidMu.Unlock()
+
+	pidPath := pidFilePath(homePath)
+	data, err := readPidFileUnlocked(pidPath)
+	if err != nil {
+		return false
+	}
+	if data.PID != expectedPID {
+		return false
+	}
+	if err := os.Remove(pidPath); err != nil {
+		return false
+	}
+	return true
 }
 
 // readPidFileUnlocked reads the PID file without acquiring the lock.

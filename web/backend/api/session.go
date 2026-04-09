@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/khunquant/khunquant/pkg/config"
 	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/khunquant/khunquant/pkg/utils"
 )
 
 // registerSessionRoutes binds session list and detail endpoints to the ServeMux.
@@ -42,6 +44,12 @@ type sessionListItem struct {
 	Updated      string `json:"updated"`
 }
 
+type sessionChatMessage struct {
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
+	Media   []string `json:"media,omitempty"`
+}
+
 type sessionMetaFile struct {
 	Key       string    `json:"key"`
 	Summary   string    `json:"summary"`
@@ -62,8 +70,12 @@ type sessionMetaFile struct {
 const (
 	picoSessionPrefix          = "agent:main:pico:direct:pico:"
 	sanitizedPicoSessionPrefix = "agent_main_pico_direct_pico_"
-	maxSessionJSONLLineSize    = 10 * 1024 * 1024 // 10 MB
-	maxSessionTitleRunes       = 60
+	maxSessionJSONLLineSize = 10 * 1024 * 1024 // 10 MB
+	maxSessionTitleRunes    = 60
+	// Keep session reconstruction aligned with tool_feedback max args preview.
+	sessionToolFeedbackMaxArgsLength = 300
+
+	handledToolResponseSummaryText = "Requested output delivered via tool attachment."
 )
 
 // extractPicoSessionID extracts the session UUID from a full session key.
@@ -195,8 +207,10 @@ func (h *Handler) readJSONLSession(dir, sessionID string) (sessionFile, error) {
 func buildSessionListItem(sessionID string, sess sessionFile) sessionListItem {
 	preview := ""
 	for _, msg := range sess.Messages {
-		if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
-			preview = msg.Content
+		if msg.Role == "user" {
+			preview = sessionMessagePreview(msg)
+		}
+		if preview != "" {
 			break
 		}
 	}
@@ -215,12 +229,7 @@ func buildSessionListItem(sessionID string, sess sessionFile) sessionListItem {
 		title = preview
 	}
 
-	validMessageCount := 0
-	for _, msg := range sess.Messages {
-		if (msg.Role == "user" || msg.Role == "assistant") && strings.TrimSpace(msg.Content) != "" {
-			validMessageCount++
-		}
-	}
+	validMessageCount := len(visibleSessionMessages(sess.Messages))
 
 	return sessionListItem{
 		ID:           sessionID,
@@ -245,6 +254,148 @@ func truncateRunes(s string, maxLen int) string {
 		return string(runes)
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func sessionMessageVisible(msg providers.Message) bool {
+	return strings.TrimSpace(msg.Content) != "" || len(msg.Media) > 0
+}
+
+func sessionMessagePreview(msg providers.Message) string {
+	if content := strings.TrimSpace(msg.Content); content != "" {
+		return content
+	}
+	if len(msg.Media) > 0 {
+		return "[image]"
+	}
+	return ""
+}
+
+func visibleSessionMessages(messages []providers.Message) []sessionChatMessage {
+	transcript := make([]sessionChatMessage, 0, len(messages))
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			if sessionMessageVisible(msg) {
+				transcript = append(transcript, sessionChatMessage{
+					Role:    "user",
+					Content: msg.Content,
+					Media:   append([]string(nil), msg.Media...),
+				})
+			}
+
+		case "assistant":
+			toolSummaryMessages := visibleAssistantToolSummaryMessages(msg.ToolCalls)
+			if len(toolSummaryMessages) > 0 {
+				transcript = append(transcript, toolSummaryMessages...)
+			}
+
+			visibleToolMessages := visibleAssistantToolMessages(msg.ToolCalls)
+			if len(visibleToolMessages) > 0 {
+				transcript = append(transcript, visibleToolMessages...)
+			}
+
+			// Pico web chat can persist both visible `message` tool output and a
+			// later plain assistant reply in the same turn. Hide only the fixed
+			// internal summary that marks handled tool delivery.
+			if !sessionMessageVisible(msg) || assistantMessageInternalOnly(msg) {
+				continue
+			}
+
+			transcript = append(transcript, sessionChatMessage{
+				Role:    "assistant",
+				Content: msg.Content,
+				Media:   append([]string(nil), msg.Media...),
+			})
+		}
+	}
+
+	return transcript
+}
+
+func assistantMessageInternalOnly(msg providers.Message) bool {
+	return strings.TrimSpace(msg.Content) == handledToolResponseSummaryText
+}
+
+func visibleAssistantToolSummaryMessages(toolCalls []providers.ToolCall) []sessionChatMessage {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	messages := make([]sessionChatMessage, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		name := tc.Name
+		argsJSON := ""
+		if tc.Function != nil {
+			if name == "" {
+				name = tc.Function.Name
+			}
+			argsJSON = tc.Function.Arguments
+		}
+
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+
+		if strings.TrimSpace(argsJSON) == "" && len(tc.Arguments) > 0 {
+			if encodedArgs, err := json.Marshal(tc.Arguments); err == nil {
+				argsJSON = string(encodedArgs)
+			}
+		}
+
+		argsPreview := strings.TrimSpace(argsJSON)
+		if argsPreview == "" {
+			argsPreview = "{}"
+		}
+
+		messages = append(messages, sessionChatMessage{
+			Role:    "assistant",
+			Content: formatToolCallSummary(name, utils.Truncate(argsPreview, sessionToolFeedbackMaxArgsLength)),
+		})
+	}
+
+	return messages
+}
+
+func formatToolCallSummary(name, argsPreview string) string {
+	return fmt.Sprintf("\U0001f527 `%s`\n```\n%s\n```", name, argsPreview)
+}
+
+func visibleAssistantToolMessages(toolCalls []providers.ToolCall) []sessionChatMessage {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	messages := make([]sessionChatMessage, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		name := tc.Name
+		argsJSON := ""
+		if tc.Function != nil {
+			if name == "" {
+				name = tc.Function.Name
+			}
+			argsJSON = tc.Function.Arguments
+		}
+
+		switch name {
+		case "message":
+			var args struct {
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				continue
+			}
+			if strings.TrimSpace(args.Content) == "" {
+				continue
+			}
+			messages = append(messages, sessionChatMessage{
+				Role:    "assistant",
+				Content: args.Content,
+			})
+		}
+	}
+
+	return messages
 }
 
 // sessionsDir resolves the path to the gateway's session storage directory.
@@ -437,22 +588,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Convert to a simpler format for the frontend
-	type chatMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	messages := make([]chatMessage, 0, len(sess.Messages))
-	for _, msg := range sess.Messages {
-		// Only include user and assistant messages that have actual content
-		if (msg.Role == "user" || msg.Role == "assistant") && strings.TrimSpace(msg.Content) != "" {
-			messages = append(messages, chatMessage{
-				Role:    msg.Role,
-				Content: msg.Content,
-			})
-		}
-	}
+	messages := visibleSessionMessages(sess.Messages)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

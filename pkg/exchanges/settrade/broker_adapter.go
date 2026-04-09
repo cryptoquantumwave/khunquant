@@ -320,7 +320,7 @@ func (a *SettradeFullAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 		ccxtSym := tr.Symbol + "/THB"
 		side := strings.ToLower(tr.Side)
 		typ := "limit"
-		shares := tr.Volume * 100
+		shares := tr.Volume
 		out[i] = ccxt.Trade{
 			Id:     &id,
 			Symbol: &ccxtSym,
@@ -373,23 +373,26 @@ func settradeOrderToCCXT(o settradeOrder) ccxt.Order {
 	}
 
 	var status string
-	switch strings.ToLower(o.Status) {
-	case "open", "pending":
+	switch strings.ToUpper(o.Status) {
+	// Settrade SEOS open/queuing states
+	case "A", "P", "SC", "S", "SX", "WC", "OPEN", "PENDING":
 		status = "open"
-	case "matched", "filled":
+	// Fully matched
+	case "M", "MATCHED", "FILLED":
 		status = "closed"
-	case "cancelled", "canceled":
+	// Cancelled states
+	case "C", "CM", "CS", "CX", "CANCELLED", "CANCELED":
 		status = "canceled"
-	case "rejected":
+	case "R", "REJECTED":
 		status = "rejected"
 	default:
 		status = strings.ToLower(o.Status)
 	}
 
-	// Convert lots → shares for CCXT
-	totalShares := o.Volume * 100
-	filledShares := o.FilledVol * 100
-	remaining := totalShares - filledShares
+	// API returns vol/matched/balance in shares (same convention as portfolioItem).
+	totalShares := o.Volume
+	filledShares := o.FilledVol
+	remaining := o.Balance
 	return ccxt.Order{
 		Id:        &id,
 		Symbol:    &sym,

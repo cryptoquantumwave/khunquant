@@ -38,6 +38,11 @@ func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExc
 	usdm := ccxt.NewBinanceusdm(ccxtCreds)
 	coinm := ccxt.NewBinancecoinm(ccxtCreds)
 
+	noSymbolWarn := map[string]interface{}{"warnOnFetchOpenOrdersWithoutSymbol": false}
+	spot.ExtendExchangeOptions(noSymbolWarn)
+	usdm.ExtendExchangeOptions(noSymbolWarn)
+	coinm.ExtendExchangeOptions(noSymbolWarn)
+
 	if testnet {
 		spot.SetSandboxMode(true)
 		usdm.SetSandboxMode(true)

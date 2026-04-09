@@ -43,7 +43,7 @@ Retrieve a single order by ID.
 ### get_open_orders
 List all currently open orders.
 - `provider`, `account`: as above
-- `symbol`: optional filter
+- `symbol`: optional filter — **required for Bitkub** (Bitkub API does not support fetching all open orders without a specific trading pair)
 
 ### get_order_history
 Retrieve closed/filled order history.
@@ -68,10 +68,10 @@ Cancel ALL open orders across all configured providers. Irreversible.
 - `confirm`: must be true to execute
 
 ## Notes
-- Binance and OKX support full order execution. Bitkub and BinanceTH do not.
-- **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares (must be a multiple of 100). PIN is required in config.
+- **Bitkub**: `get_open_orders` and `get_order_history` require a `symbol` parameter (e.g. `BTC/THB`). Calling without a symbol will fail — always ask the user which trading pair to check, or iterate over known pairs.
+- **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares. PIN is required in config.
 - The default rate limit is 5 orders per minute per provider.
-- Never place orders over $10,000 notional without explicit user confirmation.
+- Never place orders over $3,000 notional without explicit user confirmation.
 
 ## Settrade Order Notes
 - `symbol`: use SET ticker format e.g. "PTT/THB" or just "PTT"

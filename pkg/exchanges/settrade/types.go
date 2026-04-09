@@ -71,20 +71,18 @@ type settradeOrder struct {
 	Symbol    string  `json:"symbol"`
 	Side      string  `json:"side"`
 	PriceType string  `json:"priceType"`
-	Volume    float64 `json:"volume"` // lots
-	FilledVol float64 `json:"filledVolume"`
+	Volume    float64 `json:"vol"`     // shares (API field is "vol")
+	FilledVol float64 `json:"matched"` // shares filled
+	Balance   float64 `json:"balance"` // shares remaining (unfilled)
 	Price     float64 `json:"price"`
 	Status    string  `json:"status"`
-	EntryDate string  `json:"entryDate"`
+	EntryDate string  `json:"entryTime"` // ISO datetime (more precise than date-only "entryDate")
 }
 
 type orderResponse struct {
 	Data settradeOrder `json:"data"`
 }
 
-type ordersResponse struct {
-	Data []settradeOrder `json:"data"`
-}
 
 // --- Market Data (marketapi.settrade.com, flat response) ---
 
@@ -133,7 +131,7 @@ type tradeRecord struct {
 	OrderNo   string  `json:"orderNo"`
 	Symbol    string  `json:"symbol"`
 	Side      string  `json:"side"`
-	Volume    float64 `json:"volume"` // lots
+	Volume    float64 `json:"volume"` // shares (consistent with order vol and portfolio)
 	Price     float64 `json:"price"`
 	TradeDate string  `json:"tradeDate"`
 }

@@ -188,7 +188,7 @@ type bitkubOrder struct {
 	Amt string `json:"amt"` // amount remaining (THB for buy, base for sell)
 	Rec string `json:"rec"` // received (base for buy, THB for sell)
 	Fee string `json:"fee"`
-	Ts  string `json:"ts"` // Unix seconds as string
+	Ts  int64  `json:"ts"` // Unix milliseconds
 	St  string `json:"st"` // "open" | "filled" | "cancelled" (only in order-info)
 	Ci  string `json:"ci"` // client_id
 }
@@ -201,9 +201,23 @@ type bitkubFill struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// bitkubOpenOrder maps the my-open-orders endpoint response which uses full field names
+// (unlike order-history/place-bid/place-ask which use compact 2-3 letter keys).
+type bitkubOpenOrder struct {
+	ID      string `json:"id"`
+	Side    string `json:"side"`    // "buy" | "sell"
+	Type    string `json:"type"`    // "limit" | "market"
+	Rate    string `json:"rate"`    // limit price
+	Amount  string `json:"amount"`  // base amount
+	Receive string `json:"receive"` // received
+	Fee     string `json:"fee"`
+	Credit  string `json:"credit"`
+	Ts      int64  `json:"ts"` // Unix milliseconds
+}
+
 type openOrdersResponse struct {
-	Error  int           `json:"error"`
-	Result []bitkubOrder `json:"result"`
+	Error  int               `json:"error"`
+	Result []bitkubOpenOrder `json:"result"`
 }
 
 type orderHistoryResponse struct {
@@ -345,6 +359,8 @@ func (b *BitkubExchange) fetchSymbols(ctx context.Context) ([]symbolEntry, error
 }
 
 // fetchMyOpenOrders returns all open orders for the given symbol (authenticated).
+// The my-open-orders endpoint uses full field names (side/type/rate/amount/receive)
+// unlike other order endpoints which use compact names (sd/typ/rat/amt/rec).
 func (b *BitkubExchange) fetchMyOpenOrders(ctx context.Context, sym string) ([]bitkubOrder, error) {
 	params := map[string]string{"sym": strings.ToLower(sym)}
 	var resp openOrdersResponse
@@ -354,7 +370,23 @@ func (b *BitkubExchange) fetchMyOpenOrders(ctx context.Context, sym string) ([]b
 	if resp.Error != 0 {
 		return nil, fmt.Errorf("bitkub: open orders error code %d", resp.Error)
 	}
-	return resp.Result, nil
+	// Convert full-name fields to the unified bitkubOrder shape.
+	out := make([]bitkubOrder, len(resp.Result))
+	for i, o := range resp.Result {
+		out[i] = bitkubOrder{
+			ID:  o.ID,
+			Sym: sym,
+			Sd:  o.Side,
+			Typ: o.Type,
+			Rat: o.Rate,
+			Amt: o.Amount,
+			Rec: o.Receive,
+			Fee: o.Fee,
+			Ts:  o.Ts,
+			St:  "open",
+		}
+	}
+	return out, nil
 }
 
 // fetchOrderHistory returns filled/cancelled orders for the given symbol (authenticated).
@@ -483,8 +515,7 @@ func (b *BitkubExchange) orderToCCXT(o bitkubOrder) ccxt.Order {
 	rec, _ := strconv.ParseFloat(o.Rec, 64)
 	feeAmt, _ := strconv.ParseFloat(o.Fee, 64)
 
-	tsInt, _ := strconv.ParseInt(o.Ts, 10, 64)
-	tsMs := tsInt * 1000
+	tsMs := o.Ts // already Unix milliseconds
 
 	var amount, filled float64
 	if side == "buy" {
@@ -552,15 +583,22 @@ func (b *BitkubExchange) orderToCCXT(o bitkubOrder) ccxt.Order {
 // privateGet sends a signed GET request with query parameters to a private Bitkub endpoint.
 func (b *BitkubExchange) privateGet(ctx context.Context, path string, params map[string]string, out interface{}) error {
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	sig := b.sign(ts, http.MethodGet, path, "")
 
 	q := url.Values{}
 	for k, v := range params {
 		q.Set(k, v)
 	}
+	queryString := q.Encode()
+	// Bitkub v3: signature payload for GET is ts+METHOD+path+"?"+queryString
+	sigPath := path
+	if queryString != "" {
+		sigPath = path + "?" + queryString
+	}
+	sig := b.sign(ts, http.MethodGet, sigPath, "")
+
 	urlStr := baseURL + path
-	if len(q) > 0 {
-		urlStr += "?" + q.Encode()
+	if queryString != "" {
+		urlStr += "?" + queryString
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)

@@ -352,8 +352,8 @@ func (c *SettradeClient) FetchOpenEQOrders(ctx context.Context, symbol string) (
 	if symbol != "" {
 		q.Set("symbol", symbol)
 	}
-	var resp ordersResponse
-	return resp.Data, c.get(ctx, path, q, &resp)
+	var resp []settradeOrder
+	return resp, c.get(ctx, path, q, &resp)
 }
 
 // FetchClosedEQOrders returns matched/cancelled orders.
@@ -366,8 +366,8 @@ func (c *SettradeClient) FetchClosedEQOrders(ctx context.Context, symbol string,
 	if limit > 0 {
 		q.Set("limit", fmt.Sprintf("%d", limit))
 	}
-	var resp ordersResponse
-	return resp.Data, c.get(ctx, path, q, &resp)
+	var resp []settradeOrder
+	return resp, c.get(ctx, path, q, &resp)
 }
 
 // ChangeEQOrder modifies price or volume of a pending order.

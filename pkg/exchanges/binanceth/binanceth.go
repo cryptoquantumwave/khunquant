@@ -221,3 +221,207 @@ func (b *BinanceTHExchange) sign(queryString string) string {
 	mac.Write([]byte(queryString))
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+// signedPost sends a SIGNED POST request to a private Binance TH endpoint.
+// Parameters are form-encoded in the request body.
+func (b *BinanceTHExchange) signedPost(ctx context.Context, path string, extraParams url.Values, out interface{}) error {
+	params := url.Values{}
+	for k, vs := range extraParams {
+		for _, v := range vs {
+			params.Set(k, v)
+		}
+	}
+	params.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	queryString := params.Encode()
+	sig := b.sign(queryString)
+	queryString += "&signature=" + sig
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path+"?"+queryString, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return json.Unmarshal(body, out)
+}
+
+// signedDelete sends a SIGNED DELETE request to a private Binance TH endpoint.
+func (b *BinanceTHExchange) signedDelete(ctx context.Context, path string, extraParams url.Values, out interface{}) error {
+	params := url.Values{}
+	for k, vs := range extraParams {
+		for _, v := range vs {
+			params.Set(k, v)
+		}
+	}
+	params.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	queryString := params.Encode()
+	sig := b.sign(queryString)
+	queryString += "&signature=" + sig
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+path+"?"+queryString, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-MBX-APIKEY", b.apiKey)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return json.Unmarshal(body, out)
+}
+
+// orderResponse is the response from GET/POST/DELETE /api/v1/order and list endpoints.
+type orderResponse struct {
+	OrderID             int64  `json:"orderId"`
+	ClientOrderID       string `json:"clientOrderId"`
+	Symbol              string `json:"symbol"`
+	Status              string `json:"status"`
+	Side                string `json:"side"`
+	Type                string `json:"type"`
+	TimeInForce         string `json:"timeInForce"`
+	Price               string `json:"price"`
+	OrigQty             string `json:"origQty"`
+	ExecutedQty         string `json:"executedQty"`
+	CummulativeQuoteQty string `json:"cummulativeQuoteQty"`
+	Time                int64  `json:"time"`
+	UpdateTime          int64  `json:"updateTime"`
+}
+
+// tradeResponse is the response from GET /api/v1/userTrades.
+type tradeResponse struct {
+	ID              int64  `json:"id"`
+	OrderID         int64  `json:"orderId"`
+	Symbol          string `json:"symbol"`
+	Price           string `json:"price"`
+	Qty             string `json:"qty"`
+	Commission      string `json:"commission"`
+	CommissionAsset string `json:"commissionAsset"`
+	Time            int64  `json:"time"`
+	IsBuyer         bool   `json:"isBuyer"`
+	IsMaker         bool   `json:"isMaker"`
+}
+
+// fetchOrder fetches a single order by ID from GET /api/v1/order.
+func (b *BinanceTHExchange) fetchOrder(ctx context.Context, symbol, orderID string) (orderResponse, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("orderId", orderID)
+
+	var resp orderResponse
+	if err := b.signedGet(ctx, endpointOrder, params, &resp); err != nil {
+		return orderResponse{}, fmt.Errorf("binanceth: fetchOrder: %w", err)
+	}
+	return resp, nil
+}
+
+// fetchOpenOrders fetches all open orders from GET /api/v1/openOrders.
+// Pass empty symbol to fetch all open orders (higher weight: 40 vs 3).
+func (b *BinanceTHExchange) fetchOpenOrders(ctx context.Context, symbol string) ([]orderResponse, error) {
+	params := url.Values{}
+	if symbol != "" {
+		params.Set("symbol", symbol)
+	}
+
+	var resp []orderResponse
+	if err := b.signedGet(ctx, endpointOpenOrders, params, &resp); err != nil {
+		return nil, fmt.Errorf("binanceth: fetchOpenOrders: %w", err)
+	}
+	return resp, nil
+}
+
+// fetchAllOrders fetches order history from GET /api/v1/allOrders.
+func (b *BinanceTHExchange) fetchAllOrders(ctx context.Context, symbol string, since *int64, limit int) ([]orderResponse, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	if since != nil {
+		params.Set("startTime", strconv.FormatInt(*since, 10))
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+
+	var resp []orderResponse
+	if err := b.signedGet(ctx, endpointAllOrders, params, &resp); err != nil {
+		return nil, fmt.Errorf("binanceth: fetchAllOrders: %w", err)
+	}
+	return resp, nil
+}
+
+// fetchUserTrades fetches trade history from GET /api/v1/userTrades.
+func (b *BinanceTHExchange) fetchUserTrades(ctx context.Context, symbol string, since *int64, limit int) ([]tradeResponse, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	if since != nil {
+		params.Set("startTime", strconv.FormatInt(*since, 10))
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+
+	var resp []tradeResponse
+	if err := b.signedGet(ctx, endpointUserTrades, params, &resp); err != nil {
+		return nil, fmt.Errorf("binanceth: fetchUserTrades: %w", err)
+	}
+	return resp, nil
+}
+
+// createOrder places a new order via POST /api/v1/order.
+func (b *BinanceTHExchange) createOrder(ctx context.Context, symbol, side, orderType string, amount float64, price *float64) (orderResponse, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("side", strings.ToUpper(side))
+	params.Set("type", strings.ToUpper(orderType))
+	params.Set("quantity", strconv.FormatFloat(amount, 'f', -1, 64))
+	if price != nil {
+		params.Set("price", strconv.FormatFloat(*price, 'f', -1, 64))
+		params.Set("timeInForce", "GTC")
+	}
+
+	var resp orderResponse
+	if err := b.signedPost(ctx, endpointOrder, params, &resp); err != nil {
+		return orderResponse{}, fmt.Errorf("binanceth: createOrder: %w", err)
+	}
+	return resp, nil
+}
+
+// cancelOrder cancels an open order via DELETE /api/v1/order.
+func (b *BinanceTHExchange) cancelOrder(ctx context.Context, symbol, orderID string) (orderResponse, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("orderId", orderID)
+
+	var resp orderResponse
+	if err := b.signedDelete(ctx, endpointOrder, params, &resp); err != nil {
+		return orderResponse{}, fmt.Errorf("binanceth: cancelOrder: %w", err)
+	}
+	return resp, nil
+}

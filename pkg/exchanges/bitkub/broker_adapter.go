@@ -273,7 +273,12 @@ func (a *BitkubBrokerAdapter) FetchOrder(ctx context.Context, id, symbol string)
 }
 
 // FetchOpenOrders returns all open orders for the symbol.
+// Bitkub's API requires a specific trading pair — it does not support fetching
+// open orders across all symbols in a single call.
 func (a *BitkubBrokerAdapter) FetchOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error) {
+	if symbol == "" {
+		return nil, fmt.Errorf("bitkub requires a symbol to list open orders; please specify a trading pair (e.g. BTC/THB, STO/THB, ETH/THB)")
+	}
 	sym := normalizeSymbol(symbol)
 	orders, err := a.fetchMyOpenOrders(ctx, sym)
 	if err != nil {
@@ -322,8 +327,7 @@ func (a *BitkubBrokerAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 		price, _ := strconv.ParseFloat(o.Rat, 64)
 		rec, _ := strconv.ParseFloat(o.Rec, 64)
 		feeAmt, _ := strconv.ParseFloat(o.Fee, 64)
-		tsInt, _ := strconv.ParseInt(o.Ts, 10, 64)
-		tsMs := tsInt * 1000
+		tsMs := o.Ts // already Unix milliseconds
 
 		id := o.ID
 		ccxtSym := strings.ReplaceAll(strings.ToUpper(o.Sym), "_", "/")

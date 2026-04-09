@@ -501,6 +501,24 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 			cfg.Tools.MCP.Enabled = true
 			cfg.Tools.MCP.Discovery.Enabled = true
 		}
+	case tools.NamePaperTrade:
+		cfg.Tools.PaperTrade.Enabled = enabled
+	case tools.NameGetOrderRateStatus:
+		cfg.Tools.GetOrderRateStatus.Enabled = enabled
+	case tools.NameGetOrder:
+		cfg.Tools.GetOrder.Enabled = enabled
+	case tools.NameGetOpenOrders:
+		cfg.Tools.GetOpenOrders.Enabled = enabled
+	case tools.NameGetOrderHistory:
+		cfg.Tools.GetOrderHistory.Enabled = enabled
+	case tools.NameGetTradeHistory:
+		cfg.Tools.GetTradeHistory.Enabled = enabled
+	case tools.NameCreateOrder:
+		cfg.Tools.CreateOrder.Enabled = enabled
+	case tools.NameCancelOrder:
+		cfg.Tools.CancelOrder.Enabled = enabled
+	case tools.NameEmergencyStop:
+		cfg.Tools.EmergencyStop.Enabled = enabled
 	default:
 		return fmt.Errorf("tool %q cannot be updated", toolName)
 	}

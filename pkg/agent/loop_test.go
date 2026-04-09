@@ -2306,6 +2306,16 @@ func TestRunAgentLoop_PicoSkipsInterimPublishWhenNotAllowed(t *testing.T) {
 		t.Fatalf("runAgentLoop() response = %q, want %q", response, "final model text")
 	}
 
+	runCancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run() to exit")
+	}
+
 	select {
 	case outbound := <-msgBus.OutboundChan():
 		t.Fatalf("unexpected outbound message when interim publish disabled: %+v", outbound)

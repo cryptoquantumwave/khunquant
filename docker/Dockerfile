@@ -29,13 +29,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Copy binary
 COPY --from=builder /src/build/khunquant /usr/local/bin/khunquant
 
-# Create non-root user and group
-RUN addgroup -g 1000 khunquant && \
-    adduser -D -u 1000 -G khunquant khunquant
-
-# Switch to non-root user
-USER khunquant
-
 # Run onboard to create initial directories and config
 RUN /usr/local/bin/khunquant onboard
 

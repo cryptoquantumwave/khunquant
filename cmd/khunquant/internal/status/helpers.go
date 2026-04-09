@@ -51,6 +51,7 @@ func statusCmd() {
 		hasGroq := cfg.Providers.Groq.APIKey != ""
 		hasVLLM := cfg.Providers.VLLM.APIBase != ""
 		hasLlamaCpp := cfg.Providers.LlamaCpp.APIBase != ""
+		hasMLXLM := cfg.Providers.MLXLM.APIBase != ""
 		hasMoonshot := cfg.Providers.Moonshot.APIKey != ""
 		hasDeepSeek := cfg.Providers.DeepSeek.APIKey != ""
 		hasVolcEngine := cfg.Providers.VolcEngine.APIKey != ""
@@ -88,6 +89,11 @@ func statusCmd() {
 			fmt.Printf("llama.cpp: ✓ %s\n", cfg.Providers.LlamaCpp.APIBase)
 		} else {
 			fmt.Println("llama.cpp: not set")
+		}
+		if hasMLXLM {
+			fmt.Printf("MLX LM: ✓ %s\n", cfg.Providers.MLXLM.APIBase)
+		} else {
+			fmt.Println("MLX LM: not set")
 		}
 
 		store, _ := auth.LoadStore()

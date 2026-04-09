@@ -41,6 +41,7 @@ func onboard() {
 	fmt.Println("     - OpenRouter: https://openrouter.ai/keys (access 100+ models)")
 	fmt.Println("     - Ollama:     https://ollama.com (local, free)")
 	fmt.Println("     - llama.cpp:  https://github.com/ggml-org/llama.cpp (local, lightweight)")
+	fmt.Println("     - mlx_lm:    https://github.com/ml-explore/mlx-lm (local, Apple Silicon)")
 	fmt.Println("")
 	fmt.Println("     See README.md for 17+ supported providers.")
 	fmt.Println("")

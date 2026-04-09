@@ -191,6 +191,23 @@ func ConvertProvidersToModelList(cfg *Config) []ModelConfig {
 			},
 		},
 		{
+			providerNames: []string{"mlx_lm"},
+			protocol:      "mlx_lm",
+			buildConfig: func(p ProvidersConfig) (ModelConfig, bool) {
+				if p.MLXLM.APIKey == "" && p.MLXLM.APIBase == "" {
+					return ModelConfig{}, false
+				}
+				return ModelConfig{
+					ModelName:      "mlx_lm",
+					Model:          "mlx_lm/auto",
+					APIKey:         p.MLXLM.APIKey,
+					APIBase:        p.MLXLM.APIBase,
+					Proxy:          p.MLXLM.Proxy,
+					RequestTimeout: p.MLXLM.RequestTimeout,
+				}, true
+			},
+		},
+		{
 			providerNames: []string{"gemini", "google"},
 			protocol:      "gemini",
 			buildConfig: func(p ProvidersConfig) (ModelConfig, bool) {

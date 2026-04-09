@@ -728,6 +728,7 @@ type ProvidersConfig struct {
 	Minimax       ProviderConfig       `json:"minimax"`
 	LongCat       ProviderConfig       `json:"longcat"`
 	LlamaCpp      ProviderConfig       `json:"llamacpp"`
+	MLXLM         ProviderConfig       `json:"mlx_lm"`
 	ModelScope    ProviderConfig       `json:"modelscope"`
 }
 
@@ -758,7 +759,8 @@ func (p ProvidersConfig) IsEmpty() bool {
 		p.Minimax.APIKey == "" && p.Minimax.APIBase == "" &&
 		p.LongCat.APIKey == "" && p.LongCat.APIBase == "" &&
 		p.ModelScope.APIKey == "" && p.ModelScope.APIBase == "" &&
-		p.LlamaCpp.APIKey == "" && p.LlamaCpp.APIBase == ""
+		p.LlamaCpp.APIKey == "" && p.LlamaCpp.APIBase == "" &&
+		p.MLXLM.APIKey == "" && p.MLXLM.APIBase == ""
 }
 
 // MarshalJSON implements custom JSON marshaling for ProvidersConfig

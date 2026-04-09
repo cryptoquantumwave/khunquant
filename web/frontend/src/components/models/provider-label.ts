@@ -18,6 +18,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   avian: "Avian",
   vllm: "VLLM (local)",
   llamacpp: "llama.cpp (local)",
+  mlx_lm: "MLX LM (local)",
   zhipu: "Zhipu AI (智谱)",
 }
 

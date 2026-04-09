@@ -37,6 +37,7 @@ const PROVIDER_DOMAINS: Record<string, string> = {
   avian: "avian.io",
   vllm: "vllm.ai",
   llamacpp: "github.com",
+  mlx_lm: "github.com",
   zhipu: "zhipuai.cn",
 }
 

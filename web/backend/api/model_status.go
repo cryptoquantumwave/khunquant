@@ -19,6 +19,7 @@ var (
 	probeOllamaModelFunc           = probeOllamaModel
 	probeOpenAICompatibleModelFunc = probeOpenAICompatibleModel
 	probeLlamaCppHealthFunc        = probeLlamaCppHealth
+	probeMLXLMHealthFunc           = probeMLXLMHealth
 )
 
 func hasModelConfiguration(m config.ModelConfig) bool {
@@ -64,7 +65,7 @@ func requiresRuntimeProbe(m config.ModelConfig) bool {
 	switch modelProtocol(m.Model) {
 	case "claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot", "copilot":
 		return true
-	case "ollama", "vllm", "llamacpp":
+	case "ollama", "vllm", "llamacpp", "mlx_lm":
 		apiBase := strings.TrimSpace(m.APIBase)
 		return apiBase == "" || hasLocalAPIBase(apiBase)
 	}
@@ -86,6 +87,8 @@ func probeLocalModelAvailability(m config.ModelConfig) bool {
 		return probeOpenAICompatibleModelFunc(apiBase, modelID)
 	case "llamacpp":
 		return probeLlamaCppHealthFunc(apiBase)
+	case "mlx_lm":
+		return probeMLXLMHealthFunc(apiBase)
 	case "github-copilot", "copilot":
 		return probeTCPServiceFunc(apiBase)
 	case "claude-cli", "claudecli", "codex-cli", "codexcli":
@@ -109,6 +112,8 @@ func modelProbeAPIBase(m config.ModelConfig) string {
 	case "vllm":
 		return "http://localhost:8000/v1"
 	case "llamacpp":
+		return "http://localhost:8080/v1"
+	case "mlx_lm":
 		return "http://localhost:8080/v1"
 	case "github-copilot", "copilot":
 		return "localhost:4321"
@@ -261,6 +266,24 @@ func probeLlamaCppHealth(apiBase string) bool {
 		return false
 	}
 	return resp.Status == "ok"
+}
+
+// probeMLXLMHealth checks if an mlx_lm server is running by calling GET /v1/models.
+// mlx_lm serves a single model at startup; any non-empty model list means the server is ready.
+func probeMLXLMHealth(apiBase string) bool {
+	if strings.TrimSpace(apiBase) == "" {
+		return false
+	}
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp); err != nil {
+		return false
+	}
+	return len(resp.Data) > 0
 }
 
 func getJSON(rawURL string, out any) error {

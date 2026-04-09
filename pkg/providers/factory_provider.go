@@ -113,6 +113,14 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 		), modelID, nil
 
+	case "mlx_lm":
+		// mlx_lm loads one model at startup; auto-discover the loaded model ID.
+		apiBase := cfg.APIBase
+		if apiBase == "" {
+			apiBase = getDefaultAPIBase(protocol)
+		}
+		return NewMLXLMProvider(cfg.APIKey, apiBase, cfg.Proxy, cfg.RequestTimeout), modelID, nil
+
 	case "litellm", "openrouter", "groq", "zhipu", "gemini", "nvidia",
 		"ollama", "moonshot", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "mistral", "avian",
@@ -246,6 +254,8 @@ func getDefaultAPIBase(protocol string) string {
 	case "vllm":
 		return "http://localhost:8000/v1"
 	case "llamacpp":
+		return "http://localhost:8080/v1"
+	case "mlx_lm":
 		return "http://localhost:8080/v1"
 	case "mistral":
 		return "https://api.mistral.ai/v1"

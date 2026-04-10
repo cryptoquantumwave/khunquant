@@ -12,7 +12,6 @@ type accountInfoResponse struct {
 }
 
 // portfolioItem maps one entry in portfolioList from /api/seos/v3/{broker}/accounts/{acc}/portfolios.
-// Volumes are in shares (not lots).
 type portfolioItem struct {
 	Symbol        string  `json:"symbol"`
 	CurrentVolume float64 `json:"currentVolume"` // total shares held
@@ -33,13 +32,12 @@ type portfolioResponse struct {
 // --- Orders (SEOS v3) ---
 
 // createOrderRequest matches the SDK v2 place_order body.
-// Volume is in lots (1 lot = 100 shares); converted from shares internally.
 type createOrderRequest struct {
 	PIN           string  `json:"pin"`
 	Side          string  `json:"side"` // "Buy" | "Sell"
 	Symbol        string  `json:"symbol"`
 	TrusteeIDType string  `json:"trusteeIdType"` // "Local"
-	Volume        int     `json:"volume"`        // lots
+	Volume        int     `json:"volume"`
 	QtyOpen       int     `json:"qtyOpen"`
 	Price         float64 `json:"price,omitempty"`
 	PriceType     string  `json:"priceType"`    // "Limit" | "ATO"
@@ -55,7 +53,7 @@ type cancelOrderRequest struct {
 type changeOrderRequest struct {
 	PIN           string   `json:"pin"`
 	NewPrice      *float64 `json:"newPrice,omitempty"`
-	NewVolume     *int     `json:"newVolume,omitempty"` // lots
+	NewVolume     *int     `json:"newVolume,omitempty"`
 	TrusteeIDType string   `json:"newTrusteeIdType,omitempty"`
 	BypassWarning *bool    `json:"bypassWarning,omitempty"`
 }

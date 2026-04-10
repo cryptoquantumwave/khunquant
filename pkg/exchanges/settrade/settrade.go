@@ -297,11 +297,7 @@ func (c *SettradeClient) FetchQuote(ctx context.Context, symbol string) (quoteRe
 }
 
 // CreateEQOrder places an equity order. PIN is sent inline (SDK v2).
-// amount is in shares; converted to lots (÷100) internally.
-func (c *SettradeClient) CreateEQOrder(ctx context.Context, symbol, side, priceType string, amountShares int, price float64) (settradeOrder, error) {
-	if amountShares%100 != 0 {
-		return settradeOrder{}, fmt.Errorf("settrade: amount %d is not a round lot (must be multiple of 100)", amountShares)
-	}
+func (c *SettradeClient) CreateEQOrder(ctx context.Context, symbol, side, priceType string, volume int, price float64) (settradeOrder, error) {
 	if c.cfg.PIN == "" {
 		return settradeOrder{}, fmt.Errorf("settrade: pin is required for order placement")
 	}
@@ -314,7 +310,7 @@ func (c *SettradeClient) CreateEQOrder(ctx context.Context, symbol, side, priceT
 		Side:          side,
 		Symbol:        symbol,
 		TrusteeIDType: "Local",
-		Volume:        amountShares / 100,
+		Volume:        volume,
 		QtyOpen:       0,
 		Price:         price,
 		PriceType:     priceType,
@@ -371,8 +367,8 @@ func (c *SettradeClient) FetchClosedEQOrders(ctx context.Context, symbol string,
 }
 
 // ChangeEQOrder modifies price or volume of a pending order.
-// newVolume is in shares (converted to lots internally); pass 0 to leave unchanged.
-func (c *SettradeClient) ChangeEQOrder(ctx context.Context, orderNo string, newPrice float64, newVolumeShares int) (settradeOrder, error) {
+// newVolume is the new volume to set; pass 0 to leave unchanged.
+func (c *SettradeClient) ChangeEQOrder(ctx context.Context, orderNo string, newPrice float64, newVolume int) (settradeOrder, error) {
 	if c.cfg.PIN == "" {
 		return settradeOrder{}, fmt.Errorf("settrade: pin is required to change orders")
 	}
@@ -381,12 +377,8 @@ func (c *SettradeClient) ChangeEQOrder(ctx context.Context, orderNo string, newP
 		p := roundToTickSize(newPrice)
 		req.NewPrice = &p
 	}
-	if newVolumeShares > 0 {
-		if newVolumeShares%100 != 0 {
-			return settradeOrder{}, fmt.Errorf("settrade: newVolume %d is not a round lot (must be multiple of 100)", newVolumeShares)
-		}
-		lots := newVolumeShares / 100
-		req.NewVolume = &lots
+	if newVolume > 0 {
+		req.NewVolume = &newVolume
 	}
 	path := fmt.Sprintf(endpointEQOrderChange, c.cfg.BrokerID, c.cfg.AccountNo, orderNo)
 	var resp orderResponse

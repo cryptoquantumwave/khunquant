@@ -144,15 +144,15 @@ type assetBalance struct {
 // tickerEntry holds all fields from GET /api/v3/market/ticker.
 // The endpoint returns a plain JSON array (no envelope) when sym is omitted.
 type tickerEntry struct {
-	Symbol        string `json:"symbol"`
-	Last          string `json:"last"`
-	LowestAsk     string `json:"lowest_ask"`
-	HighestBid    string `json:"highest_bid"`
-	PercentChange string `json:"percent_change"`
-	BaseVolume    string `json:"base_volume"`
-	QuoteVolume   string `json:"quote_volume"`
-	High24Hr      string `json:"high_24_hr"`
-	Low24Hr       string `json:"low_24_hr"`
+	Symbol        string        `json:"symbol"`
+	Last          numericString `json:"last"`
+	LowestAsk     numericString `json:"lowest_ask"`
+	HighestBid    numericString `json:"highest_bid"`
+	PercentChange numericString `json:"percent_change"`
+	BaseVolume    numericString `json:"base_volume"`
+	QuoteVolume   numericString `json:"quote_volume"`
+	High24Hr      numericString `json:"high_24_hr"`
+	Low24Hr       numericString `json:"low_24_hr"`
 }
 
 type depthResponse struct {
@@ -241,25 +241,25 @@ type bitkubOrder struct {
 }
 
 type bitkubFill struct {
-	Amount    string `json:"amount"`
-	Fee       string `json:"fee"`
-	ID        string `json:"id"`
-	Rate      string `json:"rate"`
-	Timestamp int64  `json:"timestamp"`
+	Amount    numericString `json:"amount"`
+	Fee       numericString `json:"fee"`
+	ID        string        `json:"id"`
+	Rate      numericString `json:"rate"`
+	Timestamp flexInt64     `json:"timestamp"`
 }
 
 // bitkubOpenOrder maps the my-open-orders endpoint response which uses full field names
 // (unlike order-history/place-bid/place-ask which use compact 2-3 letter keys).
 type bitkubOpenOrder struct {
-	ID      string `json:"id"`
-	Side    string `json:"side"`    // "buy" | "sell"
-	Type    string `json:"type"`    // "limit" | "market"
-	Rate    string `json:"rate"`    // limit price
-	Amount  string `json:"amount"`  // base amount
-	Receive string `json:"receive"` // received
-	Fee     string `json:"fee"`
-	Credit  string `json:"credit"`
-	Ts      int64  `json:"ts"` // Unix milliseconds
+	ID      string        `json:"id"`
+	Side    string        `json:"side"`    // "buy" | "sell"
+	Type    string        `json:"type"`    // "limit" | "market"
+	Rate    numericString `json:"rate"`    // limit price
+	Amount  numericString `json:"amount"`  // base amount
+	Receive numericString `json:"receive"` // received
+	Fee     numericString `json:"fee"`
+	Credit  numericString `json:"credit"`
+	Ts      flexInt64     `json:"ts"` // Unix milliseconds
 }
 
 type openOrdersResponse struct {
@@ -348,7 +348,7 @@ func (b *BitkubExchange) fetchTickers(ctx context.Context) (map[string]float64, 
 	}
 	out := make(map[string]float64, len(rich))
 	for sym, e := range rich {
-		last, err := strconv.ParseFloat(e.Last, 64)
+		last, err := strconv.ParseFloat(string(e.Last), 64)
 		if err != nil {
 			continue
 		}
@@ -425,11 +425,11 @@ func (b *BitkubExchange) fetchMyOpenOrders(ctx context.Context, sym string) ([]b
 			Sym: sym,
 			Sd:  o.Side,
 			Typ: o.Type,
-			Rat: numericString(o.Rate),
-			Amt: numericString(o.Amount),
-			Rec: numericString(o.Receive),
-			Fee: numericString(o.Fee),
-			Ts:  flexInt64(o.Ts),
+			Rat: o.Rate,
+			Amt: o.Amount,
+			Rec: o.Receive,
+			Fee: o.Fee,
+			Ts:  o.Ts,
 			St:  "open",
 		}
 	}

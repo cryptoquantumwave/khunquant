@@ -373,14 +373,14 @@ func (a *BitkubBrokerAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 func tickerEntryToCCXT(symbol string, e tickerEntry) ccxt.Ticker {
 	sym := symbol
 
-	last, _ := strconv.ParseFloat(e.Last, 64)
-	ask, _ := strconv.ParseFloat(e.LowestAsk, 64)
-	bid, _ := strconv.ParseFloat(e.HighestBid, 64)
-	pct, _ := strconv.ParseFloat(e.PercentChange, 64)
-	baseVol, _ := strconv.ParseFloat(e.BaseVolume, 64)
-	quoteVol, _ := strconv.ParseFloat(e.QuoteVolume, 64)
-	high, _ := strconv.ParseFloat(e.High24Hr, 64)
-	low, _ := strconv.ParseFloat(e.Low24Hr, 64)
+	last, _ := strconv.ParseFloat(string(e.Last), 64)
+	ask, _ := strconv.ParseFloat(string(e.LowestAsk), 64)
+	bid, _ := strconv.ParseFloat(string(e.HighestBid), 64)
+	pct, _ := strconv.ParseFloat(string(e.PercentChange), 64)
+	baseVol, _ := strconv.ParseFloat(string(e.BaseVolume), 64)
+	quoteVol, _ := strconv.ParseFloat(string(e.QuoteVolume), 64)
+	high, _ := strconv.ParseFloat(string(e.High24Hr), 64)
+	low, _ := strconv.ParseFloat(string(e.Low24Hr), 64)
 
 	now := time.Now().UnixMilli()
 

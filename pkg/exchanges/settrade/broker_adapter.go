@@ -97,7 +97,7 @@ func (a *SettradeFullAdapter) GetWalletBalances(ctx context.Context, walletType 
 		}
 		out := make([]broker.WalletBalance, len(portfolio.PortfolioList))
 		for i, item := range portfolio.PortfolioList {
-			// Volumes are in shares (not lots).
+			// Volumes are as returned by the API.
 			out[i] = broker.WalletBalance{
 				Balance:    broker.Balance{Asset: item.Symbol, Free: item.ActualVolume, Locked: item.CurrentVolume - item.ActualVolume},
 				WalletType: "stock",
@@ -226,7 +226,7 @@ func (a *SettradeFullAdapter) LoadMarkets(_ context.Context) (map[string]ccxt.Ma
 // CreateOrder places a limit or market order on SET.
 // symbol: CCXT format "PTT/THB" or raw "PTT".
 // orderType: "limit" → Limit, "market" → ATO.
-// amount: number of shares (must be multiple of 100).
+// amount: number of shares/units to trade.
 // price: required for limit orders; ignored for market orders.
 func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side string, amount float64, price *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	sym := toSetSymbol(symbol)

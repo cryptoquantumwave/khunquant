@@ -15,8 +15,7 @@ import (
 func newTestPicoChannel(t *testing.T) *PicoChannel {
 	t.Helper()
 
-	cfg := config.PicoConfig{}
-	cfg.SetToken("test-token")
+	cfg := config.PicoConfig{Token: "test-token"}
 	ch, err := NewPicoChannel(cfg, bus.NewMessageBus())
 	if err != nil {
 		t.Fatalf("NewPicoChannel: %v", err)

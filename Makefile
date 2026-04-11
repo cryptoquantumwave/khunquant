@@ -63,7 +63,7 @@ WORKSPACE_DIR?=$(KHUNQUANT_HOME)/workspace
 WORKSPACE_SKILLS_DIR=$(WORKSPACE_DIR)/skills
 BUILTIN_SKILLS_DIR=$(CURDIR)/skills
 
-LSCMD=ls -sf
+LSCMD=ln -sf
 
 # OS detection
 UNAME_S?=$(shell uname -s)
@@ -131,7 +131,7 @@ generate:
 build: generate
 	@echo "Building $(BINARY_NAME)$(EXT) for $(PLATFORM)/$(ARCH)..."
 	@mkdir -p $(BUILD_DIR)
-	@GOARCH=${ARCH} $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH)$(EXT) ./$(CMD_DIR)
+	@GOARCH=${ARCH} $(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_PATH)$(EXT) ./$(CMD_DIR)
 	@echo "Build complete: $(BINARY_PATH)$(EXT)"
 	@$(LSCMD) $(BINARY_NAME)-$(PLATFORM)-$(ARCH)$(EXT) $(BUILD_DIR)/$(BINARY_NAME)$(EXT)
 

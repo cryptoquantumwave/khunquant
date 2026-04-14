@@ -973,6 +973,13 @@ type ReadFileToolConfig struct {
 }
 
 type ToolsConfig struct {
+	// FilterSensitiveData controls whether to filter API keys, tokens, and secrets
+	// from tool results before sending content to the LLM. Default: true (enabled).
+	FilterSensitiveData bool `json:"filter_sensitive_data" yaml:"-" env:"KHUNQUANT_TOOLS_FILTER_SENSITIVE_DATA"`
+	// FilterMinLength is the minimum content length required for filtering.
+	// Content shorter than this is returned unchanged for performance. Default: 8.
+	FilterMinLength int `json:"filter_min_length" yaml:"-" env:"KHUNQUANT_TOOLS_FILTER_MIN_LENGTH"`
+
 	AllowReadPaths  []string           `json:"allow_read_paths"  env:"KHUNQUANT_TOOLS_ALLOW_READ_PATHS"`
 	AllowWritePaths []string           `json:"allow_write_paths" env:"KHUNQUANT_TOOLS_ALLOW_WRITE_PATHS"`
 	Web             WebToolsConfig     `json:"web"`
@@ -1030,6 +1037,19 @@ type ToolsConfig struct {
 	SetPriceAlert     ToolConfig `json:"set_price_alert"     envPrefix:"KHUNQUANT_TOOLS_SET_PRICE_ALERT_"`
 	SetIndicatorAlert ToolConfig `json:"set_indicator_alert" envPrefix:"KHUNQUANT_TOOLS_SET_INDICATOR_ALERT_"`
 	TransferFunds     ToolConfig `json:"transfer_funds"      envPrefix:"KHUNQUANT_TOOLS_TRANSFER_FUNDS_"`
+}
+
+// IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled.
+func (c *ToolsConfig) IsFilterSensitiveDataEnabled() bool {
+	return c.FilterSensitiveData
+}
+
+// GetFilterMinLength returns the minimum content length for filtering (default: 8).
+func (c *ToolsConfig) GetFilterMinLength() int {
+	if c.FilterMinLength <= 0 {
+		return 8
+	}
+	return c.FilterMinLength
 }
 
 type SearchCacheConfig struct {

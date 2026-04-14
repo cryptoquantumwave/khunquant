@@ -78,7 +78,14 @@ func (cfg *Config) SensitiveDataReplacer() *strings.Replacer {
 }
 
 // FilterSensitiveData replaces all sensitive credential values in content with "[FILTERED]".
+// Returns content unchanged if filtering is disabled or content is shorter than FilterMinLength.
 func (cfg *Config) FilterSensitiveData(content string) string {
+	if !cfg.Tools.IsFilterSensitiveDataEnabled() {
+		return content
+	}
+	if len(content) < cfg.Tools.GetFilterMinLength() {
+		return content
+	}
 	return cfg.SensitiveDataReplacer().Replace(content)
 }
 

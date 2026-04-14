@@ -19,7 +19,19 @@ const (
 )
 
 // SecureStrings is a slice of SecureString.
+//
+//nolint:recvcheck
 type SecureStrings []*SecureString
+
+// IsZero returns true if the SecureStrings is nil or empty.
+// When called from a non-YAML context (e.g. JSON marshal via omitempty), it
+// always returns true so the field is omitted — secrets must not appear in JSON.
+func (s SecureStrings) IsZero() bool {
+	if !callerFromYaml() {
+		return true
+	}
+	return len(s) == 0
+}
 
 // Values returns the decrypted/resolved values.
 func (s *SecureStrings) Values() []string {

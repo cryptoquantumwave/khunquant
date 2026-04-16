@@ -30,6 +30,15 @@ type OAuthProviderConfig struct {
 	Port         int
 }
 
+type LoginBrowserOptions struct {
+	NoBrowser bool
+}
+
+var (
+	openBrowserFunc             = OpenBrowser
+	browserLoginInput io.Reader = os.Stdin
+)
+
 func OpenAIOAuthConfig() OAuthProviderConfig {
 	return OAuthProviderConfig{
 		Issuer:     "https://auth.openai.com",
@@ -76,6 +85,10 @@ func GenerateState() (string, error) {
 }
 
 func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
+	return LoginBrowserWithOptions(cfg, LoginBrowserOptions{})
+}
+
+func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) (*AuthCredential, error) {
 	pkce, err := GeneratePKCE()
 	if err != nil {
 		return nil, fmt.Errorf("generating PKCE: %w", err)
@@ -128,7 +141,9 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 
 	fmt.Printf("Open this URL to authenticate:\n\n%s\n\n", authURL)
 
-	if err := OpenBrowser(authURL); err != nil {
+	if opts.NoBrowser {
+		fmt.Println("Browser auto-open disabled. Open the URL manually to continue.")
+	} else if err := openBrowserFunc(authURL); err != nil {
 		fmt.Printf("Could not open browser automatically.\nPlease open this URL manually:\n\n%s\n\n", authURL)
 	}
 
@@ -144,7 +159,7 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 	// Start manual input in a goroutine
 	manualCh := make(chan string)
 	go func() {
-		reader := bufio.NewReader(os.Stdin)
+		reader := bufio.NewReader(browserLoginInput)
 		input, _ := reader.ReadString('\n')
 		manualCh <- strings.TrimSpace(input)
 	}()

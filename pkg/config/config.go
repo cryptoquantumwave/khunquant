@@ -464,6 +464,8 @@ type AgentDefaults struct {
 	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing                   *RoutingConfig     `json:"routing,omitempty"`
 	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	ContextManager            string             `json:"context_manager,omitempty"       env:"KHUNQUANT_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      json.RawMessage    `json:"context_manager_config,omitempty"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB

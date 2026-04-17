@@ -296,8 +296,9 @@ func (e *ephemeralSessionStore) TruncateHistory(key string, keepLast int) {
 	}
 }
 
-func (e *ephemeralSessionStore) Save(key string) error { return nil }
-func (e *ephemeralSessionStore) Close() error          { return nil }
+func (e *ephemeralSessionStore) Save(key string) error    { return nil }
+func (e *ephemeralSessionStore) Close() error              { return nil }
+func (e *ephemeralSessionStore) ListSessions() []string    { return nil }
 
 // newEphemeralSession creates a new isolated ephemeral session for a sub-turn.
 //

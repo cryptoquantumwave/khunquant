@@ -273,6 +273,17 @@ func (sm *SessionManager) Close() error {
 	return nil
 }
 
+// ListSessions returns all known session keys held in memory.
+func (sm *SessionManager) ListSessions() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	keys := make([]string, 0, len(sm.sessions))
+	for k := range sm.sessions {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // SetHistory updates the messages of a session.
 func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
 	sm.mu.Lock()

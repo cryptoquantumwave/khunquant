@@ -79,3 +79,8 @@ func (b *JSONLBackend) Save(key string) error {
 func (b *JSONLBackend) Close() error {
 	return b.store.Close()
 }
+
+// ListSessions returns all known session keys in the underlying store.
+func (b *JSONLBackend) ListSessions() []string {
+	return b.store.ListSessions()
+}

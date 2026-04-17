@@ -29,4 +29,7 @@ type SessionStore interface {
 	Save(key string) error
 	// Close releases resources held by the store.
 	Close() error
+
+	// ListSessions returns all known session keys.
+	ListSessions() []string
 }

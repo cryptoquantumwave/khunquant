@@ -39,4 +39,7 @@ type Store interface {
 
 	// Close releases any resources held by the store.
 	Close() error
+
+	// ListSessions returns all known session keys in the store.
+	ListSessions() []string
 }

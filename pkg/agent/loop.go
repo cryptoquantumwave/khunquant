@@ -40,7 +40,7 @@ type AgentLoop struct {
 	registry         *AgentRegistry
 	state            *state.Manager
 	running          atomic.Bool
-	summarizing      sync.Map
+	contextManager   ContextManager
 	fallback         *providers.FallbackChain
 	channelManager   *channels.Manager
 	mediaStore       media.MediaStore
@@ -120,7 +120,6 @@ func NewAgentLoop(
 		cfg:         cfg,
 		registry:    registry,
 		state:       stateManager,
-		summarizing: sync.Map{},
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(SteeringOneAtATime),
@@ -129,7 +128,36 @@ func NewAgentLoop(
 	// Register shared tools to all agents (needs al for SubTurnSpawner)
 	registerSharedTools(al, cfg, msgBus, registry, provider)
 
+	// Initialize context manager (must be done after registry is set up)
+	al.contextManager = al.resolveContextManager()
+
 	return al
+}
+
+// resolveContextManager constructs the ContextManager for this AgentLoop from config.
+// Falls back to "legacy" if no context_manager is configured or the named one fails.
+func (al *AgentLoop) resolveContextManager() ContextManager {
+	name := al.cfg.Agents.Defaults.ContextManager
+	if name == "" {
+		name = "legacy"
+	}
+
+	factory, ok := lookupContextManager(name)
+	if !ok {
+		logger.WarnCF("agent", "Unknown context manager, falling back to legacy",
+			map[string]any{"name": name})
+		factory, _ = lookupContextManager("legacy")
+	}
+
+	cfg := al.cfg.Agents.Defaults.ContextManagerConfig
+	cm, err := factory(cfg, al)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to initialize context manager, falling back to legacy",
+			map[string]any{"name": name, "error": err.Error()})
+		legacyFactory, _ := lookupContextManager("legacy")
+		cm, _ = legacyFactory(nil, al)
+	}
+	return cm
 }
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
@@ -1097,7 +1125,11 @@ func (al *AgentLoop) runAgentLoop(
 		if isOverContextBudget(agent.ContextWindow, messages, toolDefs, agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": opts.SessionKey})
-			al.forceCompression(agent, opts.SessionKey)
+			_ = al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey: opts.SessionKey,
+				Reason:     ContextCompressReasonProactive,
+				Budget:     agent.ContextWindow,
+			})
 			newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 			newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 			messages = agent.ContextBuilder.BuildMessages(
@@ -1123,7 +1155,10 @@ func (al *AgentLoop) runAgentLoop(
 		agent.Sessions.Save(opts.SessionKey)
 
 		if opts.EnableSummary {
-			al.maybeSummarize(agent, opts.SessionKey, opts.Channel, opts.ChatID)
+			_ = al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey: opts.SessionKey,
+				Reason:     ContextCompressReasonSummarize,
+			})
 		}
 
 		logger.InfoCF("agent", "Response already handled by tool output",
@@ -1173,7 +1208,10 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 6. Optional: summarization
 	if opts.EnableSummary {
-		al.maybeSummarize(agent, opts.SessionKey, opts.Channel, opts.ChatID)
+		_ = al.contextManager.Compact(ctx, &CompactRequest{
+			SessionKey: opts.SessionKey,
+			Reason:     ContextCompressReasonSummarize,
+		})
 	}
 
 	// 7. Optional: send response via bus
@@ -1498,7 +1536,11 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 
-				al.forceCompression(agent, opts.SessionKey)
+				_ = al.contextManager.Compact(ctx, &CompactRequest{
+					SessionKey: opts.SessionKey,
+					Reason:     ContextCompressReasonRetry,
+					Budget:     agent.ContextWindow,
+				})
 				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 				messages = agent.ContextBuilder.BuildMessages(
@@ -1853,95 +1895,6 @@ func (al *AgentLoop) selectCandidates(
 	return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel()), true
 }
 
-// maybeSummarize triggers summarization if the session history exceeds thresholds.
-func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, chatID string) {
-	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
-	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
-
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
-		summarizeKey := agent.ID + ":" + sessionKey
-		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
-			go func() {
-				defer al.summarizing.Delete(summarizeKey)
-				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				al.summarizeSession(agent, sessionKey)
-			}()
-		}
-	}
-}
-
-// forceCompression aggressively reduces context when the limit is hit.
-// It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
-// cycle, as defined in #1316), so tool-call sequences are never split.
-//
-// If the history is a single Turn with no safe split point, the function
-// falls back to keeping only the most recent user message. This breaks
-// Turn atomicity as a last resort to avoid a context-exceeded loop.
-//
-// Session history contains only user/assistant/tool messages — the system
-// prompt is built dynamically by BuildMessages and is NOT stored here.
-// The compression note is recorded in the session summary so that
-// BuildMessages can include it in the next system prompt.
-func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
-	history := agent.Sessions.GetHistory(sessionKey)
-	if len(history) <= 2 {
-		return
-	}
-
-	// Split at a Turn boundary so no tool-call sequence is torn apart.
-	// parseTurnBoundaries gives us the start of each Turn; we drop the
-	// oldest half of Turns and keep the most recent ones.
-	turns := parseTurnBoundaries(history)
-	var mid int
-	if len(turns) >= 2 {
-		mid = turns[len(turns)/2]
-	} else {
-		// Fewer than 2 Turns — fall back to message-level midpoint
-		// aligned to the nearest Turn boundary.
-		mid = findSafeBoundary(history, len(history)/2)
-	}
-	var keptHistory []providers.Message
-	if mid <= 0 {
-		// No safe Turn boundary — the entire history is a single Turn
-		// (e.g. one user message followed by a massive tool response).
-		// Keeping everything would leave the agent stuck in a context-
-		// exceeded loop, so fall back to keeping only the most recent
-		// user message. This breaks Turn atomicity as a last resort.
-		for i := len(history) - 1; i >= 0; i-- {
-			if history[i].Role == "user" {
-				keptHistory = []providers.Message{history[i]}
-				break
-			}
-		}
-	} else {
-		keptHistory = history[mid:]
-	}
-
-	droppedCount := len(history) - len(keptHistory)
-
-	// Record compression in the session summary so BuildMessages includes it
-	// in the system prompt. We do not modify history messages themselves.
-	existingSummary := agent.Sessions.GetSummary(sessionKey)
-	compressionNote := fmt.Sprintf(
-		"[Emergency compression dropped %d oldest messages due to context limit]",
-		droppedCount,
-	)
-	if existingSummary != "" {
-		compressionNote = existingSummary + "\n\n" + compressionNote
-	}
-	agent.Sessions.SetSummary(sessionKey, compressionNote)
-
-	agent.Sessions.SetHistory(sessionKey, keptHistory)
-	agent.Sessions.Save(sessionKey)
-
-	logger.WarnCF("agent", "Forced compression executed", map[string]any{
-		"session_key":  sessionKey,
-		"dropped_msgs": droppedCount,
-		"new_count":    len(keptHistory),
-	})
-}
-
 // GetStartupInfo returns information about loaded tools and skills for logging.
 func (al *AgentLoop) GetStartupInfo() map[string]any {
 	info := make(map[string]any)
@@ -2028,238 +1981,6 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	}
 	sb.WriteString("]")
 	return sb.String()
-}
-
-// summarizeSession summarizes the conversation history for a session.
-func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	history := agent.Sessions.GetHistory(sessionKey)
-	summary := agent.Sessions.GetSummary(sessionKey)
-
-	// Keep the most recent Turns for continuity, aligned to a Turn boundary
-	// so that no tool-call sequence is split.
-	if len(history) <= 4 {
-		return
-	}
-
-	safeCut := findSafeBoundary(history, len(history)-4)
-	if safeCut <= 0 {
-		return
-	}
-	keepCount := len(history) - safeCut
-	toSummarize := history[:safeCut]
-
-	// Oversized Message Guard
-	maxMessageTokens := agent.ContextWindow / 2
-	validMessages := make([]providers.Message, 0)
-	omitted := false
-
-	for _, m := range toSummarize {
-		if m.Role != "user" && m.Role != "assistant" {
-			continue
-		}
-		msgTokens := len(m.Content) / 2
-		if msgTokens > maxMessageTokens {
-			omitted = true
-			continue
-		}
-		validMessages = append(validMessages, m)
-	}
-
-	if len(validMessages) == 0 {
-		return
-	}
-
-	const (
-		maxSummarizationMessages = 10
-		llmMaxRetries            = 3
-		llmTemperature           = 0.3
-		fallbackMaxContentLength = 200
-	)
-
-	// Multi-Part Summarization
-	var finalSummary string
-	if len(validMessages) > maxSummarizationMessages {
-		mid := len(validMessages) / 2
-
-		mid = al.findNearestUserMessage(validMessages, mid)
-
-		part1 := validMessages[:mid]
-		part2 := validMessages[mid:]
-
-		s1, _ := al.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
-
-		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
-			s1,
-			s2,
-		)
-
-		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp.Content != "" {
-			finalSummary = resp.Content
-		} else {
-			finalSummary = s1 + " " + s2
-		}
-	} else {
-		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
-	}
-
-	if omitted && finalSummary != "" {
-		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
-	}
-
-	if finalSummary != "" {
-		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, keepCount)
-		agent.Sessions.Save(sessionKey)
-	}
-}
-
-// findNearestUserMessage finds the nearest user message to the given index.
-// It searches backward first, then forward if no user message is found.
-func (al *AgentLoop) findNearestUserMessage(messages []providers.Message, mid int) int {
-	originalMid := mid
-
-	for mid > 0 && messages[mid].Role != "user" {
-		mid--
-	}
-
-	if messages[mid].Role == "user" {
-		return mid
-	}
-
-	mid = originalMid
-	for mid < len(messages) && messages[mid].Role != "user" {
-		mid++
-	}
-
-	if mid < len(messages) {
-		return mid
-	}
-
-	return originalMid
-}
-
-// retryLLMCall calls the LLM with retry logic.
-func (al *AgentLoop) retryLLMCall(
-	ctx context.Context,
-	agent *AgentInstance,
-	prompt string,
-	maxRetries int,
-) (*providers.LLMResponse, error) {
-	const (
-		llmTemperature = 0.3
-	)
-
-	var resp *providers.LLMResponse
-	var err error
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		al.activeRequests.Add(1)
-		resp, err = func() (*providers.LLMResponse, error) {
-			defer al.activeRequests.Done()
-			return agent.Provider.Chat(
-				ctx,
-				[]providers.Message{{Role: "user", Content: prompt}},
-				nil,
-				agent.Model,
-				map[string]any{
-					"max_tokens":       agent.MaxTokens,
-					"temperature":      llmTemperature,
-					"prompt_cache_key": agent.ID,
-				},
-			)
-		}()
-
-		if err == nil && resp != nil && resp.Content != "" {
-			return resp, nil
-		}
-		if attempt < maxRetries-1 {
-			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
-		}
-	}
-
-	return resp, err
-}
-
-// summarizeBatch summarizes a batch of messages.
-func (al *AgentLoop) summarizeBatch(
-	ctx context.Context,
-	agent *AgentInstance,
-	batch []providers.Message,
-	existingSummary string,
-) (string, error) {
-	const (
-		llmMaxRetries             = 3
-		llmTemperature            = 0.3
-		fallbackMinContentLength  = 200
-		fallbackMaxContentPercent = 10
-	)
-
-	var sb strings.Builder
-	sb.WriteString(
-		"Provide a concise summary of this conversation segment, preserving core context and key points.\n",
-	)
-	if existingSummary != "" {
-		sb.WriteString("Existing context: ")
-		sb.WriteString(existingSummary)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\nCONVERSATION:\n")
-	for _, m := range batch {
-		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
-	}
-	prompt := sb.String()
-
-	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
-	if err == nil && response.Content != "" {
-		return strings.TrimSpace(response.Content), nil
-	}
-
-	var fallback strings.Builder
-	fallback.WriteString("Conversation summary: ")
-	for i, m := range batch {
-		if i > 0 {
-			fallback.WriteString(" | ")
-		}
-		content := strings.TrimSpace(m.Content)
-		runes := []rune(content)
-		if len(runes) == 0 {
-			fallback.WriteString(fmt.Sprintf("%s: ", m.Role))
-			continue
-		}
-
-		keepLength := len(runes) * fallbackMaxContentPercent / 100
-		if keepLength < fallbackMinContentLength {
-			keepLength = fallbackMinContentLength
-		}
-
-		if keepLength > len(runes) {
-			keepLength = len(runes)
-		}
-
-		content = string(runes[:keepLength])
-		if keepLength < len(runes) {
-			content += "..."
-		}
-		fallback.WriteString(fmt.Sprintf("%s: %s", m.Role, content))
-	}
-	return fallback.String(), nil
-}
-
-// estimateTokens estimates the number of tokens in a message list.
-// Counts Content, ToolCalls arguments, and ToolCallID metadata so that
-// tool-heavy conversations are not systematically undercounted.
-func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
-	}
-	return total
 }
 
 func (al *AgentLoop) handleCommand(
@@ -2372,10 +2093,8 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 				return fmt.Errorf("sessions not initialized for agent")
 			}
 
-			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			agent.Sessions.SetSummary(opts.SessionKey, "")
-			agent.Sessions.Save(opts.SessionKey)
-			return nil
+			// Delegate to context manager so seahorse DB is cleared alongside JSONL.
+			return al.contextManager.Clear(context.Background(), opts.SessionKey)
 		}
 	}
 	return rt

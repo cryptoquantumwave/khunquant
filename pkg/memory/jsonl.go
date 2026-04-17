@@ -84,6 +84,27 @@ func (s *JSONLStore) metaPath(key string) string {
 	return filepath.Join(s.dir, sanitizeKey(key)+".meta.json")
 }
 
+// ListSessions returns all known session keys by scanning for .meta.json files.
+func (s *JSONLStore) ListSessions() []string {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil
+	}
+	const metaSuffix = ".meta.json"
+	var keys []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, metaSuffix) {
+			continue
+		}
+		keys = append(keys, name[:len(name)-len(metaSuffix)])
+	}
+	return keys
+}
+
 // sanitizeKey converts a session key to a safe filename component.
 // Mirrors pkg/session.sanitizeFilename so that migration paths match.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_'

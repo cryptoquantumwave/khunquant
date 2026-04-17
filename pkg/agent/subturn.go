@@ -563,8 +563,12 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 					"retry":   contextRetryCount + 1,
 				})
 
-			// Trigger force compression
-			al.forceCompression(childAgent, ts.turnID)
+			// Trigger force compression via context manager
+			_ = al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey: ts.turnID,
+				Reason:     ContextCompressReasonRetry,
+				Budget:     childAgent.ContextWindow,
+			})
 
 			contextRetryCount++
 			continue // Retry with compressed history

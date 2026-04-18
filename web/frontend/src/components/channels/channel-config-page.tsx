@@ -104,6 +104,16 @@ function buildSavePayload(
     payload[key] = value
   }
 
+  // Handle secret fields entered by the user that weren't in the original config
+  // (e.g. first-time setup where the server omits zero-value secret keys from JSON).
+  for (const [secretKey, editKey] of Object.entries(SECRET_FIELD_MAP)) {
+    if (secretKey in payload) continue
+    const incoming = asString(editConfig[editKey])
+    if (incoming !== "") {
+      payload[secretKey] = incoming
+    }
+  }
+
   if (channel.name === "whatsapp_native") {
     payload.use_native = true
   }

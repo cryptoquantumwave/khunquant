@@ -54,10 +54,7 @@ func (t *ExchangeTotalValueTool) Parameters() map[string]any {
 }
 
 func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	exchangeName := "binance"
-	if v, ok := args["exchange"].(string); ok && v != "" {
-		exchangeName = v
-	}
+	exchangeName, _ := args["exchange"].(string)
 	accountName := ""
 	if v, ok := args["account"].(string); ok {
 		accountName = strings.TrimSpace(v)
@@ -71,6 +68,156 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 		quote = strings.ToUpper(strings.TrimSpace(v))
 	}
 
+	// No exchange specified — sum across all enabled platforms.
+	if exchangeName == "" {
+		return t.executeAll(ctx, walletType, quote)
+	}
+
+	return t.executeSingle(ctx, exchangeName, accountName, walletType, quote)
+}
+
+type accountRef struct {
+	exchange string
+	account  string
+}
+
+func (t *ExchangeTotalValueTool) enabledAccounts() []accountRef {
+	var refs []accountRef
+	ex := t.cfg.Exchanges
+
+	if ex.Binance.Enabled {
+		for i, acc := range ex.Binance.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, accountRef{exchange: "binance", account: name})
+		}
+	}
+	if ex.BinanceTH.Enabled {
+		for i, acc := range ex.BinanceTH.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, accountRef{exchange: "binanceth", account: name})
+		}
+	}
+	if ex.Bitkub.Enabled {
+		for i, acc := range ex.Bitkub.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, accountRef{exchange: "bitkub", account: name})
+		}
+	}
+	if ex.OKX.Enabled {
+		for i, acc := range ex.OKX.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, accountRef{exchange: "okx", account: name})
+		}
+	}
+	if ex.Settrade.Enabled {
+		for i, acc := range ex.Settrade.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, accountRef{exchange: "settrade", account: name})
+		}
+	}
+	return refs
+}
+
+func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quote string) *ToolResult {
+	refs := t.enabledAccounts()
+	if len(refs) == 0 {
+		return UserResult("No exchange accounts are configured.")
+	}
+
+	type lineItem struct {
+		label    string
+		value    float64
+		unpriced []string
+		err      string
+	}
+
+	var lines []lineItem
+	var grandTotal float64
+
+	for _, ref := range refs {
+		label := ref.exchange
+		if ref.account != "" {
+			label += " (" + ref.account + ")"
+		}
+
+		ex, err := exchanges.CreateExchangeForAccount(ref.exchange, ref.account, t.cfg)
+		if err != nil {
+			lines = append(lines, lineItem{label: label, err: err.Error()})
+			continue
+		}
+		pe, ok := ex.(exchanges.PricedExchange)
+		if !ok {
+			lines = append(lines, lineItem{label: label, err: "pricing not supported"})
+			continue
+		}
+
+		balances, err := pe.GetWalletBalances(ctx, walletType)
+		if err != nil {
+			lines = append(lines, lineItem{label: label, err: trimCCXTError(err)})
+			continue
+		}
+
+		totals := make(map[string]float64)
+		for _, b := range balances {
+			totals[b.Asset] += b.Free + b.Locked
+		}
+
+		var subtotal float64
+		var unpriced []string
+		for asset, amount := range totals {
+			if amount == 0 {
+				continue
+			}
+			price, err := pe.FetchPrice(ctx, asset, quote)
+			if err != nil {
+				unpriced = append(unpriced, asset)
+				continue
+			}
+			if price == 0 {
+				subtotal += amount
+			} else {
+				subtotal += amount * price
+			}
+		}
+
+		grandTotal += subtotal
+		lines = append(lines, lineItem{label: label, value: subtotal, unpriced: unpriced})
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Time: %s\n", ts)
+	for _, li := range lines {
+		if li.err != "" {
+			fmt.Fprintf(&sb, "  %-30s  ERROR: %s\n", li.label, li.err)
+		} else {
+			row := fmt.Sprintf("  %-30s  %10.2f %s", li.label, li.value, quote)
+			if len(li.unpriced) > 0 {
+				row += fmt.Sprintf(" (could not price: %s)", strings.Join(li.unpriced, ", "))
+			}
+			sb.WriteString(row + "\n")
+		}
+	}
+	fmt.Fprintf(&sb, "  %-30s  %10.2f %s\n", "TOTAL", grandTotal, quote)
+	return UserResult(sb.String())
+}
+
+func (t *ExchangeTotalValueTool) executeSingle(ctx context.Context, exchangeName, accountName, walletType, quote string) *ToolResult {
 	ex, err := exchanges.CreateExchangeForAccount(exchangeName, accountName, t.cfg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("get_total_value: %v", err))

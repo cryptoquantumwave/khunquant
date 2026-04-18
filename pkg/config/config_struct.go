@@ -180,6 +180,12 @@ func (s SecureString) MarshalYAML() (any, error) {
 }
 
 func (s *SecureString) UnmarshalYAML(value *yaml.Node) error {
+	// Don't overwrite a value that was already set (e.g. a new token provided
+	// via PATCH). SecurityCopyFrom uses yaml.Unmarshal to restore missing
+	// secrets; skipping non-zero fields preserves user-supplied updates.
+	if s.resolved != "" || s.raw != "" {
+		return nil
+	}
 	return s.fromRaw(value.Value)
 }
 

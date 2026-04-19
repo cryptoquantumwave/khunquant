@@ -11,6 +11,10 @@ import {
   getChannelsCatalog,
   patchAppConfig,
 } from "@/api/channels"
+import {
+  SECRET_FIELD_MAP,
+  buildEditConfig,
+} from "@/components/channels/channel-config-fields"
 import { getChannelDisplayName } from "@/components/channels/channel-display-name"
 import { DiscordForm } from "@/components/channels/channel-forms/discord-form"
 import { FeishuForm } from "@/components/channels/channel-forms/feishu-form"
@@ -26,24 +30,6 @@ interface ChannelConfigPageProps {
   channelName: string
 }
 
-const SECRET_FIELD_MAP: Record<string, string> = {
-  token: "_token",
-  app_secret: "_app_secret",
-  client_secret: "_client_secret",
-  corp_secret: "_corp_secret",
-  channel_secret: "_channel_secret",
-  channel_access_token: "_channel_access_token",
-  access_token: "_access_token",
-  bot_token: "_bot_token",
-  app_token: "_app_token",
-  encoding_aes_key: "_encoding_aes_key",
-  encrypt_key: "_encrypt_key",
-  verification_token: "_verification_token",
-  password: "_password",
-  nickserv_password: "_nickserv_password",
-  sasl_password: "_sasl_password",
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>
@@ -57,16 +43,6 @@ function asString(value: unknown): string {
 
 function asBool(value: unknown): boolean {
   return value === true
-}
-
-function buildEditConfig(config: ChannelConfig): ChannelConfig {
-  const edit: ChannelConfig = { ...config }
-  for (const secretKey of Object.keys(SECRET_FIELD_MAP)) {
-    if (secretKey in config) {
-      edit[SECRET_FIELD_MAP[secretKey]] = ""
-    }
-  }
-  return edit
 }
 
 function normalizeConfig(
@@ -287,7 +263,7 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
 
       setChannel(matched)
       setBaseConfig(normalized)
-      setEditConfig(buildEditConfig(normalized))
+      setEditConfig(buildEditConfig(matched.name, normalized))
       setEnabled(asBool(normalized.enabled))
       setFetchError("")
       setServerError("")
@@ -371,7 +347,7 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
   }, [])
 
   const handleReset = () => {
-    setEditConfig(buildEditConfig(baseConfig))
+    setEditConfig(buildEditConfig(channel?.name ?? "", baseConfig))
     setEnabled(asBool(baseConfig.enabled))
     setServerError("")
     setFieldErrors({})

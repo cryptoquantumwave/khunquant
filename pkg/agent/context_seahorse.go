@@ -135,9 +135,13 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return err
 	}
 
+	var budgetPtr *int
+	if req.Budget > 0 {
+		budgetPtr = &req.Budget
+	}
 	_, err := m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
 		Force:  req.Reason == ContextCompressReasonRetry,
-		Budget: &req.Budget,
+		Budget: budgetPtr,
 	})
 	return err
 }

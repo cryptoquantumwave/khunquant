@@ -1,6 +1,10 @@
 import { useTranslation } from "react-i18next"
 
 import type { ChannelConfig } from "@/api/channels"
+import {
+  SECRET_FIELD_MAP,
+  isSecretField,
+} from "@/components/channels/channel-config-fields"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import { Field, KeyInput, SwitchCardField } from "@/components/shared-form"
 import { Input } from "@/components/ui/input"
@@ -13,25 +17,6 @@ interface GenericFormProps {
   requiredKeys?: string[]
   fieldErrors?: Record<string, string>
 }
-
-// Secret field names that should use masked input.
-const SECRET_FIELDS = new Set([
-  "token",
-  "app_secret",
-  "client_secret",
-  "corp_secret",
-  "channel_secret",
-  "channel_access_token",
-  "access_token",
-  "bot_token",
-  "app_token",
-  "encoding_aes_key",
-  "encrypt_key",
-  "verification_token",
-  "password",
-  "nickserv_password",
-  "sasl_password",
-])
 
 // Fields to skip in the generic form (handled by enabled toggle or internal).
 const SKIP_FIELDS = new Set(["enabled", "reasoning_channel_id"])
@@ -151,8 +136,8 @@ export function GenericForm({
     <div className="space-y-5">
       {fields.map((key) => {
         const isRequired = requiredFieldSet.has(key)
-        if (SECRET_FIELDS.has(key)) {
-          const editKey = `_${key}`
+        if (isSecretField(key)) {
+          const editKey = SECRET_FIELD_MAP[key] ?? `_${key}`
           const extraHint =
             isEdit && config[key] ? ` ${t("channels.field.secretHintSet")}` : ""
           return (

@@ -1158,6 +1158,7 @@ func (al *AgentLoop) runAgentLoop(
 			_ = al.contextManager.Compact(ctx, &CompactRequest{
 				SessionKey: opts.SessionKey,
 				Reason:     ContextCompressReasonSummarize,
+				Budget:     agent.ContextWindow,
 			})
 		}
 
@@ -1211,6 +1212,7 @@ func (al *AgentLoop) runAgentLoop(
 		_ = al.contextManager.Compact(ctx, &CompactRequest{
 			SessionKey: opts.SessionKey,
 			Reason:     ContextCompressReasonSummarize,
+			Budget:     agent.ContextWindow,
 		})
 	}
 

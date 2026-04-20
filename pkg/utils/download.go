@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // DownloadToFile streams an HTTP response body to a temporary file in small

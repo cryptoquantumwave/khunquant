@@ -4,7 +4,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/khunquant/khunquant/pkg/brand"
+	"github.com/cryptoquantumwave/khunquant/pkg/brand"
 )
 
 var banner = "\r\n[::b]" + brand.SideBySide("[#3e5db9]", "[#ffffff]", "") + "[:]"

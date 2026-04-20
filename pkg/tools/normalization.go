@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/khunquant/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
 )
 
 const (

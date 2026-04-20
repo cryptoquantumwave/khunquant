@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/channels"
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/media"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/routing"
-	"github.com/khunquant/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/routing"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 type fakeChannel struct{ id string }

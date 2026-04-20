@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 const (

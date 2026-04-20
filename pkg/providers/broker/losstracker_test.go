@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 func newTracker() *broker.DailyLossTracker {

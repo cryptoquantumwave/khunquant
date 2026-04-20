@@ -4,7 +4,7 @@ services:
   #   docker compose -f docker/docker-compose.yml run --rm khunquant-agent -m "Hello"
   # ─────────────────────────────────────────────
   khunquant-agent:
-    image: docker.io/khunquant/khunquant:latest
+    image: docker.io/cryptoquantumwave/khunquant:latest
     container_name: khunquant-agent
     profiles:
       - agent
@@ -22,7 +22,7 @@ services:
   #   docker compose -f docker/docker-compose.yml --profile gateway up
   # ─────────────────────────────────────────────
   khunquant-gateway:
-    image: docker.io/khunquant/khunquant:latest
+    image: docker.io/cryptoquantumwave/khunquant:latest
     container_name: khunquant-gateway
     restart: on-failure
     profiles:
@@ -38,7 +38,7 @@ services:
   #   docker compose -f docker/docker-compose.yml --profile launcher up
   # ─────────────────────────────────────────────
   khunquant-launcher:
-    image: docker.io/khunquant/khunquant:launcher
+    image: docker.io/cryptoquantumwave/khunquant:launcher
     container_name: khunquant-launcher
     restart: on-failure
     profiles:

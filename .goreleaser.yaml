@@ -23,10 +23,10 @@ builds:
       - stdjson
     ldflags:
       - -s -w
-      - -X github.com/khunquant/khunquant/pkg/config.Version={{ .Version }}
-      - -X github.com/khunquant/khunquant/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/khunquant/khunquant/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/khunquant/khunquant/pkg/config.GoVersion={{ .Env.GOVERSION }}
+      - -X github.com/cryptoquantumwave/khunquant/pkg/config.Version={{ .Version }}
+      - -X github.com/cryptoquantumwave/khunquant/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/cryptoquantumwave/khunquant/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/cryptoquantumwave/khunquant/pkg/config.GoVersion={{ .Env.GOVERSION }}
     goos:
       - linux
       - windows

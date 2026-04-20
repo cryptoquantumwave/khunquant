@@ -22,10 +22,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/khunquant/khunquant/web/backend/api"
-	"github.com/khunquant/khunquant/web/backend/launcherconfig"
-	"github.com/khunquant/khunquant/web/backend/middleware"
-	"github.com/khunquant/khunquant/web/backend/utils"
+	"github.com/cryptoquantumwave/khunquant/web/backend/api"
+	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
+	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
+	"github.com/cryptoquantumwave/khunquant/web/backend/utils"
 )
 
 func main() {

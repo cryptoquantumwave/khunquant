@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/mcp"
-	"github.com/khunquant/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/mcp"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 type mcpRuntime struct {

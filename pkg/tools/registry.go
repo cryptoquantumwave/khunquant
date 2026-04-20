@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/media"
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 type ToolEntry struct {

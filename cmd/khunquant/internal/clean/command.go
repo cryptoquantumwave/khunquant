@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
 )
 
 func NewCleanCommand() *cobra.Command {

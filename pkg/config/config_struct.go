@@ -10,8 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/khunquant/khunquant/pkg/credential"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 const (

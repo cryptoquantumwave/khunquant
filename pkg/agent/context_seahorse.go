@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
-	"github.com/khunquant/khunquant/pkg/seahorse"
-	"github.com/khunquant/khunquant/pkg/session"
-	"github.com/khunquant/khunquant/pkg/tokenizer"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/seahorse"
+	"github.com/cryptoquantumwave/khunquant/pkg/session"
+	"github.com/cryptoquantumwave/khunquant/pkg/tokenizer"
 )
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.

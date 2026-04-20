@@ -1,4 +1,4 @@
-module github.com/khunquant/khunquant
+module github.com/cryptoquantumwave/khunquant
 
 go 1.25.9
 

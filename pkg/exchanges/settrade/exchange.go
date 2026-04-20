@@ -3,7 +3,7 @@ package settrade
 import (
 	"context"
 
-	"github.com/khunquant/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
 
 // SettradeExchange wraps SettradeFullAdapter and implements exchanges.PricedExchange

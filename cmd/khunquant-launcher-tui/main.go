@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/khunquant/khunquant/cmd/khunquant-launcher-tui/internal/ui"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant-launcher-tui/internal/ui"
 )
 
 func main() {

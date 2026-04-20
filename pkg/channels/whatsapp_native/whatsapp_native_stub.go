@@ -5,9 +5,9 @@ package whatsapp
 import (
 	"fmt"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/channels"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // NewWhatsAppNativeChannel returns an error when the binary was not built with -tags whatsapp_native.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 // GrepTool searches summaries and messages for matching content.

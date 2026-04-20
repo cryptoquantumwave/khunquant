@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // GetOrderRateStatusTool exposes the current rate-limiter token counts per provider.

@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/ta"
+	"github.com/cryptoquantumwave/khunquant/pkg/ta"
 )
 
 func almostEqual(a, b, epsilon float64) bool {

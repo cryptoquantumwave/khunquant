@@ -3,7 +3,7 @@ package routing
 import (
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // RouteInput contains the routing context from an inbound message.

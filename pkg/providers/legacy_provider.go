@@ -8,7 +8,7 @@ package providers
 import (
 	"fmt"
 
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // CreateProvider creates a provider based on the configuration.

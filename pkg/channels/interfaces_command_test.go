@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/commands"
+	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 )
 
 type mockRegistrar struct{}

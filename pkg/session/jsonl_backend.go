@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/khunquant/khunquant/pkg/memory"
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/memory"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.

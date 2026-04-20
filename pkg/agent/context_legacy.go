@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/tokenizer"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/tokenizer"
 )
 
 // legacyContextManager wraps the existing summarization/compression logic

@@ -5,7 +5,7 @@ package sources
 import (
 	"context"
 
-	"github.com/khunquant/khunquant/pkg/devices/events"
+	"github.com/cryptoquantumwave/khunquant/pkg/devices/events"
 )
 
 type USBMonitor struct{}

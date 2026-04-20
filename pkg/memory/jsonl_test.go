@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 func newTestStore(t *testing.T) *JSONLStore {

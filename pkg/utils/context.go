@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // CalculateDefaultMaxContextRunes computes a default context limit based on the model's context window.

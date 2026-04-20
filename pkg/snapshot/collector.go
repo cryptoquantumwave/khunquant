@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
 
 // CollectOptions controls which exchanges/accounts to snapshot.

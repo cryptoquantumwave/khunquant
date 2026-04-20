@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 func writeJSONSession(

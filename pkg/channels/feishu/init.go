@@ -1,9 +1,9 @@
 package feishu
 
 import (
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/channels"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func init() {

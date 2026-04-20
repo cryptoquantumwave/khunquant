@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers/common"
-	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/common"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
 func TestProviderChat_UsesMaxCompletionTokensForGLM(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
 
 // ExchangeBalanceTool retrieves asset balances from a configured exchange.

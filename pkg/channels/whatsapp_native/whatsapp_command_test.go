@@ -12,9 +12,9 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/channels"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func TestHandleIncoming_DoesNotConsumeGenericCommandsLocally(t *testing.T) {

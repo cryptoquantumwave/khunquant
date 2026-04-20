@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 )
 
 func TestFindSkillsToolName(t *testing.T) {

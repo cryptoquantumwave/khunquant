@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/skills"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 type ContextBuilder struct {

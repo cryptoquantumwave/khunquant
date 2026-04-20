@@ -9,9 +9,9 @@ import (
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/identity"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/identity"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // onConnect is called after a successful connection (and on reconnect).

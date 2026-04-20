@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // registerSessionRoutes binds session list and detail endpoints to the ServeMux.

@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 )
 
 type skillSupportResponse struct {

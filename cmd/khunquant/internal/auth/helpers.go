@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/cmd/khunquant/internal"
-	"github.com/khunquant/khunquant/pkg/auth"
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/auth"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 const (

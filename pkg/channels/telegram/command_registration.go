@@ -8,8 +8,8 @@ import (
 
 	"github.com/mymmrac/telego"
 
-	"github.com/khunquant/khunquant/pkg/commands"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/commands"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 var commandRegistrationBackoff = []time.Duration{

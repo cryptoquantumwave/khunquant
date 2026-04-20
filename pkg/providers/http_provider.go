@@ -10,7 +10,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers/openai_compat"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/openai_compat"
 )
 
 type HTTPProvider struct {

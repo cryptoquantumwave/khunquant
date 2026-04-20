@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/auth"
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/web/backend/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/auth"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/web/backend/utils"
 )
 
 func startLongRunningProcess(t *testing.T) *exec.Cmd {

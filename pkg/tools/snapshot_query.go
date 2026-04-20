@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/snapshot"
+	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 )
 
 // QuerySnapshotsTool retrieves historical portfolio snapshots.

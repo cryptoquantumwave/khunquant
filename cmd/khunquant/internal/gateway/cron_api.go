@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
 type cronUpdateRequest struct {

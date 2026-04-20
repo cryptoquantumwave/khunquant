@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // ContextManager manages conversation context via a pluggable strategy.

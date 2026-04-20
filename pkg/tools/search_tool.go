@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 const (

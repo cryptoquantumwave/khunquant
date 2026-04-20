@@ -9,7 +9,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.

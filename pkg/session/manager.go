@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 type Session struct {

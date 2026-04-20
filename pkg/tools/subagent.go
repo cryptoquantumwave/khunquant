@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // SubTurnSpawner is an interface for spawning sub-turns.

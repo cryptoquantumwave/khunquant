@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
 func cronListCmd(storePath string) {

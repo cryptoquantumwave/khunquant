@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // msgUser creates a user message.

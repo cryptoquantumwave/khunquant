@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/cmd/khunquant/internal"
-	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 )
 
 func newInstallCommand(installerFn func() (*skills.SkillInstaller, error)) *cobra.Command {

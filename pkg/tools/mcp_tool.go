@@ -11,7 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/khunquant/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
 )
 
 // MCPManager defines the interface for MCP manager operations

@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 func msg(role, content string) providers.Message {

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/seahorse"
+	"github.com/cryptoquantumwave/khunquant/pkg/seahorse"
 )
 
 func TestIngestSeahorseIdempotent(t *testing.T) {

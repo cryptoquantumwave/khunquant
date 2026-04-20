@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	anthropicprovider "github.com/khunquant/khunquant/pkg/providers/anthropic"
+	anthropicprovider "github.com/cryptoquantumwave/khunquant/pkg/providers/anthropic"
 )
 
 type ClaudeProvider struct {

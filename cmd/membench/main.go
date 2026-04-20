@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 var (

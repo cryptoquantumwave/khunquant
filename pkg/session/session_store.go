@@ -1,6 +1,6 @@
 package session
 
-import "github.com/khunquant/khunquant/pkg/providers"
+import "github.com/cryptoquantumwave/khunquant/pkg/providers"
 
 // SessionStore defines the persistence operations used by the agent loop.
 // Both SessionManager (legacy JSON backend) and JSONLBackend satisfy this

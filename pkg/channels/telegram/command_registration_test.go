@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/commands"
+	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 )
 
 func TestStartCommandRegistration_DoesNotBlock(t *testing.T) {

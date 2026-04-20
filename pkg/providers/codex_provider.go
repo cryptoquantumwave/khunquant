@@ -11,8 +11,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/khunquant/khunquant/pkg/auth"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/auth"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 const (

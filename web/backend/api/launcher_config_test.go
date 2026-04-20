@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/web/backend/launcherconfig"
+	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 )
 
 func TestGetLauncherConfigUsesRuntimeFallback(t *testing.T) {

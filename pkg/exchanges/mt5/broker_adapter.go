@@ -18,8 +18,8 @@ import (
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // MT5FullAdapter wraps MT5Exchange stub.

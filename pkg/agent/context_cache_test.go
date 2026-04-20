@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.

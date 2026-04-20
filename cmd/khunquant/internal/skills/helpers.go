@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/cmd/khunquant/internal"
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/skills"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 const skillsSearchMaxResults = 20

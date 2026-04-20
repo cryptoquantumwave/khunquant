@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // Name is the canonical provider identifier used in config and tool calls.

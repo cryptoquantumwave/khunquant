@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/memory"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/session"
+	"github.com/cryptoquantumwave/khunquant/pkg/memory"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/session"
 )
 
 // Compile-time interface satisfaction checks.

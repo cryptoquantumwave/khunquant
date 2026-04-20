@@ -10,8 +10,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	configstore "github.com/khunquant/khunquant/cmd/khunquant-launcher-tui/internal/config"
-	khunquantconfig "github.com/khunquant/khunquant/pkg/config"
+	configstore "github.com/cryptoquantumwave/khunquant/cmd/khunquant-launcher-tui/internal/config"
+	khunquantconfig "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 type appState struct {

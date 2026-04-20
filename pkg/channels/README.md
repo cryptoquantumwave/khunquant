@@ -162,19 +162,19 @@ Using Telegram as an example, the main changes are:
 package channels
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // New code (refactored branch)
 package telegram
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"     // Reference parent package
-    "github.com/khunquant/khunquant/pkg/config"
-    "github.com/khunquant/khunquant/pkg/identity"      // New
-    "github.com/khunquant/khunquant/pkg/media"          // New (if media support needed)
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"     // Reference parent package
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/identity"      // New
+    "github.com/cryptoquantumwave/khunquant/pkg/media"          // New (if media support needed)
 )
 ```
 
@@ -321,9 +321,9 @@ Create `init.go` for your channel:
 package telegram
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func init() {
@@ -338,9 +338,9 @@ func init() {
 ```go
 // cmd/khunquant/internal/gateway/helpers.go
 import (
-    _ "github.com/khunquant/khunquant/pkg/channels/telegram"   // Triggers init() registration
-    _ "github.com/khunquant/khunquant/pkg/channels/discord"
-    _ "github.com/khunquant/khunquant/pkg/channels/your_new_channel"  // New addition
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/telegram"   // Triggers init() registration
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/discord"
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/your_new_channel"  // New addition
 )
 ```
 
@@ -421,9 +421,9 @@ To add a new chat platform (e.g., `matrix`), you need to:
 package matrix
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func init() {
@@ -442,11 +442,11 @@ import (
     "context"
     "fmt"
 
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
-    "github.com/khunquant/khunquant/pkg/identity"
-    "github.com/khunquant/khunquant/pkg/logger"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/identity"
+    "github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // MatrixChannel implements channels.Channel for the Matrix protocol.
@@ -812,7 +812,7 @@ if m.config.Channels.Matrix.Enabled && m.config.Channels.Matrix.Token != "" {
 ```go
 // cmd/khunquant/internal/gateway/helpers.go
 import (
-    _ "github.com/khunquant/khunquant/pkg/channels/matrix"
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/matrix"
 )
 ```
 

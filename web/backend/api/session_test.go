@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/memory"
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/session"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/memory"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/session"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 func sessionsTestDir(t *testing.T, configPath string) string {

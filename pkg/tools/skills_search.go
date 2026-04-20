@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 )
 
 // FindSkillsTool allows the LLM agent to search for installable skills from registries.

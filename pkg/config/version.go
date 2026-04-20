@@ -8,10 +8,10 @@ import (
 // Build-time variables injected via ldflags during build process.
 // These are set by the Makefile or .goreleaser.yaml using the -X flag:
 //
-//	-X github.com/khunquant/khunquant/pkg/config.Version=<version>
-//	-X github.com/khunquant/khunquant/pkg/config.GitCommit=<commit>
-//	-X github.com/khunquant/khunquant/pkg/config.BuildTime=<timestamp>
-//	-X github.com/khunquant/khunquant/pkg/config.GoVersion=<go-version>
+//	-X github.com/cryptoquantumwave/khunquant/pkg/config.Version=<version>
+//	-X github.com/cryptoquantumwave/khunquant/pkg/config.GitCommit=<commit>
+//	-X github.com/cryptoquantumwave/khunquant/pkg/config.BuildTime=<timestamp>
+//	-X github.com/cryptoquantumwave/khunquant/pkg/config.GoVersion=<go-version>
 var (
 	Version   = "dev" // Default value when not built with ldflags
 	GitCommit string  // Git commit SHA (short)

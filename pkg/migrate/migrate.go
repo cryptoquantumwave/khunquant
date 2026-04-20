@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/migrate/internal"
-	"github.com/khunquant/khunquant/pkg/migrate/sources/openclaw"
+	"github.com/cryptoquantumwave/khunquant/pkg/migrate/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/migrate/sources/openclaw"
 )
 
 type (

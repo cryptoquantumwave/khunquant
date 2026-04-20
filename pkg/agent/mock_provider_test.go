@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 type mockProvider struct{}

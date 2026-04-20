@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
 // Re-export protocol types used across providers.

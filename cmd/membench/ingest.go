@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/khunquant/khunquant/pkg/seahorse"
+	"github.com/cryptoquantumwave/khunquant/pkg/seahorse"
 )
 
 // ConvMap stores the mapping from sampleID to seahorse ConversationID.

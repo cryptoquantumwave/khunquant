@@ -3,7 +3,7 @@ package tools_test
 import (
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 func TestToolNameConstants_NonEmpty(t *testing.T) {

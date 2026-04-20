@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // --- Compile-time interface check ---

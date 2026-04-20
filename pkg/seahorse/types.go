@@ -3,8 +3,8 @@ package seahorse
 import (
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/tokenizer"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/tokenizer"
 )
 
 // SummaryKind distinguishes leaf summaries (from raw messages) vs condensed

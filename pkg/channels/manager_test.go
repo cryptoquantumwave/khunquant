@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 )
 
 // mockChannel is a test double that delegates Send to a configurable function.

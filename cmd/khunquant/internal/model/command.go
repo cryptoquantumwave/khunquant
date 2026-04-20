@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/cmd/khunquant/internal"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // LocalModel is a special model name that indicates that the model is local and with or without api_key.

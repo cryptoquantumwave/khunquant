@@ -11,8 +11,8 @@ import (
 
 	"github.com/h2non/filetype"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
 )
 
 // SendFileTool allows the LLM to send a local file (image, document, etc.)

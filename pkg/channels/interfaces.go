@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/khunquant/khunquant/pkg/commands"
+	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 )
 
 // TypingCapable — channels that can show a typing/thinking indicator.

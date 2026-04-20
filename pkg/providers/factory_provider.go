@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	anthropicmessages "github.com/khunquant/khunquant/pkg/providers/anthropic_messages"
-	"github.com/khunquant/khunquant/pkg/providers/azure"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	anthropicmessages "github.com/cryptoquantumwave/khunquant/pkg/providers/anthropic_messages"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/azure"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.

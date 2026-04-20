@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 func TestExecuteHeartbeat_Async(t *testing.T) {

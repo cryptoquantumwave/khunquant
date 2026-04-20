@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // ErrAccountNotFound returns a standardised error when a named account does not exist

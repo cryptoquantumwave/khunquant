@@ -1,6 +1,6 @@
 package commands
 
-import "github.com/khunquant/khunquant/pkg/config"
+import "github.com/cryptoquantumwave/khunquant/pkg/config"
 
 // Runtime provides runtime dependencies to command handlers. It is constructed
 // per-request by the agent loop so that per-request state (like session scope)

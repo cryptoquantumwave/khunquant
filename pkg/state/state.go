@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
 // State represents the persistent state for a workspace.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // jsonSession mirrors pkg/session.Session for migration purposes.

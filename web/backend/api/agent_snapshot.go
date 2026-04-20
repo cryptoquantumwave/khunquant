@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/snapshot"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 	_ "modernc.org/sqlite"
 )
 

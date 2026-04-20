@@ -3,7 +3,7 @@ package identity
 import (
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 )
 
 func TestBuildCanonicalID(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 func setupSimProvider(lastPrice float64) *broker.SimulationProvider {

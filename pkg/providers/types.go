@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
 type (

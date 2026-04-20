@@ -6,7 +6,7 @@
 
 KhunQuant bridges Thai equity markets (SET) and global digital assets through a single AI-powered orchestrator. It runs locally on your machine, keeping your API keys and strategy parameters under your full control.
 
-Built on [khunquant](https://github.com/armmer016/khunquant) — an ultra-lightweight Go AI assistant.
+Built on [khunquant](https://github.com/cryptoquantumwave/khunquant) — an ultra-lightweight Go AI assistant.
 
 ---
 
@@ -26,7 +26,7 @@ Built on [khunquant](https://github.com/armmer016/khunquant) — an ultra-lightw
 **Requirements:** Go 1.25+, make
 
 ```bash
-git clone https://github.com/khunquant/khunquant.git
+git clone https://github.com/cryptoquantumwave/khunquant.git
 cd khunquant
 make deps
 make install       # installs to ~/.local/bin/khunquant
@@ -90,7 +90,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT — see [LICENSE](LICENSE).
-KhunQuant — [github.com/armmer016/khunquant](https://github.com/armmer016/khunquant).
+KhunQuant — [github.com/cryptoquantumwave/khunquant](https://github.com/cryptoquantumwave/khunquant).
 
 ---
 
@@ -117,7 +117,7 @@ KhunQuant เชื่อมตลาดหุ้นไทย (SET) กับส
 ## เริ่มต้นใช้งาน
 
 ```bash
-git clone https://github.com/khunquant/khunquant.git
+git clone https://github.com/cryptoquantumwave/khunquant.git
 cd khunquant
 make deps
 make install
@@ -152,4 +152,4 @@ make dev   # เปิด frontend ที่ localhost:5173 และ backend �
 ## สัญญาอนุญาต
 
 MIT — ดู [LICENSE](LICENSE)
-KhunQuant — [github.com/armmer016/khunquant](https://github.com/armmer016/khunquant)
+KhunQuant — [github.com/cryptoquantumwave/khunquant](https://github.com/cryptoquantumwave/khunquant)

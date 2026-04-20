@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
 // MemoryStore manages persistent memory for the agent.

@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/updater"
-	"github.com/khunquant/khunquant/web/backend/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/updater"
+	"github.com/cryptoquantumwave/khunquant/web/backend/utils"
 )
 
 const updateInterval = 1 * time.Hour

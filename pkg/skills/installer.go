@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // GitHubContent represents a file or directory in GitHub API response

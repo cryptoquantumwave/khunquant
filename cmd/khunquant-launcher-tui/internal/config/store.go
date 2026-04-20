@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	khunquantconfig "github.com/khunquant/khunquant/pkg/config"
+	khunquantconfig "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 const (

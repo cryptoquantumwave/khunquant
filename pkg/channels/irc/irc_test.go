@@ -3,8 +3,8 @@ package irc
 import (
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func TestNewIRCChannel(t *testing.T) {

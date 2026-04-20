@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/exchanges"
-	_ "github.com/khunquant/khunquant/pkg/exchanges/binance"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binance"
 )
 
 func loadConfig(t *testing.T) *config.Config {

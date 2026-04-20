@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/devices/events"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/devices/events"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 var usbClassToCapability = map[string]string{

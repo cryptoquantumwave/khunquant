@@ -162,19 +162,19 @@ pkg/identity/
 package channels
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // 新代码（重构分支）
 package telegram
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"     // 引用父包
-    "github.com/khunquant/khunquant/pkg/config"
-    "github.com/khunquant/khunquant/pkg/identity"      // 新增
-    "github.com/khunquant/khunquant/pkg/media"          // 新增（如需媒体）
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"     // 引用父包
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/identity"      // 新增
+    "github.com/cryptoquantumwave/khunquant/pkg/media"          // 新增（如需媒体）
 )
 ```
 
@@ -321,9 +321,9 @@ c.HandleMessage(ctx, peer, messageID, senderID, chatID, content, mediaRefs, meta
 package telegram
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func init() {
@@ -338,9 +338,9 @@ func init() {
 ```go
 // cmd/khunquant/internal/gateway/helpers.go
 import (
-    _ "github.com/khunquant/khunquant/pkg/channels/telegram"   // 触发 init() 注册
-    _ "github.com/khunquant/khunquant/pkg/channels/discord"
-    _ "github.com/khunquant/khunquant/pkg/channels/your_new_channel"  // 新增
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/telegram"   // 触发 init() 注册
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/discord"
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/your_new_channel"  // 新增
 )
 ```
 
@@ -421,9 +421,9 @@ Agent Loop 的主要变化：
 package matrix
 
 import (
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func init() {
@@ -442,11 +442,11 @@ import (
     "context"
     "fmt"
 
-    "github.com/khunquant/khunquant/pkg/bus"
-    "github.com/khunquant/khunquant/pkg/channels"
-    "github.com/khunquant/khunquant/pkg/config"
-    "github.com/khunquant/khunquant/pkg/identity"
-    "github.com/khunquant/khunquant/pkg/logger"
+    "github.com/cryptoquantumwave/khunquant/pkg/bus"
+    "github.com/cryptoquantumwave/khunquant/pkg/channels"
+    "github.com/cryptoquantumwave/khunquant/pkg/config"
+    "github.com/cryptoquantumwave/khunquant/pkg/identity"
+    "github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // MatrixChannel implements channels.Channel for the Matrix protocol.
@@ -811,7 +811,7 @@ if m.config.Channels.Matrix.Enabled && m.config.Channels.Matrix.Token != "" {
 ```go
 // cmd/khunquant/internal/gateway/helpers.go
 import (
-    _ "github.com/khunquant/khunquant/pkg/channels/matrix"
+    _ "github.com/cryptoquantumwave/khunquant/pkg/channels/matrix"
 )
 ```
 

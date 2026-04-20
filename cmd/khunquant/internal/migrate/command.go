@@ -3,7 +3,7 @@ package migrate
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/pkg/migrate"
+	"github.com/cryptoquantumwave/khunquant/pkg/migrate"
 )
 
 func NewMigrateCommand() *cobra.Command {

@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/constants"
-	"github.com/khunquant/khunquant/pkg/cron"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/constants"
+	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // JobExecutor is the interface for executing cron jobs through the agent

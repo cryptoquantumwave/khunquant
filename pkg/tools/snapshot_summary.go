@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/snapshot"
+	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 )
 
 // SnapshotSummaryTool computes aggregate analytics over portfolio snapshots.

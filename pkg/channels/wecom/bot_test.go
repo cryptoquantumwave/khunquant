@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // generateTestAESKey generates a valid test AES key

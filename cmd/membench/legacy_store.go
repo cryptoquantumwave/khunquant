@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/khunquant/khunquant/pkg/providers"
-	"github.com/khunquant/khunquant/pkg/session"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/session"
 )
 
 // LegacyStore wraps session.SessionManager for legacy baseline.

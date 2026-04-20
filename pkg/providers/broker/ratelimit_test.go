@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 func TestTokenBucketLimiter_Allow(t *testing.T) {

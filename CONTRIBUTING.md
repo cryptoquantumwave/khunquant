@@ -38,7 +38,7 @@ KhunQuant is a community project aimed at democratizing quantitative portfolio m
 ## Development setup
 
 ```bash
-git clone https://github.com/khunquant/khunquant.git
+git clone https://github.com/cryptoquantumwave/khunquant.git
 cd khunquant
 make deps
 make build

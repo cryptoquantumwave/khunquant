@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"unicode/utf8"
 
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // parseTurnBoundaries returns the starting index of each Turn in the history.

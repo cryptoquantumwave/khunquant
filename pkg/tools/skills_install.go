@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
-	"github.com/khunquant/khunquant/pkg/logger"
-	"github.com/khunquant/khunquant/pkg/skills"
-	"github.com/khunquant/khunquant/pkg/utils"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // InstallSkillTool allows the LLM agent to install skills from registries.

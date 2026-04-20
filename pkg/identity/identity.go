@@ -6,7 +6,7 @@ package identity
 import (
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 )
 
 // BuildCanonicalID constructs a canonical "platform:id" identifier.

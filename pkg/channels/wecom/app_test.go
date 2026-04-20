@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // generateTestAESKeyApp generates a valid test AES key for WeCom App

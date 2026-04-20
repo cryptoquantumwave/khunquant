@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/media"
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // --- mock types ---

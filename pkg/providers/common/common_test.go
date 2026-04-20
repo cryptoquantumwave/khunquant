@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
 // --- NewHTTPClient tests ---

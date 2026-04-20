@@ -3,8 +3,8 @@ package channels
 import (
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/bus"
-	"github.com/khunquant/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 // ChannelFactory is a constructor function that creates a Channel from config and message bus.

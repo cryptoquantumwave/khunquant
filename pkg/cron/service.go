@@ -12,7 +12,7 @@ import (
 
 	"github.com/adhocore/gronx"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
 type CronSchedule struct {

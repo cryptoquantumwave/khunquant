@@ -1,7 +1,7 @@
 .PHONY: dev dev-frontend dev-backend build test lint clean
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LD_FLAGS := -X github.com/khunquant/khunquant/pkg/config.Version=$(VERSION)
+LD_FLAGS := -X github.com/cryptoquantumwave/khunquant/pkg/config.Version=$(VERSION)
 
 # Run both frontend and backend dev servers
 dev:

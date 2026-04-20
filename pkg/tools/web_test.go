@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 const testFetchLimit = int64(10 * 1024 * 1024)

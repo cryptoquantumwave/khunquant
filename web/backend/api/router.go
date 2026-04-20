@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/web/backend/launcherconfig"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 )
 
 // Handler serves HTTP API requests.

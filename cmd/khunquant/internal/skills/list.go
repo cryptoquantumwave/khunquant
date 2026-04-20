@@ -3,7 +3,7 @@ package skills
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 )
 
 func newListCommand(loaderFn func() (*skills.SkillsLoader, error)) *cobra.Command {

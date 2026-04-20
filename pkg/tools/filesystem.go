@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
-	"github.com/khunquant/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow

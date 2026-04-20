@@ -33,11 +33,11 @@ Personal AI-powered quantitative portfolio manager for the Thai investor communi
 MIT License - Free and open source
 
 ## Repository
-https://github.com/khunquant/khunquant
+https://github.com/cryptoquantumwave/khunquant
 
 ## Contact
-Issues: https://github.com/khunquant/khunquant/issues
-Discussions: https://github.com/khunquant/khunquant/discussions
+Issues: https://github.com/cryptoquantumwave/khunquant/issues
+Discussions: https://github.com/cryptoquantumwave/khunquant/discussions
 
 ---
 

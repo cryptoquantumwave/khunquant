@@ -3,8 +3,8 @@ package broker_test
 import (
 	"testing"
 
-	"github.com/khunquant/khunquant/pkg/config"
-	"github.com/khunquant/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 func TestListConfiguredAccounts_Empty(t *testing.T) {

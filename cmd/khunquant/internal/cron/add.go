@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khunquant/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
 func newAddCommand(storePath func() string) *cobra.Command {

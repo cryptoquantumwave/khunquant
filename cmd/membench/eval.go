@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/khunquant/khunquant/pkg/seahorse"
+	"github.com/cryptoquantumwave/khunquant/pkg/seahorse"
 )
 
 // EvalResult holds per-sample evaluation results for one mode.

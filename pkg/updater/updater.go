@@ -14,7 +14,7 @@ import (
 
 const (
 	// DefaultOwner is the GitHub repository owner for khunquant releases.
-	DefaultOwner = "armmer016"
+	DefaultOwner = "cryptoquantumwave"
 	// DefaultRepo is the GitHub repository name for khunquant releases.
 	DefaultRepo = "khunquant"
 )

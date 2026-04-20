@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
 type AuthCredential struct {

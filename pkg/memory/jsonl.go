@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/fileutil"
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 const (

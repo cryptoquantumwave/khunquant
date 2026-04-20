@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khunquant/khunquant/pkg/providers/openai_compat"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/openai_compat"
 )
 
 // MLXLMProvider wraps the OpenAI-compatible HTTP provider for mlx_lm servers.

@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/khunquant/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 )
 
 // MediaSender is an optional interface for channels that can send

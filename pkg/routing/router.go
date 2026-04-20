@@ -1,7 +1,7 @@
 package routing
 
 import (
-	"github.com/khunquant/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 )
 
 // defaultThreshold is used when the config threshold is zero or negative.

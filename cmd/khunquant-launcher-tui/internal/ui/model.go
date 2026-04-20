@@ -10,7 +10,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	khunquantconfig "github.com/khunquant/khunquant/pkg/config"
+	khunquantconfig "github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
 func (s *appState) modelMenu() tview.Primitive {

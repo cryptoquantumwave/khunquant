@@ -25,6 +25,7 @@ var (
 	factoriesMu      sync.RWMutex
 	factories        = map[string]ExchangeFactory{}
 	accountFactories = map[string]ExchangeAccountFactory{}
+	instanceCache    = map[string]Exchange{}
 )
 
 // RegisterFactory registers a named exchange factory. Called from subpackage init() functions.
@@ -53,13 +54,40 @@ func CreateExchange(name string, cfg *config.Config) (Exchange, error) {
 }
 
 // CreateExchangeForAccount creates an exchange for a specific named sub-account.
+// Instances are cached by (name, accountName) so concurrent calls reuse the same
+// client — important for exchanges like Settrade that enforce a single active session.
 // Falls back to CreateExchange (default account) if no account factory is registered.
 func CreateExchangeForAccount(name, accountName string, cfg *config.Config) (Exchange, error) {
+	cacheKey := name + "\x00" + accountName
+
 	factoriesMu.RLock()
-	af, ok := accountFactories[name]
-	factoriesMu.RUnlock()
-	if ok {
-		return af(cfg, accountName)
+	if ex, ok := instanceCache[cacheKey]; ok {
+		factoriesMu.RUnlock()
+		return ex, nil
 	}
-	return CreateExchange(name, cfg)
+	factoriesMu.RUnlock()
+
+	factoriesMu.Lock()
+	defer factoriesMu.Unlock()
+	// Double-check after acquiring write lock.
+	if ex, ok := instanceCache[cacheKey]; ok {
+		return ex, nil
+	}
+
+	var (
+		ex  Exchange
+		err error
+	)
+	if af, ok := accountFactories[name]; ok {
+		ex, err = af(cfg, accountName)
+	} else if f, ok := factories[name]; ok {
+		ex, err = f(cfg)
+	} else {
+		return nil, fmt.Errorf("exchange %q not registered", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	instanceCache[cacheKey] = ex
+	return ex, nil
 }

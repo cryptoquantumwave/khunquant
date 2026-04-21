@@ -129,7 +129,11 @@ func (p *CodexProvider) Chat(
 			fields["api_param"] = apiErr.Param
 			fields["api_message"] = apiErr.Message
 			if apiErr.StatusCode == 400 {
-				fields["hint"] = "verify account id header and model compatibility for codex backend"
+				fields["hint"] = fmt.Sprintf(
+					"model %q may not be supported by the Codex backend; try %q or a model ending in -codex",
+					resolvedModel,
+					codexDefaultModel,
+				)
 			}
 			if apiErr.Response != nil {
 				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")

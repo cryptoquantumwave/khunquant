@@ -1348,6 +1348,7 @@ func (al *AgentLoop) runLLMIteration(
 	iteration := 0
 	var finalContent string
 	var pendingMessages []providers.Message
+	var ephemeralMessages []providers.Message // injected into LLM context only, not saved to session
 
 	// Determine effective model tier for this conversation turn.
 	// selectCandidates evaluates routing once and the decision is sticky for
@@ -1379,6 +1380,14 @@ func (al *AgentLoop) runLLMIteration(
 				"iteration": iteration,
 				"turn_id":   ts.turnID,
 			})
+		}
+
+		// Inject ephemeral steering messages (nudge) into context only — not saved to session.
+		if len(ephemeralMessages) > 0 {
+			for _, pm := range ephemeralMessages {
+				messages = append(messages, pm)
+			}
+			ephemeralMessages = nil
 		}
 
 		// Inject pending steering messages into the conversation context
@@ -1624,9 +1633,9 @@ func (al *AgentLoop) runLLMIteration(
 			if agent.FollowUpNudge && iteration == 1 {
 				logger.InfoCF("agent", "Follow-up nudge: text-only response on iteration 1, injecting steering message",
 					map[string]any{"agent_id": agent.ID})
-				pendingMessages = append(pendingMessages, providers.Message{
+				ephemeralMessages = append(ephemeralMessages, providers.Message{
 					Role:    "user",
-					Content: "You mentioned you would take action. Please proceed by calling the appropriate tool now. If no tool action is needed and this was a purely conversational reply, just respond naturally.",
+					Content: "If you still need to call a tool to complete the task, do so now. If you already have enough information to answer directly, just respond.",
 				})
 				continue
 			}

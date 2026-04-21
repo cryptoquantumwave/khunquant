@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
@@ -116,19 +117,60 @@ func (a *BinanceTHBrokerAdapter) FetchTickers(ctx context.Context, symbols []str
 	return out, nil
 }
 
-// FetchOHLCV is not supported by the BinanceTH public API.
-func (a *BinanceTHBrokerAdapter) FetchOHLCV(_ context.Context, symbol, _ string, _ *int64, _ int) ([]ccxt.OHLCV, error) {
-	return nil, fmt.Errorf("binanceth: FetchOHLCV not supported for symbol %s", symbol)
+// FetchOHLCV fetches OHLCV bars from GET /api/v1/klines.
+// Timeframe uses Binance interval notation (e.g. "1h", "1d") — CCXT format matches directly.
+func (a *BinanceTHBrokerAdapter) FetchOHLCV(ctx context.Context, symbol, timeframe string, since *int64, limit int) ([]ccxt.OHLCV, error) {
+	if timeframe == "" {
+		timeframe = "1h"
+	}
+	bars, err := a.BinanceTHExchange.fetchKlines(ctx, normalizeSymbol(symbol), timeframe, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("binanceth: FetchOHLCV %s: %w", symbol, err)
+	}
+	return bars, nil
 }
 
-// FetchOrderBook is not supported by the BinanceTH public API.
-func (a *BinanceTHBrokerAdapter) FetchOrderBook(_ context.Context, symbol string, _ int) (ccxt.OrderBook, error) {
-	return ccxt.OrderBook{}, fmt.Errorf("binanceth: FetchOrderBook not supported for symbol %s", symbol)
+// FetchOrderBook fetches the order book from GET /api/v1/depth.
+func (a *BinanceTHBrokerAdapter) FetchOrderBook(ctx context.Context, symbol string, depth int) (ccxt.OrderBook, error) {
+	resp, err := a.BinanceTHExchange.fetchDepth(ctx, normalizeSymbol(symbol), depth)
+	if err != nil {
+		return ccxt.OrderBook{}, fmt.Errorf("binanceth: FetchOrderBook %s: %w", symbol, err)
+	}
+	now := time.Now().UnixMilli()
+	sym := symbol
+	return ccxt.OrderBook{
+		Bids:      parseOrderBookSide(resp.Bids),
+		Asks:      parseOrderBookSide(resp.Asks),
+		Symbol:    &sym,
+		Timestamp: &now,
+	}, nil
 }
 
-// LoadMarkets is not supported by the BinanceTH public API.
-func (a *BinanceTHBrokerAdapter) LoadMarkets(_ context.Context) (map[string]ccxt.MarketInterface, error) {
-	return nil, fmt.Errorf("binanceth: LoadMarkets not supported")
+// LoadMarkets fetches all listed trading pairs from GET /api/v1/exchangeInfo.
+func (a *BinanceTHBrokerAdapter) LoadMarkets(ctx context.Context) (map[string]ccxt.MarketInterface, error) {
+	info, err := a.BinanceTHExchange.fetchExchangeInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("binanceth: LoadMarkets: %w", err)
+	}
+	out := make(map[string]ccxt.MarketInterface, len(info.Symbols))
+	for _, s := range info.Symbols {
+		ccxtSym := s.BaseAsset + "/" + s.QuoteAsset
+		id := s.Symbol
+		base := s.BaseAsset
+		quote := s.QuoteAsset
+		active := s.Status == "TRADING"
+		spotTrue := true
+		out[ccxtSym] = ccxt.MarketInterface{
+			Info:          map[string]interface{}{"symbol": s.Symbol, "status": s.Status},
+			Id:            &id,
+			Symbol:        &ccxtSym,
+			BaseCurrency:  &base,
+			QuoteCurrency: &quote,
+			Active:        &active,
+			Spot:          &spotTrue,
+		}
+	}
+	return out, nil
 }
 
 // --- broker.TradingProvider ---

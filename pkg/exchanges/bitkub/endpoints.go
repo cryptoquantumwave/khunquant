@@ -14,6 +14,9 @@ const (
 	endpointOrderHistory = "/api/v3/market/my-order-history"
 	endpointOrderInfo    = "/api/v3/market/order-info"
 
+	// TradingView OHLCV (public)
+	endpointTVHistory = "/tradingview/history"
+
 	// Private trading (authenticated POST)
 	endpointBalances    = "/api/v3/market/balances"
 	endpointPlaceBid    = "/api/v3/market/place-bid"

@@ -136,9 +136,28 @@ func (a *BitkubBrokerAdapter) FetchTickers(ctx context.Context, symbols []string
 	return out, nil
 }
 
-// FetchOHLCV is not provided by Bitkub (no candle endpoint in v3).
-func (a *BitkubBrokerAdapter) FetchOHLCV(_ context.Context, symbol, _ string, _ *int64, _ int) ([]ccxt.OHLCV, error) {
-	return nil, fmt.Errorf("bitkub: OHLCV data is not available on Bitkub v3 API (symbol: %s)", symbol)
+// FetchOHLCV fetches OHLCV bars via the Bitkub TradingView history endpoint.
+func (a *BitkubBrokerAdapter) FetchOHLCV(ctx context.Context, symbol, timeframe string, since *int64, limit int) ([]ccxt.OHLCV, error) {
+	tv, err := a.BitkubExchange.fetchTradingViewHistory(ctx, symbol, timeframe, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("bitkub: FetchOHLCV: %w", err)
+	}
+	if tv.Status != "ok" || len(tv.T) == 0 {
+		return nil, fmt.Errorf("bitkub: FetchOHLCV: no data returned for %s", symbol)
+	}
+	out := make([]ccxt.OHLCV, len(tv.T))
+	for i, ts := range tv.T {
+		tsMs := ts * 1000
+		out[i] = ccxt.OHLCV{
+			Timestamp: tsMs,
+			Open:      tv.O[i],
+			High:      tv.H[i],
+			Low:       tv.L[i],
+			Close:     tv.C[i],
+			Volume:    tv.V[i],
+		}
+	}
+	return out, nil
 }
 
 // FetchOrderBook returns the order book using GET /api/v3/market/depth.

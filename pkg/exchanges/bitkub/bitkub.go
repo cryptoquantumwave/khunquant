@@ -631,6 +631,79 @@ func (b *BitkubExchange) orderToCCXT(o bitkubOrder) ccxt.Order {
 	}
 }
 
+// tvHistoryResponse is the response from GET /tradingview/history.
+// All arrays are parallel and indexed by bar position.
+type tvHistoryResponse struct {
+	Status string    `json:"s"` // "ok" or "no_data"
+	T      []int64   `json:"t"` // Unix seconds
+	O      []float64 `json:"o"`
+	H      []float64 `json:"h"`
+	L      []float64 `json:"l"`
+	C      []float64 `json:"c"`
+	V      []float64 `json:"v"`
+}
+
+// tvResolution maps a CCXT-style timeframe string to a Bitkub TradingView resolution.
+var tvResolution = map[string]string{
+	"1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+	"1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
+	"1d": "1D", "1w": "1W", "1M": "1M",
+}
+
+// tvTimeframeSeconds maps CCXT timeframe to its duration in seconds (for computing `from`).
+var tvTimeframeSeconds = map[string]int64{
+	"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+	"1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200,
+	"1d": 86400, "1w": 604800, "1M": 2592000,
+}
+
+// fetchTradingViewHistory fetches OHLCV bars via the public TradingView endpoint.
+func (b *BitkubExchange) fetchTradingViewHistory(ctx context.Context, symbol, timeframe string, since *int64, limit int) (tvHistoryResponse, error) {
+	res, ok := tvResolution[timeframe]
+	if !ok {
+		res = "60" // default to 1h
+	}
+	tfSecs, ok := tvTimeframeSeconds[timeframe]
+	if !ok {
+		tfSecs = 3600
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	now := time.Now().Unix()
+	var from int64
+	if since != nil {
+		from = *since / 1000 // ms → s
+	} else {
+		from = now - int64(limit)*tfSecs
+	}
+
+	params := url.Values{}
+	params.Set("symbol", normalizeSymbol(symbol))
+	params.Set("resolution", res)
+	params.Set("from", strconv.FormatInt(from, 10))
+	params.Set("to", strconv.FormatInt(now, 10))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		baseURL+endpointTVHistory+"?"+params.Encode(), nil)
+	if err != nil {
+		return tvHistoryResponse{}, err
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return tvHistoryResponse{}, fmt.Errorf("bitkub: tradingview history request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out tvHistoryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return tvHistoryResponse{}, fmt.Errorf("bitkub: parsing tradingview history: %w", err)
+	}
+	return out, nil
+}
+
 // ---- HTTP helpers ----
 
 // privateGet sends a signed GET request with query parameters to a private Bitkub endpoint.

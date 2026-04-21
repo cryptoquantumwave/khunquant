@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
@@ -172,6 +174,150 @@ func (b *BinanceTHExchange) fetchTickerPrice(ctx context.Context, symbol string)
 	}
 
 	return strconv.ParseFloat(ticker.Price, 64)
+}
+
+// depthResponse is the response from GET /api/v1/depth.
+// Bids and asks are returned as [price, qty] string pairs.
+type depthResponse struct {
+	LastUpdateID int64      `json:"lastUpdateId"`
+	Bids         [][]string `json:"bids"`
+	Asks         [][]string `json:"asks"`
+}
+
+// exchangeInfoResponse is the response from GET /api/v1/exchangeInfo.
+type exchangeInfoResponse struct {
+	Symbols []struct {
+		Symbol             string `json:"symbol"`
+		Status             string `json:"status"`
+		BaseAsset          string `json:"baseAsset"`
+		BaseAssetPrecision int    `json:"baseAssetPrecision"`
+		QuoteAsset         string `json:"quoteAsset"`
+		QuotePrecision     int    `json:"quotePrecision"`
+	} `json:"symbols"`
+}
+
+// fetchKlines fetches OHLCV bars from GET /api/v1/klines.
+// Binance returns each bar as a 12-element JSON array; indices 0-5 are used.
+func (b *BinanceTHExchange) fetchKlines(ctx context.Context, symbol, interval string, since *int64, limit int) ([]ccxt.OHLCV, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("interval", interval)
+	params.Set("limit", strconv.Itoa(limit))
+	if since != nil {
+		params.Set("startTime", strconv.FormatInt(*since, 10))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		baseURL+endpointKlines+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("binanceth: klines request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Each row: [openTime, open, high, low, close, vol, closeTime, ...]
+	var raw [][]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("binanceth: parsing klines: %w", err)
+	}
+
+	parseStr := func(r json.RawMessage) float64 {
+		var s string
+		if json.Unmarshal(r, &s) == nil {
+			f, _ := strconv.ParseFloat(s, 64)
+			return f
+		}
+		var f float64
+		json.Unmarshal(r, &f)
+		return f
+	}
+
+	out := make([]ccxt.OHLCV, 0, len(raw))
+	for _, row := range raw {
+		if len(row) < 6 {
+			continue
+		}
+		var openTime int64
+		json.Unmarshal(row[0], &openTime)
+		out = append(out, ccxt.OHLCV{
+			Timestamp: openTime,
+			Open:      parseStr(row[1]),
+			High:      parseStr(row[2]),
+			Low:       parseStr(row[3]),
+			Close:     parseStr(row[4]),
+			Volume:    parseStr(row[5]),
+		})
+	}
+	return out, nil
+}
+
+// fetchDepth fetches the order book from GET /api/v1/depth.
+func (b *BinanceTHExchange) fetchDepth(ctx context.Context, symbol string, limit int) (depthResponse, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("limit", strconv.Itoa(limit))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		baseURL+endpointDepth+"?"+params.Encode(), nil)
+	if err != nil {
+		return depthResponse{}, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return depthResponse{}, fmt.Errorf("binanceth: depth request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out depthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return depthResponse{}, fmt.Errorf("binanceth: parsing depth: %w", err)
+	}
+	return out, nil
+}
+
+// parseOrderBookSide converts Binance string [price, qty] pairs to [][]float64.
+func parseOrderBookSide(rows [][]string) [][]float64 {
+	out := make([][]float64, 0, len(rows))
+	for _, row := range rows {
+		if len(row) < 2 {
+			continue
+		}
+		price, err1 := strconv.ParseFloat(row[0], 64)
+		qty, err2 := strconv.ParseFloat(row[1], 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		out = append(out, []float64{price, qty})
+	}
+	return out
+}
+
+// fetchExchangeInfo fetches all listed markets from GET /api/v1/exchangeInfo.
+func (b *BinanceTHExchange) fetchExchangeInfo(ctx context.Context) (exchangeInfoResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+endpointExchangeInfo, nil)
+	if err != nil {
+		return exchangeInfoResponse{}, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return exchangeInfoResponse{}, fmt.Errorf("binanceth: exchangeInfo request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out exchangeInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return exchangeInfoResponse{}, fmt.Errorf("binanceth: parsing exchangeInfo: %w", err)
+	}
+	return out, nil
 }
 
 // signedGet sends a SIGNED GET request to a private Binance TH endpoint.

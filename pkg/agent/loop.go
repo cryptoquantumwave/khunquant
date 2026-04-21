@@ -1219,9 +1219,10 @@ func (al *AgentLoop) runAgentLoop(
 	// 7. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: finalContent,
+			Channel:      opts.Channel,
+			ChatID:       opts.ChatID,
+			Content:      finalContent,
+			ContextUsage: computeContextUsage(agent, opts.SessionKey),
 		})
 	}
 
@@ -2131,6 +2132,24 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 
 			// Delegate to context manager so seahorse DB is cleared alongside JSONL.
 			return al.contextManager.Clear(context.Background(), opts.SessionKey)
+		}
+
+		rt.GetContextStats = func() *commands.ContextStats {
+			if opts == nil || agent.Sessions == nil {
+				return nil
+			}
+			usage := computeContextUsage(agent, opts.SessionKey)
+			if usage == nil {
+				return nil
+			}
+			history := agent.Sessions.GetHistory(opts.SessionKey)
+			return &commands.ContextStats{
+				UsedTokens:       usage.UsedTokens,
+				TotalTokens:      usage.TotalTokens,
+				CompressAtTokens: usage.CompressAtTokens,
+				UsedPercent:      usage.UsedPercent,
+				MessageCount:     len(history),
+			}
 		}
 	}
 	return rt

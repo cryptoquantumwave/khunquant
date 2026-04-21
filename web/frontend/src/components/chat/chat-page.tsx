@@ -28,6 +28,7 @@ export function ChatPage() {
     connectionState,
     isTyping,
     activeSessionId,
+    contextUsage,
     sendMessage,
     switchSession,
     newChat,
@@ -167,8 +168,14 @@ export function ChatPage() {
         input={input}
         onInputChange={setInput}
         onSend={handleSend}
+        onContextDetail={() => {
+          if (sendMessage("/context")) {
+            setInput("")
+          }
+        }}
         isConnected={isChatConnected}
         hasDefaultModel={Boolean(defaultModelName)}
+        contextUsage={contextUsage}
       />
     </div>
   )

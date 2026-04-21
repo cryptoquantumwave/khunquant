@@ -1,5 +1,8 @@
 import { normalizeUnixTimestamp } from "@/features/chat/state"
-import { updateChatStore } from "@/store/chat"
+import {
+  type ContextUsage,
+  updateChatStore,
+} from "@/store/chat"
 
 export interface PicoMessage {
   type: string
@@ -8,6 +11,25 @@ export interface PicoMessage {
   timestamp?: number | string
   payload?: Record<string, unknown>
 }
+
+function parseContextUsage(
+  payload: Record<string, unknown>,
+): ContextUsage | undefined {
+  const raw = payload.context_usage
+  if (!raw || typeof raw !== "object") return undefined
+  const obj = raw as Record<string, unknown>
+  const used = Number(obj.used_tokens)
+  const total = Number(obj.total_tokens)
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0)
+    return undefined
+  return {
+    used_tokens: used,
+    total_tokens: total,
+    compress_at_tokens: Number(obj.compress_at_tokens) || 0,
+    used_percent: Number(obj.used_percent) || 0,
+  }
+}
+
 
 export function handlePicoMessage(
   message: PicoMessage,
@@ -23,6 +45,7 @@ export function handlePicoMessage(
     case "message.create": {
       const content = (payload.content as string) || ""
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
+      const contextUsage = parseContextUsage(payload)
       const timestamp =
         message.timestamp !== undefined &&
         Number.isFinite(Number(message.timestamp))
@@ -40,6 +63,7 @@ export function handlePicoMessage(
           },
         ],
         isTyping: false,
+        ...(contextUsage ? { contextUsage } : {}),
       }))
       break
     }

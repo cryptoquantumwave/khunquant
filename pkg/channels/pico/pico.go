@@ -235,9 +235,11 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		return channels.ErrNotRunning
 	}
 
-	outMsg := newMessage(TypeMessageCreate, map[string]any{
+	payload := map[string]any{
 		"content": msg.Content,
-	})
+	}
+	setContextUsagePayload(payload, msg.ContextUsage)
+	outMsg := newMessage(TypeMessageCreate, payload)
 
 	return c.broadcastToSession(msg.ChatID, outMsg)
 }
@@ -571,4 +573,18 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+
+// setContextUsagePayload adds context window usage stats to a pico payload.
+func setContextUsagePayload(payload map[string]any, u *bus.ContextUsage) {
+	if u == nil {
+		return
+	}
+	payload["context_usage"] = map[string]any{
+		"used_tokens":        u.UsedTokens,
+		"total_tokens":       u.TotalTokens,
+		"compress_at_tokens": u.CompressAtTokens,
+		"used_percent":       u.UsedPercent,
+	}
 }

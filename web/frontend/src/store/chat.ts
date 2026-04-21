@@ -12,6 +12,13 @@ export interface ChatMessage {
   timestamp: number | string
 }
 
+export interface ContextUsage {
+  used_tokens: number
+  total_tokens: number
+  compress_at_tokens: number
+  used_percent: number
+}
+
 export type ConnectionState =
   | "disconnected"
   | "connecting"
@@ -24,6 +31,7 @@ export interface ChatStoreState {
   isTyping: boolean
   activeSessionId: string
   hasHydratedActiveSession: boolean
+  contextUsage?: ContextUsage
 }
 
 type ChatStorePatch = Partial<ChatStoreState>

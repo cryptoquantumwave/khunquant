@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,8 +9,10 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/auth"
@@ -285,7 +288,12 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		redirectURI := buildOAuthRedirectURI(r)
+		var redirectURI string
+		if cfg.Port > 0 {
+			redirectURI = fmt.Sprintf("http://localhost:%d/auth/callback", cfg.Port)
+		} else {
+			redirectURI = buildOAuthRedirectURI(r)
+		}
 		authURL := oauthBuildAuthorizeURL(cfg, pkce, state, redirectURI)
 
 		now := oauthNow()
@@ -302,6 +310,10 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 			RedirectURI:  redirectURI,
 		}
 		h.storeOAuthFlow(flow)
+
+		if cfg.Port > 0 {
+			go h.startLocalOAuthCallbackServer(provider, cfg, flow.ID, state, pkce.CodeVerifier, redirectURI)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -562,6 +574,81 @@ func oauthMethodTokenOrOAuth(method string) string {
 	return "oauth"
 }
 
+// startLocalOAuthCallbackServer starts a temporary HTTP server on cfg.Port to receive the OAuth
+// callback directly from the browser. This is required for providers like OpenAI whose registered
+// redirect URIs are localhost:PORT (e.g. http://localhost:1455/auth/callback), not the web server URL.
+func (h *Handler) startLocalOAuthCallbackServer(provider string, cfg auth.OAuthProviderConfig, flowID, state, codeVerifier, redirectURI string) {
+	var once sync.Once
+	done := make(chan struct{})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
+		defer once.Do(func() { close(done) })
+
+		if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
+			desc := strings.TrimSpace(r.URL.Query().Get("error_description"))
+			errMsg := errParam
+			if desc != "" {
+				errMsg += ": " + desc
+			}
+			h.setOAuthFlowError(flowID, errMsg)
+			renderOAuthCallbackPage(w, flowID, oauthFlowError, "Authorization failed", errMsg)
+			return
+		}
+
+		if r.URL.Query().Get("state") != state {
+			h.setOAuthFlowError(flowID, "state mismatch")
+			renderOAuthCallbackPage(w, flowID, oauthFlowError, "State mismatch", "state_mismatch")
+			return
+		}
+
+		code := strings.TrimSpace(r.URL.Query().Get("code"))
+		if code == "" {
+			h.setOAuthFlowError(flowID, "missing authorization code")
+			renderOAuthCallbackPage(w, flowID, oauthFlowError, "Missing authorization code", "missing_code")
+			return
+		}
+
+		cred, err := oauthExchangeCodeForTokens(cfg, code, codeVerifier, redirectURI)
+		if err != nil {
+			h.setOAuthFlowError(flowID, fmt.Sprintf("token exchange failed: %v", err))
+			renderOAuthCallbackPage(w, flowID, oauthFlowError, "Token exchange failed", err.Error())
+			return
+		}
+
+		if err := h.persistCredentialAndConfig(provider, "oauth", cred); err != nil {
+			h.setOAuthFlowError(flowID, fmt.Sprintf("failed to save credential: %v", err))
+			renderOAuthCallbackPage(w, flowID, oauthFlowError, "Failed to save credential", err.Error())
+			return
+		}
+
+		h.setOAuthFlowSuccess(flowID)
+		renderOAuthCallbackPage(w, flowID, oauthFlowSuccess, "Authentication successful", "")
+	})
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Port))
+	if err != nil {
+		h.setOAuthFlowError(flowID, fmt.Sprintf("could not start local callback server on port %d: %v", cfg.Port, err))
+		return
+	}
+
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener) //nolint:errcheck
+
+	timeout := time.NewTimer(oauthBrowserFlowTTL + 30*time.Second)
+	defer timeout.Stop()
+
+	select {
+	case <-done:
+	case <-timeout.C:
+		h.setOAuthFlowError(flowID, "browser oauth timed out")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	server.Shutdown(shutdownCtx) //nolint:errcheck
+}
+
 func buildOAuthRedirectURI(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
@@ -791,8 +878,8 @@ func defaultModelConfigForProvider(provider, authMethod string) config.ModelConf
 	switch provider {
 	case oauthProviderOpenAI:
 		return config.ModelConfig{
-			ModelName:  "gpt-5.4",
-			Model:      "openai/gpt-5.4",
+			ModelName:  "gpt-5.3-codex",
+			Model:      "openai/gpt-5.3-codex",
 			AuthMethod: authMethod,
 		}
 	case oauthProviderAnthropic:

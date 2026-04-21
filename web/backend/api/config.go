@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"regexp"
+	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
@@ -43,8 +46,22 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	var raw map[string]any
+	if err = json.Unmarshal(body, &raw); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err = normalizeChannelArrayFields(raw); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
+		return
+	}
+	normalizedBody, err := json.Marshal(raw)
+	if err != nil {
+		http.Error(w, "Failed to normalize config payload", http.StatusBadRequest)
+		return
+	}
 	var cfg config.Config
-	if err := json.Unmarshal(body, &cfg); err != nil {
+	if err = json.Unmarshal(normalizedBody, &cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -130,6 +147,10 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Recursively merge patch into base
 	mergeMap(base, patch)
+	if err = normalizeChannelArrayFields(base); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	// Convert merged map back to Config struct
 	merged, err := json.Marshal(base)
@@ -224,6 +245,285 @@ func mergeMap(dst, src map[string]any) {
 			mergeMap(dstMap, srcMap)
 		} else {
 			dst[key] = srcVal
+		}
+	}
+}
+
+func asMapField(value map[string]any, key string) (map[string]any, bool) {
+	raw, exists := value[key]
+	if !exists {
+		return nil, false
+	}
+	m, isMap := raw.(map[string]any)
+	return m, isMap
+}
+
+var (
+	allowFromHiddenCharsRe = regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]`)
+	allowFromSplitRe       = regexp.MustCompile(`[,\x{FF0C}\x{3001};\x{FF1B}\r\n\t]+`)
+	conservativeSplitRe    = regexp.MustCompile(`[,\x{FF0C}\r\n\t]+`)
+)
+
+type stringArrayParserOptions struct {
+	stripHiddenChars bool
+}
+
+func normalizeChannelArrayFields(raw map[string]any) error {
+	channelsMap, hasChannels := asMapField(raw, "channel_list")
+	if !hasChannels {
+		return nil
+	}
+
+	defaultCfg := config.DefaultConfig()
+	for channelName, rawChannel := range channelsMap {
+		chMap, ok := rawChannel.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if rawAllowFrom, exists := chMap["allow_from"]; exists {
+			normalized, err := normalizeStringArrayValue(rawAllowFrom, stringArrayParserOptions{
+				stripHiddenChars: true,
+			})
+			if err != nil {
+				return fmt.Errorf("channel_list.%s.allow_from: %w", channelName, err)
+			}
+			chMap["allow_from"] = normalized
+		}
+
+		if groupTrigger, ok := asMapField(chMap, "group_trigger"); ok {
+			if rawPrefixes, exists := groupTrigger["prefixes"]; exists {
+				normalized, err := normalizeStringArrayValue(rawPrefixes, stringArrayParserOptions{})
+				if err != nil {
+					return fmt.Errorf("channel_list.%s.group_trigger.prefixes: %w", channelName, err)
+				}
+				groupTrigger["prefixes"] = normalized
+			}
+		}
+
+		settingsMap, hasSettings := asMapField(chMap, "settings")
+		if !hasSettings {
+			continue
+		}
+
+		settingsType := channelSettingsType(defaultCfg, channelName, chMap)
+		if settingsType == nil {
+			continue
+		}
+
+		for i := range settingsType.NumField() {
+			field := settingsType.Field(i)
+			if !field.IsExported() || !isStringSliceType(field.Type) {
+				continue
+			}
+			jsonKey := strings.Split(field.Tag.Get("json"), ",")[0]
+			if jsonKey == "" || jsonKey == "-" {
+				continue
+			}
+			rawValue, exists := settingsMap[jsonKey]
+			if !exists {
+				continue
+			}
+
+			options := stringArrayParserOptions{}
+			if jsonKey == "allow_from" {
+				options.stripHiddenChars = true
+			}
+			normalized, err := normalizeStringArrayValue(rawValue, options)
+			if err != nil {
+				return fmt.Errorf("channel_list.%s.settings.%s: %w", channelName, jsonKey, err)
+			}
+			settingsMap[jsonKey] = normalized
+		}
+	}
+	return nil
+}
+
+func channelSettingsType(
+	_ *config.Config,
+	_ string,
+	_ map[string]any,
+) reflect.Type {
+	return nil // struct-based channels config doesn't support dynamic type lookup
+}
+
+func derefType(typ reflect.Type) reflect.Type {
+	for typ != nil && typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+	return typ
+}
+
+func isStringSliceType(typ reflect.Type) bool {
+	typ = derefType(typ)
+	return typ != nil && typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.String
+}
+
+func normalizeStringArrayValue(value any, options stringArrayParserOptions) ([]string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return parseStringArrayValue(typed, options), nil
+	case float64:
+		return normalizeStringArrayItems([]string{fmt.Sprintf("%.0f", typed)}, options), nil
+	case []string:
+		return normalizeStringArrayItems(typed, options), nil
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			switch raw := item.(type) {
+			case string:
+				items = append(items, raw)
+			case float64:
+				items = append(items, fmt.Sprintf("%.0f", raw))
+			default:
+				return nil, fmt.Errorf("unsupported list item type %T", item)
+			}
+		}
+		return normalizeStringArrayItems(items, options), nil
+	default:
+		return nil, fmt.Errorf("unsupported list field type %T", value)
+	}
+}
+
+func parseStringArrayValue(raw string, options stringArrayParserOptions) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	splitRe := conservativeSplitRe
+	if options.stripHiddenChars {
+		splitRe = allowFromSplitRe
+	}
+	return normalizeStringArrayItems(splitRe.Split(raw, -1), options)
+}
+
+func normalizeStringArrayItems(items []string, options stringArrayParserOptions) []string {
+	result := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		normalized := item
+		if options.stripHiddenChars {
+			normalized = allowFromHiddenCharsRe.ReplaceAllString(normalized, "")
+		}
+		normalized = strings.TrimSpace(normalized)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		return []string{}
+	}
+	return result
+}
+
+func getSecretString(m map[string]any, key string) (string, bool) {
+	if raw, exists := m[key]; exists {
+		s, isString := raw.(string)
+		if isString {
+			return s, true
+		}
+	}
+	if raw, exists := m["_"+key]; exists {
+		s, isString := raw.(string)
+		if isString {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+func applyConfigSecretsFromMap(_ *config.Config, _ map[string]any) {
+	// No-op: khunquant uses struct-based ChannelsConfig and doesn't support
+	// dynamic channel_list secret injection from the API payload.
+	// Secrets are restored via SecurityCopyFrom after each PATCH/PUT.
+}
+
+// applySecureStringsToStruct walks a struct and applies SecureString fields
+// from the matching keys in rawMap. It recurses into nested maps and slices.
+func applySecureStringsToStruct(rv reflect.Value, rawMap map[string]any) {
+	rt := rv.Type()
+	for jsonKey, rawVal := range rawMap {
+		for i := range rt.NumField() {
+			f := rt.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			tag := f.Tag.Get("json")
+			name := strings.Split(tag, ",")[0]
+			if name != jsonKey {
+				continue
+			}
+			sf := rv.Field(i)
+			if !sf.CanSet() {
+				continue
+			}
+			// Direct SecureString field
+			if s, ok := rawVal.(string); ok {
+				if f.Type == reflect.TypeOf(config.SecureString{}) {
+					sf.Set(reflect.ValueOf(*config.NewSecureString(s)))
+				} else if f.Type == reflect.TypeOf(&config.SecureString{}) {
+					sf.Set(reflect.ValueOf(config.NewSecureString(s)))
+				}
+				continue
+			}
+			// Recurse into nested struct
+			if sf.Kind() == reflect.Struct {
+				if nested, ok := rawVal.(map[string]any); ok {
+					applySecureStringsToStruct(sf, nested)
+				}
+				continue
+			}
+			// Recurse into map fields (e.g., map[string]SomeStruct)
+			if sf.Kind() == reflect.Map && sf.Type().Elem().Kind() == reflect.Struct {
+				if nestedMap, ok := rawVal.(map[string]any); ok {
+					for mapKey, mapVal := range nestedMap {
+						nested, ok := mapVal.(map[string]any)
+						if !ok {
+							continue
+						}
+						elemType := sf.Type().Elem()
+						// Get existing element or create a new zero value
+						var elem reflect.Value
+						existing := sf.MapIndex(reflect.ValueOf(mapKey))
+						if existing.IsValid() {
+							if existing.Kind() == reflect.Interface {
+								existing = existing.Elem()
+							}
+							if existing.Kind() == reflect.Ptr && !existing.IsNil() {
+								elem = reflect.New(elemType)
+								elem.Elem().Set(existing.Elem())
+							} else if existing.Kind() == reflect.Struct {
+								elem = reflect.New(elemType)
+								elem.Elem().Set(existing)
+							}
+						}
+						if !elem.IsValid() {
+							elem = reflect.New(elemType)
+						}
+						applySecureStringsToStruct(elem.Elem(), nested)
+						sf.SetMapIndex(reflect.ValueOf(mapKey), elem.Elem())
+					}
+				}
+				continue
+			}
+			// Recurse into slice elements that are structs
+			if sf.Kind() == reflect.Slice && sf.Type().Elem().Kind() == reflect.Struct {
+				if sliceRaw, ok := rawVal.([]any); ok {
+					for idx, elemRaw := range sliceRaw {
+						if nested, ok := elemRaw.(map[string]any); ok {
+							if idx < sf.Len() {
+								applySecureStringsToStruct(sf.Index(idx), nested)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }

@@ -11,6 +11,11 @@ import {
   getChannelsCatalog,
   patchAppConfig,
 } from "@/api/channels"
+import { type ArrayFieldFlusher } from "@/components/channels/channel-array-list-field"
+import {
+  normalizeAllowFromValues,
+  serializeStringArrayForSubmit,
+} from "@/components/channels/channel-array-utils"
 import {
   SECRET_FIELD_MAP,
   buildEditConfig,
@@ -45,6 +50,51 @@ function asBool(value: unknown): boolean {
   return value === true
 }
 
+function setRecordValueByPath(
+  source: Record<string, unknown>,
+  pathSegments: string[],
+  value: unknown,
+): Record<string, unknown> {
+  const [segment, ...rest] = pathSegments
+  if (!segment) {
+    return source
+  }
+  if (rest.length === 0) {
+    return { ...source, [segment]: value }
+  }
+  return {
+    ...source,
+    [segment]: setRecordValueByPath(asRecord(source[segment]), rest, value),
+  }
+}
+
+function setConfigValueByPath(
+  source: ChannelConfig,
+  fieldPath: string,
+  value: unknown,
+): ChannelConfig {
+  return setRecordValueByPath(source, fieldPath.split("."), value)
+}
+
+function serializeGroupTriggerForSubmit(value: unknown): unknown {
+  const groupTrigger = asRecord(value)
+  if (Object.keys(groupTrigger).length === 0) {
+    return value
+  }
+  return {
+    ...groupTrigger,
+    prefixes: serializeStringArrayForSubmit(groupTrigger.prefixes),
+  }
+}
+
+const CHANNEL_COMMON_CONFIG_KEYS = new Set([
+  "allow_from",
+  "group_trigger",
+  "placeholder",
+  "reasoning_channel_id",
+  "typing",
+])
+
 function normalizeConfig(
   channel: SupportedChannel,
   rawConfig: ChannelConfig,
@@ -69,6 +119,19 @@ function buildSavePayload(
   for (const [key, value] of Object.entries(editConfig)) {
     if (key.startsWith("_")) continue
     if (key === "enabled") continue
+
+    if (CHANNEL_COMMON_CONFIG_KEYS.has(key)) {
+      if (key === "allow_from") {
+        payload[key] = serializeStringArrayForSubmit(
+          normalizeAllowFromValues(value),
+        )
+      } else if (key === "group_trigger") {
+        payload[key] = serializeGroupTriggerForSubmit(value)
+      } else {
+        payload[key] = value
+      }
+      continue
+    }
 
     if (key in SECRET_FIELD_MAP) {
       const editKey = SECRET_FIELD_MAP[key]
@@ -236,6 +299,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
   const [baseConfig, setBaseConfig] = useState<ChannelConfig>({})
   const [editConfig, setEditConfig] = useState<ChannelConfig>({})
   const [enabled, setEnabled] = useState(false)
+  const [arrayFieldResetVersion, setArrayFieldResetVersion] = useState(0)
+  const arrayFieldFlushersRef = useRef(new Map<string, ArrayFieldFlusher>())
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -288,15 +353,10 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     previousGatewayStatusRef.current = gateway.status
   }, [gateway.status, loadData])
 
-  const savePayload = useMemo(() => {
-    if (!channel) return null
-    return buildSavePayload(channel, editConfig, enabled)
-  }, [channel, editConfig, enabled])
-
   const configured = useMemo(() => {
-    if (!channel || !savePayload) return false
-    return isConfigured(channel, savePayload)
-  }, [channel, savePayload])
+    if (!channel) return false
+    return isConfigured(channel, baseConfig)
+  }, [channel, baseConfig])
 
   const docsUrl = useMemo(() => {
     if (!channel) return ""
@@ -346,18 +406,50 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     })
   }, [])
 
+  const registerArrayFieldFlusher = useCallback(
+    (fieldPath: string, flusher: ArrayFieldFlusher | null) => {
+      if (flusher) {
+        arrayFieldFlushersRef.current.set(fieldPath, flusher)
+        return
+      }
+      arrayFieldFlushersRef.current.delete(fieldPath)
+    },
+    [],
+  )
+
+  const flushPendingArrayFieldDrafts = useCallback(
+    (sourceConfig: ChannelConfig): ChannelConfig => {
+      let nextConfig = sourceConfig
+      for (const [fieldPath, flusher] of arrayFieldFlushersRef.current) {
+        const flushedValue = flusher()
+        if (flushedValue === null) {
+          continue
+        }
+        nextConfig = setConfigValueByPath(nextConfig, fieldPath, flushedValue)
+      }
+      return nextConfig
+    },
+    [],
+  )
+
   const handleReset = () => {
     setEditConfig(buildEditConfig(channel?.name ?? "", baseConfig))
     setEnabled(asBool(baseConfig.enabled))
     setServerError("")
     setFieldErrors({})
+    setArrayFieldResetVersion((version) => version + 1)
   }
 
   const handleSave = async () => {
-    if (!channel || !savePayload) return
+    if (!channel) return
+
+    const preparedEditConfig = flushPendingArrayFieldDrafts(editConfig)
+    if (preparedEditConfig !== editConfig) {
+      setEditConfig(preparedEditConfig)
+    }
 
     const missingRequiredFields = requiredKeys.filter((key) =>
-      isMissingRequiredValue(savePayload[key]),
+      isMissingRequiredValue(preparedEditConfig[key]),
     )
     if (missingRequiredFields.length > 0) {
       const requiredFieldError = t("channels.validation.requiredField")
@@ -374,6 +466,7 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     setServerError("")
     setFieldErrors({})
     try {
+      const savePayload = buildSavePayload(channel, preparedEditConfig, enabled)
       await patchAppConfig({
         channels: {
           [channel.config_key]: savePayload,
@@ -403,6 +496,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             isEdit={isEdit}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "discord":
@@ -412,6 +507,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             isEdit={isEdit}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "slack":
@@ -421,6 +518,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             isEdit={isEdit}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "feishu":
@@ -430,6 +529,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             isEdit={isEdit}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       default:
@@ -441,6 +542,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             hiddenKeys={hiddenKeys}
             requiredKeys={requiredKeys}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
     }

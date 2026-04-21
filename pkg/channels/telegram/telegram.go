@@ -110,15 +110,11 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	updates, err := c.bot.UpdatesViaLongPolling(c.ctx, &telego.GetUpdatesParams{
-		Timeout: 30,
-	})
-	if err != nil {
-		c.cancel()
-		return fmt.Errorf("failed to start long polling: %w", err)
-	}
+	// proxyUpdates is a persistent channel fed by runPollingWithBackoff.
+	// BotHandler stays connected to it across reconnections.
+	proxyUpdates := make(chan telego.Update, 100)
 
-	bh, err := th.NewBotHandler(c.bot, updates)
+	bh, err := th.NewBotHandler(c.bot, proxyUpdates)
 	if err != nil {
 		c.cancel()
 		return fmt.Errorf("failed to create bot handler: %w", err)
@@ -136,6 +132,8 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 
 	c.startCommandRegistration(c.ctx, commands.BuiltinDefinitions())
 
+	go c.runPollingWithBackoff(c.ctx, proxyUpdates)
+
 	go func() {
 		if err = bh.Start(); err != nil {
 			logger.ErrorCF("telegram", "Bot handler failed", map[string]any{
@@ -145,6 +143,70 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+// runPollingWithBackoff starts long polling and forwards updates to proxyUpdates.
+// On connection failure it retries with exponential backoff starting at 8s, capped at 30 minutes.
+// It resets the delay when the connection was healthy (at least one update received).
+func (c *TelegramChannel) runPollingWithBackoff(ctx context.Context, proxyUpdates chan<- telego.Update) {
+	defer close(proxyUpdates)
+
+	const (
+		initialDelay = 8 * time.Second
+		maxDelay     = 30 * time.Minute
+	)
+	delay := initialDelay
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// retryTimeout=0 disables telego's built-in fixed retry so the channel
+		// closes immediately on error, giving us full control over backoff.
+		updates, err := c.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
+			Timeout: 30,
+		}, telego.WithLongPollingRetryTimeout(0))
+
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.ErrorCF("telegram", "Failed to start long polling, retrying", map[string]any{
+				"error": err.Error(), "retry_in": delay.String(),
+			})
+		} else {
+			receivedAny := false
+			for update := range updates {
+				receivedAny = true
+				select {
+				case <-ctx.Done():
+					return
+				case proxyUpdates <- update:
+				}
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if receivedAny {
+				delay = initialDelay
+			}
+			logger.ErrorCF("telegram", "Long polling connection dropped, retrying", map[string]any{
+				"retry_in": delay.String(),
+			})
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
 }
 
 func (c *TelegramChannel) Stop(ctx context.Context) error {

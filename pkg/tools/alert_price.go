@@ -56,6 +56,8 @@ func (t *SetPriceAlertTool) Parameters() map[string]any {
 			},
 			"threshold": map[string]any{"type": "number", "description": "Price threshold."},
 			"message":   map[string]any{"type": "string", "description": "Custom message to include in the alert notification."},
+			"channel":   map[string]any{"type": "string", "description": "Optional: target notification channel (e.g. line, telegram). Defaults to the current channel."},
+			"chat_id":   map[string]any{"type": "string", "description": "Optional: target chat/user ID for the notification. Required when specifying a custom channel."},
 			"recurring": map[string]any{"type": "boolean", "description": "If true, keep the alert active after it fires (default: false = one-shot)."},
 			"alert_id":  map[string]any{"type": "string", "description": "Alert ID to cancel (required for action='cancel')."},
 		},
@@ -122,8 +124,15 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 	name := fmt.Sprintf("price_alert:%s:%s:%s:%.8g", providerID, symbol, condition, threshold)
 
 	// Capture the originating channel/chatID so the handler can notify the right user.
-	channel := ToolChannel(ctx)
-	chatID := ToolChatID(ctx)
+	// Allow args to override the context channel/chatID for cross-channel alert delivery.
+	channel, _ := args["channel"].(string)
+	chatID, _ := args["chat_id"].(string)
+	if channel == "" {
+		channel = ToolChannel(ctx)
+	}
+	if chatID == "" {
+		chatID = ToolChatID(ctx)
+	}
 
 	job, err := t.cronService.AddJob(name, schedule, string(payloadJSON), false, channel, chatID)
 	if err != nil {

@@ -8,6 +8,7 @@ export interface SupportedChannel {
   display_name?: string
   config_key: string
   variant?: string
+  enabled?: boolean
 }
 
 interface ChannelsCatalogResponse {

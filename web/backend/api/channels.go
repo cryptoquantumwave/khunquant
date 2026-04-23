@@ -11,6 +11,7 @@ type channelCatalogItem struct {
 	Name      string `json:"name"`
 	ConfigKey string `json:"config_key"`
 	Variant   string `json:"variant,omitempty"`
+	Enabled   bool   `json:"enabled"`
 }
 
 var channelCatalog = []channelCatalogItem{
@@ -38,7 +39,7 @@ func (h *Handler) registerChannelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/catalog", h.handleListChannelCatalog)
 }
 
-// handleListChannelCatalog returns only the channels the user has enabled.
+// handleListChannelCatalog returns all supported channels with their enabled status.
 //
 //	GET /api/channels/catalog
 func (h *Handler) handleListChannelCatalog(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +49,7 @@ func (h *Handler) handleListChannelCatalog(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	enabledKeys := map[string]bool{
+	enabledByConfigKey := map[string]bool{
 		"telegram":    cfg.Channels.Telegram.Enabled,
 		"discord":     cfg.Channels.Discord.Enabled,
 		"slack":       cfg.Channels.Slack.Enabled,
@@ -67,14 +68,10 @@ func (h *Handler) handleListChannelCatalog(w http.ResponseWriter, r *http.Reques
 		"irc":         cfg.Channels.IRC.Enabled,
 	}
 
-	var result []channelCatalogItem
-	for _, ch := range channelCatalog {
-		if enabledKeys[ch.Name] || enabledKeys[ch.ConfigKey] {
-			result = append(result, ch)
-		}
-	}
-	if result == nil {
-		result = []channelCatalogItem{}
+	result := make([]channelCatalogItem, len(channelCatalog))
+	for i, ch := range channelCatalog {
+		result[i] = ch
+		result[i].Enabled = enabledByConfigKey[ch.ConfigKey]
 	}
 
 	w.Header().Set("Content-Type", "application/json")

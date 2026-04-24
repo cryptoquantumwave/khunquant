@@ -584,6 +584,11 @@ func DefaultConfig() *Config {
 			TransferFunds: ToolConfig{
 				Enabled: false,
 			},
+
+			// Security tools — disabled by default; opt-in for agent access to secrets
+			ConfigEncryptKeys: ToolConfig{
+				Enabled: false,
+			},
 		},
 		Exchanges: ExchangesConfig{
 			Binance: BinanceExchangeConfig{

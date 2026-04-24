@@ -24,9 +24,6 @@ func TestNewOnboardCommand(t *testing.T) {
 	assert.Nil(t, cmd.PersistentPreRun)
 	assert.Nil(t, cmd.PersistentPostRun)
 
-	assert.True(t, cmd.HasFlags())
-	encFlag := cmd.Flags().Lookup("enc")
-	assert.NotNil(t, encFlag)
-	assert.Equal(t, "false", encFlag.DefValue)
+	assert.False(t, cmd.HasFlags())
 	assert.False(t, cmd.HasSubCommands())
 }

@@ -130,6 +130,9 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("list_portfolios") {
 		toolsRegistry.Register(tools.NewListPortfoliosTool(cfg))
 	}
+	if cfg.Tools.IsToolEnabled("config_encrypt_keys") {
+		toolsRegistry.Register(tools.NewConfigEncryptKeysTool(cfg))
+	}
 
 	// Snapshot tools — share a single Store instance.
 	var snapshotStore *snapshot.Store

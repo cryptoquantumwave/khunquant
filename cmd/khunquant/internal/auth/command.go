@@ -16,6 +16,7 @@ func NewAuthCommand() *cobra.Command {
 		newLogoutCommand(),
 		newStatusCommand(),
 		newModelsCommand(),
+		newEncryptCommand(),
 	)
 
 	return cmd

@@ -1040,6 +1040,9 @@ type ToolsConfig struct {
 	SetPriceAlert     ToolConfig `json:"set_price_alert"     envPrefix:"KHUNQUANT_TOOLS_SET_PRICE_ALERT_"`
 	SetIndicatorAlert ToolConfig `json:"set_indicator_alert" envPrefix:"KHUNQUANT_TOOLS_SET_INDICATOR_ALERT_"`
 	TransferFunds     ToolConfig `json:"transfer_funds"      envPrefix:"KHUNQUANT_TOOLS_TRANSFER_FUNDS_"`
+
+	// Security tools
+	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled.
@@ -1442,6 +1445,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.SetIndicatorAlert.Enabled
 	case "transfer_funds":
 		return t.TransferFunds.Enabled
+	case "config_encrypt_keys":
+		return t.ConfigEncryptKeys.Enabled
 	default:
 		return true
 	}

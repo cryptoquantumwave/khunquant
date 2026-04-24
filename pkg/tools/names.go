@@ -55,6 +55,9 @@ const (
 	NameSetPriceAlert     = "set_price_alert"
 	NameSetIndicatorAlert = "set_indicator_alert"
 	NameTransferFunds     = "transfer_funds"
+
+	// Security
+	NameConfigEncryptKeys = "config_encrypt_keys"
 )
 
 // Category constants for the web UI tool catalog.

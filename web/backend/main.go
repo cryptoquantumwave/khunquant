@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 	"github.com/cryptoquantumwave/khunquant/web/backend/api"
 	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
@@ -50,6 +51,10 @@ func main() {
 		)
 	}
 	flag.Parse()
+
+	// Install a file-backed PassphraseProvider so enc:// credentials in config
+	// are decrypted automatically when ~/.khunquant/.passphrase exists.
+	credential.InstallFileBackedProvider()
 
 	// Resolve config path
 	configPath := utils.GetDefaultConfigPath()

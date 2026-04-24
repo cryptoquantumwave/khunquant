@@ -27,6 +27,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/version"
 	"github.com/cryptoquantumwave/khunquant/pkg/brand"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 	"github.com/cryptoquantumwave/khunquant/pkg/updater"
 )
 
@@ -61,6 +62,11 @@ var banner = "\r\n" + brand.SideBySide(brand.ANSIBlue, brand.ANSIRed, brand.ANSI
 
 func main() {
 	fmt.Printf("%s", banner)
+
+	// Install a file-backed PassphraseProvider so enc:// credentials are
+	// decrypted automatically if ~/.khunquant/.passphrase exists.
+	// KHUNQUANT_KEY_PASSPHRASE env var still takes precedence when set.
+	credential.InstallFileBackedProvider()
 
 	// Read the cached update result instantly (no network wait), and kick off
 	// a background refresh so the cache stays fresh for the next invocation.

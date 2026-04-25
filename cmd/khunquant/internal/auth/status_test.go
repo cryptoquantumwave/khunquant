@@ -13,8 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	pkgauth "github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
+	pkgauth "github.com/cryptoquantumwave/khunquant/pkg/auth"
 )
 
 func captureAuthStdout(t *testing.T, fn func()) string {
@@ -44,7 +43,7 @@ func setAuthStatusTestHome(t *testing.T) string {
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	t.Setenv(config.EnvHome, filepath.Join(tmpDir, ".picoclaw"))
+	t.Setenv("KHUNQUANT_HOME", filepath.Join(tmpDir, ".khunquant"))
 	return tmpDir
 }
 
@@ -76,7 +75,7 @@ func TestAuthStatusCmdShowsCanonicalGoogleAntigravityAfterLegacyRefresh(t *testi
 	data, err := json.Marshal(legacyStore)
 	require.NoError(t, err)
 
-	authPath := filepath.Join(tmpDir, ".picoclaw", "auth.json")
+	authPath := filepath.Join(tmpDir, ".khunquant", "auth.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(authPath), 0o755))
 	require.NoError(t, os.WriteFile(authPath, data, 0o600))
 

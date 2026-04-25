@@ -17,6 +17,7 @@ func (h *Handler) registerConfigRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", h.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", h.handleUpdateConfig)
 	mux.HandleFunc("PATCH /api/config", h.handlePatchConfig)
+	mux.HandleFunc("POST /api/config/test-command-patterns", h.handleTestCommandPatterns)
 }
 
 // handleGetConfig returns the complete system configuration.
@@ -226,6 +227,20 @@ func validateConfig(cfg *config.Config) []string {
 		}
 	}
 
+	// Validate exec regex patterns only when deny patterns are enabled
+	if cfg.Tools.Exec.EnableDenyPatterns {
+		for _, p := range cfg.Tools.Exec.CustomDenyPatterns {
+			if _, err := regexp.Compile(p); err != nil {
+				errs = append(errs, fmt.Sprintf("tools.exec.custom_deny_patterns: invalid regex %q: %v", p, err))
+			}
+		}
+		for _, p := range cfg.Tools.Exec.CustomAllowPatterns {
+			if _, err := regexp.Compile(p); err != nil {
+				errs = append(errs, fmt.Sprintf("tools.exec.custom_allow_patterns: invalid regex %q: %v", p, err))
+			}
+		}
+	}
+
 	return errs
 }
 
@@ -345,6 +360,66 @@ func channelSettingsType(
 	_ map[string]any,
 ) reflect.Type {
 	return nil // struct-based channels config doesn't support dynamic type lookup
+}
+
+type testCommandPatternsRequest struct {
+	AllowPatterns []string `json:"allow_patterns"`
+	DenyPatterns  []string `json:"deny_patterns"`
+	Command       string   `json:"command"`
+}
+
+type testCommandPatternsResponse struct {
+	Allowed           bool   `json:"allowed"`
+	Blocked           bool   `json:"blocked"`
+	MatchedWhitelist  string `json:"matched_whitelist,omitempty"`
+	MatchedBlacklist  string `json:"matched_blacklist,omitempty"`
+}
+
+// handleTestCommandPatterns tests allow/deny regex patterns against a command without saving.
+//
+//	POST /api/config/test-command-patterns
+func (h *Handler) handleTestCommandPatterns(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req testCommandPatternsRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	resp := testCommandPatternsResponse{}
+
+	for _, p := range req.AllowPatterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(req.Command) {
+			resp.Allowed = true
+			resp.MatchedWhitelist = p
+			break
+		}
+	}
+
+	for _, p := range req.DenyPatterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(req.Command) {
+			resp.Blocked = true
+			resp.MatchedBlacklist = p
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func derefType(typ reflect.Type) reflect.Type {

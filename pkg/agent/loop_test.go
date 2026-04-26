@@ -1700,6 +1700,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 		sessionKey,
 		"test",
 		"test-chat",
+		false,
 	)
 	if err != nil {
 		t.Fatalf("Expected success after retry, got error: %v", err)
@@ -1748,7 +1749,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	provider := &simpleMockProvider{response: ""}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1")
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1", false)
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -1780,7 +1781,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.RegisterTool(&toolLimitTestTool{})
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit", "test", "chat1")
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit", "test", "chat1", false)
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -1855,6 +1856,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 		"session-1",
 		"cli",
 		"direct",
+		false,
 	)
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)

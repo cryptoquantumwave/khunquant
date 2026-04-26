@@ -146,6 +146,8 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("creating alert: %v", err))
 	}
+	job.Payload.NoHistory = true
+	t.cronService.UpdateJob(job)
 
 	return UserResult(fmt.Sprintf("Indicator alert created (ID: %s)\n  %s %s(%s) %s %.4g\n  Timeframe: %s  Recurring: %v",
 		job.ID, symbol, indicator, timeframe, condition, threshold, timeframe, recurring))

@@ -823,12 +823,13 @@ func (al *AgentLoop) ProcessDirect(
 	ctx context.Context,
 	content, sessionKey string,
 ) (string, error) {
-	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct")
+	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct", false)
 }
 
 func (al *AgentLoop) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
+	noHistory bool,
 ) (string, error) {
 	if err := al.ensureMCPInitialized(ctx); err != nil {
 		return "", err
@@ -840,6 +841,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		ChatID:     chatID,
 		Content:    content,
 		SessionKey: sessionKey,
+		NoHistory:  noHistory,
 	}
 
 	return al.processMessage(ctx, msg)
@@ -938,9 +940,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		UserMessage:             msg.Content,
 		Media:                   msg.Media,
 		DefaultResponse:         defaultResponse,
-		EnableSummary:           true,
+		EnableSummary:           !msg.NoHistory,
 		SendResponse:            false,
 		AllowInterimPicoPublish: true,
+		NoHistory:               msg.NoHistory,
 	}
 
 	// context-dependent commands check their own Runtime fields and report

@@ -144,6 +144,8 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("creating alert: %v", err))
 	}
+	job.Payload.NoHistory = true
+	t.cronService.UpdateJob(job)
 
 	return UserResult(fmt.Sprintf("Price alert created (ID: %s)\n  %s %s %s %.8g\n  Recurring: %v",
 		job.ID, symbol, condition, "price", threshold, recurring))

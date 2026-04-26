@@ -27,6 +27,7 @@ type InboundMessage struct {
 	MediaScope string            `json:"media_scope,omitempty"` // media lifecycle scope
 	SessionKey string            `json:"session_key"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+	NoHistory  bool              `json:"no_history,omitempty"`
 }
 
 // ContextUsage describes how much of the model's context window the current

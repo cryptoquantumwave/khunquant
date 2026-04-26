@@ -24,13 +24,14 @@ type CronSchedule struct {
 }
 
 type CronPayload struct {
-	Kind    string `json:"kind"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	Command string `json:"command,omitempty"`
-	Deliver bool   `json:"deliver"`
-	Channel string `json:"channel,omitempty"`
-	To      string `json:"to,omitempty"`
+	Kind      string `json:"kind"`
+	Type      string `json:"type"`
+	Message   string `json:"message"`
+	Command   string `json:"command,omitempty"`
+	Deliver   bool   `json:"deliver"`
+	Channel   string `json:"channel,omitempty"`
+	To        string `json:"to,omitempty"`
+	NoHistory bool   `json:"noHistory,omitempty"`
 }
 
 type CronJobState struct {

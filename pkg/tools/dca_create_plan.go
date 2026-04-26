@@ -270,6 +270,8 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		_ = t.store.DeletePlan(ctx, planID)
 		return ErrorResult(fmt.Sprintf("failed to schedule cron job: %v", err))
 	}
+	job.Payload.NoHistory = true
+	t.cronService.UpdateJob(job)
 
 	plan.CronJobID = job.ID
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {

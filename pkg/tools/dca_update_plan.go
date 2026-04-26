@@ -114,6 +114,8 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("failed to recreate cron job: %v", err))
 		}
+		job.Payload.NoHistory = true
+		t.cronService.UpdateJob(job)
 		plan.FrequencyExpr = newExpr
 		plan.CronJobID = job.ID
 		changed = true

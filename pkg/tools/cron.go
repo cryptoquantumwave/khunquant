@@ -15,7 +15,7 @@ import (
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string, noHistory bool) (string, error)
 	// PublishResponseIfNeeded sends response to the outbound bus only when the
 	// agent did not already deliver content through the message tool in this round.
 	PublishResponseIfNeeded(ctx context.Context, channel, chatID, response string)
@@ -107,6 +107,10 @@ func (t *CronTool) Parameters() map[string]any {
 			"deliver": map[string]any{
 				"type":        "boolean",
 				"description": "If true, send message directly to channel. If false, let agent process message (for complex tasks). Default: false",
+			},
+			"no_history": map[string]any{
+				"type":        "boolean",
+				"description": "If true, each run is stateless — no session history is loaded or accumulated between executions. Default: false.",
 			},
 		},
 		"required": []string{"action"},
@@ -234,6 +238,10 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	}
 	if msgType != "" {
 		job.Payload.Type = msgType
+		needsUpdate = true
+	}
+	if noHistory, ok := args["no_history"].(bool); ok && noHistory {
+		job.Payload.NoHistory = true
 		needsUpdate = true
 	}
 	if needsUpdate {
@@ -391,6 +399,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		sessionKey,
 		channel,
 		chatID,
+		job.Payload.NoHistory,
 	)
 	if err != nil {
 		return err.Error()

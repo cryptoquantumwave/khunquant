@@ -29,6 +29,7 @@ type stubJobExecutor struct {
 func (s *stubJobExecutor) ProcessDirectWithChannel(
 	_ context.Context,
 	content, sessionKey, channel, chatID string,
+	_ bool,
 ) (string, error) {
 	s.lastPrompt = content
 	s.lastKey = sessionKey

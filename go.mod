@@ -24,7 +24,6 @@ require (
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.0
-	github.com/sipeed/picoclaw v0.2.7
 	github.com/slack-go/slack v0.17.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
@@ -56,6 +55,7 @@ require (
 	github.com/elliottech/poseidon_crypto v0.0.11 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.5 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
+	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

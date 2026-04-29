@@ -677,6 +677,13 @@ func (b *BitkubExchange) fetchTradingViewHistory(ctx context.Context, symbol, ti
 		from = *since / 1000 // ms → s
 	} else {
 		from = now - int64(limit)*tfSecs
+		// For thinly-traded pairs, a limit×timeframe window may return far fewer bars
+		// than requested (e.g. TON/THB averages one 5m candle per hour).
+		// Always look back at least 7 days so sparse pairs accumulate enough bars.
+		minFrom := now - 7*86400
+		if from > minFrom {
+			from = minFrom
+		}
 	}
 
 	params := url.Values{}

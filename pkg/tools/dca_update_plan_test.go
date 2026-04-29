@@ -233,9 +233,11 @@ func TestUpdateDCAPlan_GuardrailUpdate(t *testing.T) {
 	tool := newTestUpdatePlanTool(t, store, cronSvc)
 
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_id":             float64(planID),
-		"max_exec_per_period": float64(3),
-		"exec_period":         "day",
+		"plan_id": float64(planID),
+		"guardrails": map[string]any{
+			"max_executions_per_period": float64(3),
+			"period":                   "day",
+		},
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -257,9 +259,8 @@ func TestUpdateDCAPlan_NotifyRouting(t *testing.T) {
 	tool := newTestUpdatePlanTool(t, store, cronSvc)
 
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_id":        float64(planID),
-		"notify_channel": "line",
-		"notify_chat_id": "line-user-42",
+		"plan_id": float64(planID),
+		"notify":  map[string]any{"channel": "line", "chat_id": "line-user-42"},
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -281,8 +282,8 @@ func TestUpdateDCAPlan_ScheduleChange(t *testing.T) {
 	tool := newTestUpdatePlanTool(t, store, cronSvc)
 
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_id":        float64(planID),
-		"frequency_expr": "0 12 * * *", // daily at noon
+		"plan_id":  float64(planID),
+		"schedule": map[string]any{"cron": "0 12 * * *"}, // daily at noon
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error on schedule change: %s", result.ForLLM)
@@ -316,8 +317,8 @@ func TestUpdateDCAPlan_ScheduleChange_NoHistory(t *testing.T) {
 	tool := newTestUpdatePlanTool(t, store, cronSvc)
 
 	tool.Execute(testCtx(), map[string]any{
-		"plan_id":        float64(planID),
-		"frequency_expr": "*/30 * * * *",
+		"plan_id":  float64(planID),
+		"schedule": map[string]any{"cron": "*/30 * * * *"},
 	})
 
 	got, _ := store.GetPlan(context.Background(), planID)
@@ -346,8 +347,8 @@ func TestUpdateDCAPlan_InvalidCronExpr(t *testing.T) {
 	tool := newTestUpdatePlanTool(t, store, cronSvc)
 
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_id":        float64(planID),
-		"frequency_expr": "not-a-cron",
+		"plan_id":  float64(planID),
+		"schedule": map[string]any{"cron": "not-a-cron"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error for invalid cron expression")

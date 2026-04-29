@@ -41,7 +41,7 @@ func TestCreateDCAPlan_MissingPlanName(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error when plan_name is missing")
@@ -54,7 +54,7 @@ func TestCreateDCAPlan_MissingProvider(t *testing.T) {
 		"plan_name":        "Test",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error when provider is missing")
@@ -68,7 +68,7 @@ func TestCreateDCAPlan_InvalidAmount(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(0),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error for amount_per_order=0")
@@ -82,14 +82,14 @@ func TestCreateDCAPlan_InvalidCronExpr(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "not-valid-cron",
+		"schedule":         map[string]any{"cron": "not-valid-cron"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error for invalid cron expression")
 	}
 }
 
-func TestCreateDCAPlan_NoFrequencyExpr(t *testing.T) {
+func TestCreateDCAPlan_NoSchedule(t *testing.T) {
 	tool := newTestCreatePlanTool(t)
 	result := tool.Execute(testCtx(), map[string]any{
 		"plan_name":        "Test",
@@ -98,10 +98,10 @@ func TestCreateDCAPlan_NoFrequencyExpr(t *testing.T) {
 		"amount_per_order": float64(100),
 	})
 	if !result.IsError {
-		t.Fatal("expected error when frequency_expr is missing and trigger_type is not indicator")
+		t.Fatal("expected error when schedule.cron and trigger are both absent")
 	}
-	if !strings.Contains(result.ForLLM, "frequency_expr is required") {
-		t.Errorf("expected 'frequency_expr is required', got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "schedule.cron is required") {
+		t.Errorf("expected 'schedule.cron is required', got: %s", result.ForLLM)
 	}
 }
 
@@ -115,9 +115,8 @@ func TestCreateDCAPlan_Success(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(500),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+		"notify":           map[string]any{"channel": "test", "chat_id": "user-1"},
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -126,7 +125,6 @@ func TestCreateDCAPlan_Success(t *testing.T) {
 		t.Errorf("expected success message, got: %s", result.ForUser)
 	}
 
-	// Verify plan persisted in store
 	plans, err := store.ListPlans(context.Background(), dca.QueryFilter{})
 	if err != nil {
 		t.Fatalf("ListPlans: %v", err)
@@ -148,9 +146,7 @@ func TestCreateDCAPlan_DefaultSideBuy(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 
 	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -172,9 +168,7 @@ func TestCreateDCAPlan_SellSide(t *testing.T) {
 		"symbol":           "BTC/THB",
 		"side":             "sell",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 
 	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -195,10 +189,8 @@ func TestCreateDCAPlan_WithEndDate(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 		"end_date":         "2099-12-31",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -221,20 +213,22 @@ func TestCreateDCAPlan_WithIndicatorTrigger(t *testing.T) {
 	tool := NewCreateDCAPlanTool(config.DefaultConfig(), store, newTestCronService(t))
 
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_name":          "RSI DCA",
-		"provider":           "bitkub",
-		"symbol":             "BTC/THB",
-		"amount_per_order":   float64(100),
-		"trigger_type":       "indicator",
-		"trigger_indicator":  "rsi",
-		"trigger_condition":  "oversold",
-		"trigger_timeframe":  "1h",
-		"notify_channel":     "test",
-		"notify_chat_id":     "user-1",
+		"plan_name":        "RSI DCA",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(100),
+		"trigger": map[string]any{
+			"timeframe": "1h",
+			"indicators": []any{
+				map[string]any{"alias": "rsi14", "kind": "rsi", "params": map[string]any{"period": float64(14)}},
+			},
+			"expression": "rsi14 < 30",
+		},
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
 	}
+	// Auto-derived cron for 1h should appear in output.
 	if !strings.Contains(result.ForUser, "0 * * * *") {
 		t.Errorf("expected auto-derived 1h cron '0 * * * *' in output, got: %s", result.ForUser)
 	}
@@ -243,86 +237,116 @@ func TestCreateDCAPlan_WithIndicatorTrigger(t *testing.T) {
 	if len(plans) == 0 {
 		t.Fatal("expected plan to be created")
 	}
-	if plans[0].TriggerConfig == nil {
-		t.Fatal("expected TriggerConfig to be set")
+	if plans[0].Trigger == nil {
+		t.Fatal("expected Trigger to be set")
 	}
-	if plans[0].TriggerConfig.Indicator != "rsi" {
-		t.Errorf("indicator = %q, want rsi", plans[0].TriggerConfig.Indicator)
+	if plans[0].Trigger.Expression != "rsi14 < 30" {
+		t.Errorf("expression = %q, want rsi14 < 30", plans[0].Trigger.Expression)
 	}
-}
-
-func TestCreateDCAPlan_IndicatorMissingIndicator(t *testing.T) {
-	tool := newTestCreatePlanTool(t)
-	result := tool.Execute(testCtx(), map[string]any{
-		"plan_name":         "Test",
-		"provider":          "bitkub",
-		"symbol":            "BTC/THB",
-		"amount_per_order":  float64(100),
-		"trigger_type":      "indicator",
-		"trigger_condition": "oversold",
-		"trigger_timeframe": "1h",
-		"notify_channel":    "test",
-		"notify_chat_id":    "user-1",
-	})
-	if !result.IsError {
-		t.Fatal("expected error when trigger_indicator is missing")
+	if len(plans[0].Trigger.Indicators) != 1 || plans[0].Trigger.Indicators[0].Alias != "rsi14" {
+		t.Errorf("unexpected indicators: %+v", plans[0].Trigger.Indicators)
 	}
 }
 
-func TestCreateDCAPlan_IndicatorMissingCondition(t *testing.T) {
+func TestCreateDCAPlan_TriggerMissingTimeframe(t *testing.T) {
 	tool := newTestCreatePlanTool(t)
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_name":         "Test",
-		"provider":          "bitkub",
-		"symbol":            "BTC/THB",
-		"amount_per_order":  float64(100),
-		"trigger_type":      "indicator",
-		"trigger_indicator": "rsi",
-		"trigger_timeframe": "1h",
-		"notify_channel":    "test",
-		"notify_chat_id":    "user-1",
+		"plan_name":        "Test",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(100),
+		"trigger": map[string]any{
+			// missing timeframe
+			"expression": "rsi14 < 30",
+		},
 	})
 	if !result.IsError {
-		t.Fatal("expected error when trigger_condition is missing")
+		t.Fatal("expected error when trigger.timeframe is missing")
 	}
 }
 
-func TestCreateDCAPlan_IndicatorMissingTimeframe(t *testing.T) {
+func TestCreateDCAPlan_TriggerMissingExpression(t *testing.T) {
 	tool := newTestCreatePlanTool(t)
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_name":         "Test",
-		"provider":          "bitkub",
-		"symbol":            "BTC/THB",
-		"amount_per_order":  float64(100),
-		"trigger_type":      "indicator",
-		"trigger_indicator": "rsi",
-		"trigger_condition": "oversold",
-		"notify_channel":    "test",
-		"notify_chat_id":    "user-1",
+		"plan_name":        "Test",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(100),
+		"trigger": map[string]any{
+			"timeframe": "1h",
+			// missing expression
+		},
 	})
 	if !result.IsError {
-		t.Fatal("expected error when trigger_timeframe is missing")
+		t.Fatal("expected error when trigger.expression is missing")
+	}
+}
+
+func TestCreateDCAPlan_TriggerBadAlias(t *testing.T) {
+	// Compile-time check: expression references alias not declared in indicators.
+	tool := newTestCreatePlanTool(t)
+	result := tool.Execute(testCtx(), map[string]any{
+		"plan_name":        "Test",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(100),
+		"trigger": map[string]any{
+			"timeframe": "1h",
+			"indicators": []any{
+				map[string]any{"alias": "rsi14", "kind": "rsi"},
+			},
+			"expression": "rs14 < 30", // typo: rs14 instead of rsi14
+		},
+	})
+	if !result.IsError {
+		t.Fatal("expected compile error for undefined alias rs14")
+	}
+}
+
+func TestCreateDCAPlan_TriggerLookbackClamped(t *testing.T) {
+	tc, errResult := parseTrigger(map[string]any{
+		"timeframe":  "1h",
+		"lookback":   float64(9999), // above max 1000
+		"expression": "close > open",
+	})
+	if errResult != nil {
+		t.Fatalf("expected no error, got: %s", errResult.ForLLM)
+	}
+	if tc.Lookback != 1000 {
+		t.Errorf("lookback clamped to %d, want 1000", tc.Lookback)
+	}
+}
+
+func TestCreateDCAPlan_TriggerLookbackMinimum(t *testing.T) {
+	tc, errResult := parseTrigger(map[string]any{
+		"timeframe":  "1h",
+		"lookback":   float64(5), // below min 30
+		"expression": "close > open",
+	})
+	if errResult != nil {
+		t.Fatalf("expected no error, got: %s", errResult.ForLLM)
+	}
+	if tc.Lookback != 30 {
+		t.Errorf("lookback clamped to %d, want 30", tc.Lookback)
 	}
 }
 
 func TestCreateDCAPlan_GuardrailMissingPeriod(t *testing.T) {
 	tool := newTestCreatePlanTool(t)
 	result := tool.Execute(testCtx(), map[string]any{
-		"plan_name":           "Test",
-		"provider":            "bitkub",
-		"symbol":              "BTC/THB",
-		"amount_per_order":    float64(100),
-		"frequency_expr":      "0 9 * * 1",
-		"max_exec_per_period": float64(2),
-		// missing exec_period
-		"notify_channel": "test",
-		"notify_chat_id": "user-1",
+		"plan_name":        "Test",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(100),
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+		"guardrails":       map[string]any{"max_executions_per_period": float64(2)},
+		// missing guardrails.period
 	})
 	if !result.IsError {
-		t.Fatal("expected error when exec_period is missing but max_exec_per_period is set")
+		t.Fatal("expected error when guardrails.period is missing but max_executions_per_period is set")
 	}
-	if !strings.Contains(result.ForLLM, "exec_period is required") {
-		t.Errorf("expected 'exec_period is required', got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "guardrails.period is required") {
+		t.Errorf("expected 'guardrails.period is required', got: %s", result.ForLLM)
 	}
 }
 
@@ -336,9 +360,7 @@ func TestCreateDCAPlan_NoHistoryOnJob(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -369,10 +391,8 @@ func TestCreateDCAPlan_StartDate(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 		"start_date":       "2025-01-15",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -394,10 +414,8 @@ func TestCreateDCAPlan_InvalidEndDate(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 		"end_date":         "not-a-date",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
 	})
 	if !result.IsError {
 		t.Fatal("expected error for invalid end_date")
@@ -412,7 +430,7 @@ func TestCreateDCAPlan_InvalidSide(t *testing.T) {
 		"symbol":           "BTC/THB",
 		"side":             "hold",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 	if !result.IsError {
 		t.Fatal("expected error for invalid side")
@@ -431,7 +449,7 @@ func TestCreateDCAPlan_NotifyDefaultsToContext(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 
 	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -457,9 +475,7 @@ func TestCreateDCAPlan_CronJobIDPersisted(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 
 	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -468,49 +484,6 @@ func TestCreateDCAPlan_CronJobIDPersisted(t *testing.T) {
 	}
 	if plans[0].CronJobID == "" {
 		t.Error("expected CronJobID to be stored in plan")
-	}
-}
-
-// buildTriggerConfig validation: period limits
-func TestBuildTriggerConfig_CandleLimitCapped(t *testing.T) {
-	args := map[string]any{
-		"trigger_indicator":    "rsi",
-		"trigger_condition":    "oversold",
-		"trigger_timeframe":    "1h",
-		"trigger_candle_limit": float64(1000),
-	}
-	tc, result := buildTriggerConfig(args)
-	if result != nil {
-		t.Fatalf("expected no error, got: %s", result.ForLLM)
-	}
-	if tc.Limit != 500 {
-		t.Errorf("candle_limit capped to %d, want 500", tc.Limit)
-	}
-}
-
-func TestBuildTriggerConfig_CustomPeriods(t *testing.T) {
-	args := map[string]any{
-		"trigger_indicator":  "macd",
-		"trigger_condition":  "histogram_positive",
-		"trigger_timeframe":  "4h",
-		"trigger_period":     float64(10),
-		"trigger_period2":    float64(20),
-		"trigger_period3":    float64(5),
-		"trigger_multiplier": float64(1.5),
-		"trigger_threshold":  float64(35.0),
-	}
-	tc, result := buildTriggerConfig(args)
-	if result != nil {
-		t.Fatalf("expected no error, got: %s", result.ForLLM)
-	}
-	if tc.Period != 10 || tc.Period2 != 20 || tc.Period3 != 5 {
-		t.Errorf("periods = %d/%d/%d, want 10/20/5", tc.Period, tc.Period2, tc.Period3)
-	}
-	if tc.Multiplier != 1.5 {
-		t.Errorf("multiplier = %g, want 1.5", tc.Multiplier)
-	}
-	if tc.Threshold != 35.0 {
-		t.Errorf("threshold = %g, want 35.0", tc.Threshold)
 	}
 }
 
@@ -524,10 +497,8 @@ func TestCreateDCAPlan_PastEndDate(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 		"end_date":         "2020-01-01",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
 	})
 	if result.IsError {
 		t.Fatalf("creation with past end_date should succeed: %s", result.ForLLM)
@@ -548,9 +519,7 @@ func TestCreateDCAPlan_DefaultTimezone(t *testing.T) {
 		"provider":         "bitkub",
 		"symbol":           "BTC/THB",
 		"amount_per_order": float64(100),
-		"frequency_expr":   "0 9 * * 1",
-		"notify_channel":   "test",
-		"notify_chat_id":   "user-1",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
 	})
 
 	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -562,3 +531,66 @@ func TestCreateDCAPlan_DefaultTimezone(t *testing.T) {
 	}
 }
 
+func TestCreateDCAPlan_AmountUnitBase(t *testing.T) {
+	store := newTestDCAStore(t)
+	tool := NewCreateDCAPlanTool(config.DefaultConfig(), store, newTestCronService(t))
+
+	result := tool.Execute(testCtx(), map[string]any{
+		"plan_name":        "BTC Base Units",
+		"provider":         "bitkub",
+		"symbol":           "BTC/THB",
+		"amount_per_order": float64(0.001),
+		"amount_unit":      "base",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
+	if len(plans) == 0 {
+		t.Fatal("expected plan to be created")
+	}
+	if plans[0].AmountUnit != "base" {
+		t.Errorf("AmountUnit = %q, want base", plans[0].AmountUnit)
+	}
+}
+
+func TestCreateDCAPlan_SettradeDefaultsToBase(t *testing.T) {
+	store := newTestDCAStore(t)
+	tool := NewCreateDCAPlanTool(config.DefaultConfig(), store, newTestCronService(t))
+
+	result := tool.Execute(testCtx(), map[string]any{
+		"plan_name":        "PTT Shares",
+		"provider":         "settrade",
+		"symbol":           "PTT",
+		"amount_per_order": float64(10),
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	plans, _ := store.ListPlans(context.Background(), dca.QueryFilter{})
+	if len(plans) == 0 {
+		t.Fatal("expected plan to be created")
+	}
+	if plans[0].AmountUnit != "base" {
+		t.Errorf("AmountUnit = %q, want base (auto-defaulted for settrade)", plans[0].AmountUnit)
+	}
+}
+
+func TestCreateDCAPlan_SettradeRejectsQuoteUnit(t *testing.T) {
+	tool := newTestCreatePlanTool(t)
+	result := tool.Execute(testCtx(), map[string]any{
+		"plan_name":        "PTT Quote",
+		"provider":         "settrade",
+		"symbol":           "PTT",
+		"amount_per_order": float64(1000),
+		"amount_unit":      "quote",
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+	})
+	if !result.IsError {
+		t.Fatal("expected error when using amount_unit=quote with settrade")
+	}
+}

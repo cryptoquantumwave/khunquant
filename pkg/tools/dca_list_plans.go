@@ -59,8 +59,12 @@ func (t *ListDCAPlansTool) Execute(ctx context.Context, args map[string]any) *To
 		}
 		sb.WriteString(fmt.Sprintf("  [%d] %s — %s\n", p.ID, p.Name, status))
 		sb.WriteString(fmt.Sprintf("      Symbol:        %s on %s\n", p.Symbol, p.Provider))
-		sb.WriteString(fmt.Sprintf("      Amount/order:  %.2f\n", p.AmountPerOrder))
+		sb.WriteString(fmt.Sprintf("      Amount/order:  %.4g %s\n", p.AmountPerOrder, amountUnitLabel(p.AmountUnit, p.Symbol)))
+		sb.WriteString(fmt.Sprintf("      Side:          %s\n", p.Side))
 		sb.WriteString(fmt.Sprintf("      Schedule:      %s (%s)\n", p.FrequencyExpr, p.Timezone))
+		if p.Trigger != nil {
+			sb.WriteString(fmt.Sprintf("      Trigger:       %s @ %s\n", p.Trigger.Expression, p.Trigger.Timeframe))
+		}
 		if p.TotalInvested > 0 {
 			sb.WriteString(fmt.Sprintf("      Total invested: %.2f | Avg cost: %.4f | Qty: %.6f\n",
 				p.TotalInvested, p.AvgCost, p.TotalQuantity))

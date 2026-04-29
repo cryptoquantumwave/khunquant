@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adhocore/gronx"
@@ -25,108 +26,121 @@ func NewCreateDCAPlanTool(cfg *config.Config, store *dca.Store, cronService *cro
 func (t *CreateDCAPlanTool) Name() string { return NameCreateDCAPlan }
 
 func (t *CreateDCAPlanTool) Description() string {
-	return "Create a new DCA (Dollar Cost Averaging) plan. Supports buy (DCA-in) and sell (DCA-out) sides. " +
-		"Plans can execute on a fixed cron schedule OR be triggered by a technical indicator condition " +
-		"(RSI oversold/overbought, Bollinger Band touch, MACD crossover, SMA/EMA cross, Stochastic, ATR, VWAP). " +
-		"Optional guardrails limit how many times per hour/day/week the plan can execute. " +
-		"Results are automatically delivered back to the channel and user who created the plan."
+	return "Create a new DCA (Dollar Cost Averaging) plan.\n" +
+		"Supports buy (DCA-in) and sell (DCA-out) sides.\n" +
+		"amount_unit controls whether amount_per_order is in quote currency (crypto default) or base units (shares for Settrade stocks).\n" +
+		"Plans execute on a fixed cron schedule; an optional trigger gates execution on indicator conditions.\n" +
+		"The trigger.expression is a boolean formula referencing indicator aliases and bar variables " +
+		"(close, open, high, low, volume, *_prev variants). Examples: " +
+		"\"rsi14 < 30\" — buy when RSI(14) is oversold; " +
+		"\"m.histogram > 0 and m.histogram_prev <= 0\" — MACD histogram just flipped positive; " +
+		"\"close < bb.lower and rsi14 < 40\" — price below BB lower band AND RSI under 40.\n" +
+		"The expression is compiled at create time — typos in alias names cause an immediate error."
 }
 
 func (t *CreateDCAPlanTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			// Core plan fields
-			"plan_name":        map[string]any{"type": "string", "description": "Human-readable plan name (e.g. 'RSI TON Buy')."},
-			"provider":         map[string]any{"type": "string", "description": "Exchange/provider name (e.g. 'bitkub', 'binance')."},
-			"account":          map[string]any{"type": "string", "description": "Account name (empty = default)."},
-			"symbol":           map[string]any{"type": "string", "description": "Trading pair in CCXT format (e.g. 'BTC/USDT', 'TON/THB')."},
-			"amount_per_order": map[string]any{"type": "number", "description": "Quote currency amount per execution (e.g. 30 for 30 THB)."},
+			"plan_name": map[string]any{"type": "string", "description": "Unique human-readable plan name (e.g. 'BTC RSI Dip Buy')."},
+			"provider":  map[string]any{"type": "string", "description": "Exchange/provider ID (e.g. 'bitkub', 'binance', 'settrade')."},
+			"account":   map[string]any{"type": "string", "description": "Account name. Leave empty for the default account."},
+			"symbol":    map[string]any{"type": "string", "description": "Trading pair in CCXT format (e.g. 'BTC/USDT', 'PTT/THB')."},
 			"side": map[string]any{
 				"type":        "string",
 				"enum":        []string{"buy", "sell"},
 				"description": "Order side: 'buy' (DCA-in, default) or 'sell' (DCA-out).",
 			},
+			"amount_per_order": map[string]any{
+				"type":        "number",
+				"description": "Amount per execution. Interpreted according to amount_unit.",
+			},
+			"amount_unit": map[string]any{
+				"type": "string",
+				"enum": []string{"quote", "base"},
+				"description": "Unit of amount_per_order. " +
+					"'quote' (default for non-Settrade): quote-currency budget; the tool divides by current price to get the base quantity. " +
+					"'base': base-asset quantity passed directly to CreateOrder. " +
+					"Required for Settrade stocks — use 'base' and set amount_per_order to the share count (e.g. 10 for 10 PTT shares). " +
+					"Also useful for crypto: 'DCA 0.001 BTC weekly' uses amount_unit=base.",
+			},
+			"schedule": map[string]any{
+				"type":        "object",
+				"description": "Cron schedule. Required unless trigger.timeframe is set (cron is then auto-derived from the timeframe).",
+				"properties": map[string]any{
+					"cron":     map[string]any{"type": "string", "description": "5-field cron expression (e.g. '0 9 * * 1' = Monday 9am)."},
+					"timezone": map[string]any{"type": "string", "description": "IANA timezone (e.g. 'Asia/Bangkok'). Defaults to UTC."},
+				},
+			},
 			"start_date": map[string]any{"type": "string", "description": "ISO 8601 start date (YYYY-MM-DD). Defaults to today."},
 			"end_date":   map[string]any{"type": "string", "description": "Optional ISO 8601 end date. Omit for ongoing."},
-			"timezone": map[string]any{
-				"type":        "string",
-				"description": "IANA timezone for the cron expression (e.g. 'Asia/Bangkok'). Defaults to UTC.",
+			"trigger": map[string]any{
+				"type": "object",
+				"description": "Optional indicator trigger. When present, the plan only executes when expression evaluates to true. " +
+					"Omit for unconditional schedule-based execution.",
+				"properties": map[string]any{
+					"timeframe": map[string]any{
+						"type":        "string",
+						"enum":        []string{"1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "1w"},
+						"description": "Candle timeframe for indicator calculation. The cron schedule is auto-derived from this when schedule is omitted.",
+					},
+					"lookback": map[string]any{
+						"type":        "integer",
+						"description": "Number of OHLCV bars to fetch (default 200, min 30, max 1000). Rule of thumb: lookback >= max_period * 5.",
+					},
+					"indicators": map[string]any{
+						"type":        "array",
+						"description": "List of named indicator instances. Each alias becomes a variable in the expression.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"alias": map[string]any{"type": "string", "description": "Variable name used in expression (e.g. 'rsi14', 'ema50', 'm')."},
+								"kind":  map[string]any{"type": "string", "enum": []string{"rsi", "sma", "ema", "macd", "bb", "atr", "stoch", "vwap"}},
+								"params": map[string]any{
+									"type": "object",
+									"description": "Indicator-specific parameters. " +
+										"rsi: {period}. sma/ema: {period}. " +
+										"macd: {fast, slow, signal}. bb: {period, stddev}. " +
+										"atr: {period}. stoch: {k, d}. vwap: {} (no params). " +
+										"All params are optional and fall back to sensible defaults.",
+								},
+							},
+							"required": []string{"alias", "kind"},
+						},
+					},
+					"expression": map[string]any{
+						"type": "string",
+						"description": "Boolean expression. Operators: < <= > >= == != and or not. " +
+							"Scalar indicator value: alias (e.g. rsi14). Previous bar: alias_prev (e.g. rsi14_prev). " +
+							"MACD sub-fields: alias.macd alias.signal alias.histogram (and *_prev variants inside the same map). " +
+							"BB: alias.upper alias.middle alias.lower. Stoch: alias.k alias.d. " +
+							"Bar variables: close open high low volume (and *_prev). " +
+							"Cross-above pattern: val > threshold and val_prev <= threshold. " +
+							"Examples: \"rsi14 < 30\", \"m.histogram > 0 and m.histogram_prev <= 0\", " +
+							"\"rsi7 < 25 and close > sma200\", \"close < bb.lower\".",
+					},
+				},
+				"required": []string{"timeframe", "expression"},
 			},
-
-			// Schedule — required for schedule-based plans; auto-derived for indicator-based plans
-			"frequency_expr": map[string]any{
-				"type":        "string",
-				"description": "Cron expression (e.g. '0 9 * * 1'). Required for schedule-based plans. Auto-derived from trigger_timeframe when trigger_type=indicator.",
+			"guardrails": map[string]any{
+				"type":        "object",
+				"description": "Optional execution guardrails to prevent over-trading.",
+				"properties": map[string]any{
+					"max_executions_per_period": map[string]any{"type": "integer", "description": "Maximum executions allowed per period. 0 = unlimited."},
+					"period": map[string]any{
+						"type":        "string",
+						"enum":        []string{"hour", "day", "week"},
+						"description": "Time window for the guardrail counter.",
+					},
+				},
 			},
-
-			// Indicator trigger
-			"trigger_type": map[string]any{
-				"type":        "string",
-				"enum":        []string{"schedule", "indicator"},
-				"description": "'schedule' (default) executes on the cron schedule. 'indicator' checks a TA condition each tick before executing.",
-			},
-			"trigger_indicator": map[string]any{
-				"type":        "string",
-				"enum":        []string{"sma", "ema", "rsi", "macd", "bb", "atr", "stoch", "vwap"},
-				"description": "Technical indicator to evaluate. Required when trigger_type=indicator.",
-			},
-			"trigger_condition": map[string]any{
-				"type": "string",
-				"description": "Condition to check. rsi: oversold|overbought. sma/ema: price_above|price_below|cross_above|cross_below. " +
-					"macd: histogram_positive|histogram_negative|macd_above_signal|macd_below_signal. " +
-					"bb: touch_upper|touch_lower|outside_upper|outside_lower. " +
-					"atr: above_threshold|below_threshold. stoch: oversold|overbought. vwap: price_above|price_below.",
-			},
-			"trigger_timeframe": map[string]any{
-				"type":        "string",
-				"enum":        []string{"1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "1w"},
-				"description": "Candle timeframe for indicator calculation. Required when trigger_type=indicator. The cron check interval is auto-derived from this value.",
-			},
-			"trigger_period": map[string]any{
-				"type":        "integer",
-				"description": "Primary indicator period (RSI default 14; SMA/EMA/BB default 20; ATR/Stoch default 14).",
-			},
-			"trigger_period2": map[string]any{
-				"type":        "integer",
-				"description": "Secondary period (EMA slow default 50; MACD slow default 26; Stoch D default 3).",
-			},
-			"trigger_period3": map[string]any{
-				"type":        "integer",
-				"description": "Tertiary period (MACD signal default 9).",
-			},
-			"trigger_multiplier": map[string]any{
-				"type":        "number",
-				"description": "BB std-dev multiplier (default 2.0).",
-			},
-			"trigger_threshold": map[string]any{
-				"type":        "number",
-				"description": "Custom threshold level: RSI oversold/overbought level, ATR comparison value, Stoch level.",
-			},
-			"trigger_candle_limit": map[string]any{
-				"type":        "integer",
-				"description": "OHLCV bars to fetch for indicator calculation (default 100, min 20, max 500).",
-			},
-
-			// Guardrails
-			"max_exec_per_period": map[string]any{
-				"type":        "integer",
-				"description": "Maximum number of executions allowed per period. 0 = unlimited.",
-			},
-			"exec_period": map[string]any{
-				"type":        "string",
-				"enum":        []string{"hour", "day", "week"},
-				"description": "Time period for the execution count guardrail.",
-			},
-
-			// Notification routing
-			"notify_channel": map[string]any{
-				"type":        "string",
-				"description": "Channel to send execution results to. Defaults to the channel of the current conversation.",
-			},
-			"notify_chat_id": map[string]any{
-				"type":        "string",
-				"description": "ChatID/UserID to send results to. Defaults to the current conversation participant.",
+			"notify": map[string]any{
+				"type":        "object",
+				"description": "Notification routing. Defaults to the current conversation context.",
+				"properties": map[string]any{
+					"channel": map[string]any{"type": "string", "description": "Channel to send execution results to."},
+					"chat_id": map[string]any{"type": "string", "description": "ChatID/UserID for delivery."},
+				},
 			},
 		},
 		"required": []string{"plan_name", "provider", "symbol", "amount_per_order"},
@@ -140,13 +154,8 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	symbol, _ := args["symbol"].(string)
 	amountPerOrder, _ := args["amount_per_order"].(float64)
 	side, _ := args["side"].(string)
-	frequencyExpr, _ := args["frequency_expr"].(string)
-	timezone, _ := args["timezone"].(string)
 	startDateStr, _ := args["start_date"].(string)
 	endDateStr, _ := args["end_date"].(string)
-	triggerType, _ := args["trigger_type"].(string)
-	notifyChannel, _ := args["notify_channel"].(string)
-	notifyChatID, _ := args["notify_chat_id"].(string)
 
 	if planName == "" || providerID == "" || symbol == "" {
 		return ErrorResult("plan_name, provider, and symbol are required")
@@ -160,28 +169,59 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	if side != "buy" && side != "sell" {
 		return ErrorResult("side must be 'buy' or 'sell'")
 	}
+
+	// Resolve amount_unit with provider-aware default.
+	amountUnit := "quote"
+	if v, ok := args["amount_unit"].(string); ok && v != "" {
+		amountUnit = v
+	} else if strings.EqualFold(providerID, "settrade") {
+		amountUnit = "base"
+	}
+	if amountUnit != "quote" && amountUnit != "base" {
+		return ErrorResult("amount_unit must be 'quote' or 'base'")
+	}
+	if strings.EqualFold(providerID, "settrade") && amountUnit == "quote" {
+		return ErrorResult("Settrade stocks are ordered in share units — set amount_unit='base' and amount_per_order to the number of shares (e.g. 10 for 10 shares)")
+	}
+	if amountUnit == "base" && strings.EqualFold(providerID, "settrade") {
+		if amountPerOrder < 1 || amountPerOrder != float64(int(amountPerOrder)) {
+			return ErrorResult("Settrade share orders must be whole numbers (e.g. amount_per_order=10)")
+		}
+	}
+
+	// Schedule.
+	var frequencyExpr, timezone string
+	if sched, ok := args["schedule"].(map[string]any); ok {
+		frequencyExpr, _ = sched["cron"].(string)
+		timezone, _ = sched["timezone"].(string)
+	}
 	if timezone == "" {
 		timezone = "UTC"
 	}
 
-	// Default notification routing to the current conversation context.
-	if notifyChannel == "" {
-		notifyChannel = ToolChannel(ctx)
-	}
-	if notifyChatID == "" {
-		notifyChatID = ToolChatID(ctx)
+	// Notification routing — default to current conversation context.
+	notifyChannel := ToolChannel(ctx)
+	notifyChatID := ToolChatID(ctx)
+	if notif, ok := args["notify"].(map[string]any); ok {
+		if v, _ := notif["channel"].(string); v != "" {
+			notifyChannel = v
+		}
+		if v, _ := notif["chat_id"].(string); v != "" {
+			notifyChatID = v
+		}
 	}
 
-	var triggerConfig *dca.TriggerConfig
-	if triggerType == "indicator" {
-		tc, errResult := buildTriggerConfig(args)
+	// Parse trigger.
+	var trigger *dca.Trigger
+	if trigMap, ok := args["trigger"].(map[string]any); ok {
+		tc, errResult := parseTrigger(trigMap)
 		if errResult != nil {
 			return errResult
 		}
-		triggerConfig = tc
-		// Auto-derive cron from timeframe when not explicitly provided.
+		trigger = tc
+		// Auto-derive schedule from timeframe when not explicitly set.
 		if frequencyExpr == "" {
-			derived, err := timeframeToCron(tc.Timeframe)
+			derived, err := dca.TimeframeToCron(tc.Timeframe)
 			if err != nil {
 				return ErrorResult(fmt.Sprintf("cannot derive schedule from timeframe: %v", err))
 			}
@@ -190,11 +230,24 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if frequencyExpr == "" {
-		return ErrorResult("frequency_expr is required for schedule-based plans (or set trigger_type=indicator with trigger_timeframe)")
+		return ErrorResult("schedule.cron is required for plans without a trigger (or set trigger.timeframe to auto-derive it)")
 	}
 	gx := gronx.New()
 	if !gx.IsValid(frequencyExpr) {
-		return ErrorResult(fmt.Sprintf("invalid cron expression %q — use standard 5-field cron format (e.g. '*/15 * * * *')", frequencyExpr))
+		return ErrorResult(fmt.Sprintf("invalid cron expression %q — use standard 5-field format (e.g. '*/15 * * * *')", frequencyExpr))
+	}
+
+	// Guardrails.
+	maxExec := 0
+	execPeriod := ""
+	if gr, ok := args["guardrails"].(map[string]any); ok {
+		if v, ok := gr["max_executions_per_period"].(float64); ok {
+			maxExec = int(v)
+		}
+		execPeriod, _ = gr["period"].(string)
+	}
+	if maxExec > 0 && execPeriod == "" {
+		return ErrorResult("guardrails.period is required when max_executions_per_period > 0 (use 'hour', 'day', or 'week')")
 	}
 
 	startDate := time.Now().UTC()
@@ -203,7 +256,7 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		if err != nil {
 			parsed, err = time.Parse(time.RFC3339, startDateStr)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("invalid start_date %q — use YYYY-MM-DD format", startDateStr))
+				return ErrorResult(fmt.Sprintf("invalid start_date %q — use YYYY-MM-DD", startDateStr))
 			}
 		}
 		startDate = parsed
@@ -215,19 +268,10 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		if err != nil {
 			parsed, err = time.Parse(time.RFC3339, endDateStr)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("invalid end_date %q — use YYYY-MM-DD format", endDateStr))
+				return ErrorResult(fmt.Sprintf("invalid end_date %q — use YYYY-MM-DD", endDateStr))
 			}
 		}
 		endDate = &parsed
-	}
-
-	maxExec := 0
-	if v, ok := args["max_exec_per_period"].(float64); ok {
-		maxExec = int(v)
-	}
-	execPeriod, _ := args["exec_period"].(string)
-	if maxExec > 0 && execPeriod == "" {
-		return ErrorResult("exec_period is required when max_exec_per_period is set (use 'hour', 'day', or 'week')")
 	}
 
 	now := time.Now().UTC()
@@ -237,13 +281,14 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		Account:          account,
 		Symbol:           symbol,
 		AmountPerOrder:   amountPerOrder,
+		AmountUnit:       amountUnit,
 		FrequencyExpr:    frequencyExpr,
 		Timezone:         timezone,
 		StartDate:        startDate,
 		EndDate:          endDate,
 		Enabled:          true,
 		Side:             side,
-		TriggerConfig:    triggerConfig,
+		Trigger:          trigger,
 		MaxExecPerPeriod: maxExec,
 		ExecPeriod:       execPeriod,
 		NotifyChannel:    notifyChannel,
@@ -278,21 +323,20 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("failed to update plan with cron job ID: %v", err))
 	}
 
+	amountDesc := fmt.Sprintf("%.4g %s", amountPerOrder, amountUnitLabel(amountUnit, symbol))
+
 	out := "DCA plan created successfully!\n\n"
 	out += fmt.Sprintf("  Plan ID:       %d\n", planID)
 	out += fmt.Sprintf("  Name:          %s\n", planName)
 	out += fmt.Sprintf("  Symbol:        %s on %s\n", symbol, providerID)
 	out += fmt.Sprintf("  Side:          %s\n", side)
-	out += fmt.Sprintf("  Amount/order:  %.2f (quote currency)\n", amountPerOrder)
+	out += fmt.Sprintf("  Amount/order:  %s\n", amountDesc)
 	out += fmt.Sprintf("  Schedule:      %s (%s)\n", frequencyExpr, timezone)
-	if triggerConfig != nil {
-		out += fmt.Sprintf("  Trigger:       %s %s on %s timeframe\n", triggerConfig.Indicator, triggerConfig.Condition, triggerConfig.Timeframe)
+	if trigger != nil {
+		out += fmt.Sprintf("  Trigger:       %s @ %s\n", trigger.Expression, trigger.Timeframe)
 	}
 	if maxExec > 0 {
 		out += fmt.Sprintf("  Guardrail:     max %d per %s\n", maxExec, execPeriod)
-	}
-	if notifyChannel != "" || notifyChatID != "" {
-		out += fmt.Sprintf("  Notify:        %s / %s\n", notifyChannel, notifyChatID)
 	}
 	out += fmt.Sprintf("  Cron job ID:   %s\n", job.ID)
 	out += fmt.Sprintf("\nOn each cron tick the agent will receive:\n  \"%s\"\n", cronMsg)
@@ -300,77 +344,75 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	return UserResult(out)
 }
 
-// buildTriggerConfig validates and constructs a TriggerConfig from tool args.
-func buildTriggerConfig(args map[string]any) (*dca.TriggerConfig, *ToolResult) {
-	indicator, _ := args["trigger_indicator"].(string)
-	condition, _ := args["trigger_condition"].(string)
-	timeframe, _ := args["trigger_timeframe"].(string)
+// parseTrigger validates and constructs a Trigger from the tool's trigger sub-object.
+func parseTrigger(trigMap map[string]any) (*dca.Trigger, *ToolResult) {
+	timeframe, _ := trigMap["timeframe"].(string)
+	expression, _ := trigMap["expression"].(string)
 
-	if indicator == "" {
-		return nil, ErrorResult("trigger_indicator is required when trigger_type=indicator")
-	}
-	if condition == "" {
-		return nil, ErrorResult("trigger_condition is required when trigger_type=indicator")
-	}
 	if timeframe == "" {
-		return nil, ErrorResult("trigger_timeframe is required when trigger_type=indicator")
+		return nil, ErrorResult("trigger.timeframe is required")
+	}
+	if !dca.ValidTimeframes[timeframe] {
+		return nil, ErrorResult(fmt.Sprintf("trigger.timeframe %q is not supported", timeframe))
+	}
+	if expression == "" {
+		return nil, ErrorResult("trigger.expression is required")
 	}
 
-	tc := &dca.TriggerConfig{
-		Indicator: indicator,
-		Timeframe: timeframe,
-		Condition: condition,
+	lookback := 200
+	if v, ok := trigMap["lookback"].(float64); ok && v > 0 {
+		lookback = int(v)
 	}
-	if v, ok := args["trigger_period"].(float64); ok && v > 0 {
-		tc.Period = int(v)
+	if lookback < 30 {
+		lookback = 30
 	}
-	if v, ok := args["trigger_period2"].(float64); ok && v > 0 {
-		tc.Period2 = int(v)
+	if lookback > 1000 {
+		lookback = 1000
 	}
-	if v, ok := args["trigger_period3"].(float64); ok && v > 0 {
-		tc.Period3 = int(v)
-	}
-	if v, ok := args["trigger_multiplier"].(float64); ok && v > 0 {
-		tc.Multiplier = v
-	}
-	if v, ok := args["trigger_threshold"].(float64); ok {
-		tc.Threshold = v
-	}
-	if v, ok := args["trigger_candle_limit"].(float64); ok && v >= 20 {
-		tc.Limit = int(v)
-		if tc.Limit > 500 {
-			tc.Limit = 500
+
+	var indicators []dca.IndicatorSpec
+	if indList, ok := trigMap["indicators"].([]any); ok {
+		for i, item := range indList {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, ErrorResult(fmt.Sprintf("trigger.indicators[%d] must be an object", i))
+			}
+			alias, _ := m["alias"].(string)
+			kind, _ := m["kind"].(string)
+			params := map[string]any{}
+			if p, ok := m["params"].(map[string]any); ok {
+				params = p
+			}
+			spec := dca.IndicatorSpec{Alias: alias, Kind: kind, Params: params}
+			if err := dca.ValidateIndicatorSpec(spec); err != nil {
+				return nil, ErrorResult(fmt.Sprintf("trigger.indicators[%d]: %v", i, err))
+			}
+			indicators = append(indicators, spec)
 		}
 	}
-	return tc, nil
+
+	t := &dca.Trigger{
+		Timeframe:  timeframe,
+		Lookback:   lookback,
+		Indicators: indicators,
+		Expression: expression,
+	}
+
+	// Compile-time expression check — catches alias typos before the plan is saved.
+	if err := dca.CompileTrigger(t); err != nil {
+		return nil, ErrorResult(fmt.Sprintf("trigger expression error: %v", err))
+	}
+	return t, nil
 }
 
-// timeframeToCron maps a standard candle timeframe string to a cron expression.
-func timeframeToCron(tf string) (string, error) {
-	switch tf {
-	case "1m":
-		return "* * * * *", nil
-	case "5m":
-		return "*/5 * * * *", nil
-	case "15m":
-		return "*/15 * * * *", nil
-	case "30m":
-		return "*/30 * * * *", nil
-	case "1h":
-		return "0 * * * *", nil
-	case "2h":
-		return "0 */2 * * *", nil
-	case "4h":
-		return "0 */4 * * *", nil
-	case "6h":
-		return "0 */6 * * *", nil
-	case "12h":
-		return "0 */12 * * *", nil
-	case "1d":
-		return "0 0 * * *", nil
-	case "1w":
-		return "0 0 * * 1", nil
-	default:
-		return "", fmt.Errorf("unsupported timeframe %q", tf)
+// amountUnitLabel returns a human-readable unit description.
+func amountUnitLabel(unit, symbol string) string {
+	if unit == "base" {
+		base := symbol
+		if i := strings.Index(symbol, "/"); i >= 0 {
+			base = symbol[:i]
+		}
+		return base + " (base units)"
 	}
+	return "quote currency"
 }

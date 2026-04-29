@@ -84,30 +84,31 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 		}
 	}
 
-	// Indicator condition check — only for indicator-triggered plans.
-	if plan.TriggerConfig != nil {
-		met, reason, err := checkDCACondition(ctx, plan, t.cfg)
-		if err != nil {
-			return t.recordFailure(ctx, plan, 0, fmt.Sprintf("condition check failed: %v", err))
-		}
-		if !met {
-			return SilentResult(fmt.Sprintf(
-				"condition not met for plan %d (%s): %s — skipping",
-				planID, plan.Name, reason,
-			))
-		}
-	}
-
+	// Build provider early — needed for both trigger evaluation and order placement.
 	p, err := broker.CreateProviderForAccount(plan.Provider, plan.Account, t.cfg)
 	if err != nil {
 		return t.recordFailure(ctx, plan, 0, fmt.Sprintf("failed to create provider: %v", err))
 	}
-
-	// Fetch current price to compute order quantity.
 	md, ok := p.(broker.MarketDataProvider)
 	if !ok {
 		return t.recordFailure(ctx, plan, 0, fmt.Sprintf("provider %q does not support market data", plan.Provider))
 	}
+
+	// Indicator trigger evaluation — only for plans with a trigger configured.
+	if plan.Trigger != nil {
+		met, snap, err := dca.EvaluateTrigger(ctx, plan.Trigger, md, plan.Symbol)
+		if err != nil {
+			return t.recordFailure(ctx, plan, 0, fmt.Sprintf("trigger evaluation failed: %v", err))
+		}
+		if !met {
+			return SilentResult(fmt.Sprintf(
+				"DCA plan '%s' (id=%d) skipped — expression false\n  %s",
+				plan.Name, planID, snap.FormatSnapshot(),
+			))
+		}
+	}
+
+	// Fetch current price for quote→base conversion and diagnostics.
 	ticker, err := md.FetchTicker(ctx, plan.Symbol)
 	if err != nil {
 		return t.recordFailure(ctx, plan, 0, fmt.Sprintf("failed to fetch ticker for %s: %v", plan.Symbol, err))
@@ -120,8 +121,16 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 		return t.recordFailure(ctx, plan, 0, fmt.Sprintf("invalid price %.8g for %s", currentPrice, plan.Symbol))
 	}
 
-	// For both buy and sell, base amount = quote amount / price.
-	baseAmount := plan.AmountPerOrder / currentPrice
+	// Resolve base amount based on amount_unit.
+	var baseAmount float64
+	switch plan.AmountUnit {
+	case "base":
+		// amount_per_order is already in base units (e.g. shares or BTC).
+		baseAmount = plan.AmountPerOrder
+	default:
+		// "quote": divide the quote budget by the current price.
+		baseAmount = plan.AmountPerOrder / currentPrice
+	}
 
 	tp, ok := p.(broker.TradingProvider)
 	if !ok {

@@ -21,12 +21,6 @@ function formatNum(n: number, digits = 4): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: 2 })
 }
 
-function pnlColor(pct: number): string {
-  if (pct > 0) return "text-green-600 dark:text-green-400"
-  if (pct < 0) return "text-red-600 dark:text-red-400"
-  return "text-muted-foreground"
-}
-
 function quoteCurrency(symbol: string): string {
   const i = symbol.lastIndexOf("/")
   return i >= 0 ? symbol.slice(i + 1) : ""
@@ -34,10 +28,6 @@ function quoteCurrency(symbol: string): string {
 
 function PlanSummary({ plan }: { plan: DCAPlanListItem }) {
   const quote = quoteCurrency(plan.symbol)
-  const currentPnL = 0 // live price not fetched in UI; shown from stored totals
-  const pct = plan.avg_cost > 0 && plan.total_quantity > 0
-    ? ((plan.total_quantity * plan.avg_cost - plan.total_invested) / plan.total_invested) * 100
-    : 0
 
   const statCell = (label: string, value: string) => (
     <div className="rounded-lg border p-3">
@@ -76,16 +66,6 @@ function PlanSummary({ plan }: { plan: DCAPlanListItem }) {
         {statCell("Total Acquired", plan.total_quantity > 0 ? `${plan.total_quantity.toFixed(8)} ${plan.symbol.split("/")[0]}` : "—")}
       </div>
 
-      {/* PnL bar (store-only, no live price) */}
-      {plan.total_invested > 0 && plan.avg_cost > 0 && (
-        <div className="rounded-lg border p-3">
-          <div className="text-muted-foreground mb-1 text-xs">Unrealized PnL (stored avg cost)</div>
-          <div className={`font-mono text-sm font-semibold ${pnlColor(pct)}`}>
-            {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
-          </div>
-          <div className="text-muted-foreground text-xs">{currentPnL}</div>
-        </div>
-      )}
     </div>
   )
 }

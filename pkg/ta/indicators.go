@@ -248,6 +248,25 @@ func Stochastic(high, low, close []float64, kPeriod, dPeriod int) *StochasticRes
 	return &StochasticResult{K: k, D: d}
 }
 
+// ROC returns the Rate of Change as a percentage over the given period.
+// roc[i] = (data[i] - data[i-period]) / data[i-period] * 100
+// Returns nil if len(data) <= period or period <= 0.
+func ROC(data []float64, period int) []float64 {
+	if period <= 0 || len(data) <= period {
+		return nil
+	}
+	result := make([]float64, len(data)-period)
+	for i := period; i < len(data); i++ {
+		base := data[i-period]
+		if base == 0 {
+			result[i-period] = 0
+		} else {
+			result[i-period] = (data[i] - base) / base * 100
+		}
+	}
+	return result
+}
+
 // VWAP returns the Volume-Weighted Average Price for each bar.
 // typical price = (high + low + close) / 3
 // VWAP[i] = cumulative(typical * volume) / cumulative(volume)

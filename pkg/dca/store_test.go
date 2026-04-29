@@ -204,17 +204,19 @@ func TestStore_GetPlan_NotFound(t *testing.T) {
 	}
 }
 
-func TestStore_TriggerConfigRoundTrip(t *testing.T) {
+func TestStore_TriggerRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	plan := minimalPlan("TriggerPlan")
-	plan.TriggerConfig = &TriggerConfig{
-		Indicator: "rsi",
+	plan.Trigger = &Trigger{
 		Timeframe: "1h",
-		Condition: "oversold",
-		Period:    14,
-		Threshold: 25.0,
+		Lookback:  100,
+		Indicators: []IndicatorSpec{
+			{Alias: "rsi14", Kind: "rsi", Params: map[string]any{"period": float64(14)}},
+			{Alias: "ema50", Kind: "ema", Params: map[string]any{"period": float64(50)}},
+		},
+		Expression: "rsi14 < 30 and close > ema50",
 	}
 
 	id, err := s.SavePlan(ctx, plan)
@@ -226,21 +228,24 @@ func TestStore_TriggerConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPlan: %v", err)
 	}
-	if got.TriggerConfig == nil {
-		t.Fatal("expected TriggerConfig to be non-nil after round-trip")
+	if got.Trigger == nil {
+		t.Fatal("expected Trigger to be non-nil after round-trip")
 	}
-	tc := got.TriggerConfig
-	if tc.Indicator != "rsi" {
-		t.Errorf("Indicator = %q, want rsi", tc.Indicator)
+	tr := got.Trigger
+	if tr.Timeframe != "1h" {
+		t.Errorf("Timeframe = %q, want 1h", tr.Timeframe)
 	}
-	if tc.Condition != "oversold" {
-		t.Errorf("Condition = %q, want oversold", tc.Condition)
+	if tr.Lookback != 100 {
+		t.Errorf("Lookback = %d, want 100", tr.Lookback)
 	}
-	if tc.Period != 14 {
-		t.Errorf("Period = %d, want 14", tc.Period)
+	if tr.Expression != "rsi14 < 30 and close > ema50" {
+		t.Errorf("Expression = %q", tr.Expression)
 	}
-	if tc.Threshold != 25.0 {
-		t.Errorf("Threshold = %g, want 25.0", tc.Threshold)
+	if len(tr.Indicators) != 2 {
+		t.Fatalf("len(Indicators) = %d, want 2", len(tr.Indicators))
+	}
+	if tr.Indicators[0].Alias != "rsi14" || tr.Indicators[0].Kind != "rsi" {
+		t.Errorf("Indicators[0] = %+v", tr.Indicators[0])
 	}
 }
 

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	minIntervalMinutes     = 5
+	minIntervalMinutes     = 1
 	defaultIntervalMinutes = 30
 	userTasksMarker        = "Add your heartbeat tasks below this line:"
 )

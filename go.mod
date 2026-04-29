@@ -11,6 +11,7 @@ require (
 	github.com/ccxt/ccxt/go/v4 v4.5.43
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
+	github.com/expr-lang/expr v1.17.8
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
 	github.com/google/uuid v1.6.0
@@ -55,7 +56,6 @@ require (
 	github.com/elliottech/poseidon_crypto v0.0.11 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.5 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

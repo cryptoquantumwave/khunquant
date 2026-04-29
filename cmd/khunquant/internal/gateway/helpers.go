@@ -645,7 +645,17 @@ func setupCronTool(
 		agentLoop.RegisterTool(cronTool)
 	}
 
-	// Set onJob handler — alert jobs are handled directly in code;
+	// DCA store — opened unconditionally so the cron trigger gate works even when
+	// individual DCA tools are disabled (e.g. legacy dca:* jobs still in jobs.json).
+	var dcaStore *dca.Store
+	if store, storeErr := dca.NewStore(workspace); storeErr != nil {
+		logger.ErrorCF("gateway", "Failed to open DCA store; DCA cron gate and tools disabled",
+			map[string]any{"error": storeErr.Error()})
+	} else {
+		dcaStore = store
+	}
+
+	// Set onJob handler — alert and DCA jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
 	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
 		if strings.HasPrefix(job.Name, "price_alert:") {
@@ -653,6 +663,9 @@ func setupCronTool(
 		}
 		if strings.HasPrefix(job.Name, "indicator_alert:") {
 			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
+		}
+		if strings.HasPrefix(job.Name, "dca:") && dcaStore != nil {
+			return handleDCAAutoJob(context.Background(), job, cfg, dcaStore, cronTool)
 		}
 		if cronTool != nil {
 			return cronTool.ExecuteJob(context.Background(), job), nil
@@ -668,7 +681,7 @@ func setupCronTool(
 		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService))
 	}
 
-	// DCA tools (Track E) — require cron service + dedicated SQLite store.
+	// DCA tools (Track E) — require cron service + the store opened above.
 	dcaEnabled := cfg.Tools.IsToolEnabled("create_dca_plan") ||
 		cfg.Tools.IsToolEnabled("list_dca_plans") ||
 		cfg.Tools.IsToolEnabled("update_dca_plan") ||
@@ -676,33 +689,27 @@ func setupCronTool(
 		cfg.Tools.IsToolEnabled("execute_dca_order") ||
 		cfg.Tools.IsToolEnabled("get_dca_history") ||
 		cfg.Tools.IsToolEnabled("get_dca_summary")
-	if dcaEnabled {
-		dcaStore, dcaErr := dca.NewStore(workspace)
-		if dcaErr != nil {
-			logger.ErrorCF("gateway", "Failed to open DCA store; DCA tools disabled",
-				map[string]any{"error": dcaErr.Error()})
-		} else {
-			if cfg.Tools.IsToolEnabled("create_dca_plan") {
-				agentLoop.RegisterTool(tools.NewCreateDCAPlanTool(cfg, dcaStore, cronService))
-			}
-			if cfg.Tools.IsToolEnabled("list_dca_plans") {
-				agentLoop.RegisterTool(tools.NewListDCAPlansTool(dcaStore))
-			}
-			if cfg.Tools.IsToolEnabled("update_dca_plan") {
-				agentLoop.RegisterTool(tools.NewUpdateDCAPlanTool(dcaStore, cronService))
-			}
-			if cfg.Tools.IsToolEnabled("delete_dca_plan") {
-				agentLoop.RegisterTool(tools.NewDeleteDCAPlanTool(dcaStore, cronService))
-			}
-			if cfg.Tools.IsToolEnabled("execute_dca_order") {
-				agentLoop.RegisterTool(tools.NewExecuteDCAOrderTool(cfg, dcaStore))
-			}
-			if cfg.Tools.IsToolEnabled("get_dca_history") {
-				agentLoop.RegisterTool(tools.NewGetDCAHistoryTool(dcaStore))
-			}
-			if cfg.Tools.IsToolEnabled("get_dca_summary") {
-				agentLoop.RegisterTool(tools.NewGetDCASummaryTool(cfg, dcaStore))
-			}
+	if dcaEnabled && dcaStore != nil {
+		if cfg.Tools.IsToolEnabled("create_dca_plan") {
+			agentLoop.RegisterTool(tools.NewCreateDCAPlanTool(cfg, dcaStore, cronService))
+		}
+		if cfg.Tools.IsToolEnabled("list_dca_plans") {
+			agentLoop.RegisterTool(tools.NewListDCAPlansTool(dcaStore))
+		}
+		if cfg.Tools.IsToolEnabled("update_dca_plan") {
+			agentLoop.RegisterTool(tools.NewUpdateDCAPlanTool(dcaStore, cronService))
+		}
+		if cfg.Tools.IsToolEnabled("delete_dca_plan") {
+			agentLoop.RegisterTool(tools.NewDeleteDCAPlanTool(dcaStore, cronService))
+		}
+		if cfg.Tools.IsToolEnabled("execute_dca_order") {
+			agentLoop.RegisterTool(tools.NewExecuteDCAOrderTool(cfg, dcaStore))
+		}
+		if cfg.Tools.IsToolEnabled("get_dca_history") {
+			agentLoop.RegisterTool(tools.NewGetDCAHistoryTool(dcaStore))
+		}
+		if cfg.Tools.IsToolEnabled("get_dca_summary") {
+			agentLoop.RegisterTool(tools.NewGetDCASummaryTool(cfg, dcaStore))
 		}
 	}
 

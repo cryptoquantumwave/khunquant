@@ -141,7 +141,7 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if side == "" {
 		side = "buy"
 	}
-	order, err := tp.CreateOrder(ctx, plan.Symbol, "market", side, baseAmount, nil, nil)
+	order, err := tp.CreateOrder(ctx, plan.Symbol, "market", side, baseAmount, &currentPrice, nil)
 	if err != nil {
 		return t.recordFailure(ctx, plan, currentPrice, fmt.Sprintf("order placement failed: %v", err))
 	}

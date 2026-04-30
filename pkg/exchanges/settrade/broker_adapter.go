@@ -223,11 +223,15 @@ func (a *SettradeFullAdapter) LoadMarkets(_ context.Context) (map[string]ccxt.Ma
 
 // --- broker.TradingProvider (Equity) ---
 
+// setBoardLotSize is the standard board lot on Thailand's SET exchange.
+// Orders below this threshold are oddlot and cannot use ATO/ATC price types.
+const setBoardLotSize = 100
+
 // CreateOrder places a limit or market order on SET.
 // symbol: CCXT format "PTT/THB" or raw "PTT".
-// orderType: "limit" → Limit, "market" → ATO.
+// orderType: "limit" → Limit, "market" → ATO (or Limit for oddlot).
 // amount: number of shares/units to trade.
-// price: required for limit orders; ignored for market orders.
+// price: required for limit orders; also used as fallback price for oddlot market orders.
 func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side string, amount float64, price *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	sym := toSetSymbol(symbol)
 
@@ -241,7 +245,16 @@ func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType
 		}
 		orderPrice = *price
 	case "market":
-		priceType = "ATO"
+		// Oddlot orders (< 1 board lot) cannot use ATO; fall back to Limit.
+		if int(amount) < setBoardLotSize {
+			if price == nil {
+				return ccxt.Order{}, fmt.Errorf("settrade: oddlot market order for %d shares requires a price (< %d board lot size)", int(amount), setBoardLotSize)
+			}
+			priceType = "Limit"
+			orderPrice = *price
+		} else {
+			priceType = "ATO"
+		}
 	default:
 		return ccxt.Order{}, fmt.Errorf("settrade: unsupported order type %q (use \"limit\" or \"market\")", orderType)
 	}

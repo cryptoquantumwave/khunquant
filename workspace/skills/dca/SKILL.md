@@ -30,8 +30,8 @@ User reviews performance:
 When you receive a message starting with `[DCA-AUTO]`, this is a cron-triggered DCA task:
 
 1. Extract the `plan_id` from the message (e.g., `plan_id=3`)
-2. **Immediately call `execute_dca_order` with that plan_id** — no additional user confirmation required
-3. The plan was user-approved at creation; `execute_dca_order` is pre-authorized for this purpose
+2. **Immediately call `execute_dca_order` with that plan_id** — the plan was pre-authorized by the user at creation time; no additional confirmation is required per execution
+3. `execute_dca_order` is pre-authorized for this purpose; the user may cancel or pause the plan at any time via `update_dca_plan`
 
 ```
 [DCA-AUTO] Execute plan: BTC RSI Dip plan_id=3
@@ -387,13 +387,27 @@ get_dca_history({ "plan_id": 3, "limit": 20 })
 
 ## Common Cron Schedules
 
+Cron field order: **`minute hour day month weekday`**
+
+```
+*/5  *   *  *  *   → every 5 minutes
+0    */4 *  *  *   → every 4 hours (at :00)
+0    9   *  *  1   → every Monday at 09:00
+```
+
 | Schedule | Expression |
 |----------|-----------|
+| Every 5 minutes | `*/5 * * * *` |
+| Every 15 minutes | `*/15 * * * *` |
+| Every 30 minutes | `*/30 * * * *` |
+| Every hour | `0 * * * *` |
+| Every 4 hours | `0 */4 * * *` |
 | Daily at 9am | `0 9 * * *` |
 | Every Monday 9am | `0 9 * * 1` |
 | Mon & Thu 10am | `0 10 * * 1,4` |
 | 1st of month 9am | `0 9 1 * *` |
-| Every 4 hours | `0 */4 * * *` |
+
+> **Common mistake**: `0 */5 * * *` is every 5 **hours** (*/5 is in the hour field), NOT every 5 minutes. Sub-hourly schedules put `*/N` in the **first** (minute) field.
 
 All times are in `schedule.timezone` (default: UTC).
 

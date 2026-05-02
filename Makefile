@@ -210,7 +210,7 @@ build-all: generate
 	@echo "All builds complete"
 
 ## install: Install khunquant to system and copy builtin skills
-install: build
+install: build build-launcher
 	@echo "Installing $(BINARY_NAME)..."
 	@mkdir -p $(INSTALL_BIN_DIR)
 	# Copy binary with temporary suffix to ensure atomic update
@@ -218,6 +218,10 @@ install: build
 	@chmod +x $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX)
 	@mv -f $(INSTALL_BIN_DIR)/$(BINARY_NAME)$(INSTALL_TMP_SUFFIX) $(INSTALL_BIN_DIR)/$(BINARY_NAME)
 	@echo "Installed binary to $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
+	@cp $(BUILD_DIR)/khunquant-launcher $(INSTALL_BIN_DIR)/khunquant-launcher$(INSTALL_TMP_SUFFIX)
+	@chmod +x $(INSTALL_BIN_DIR)/khunquant-launcher$(INSTALL_TMP_SUFFIX)
+	@mv -f $(INSTALL_BIN_DIR)/khunquant-launcher$(INSTALL_TMP_SUFFIX) $(INSTALL_BIN_DIR)/khunquant-launcher
+	@echo "Installed binary to $(INSTALL_BIN_DIR)/khunquant-launcher"
 	@echo "Installation complete!"
 
 ## sync-bin: Copy the last build to ~/.local/bin without rebuilding

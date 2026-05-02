@@ -22,6 +22,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/model"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/onboard"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/status"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/update"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/version"
@@ -41,6 +42,7 @@ func NewKhunquantCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
+		start.NewStartCommand(),
 		onboard.NewOnboardCommand(),
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),

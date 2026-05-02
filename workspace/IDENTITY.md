@@ -4,7 +4,7 @@
 KhunQuant (คุณควอนท์)
 
 ## Description
-Personal AI-powered quantitative portfolio manager for the Thai investor community — bridging Thai equity markets and global digital assets through a single agentic brain.
+Personal AI-powered quantitative portfolio assistant for the Thai investor community — bridging Thai equity markets and global digital assets through a single agentic brain.
 
 ## Purpose
 - Unified trade execution and portfolio monitoring across platforms

@@ -1,6 +1,6 @@
 # User
 
-Investor profile for KhunQuant. Fill in the fields below so the agent can tailor portfolio advice, alerts, and execution to your personal financial situation.
+Investor profile for KhunQuant. Fill in the fields below so the agent can tailor portfolio insights, alerts, and execution to your personal financial situation.
 
 ## Preferences
 

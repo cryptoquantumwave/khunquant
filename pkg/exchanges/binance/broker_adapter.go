@@ -26,8 +26,12 @@ func newBrokerAdapter(creds config.ExchangeAccount, testnet bool) (*BinanceBroke
 	if err != nil {
 		return nil, err
 	}
-	logger.RegisterSecret(creds.APIKey.String())
-	logger.RegisterSecret(creds.Secret.String())
+	if creds.APIKey.String() != "" {
+		logger.RegisterSecret(creds.APIKey.String())
+	}
+	if creds.Secret.String() != "" {
+		logger.RegisterSecret(creds.Secret.String())
+	}
 	return &BinanceBrokerAdapter{BinanceExchange: ex}, nil
 }
 
@@ -38,7 +42,7 @@ func (a *BinanceBrokerAdapter) ID() string { return Name }
 func (a *BinanceBrokerAdapter) Category() broker.AssetCategory { return broker.CategoryCrypto }
 
 func (a *BinanceBrokerAdapter) GetMarketStatus(_ context.Context, symbol string) (broker.MarketStatus, error) {
-	ticker, err := a.spot.FetchTicker(symbol)
+	ticker, err := a.publicSpot.FetchTicker(symbol)
 	if err != nil {
 		return broker.MarketUnknown, fmt.Errorf("binance: GetMarketStatus: %w", err)
 	}
@@ -89,16 +93,16 @@ func (a *BinanceBrokerAdapter) SupportedWalletTypes() []string {
 // --- broker.MarketDataProvider ---
 
 func (a *BinanceBrokerAdapter) FetchTicker(_ context.Context, symbol string) (ccxt.Ticker, error) {
-	return a.spot.FetchTicker(symbol)
+	return a.publicSpot.FetchTicker(symbol)
 }
 
 func (a *BinanceBrokerAdapter) FetchTickers(_ context.Context, symbols []string) (map[string]ccxt.Ticker, error) {
 	var tickers ccxt.Tickers
 	var err error
 	if len(symbols) == 0 {
-		tickers, err = a.spot.FetchTickers()
+		tickers, err = a.publicSpot.FetchTickers()
 	} else {
-		tickers, err = a.spot.FetchTickers(ccxt.WithFetchTickersSymbols(symbols))
+		tickers, err = a.publicSpot.FetchTickers(ccxt.WithFetchTickersSymbols(symbols))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("binance: FetchTickers: %w", err)
@@ -114,18 +118,18 @@ func (a *BinanceBrokerAdapter) FetchOHLCV(_ context.Context, symbol, timeframe s
 	if limit > 0 {
 		opts = append(opts, ccxt.WithFetchOHLCVLimit(int64(limit)))
 	}
-	return a.spot.FetchOHLCV(symbol, opts...)
+	return a.publicSpot.FetchOHLCV(symbol, opts...)
 }
 
 func (a *BinanceBrokerAdapter) FetchOrderBook(_ context.Context, symbol string, depth int) (ccxt.OrderBook, error) {
 	if depth > 0 {
-		return a.spot.FetchOrderBook(symbol, ccxt.WithFetchOrderBookLimit(int64(depth)))
+		return a.publicSpot.FetchOrderBook(symbol, ccxt.WithFetchOrderBookLimit(int64(depth)))
 	}
-	return a.spot.FetchOrderBook(symbol)
+	return a.publicSpot.FetchOrderBook(symbol)
 }
 
 func (a *BinanceBrokerAdapter) LoadMarkets(_ context.Context) (map[string]ccxt.MarketInterface, error) {
-	return a.spot.LoadMarkets()
+	return a.publicSpot.LoadMarkets()
 }
 
 // --- broker.TradingProvider ---
@@ -194,7 +198,8 @@ func init() {
 	broker.RegisterFactory(Name, func(cfg *config.Config) (broker.Provider, error) {
 		acc, ok := cfg.Exchanges.Binance.ResolveAccount("")
 		if !ok {
-			return nil, fmt.Errorf("%s: no accounts configured", Name)
+			// No credentials configured — create a public-only instance for market data.
+			return newBrokerAdapter(config.ExchangeAccount{}, cfg.Exchanges.Binance.Testnet)
 		}
 		return newBrokerAdapter(acc, cfg.Exchanges.Binance.Testnet)
 	})

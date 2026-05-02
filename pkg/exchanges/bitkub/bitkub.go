@@ -28,18 +28,26 @@ type BitkubExchange struct {
 	apiKey    string
 	apiSecret string
 	client    *http.Client
+	hasAuth   bool
 }
 
 // NewBitkubExchange creates a new BitkubExchange using resolved credentials.
+// If credentials are empty, a public-only instance is created for market data endpoints.
 func NewBitkubExchange(creds config.ExchangeAccount) (*BitkubExchange, error) {
-	if creds.APIKey.String() == "" || creds.Secret.String() == "" {
-		return nil, fmt.Errorf("bitkub: api_key and secret are required")
-	}
+	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
 	return &BitkubExchange{
 		apiKey:    creds.APIKey.String(),
 		apiSecret: creds.Secret.String(),
 		client:    &http.Client{Timeout: 15 * time.Second},
+		hasAuth:   hasAuth,
 	}, nil
+}
+
+func (b *BitkubExchange) requireAuth() error {
+	if !b.hasAuth {
+		return fmt.Errorf("bitkub: api_key and secret are required for this operation")
+	}
+	return nil
 }
 
 // Name returns the exchange identifier.
@@ -57,6 +65,9 @@ func (b *BitkubExchange) SupportedQuotes() []string {
 
 // GetBalances implements the basic Exchange interface.
 func (b *BitkubExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	wb, err := b.getSpotBalances(ctx)
 	if err != nil {
 		return nil, err
@@ -70,6 +81,9 @@ func (b *BitkubExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, 
 
 // GetWalletBalances implements WalletExchange.
 func (b *BitkubExchange) GetWalletBalances(ctx context.Context, walletType string) ([]exchanges.WalletBalance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	switch walletType {
 	case "spot", "all":
 		return b.getSpotBalances(ctx)

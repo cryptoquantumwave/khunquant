@@ -16,36 +16,55 @@ const Name = "okx"
 
 // OKXExchange implements exchanges.WalletExchange using the CCXT Go library.
 type OKXExchange struct {
-	client    *ccxt.Okx
-	isTestnet bool
+	client     *ccxt.Okx
+	publicClient *ccxt.Okx // credential-free instance for public endpoints
+	isTestnet  bool
+	hasAuth    bool
 }
 
 // NewOKXExchange creates a new OKXExchange using resolved credentials.
+// If credentials are empty, a public-only instance is created for market data endpoints.
+// Public endpoints (OHLCV, tickers, order book) always use a credential-free CCXT
+// instance so that IP-restricted API keys do not cause authentication errors.
 func NewOKXExchange(creds config.OKXExchangeAccount, testnet bool) (*OKXExchange, error) {
-	if creds.APIKey.String() == "" || creds.Secret.String() == "" || creds.Passphrase.String() == "" {
-		return nil, fmt.Errorf("okx: api_key, secret, and passphrase are required")
-	}
+	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != "" && creds.Passphrase.String() != ""
 
-	ccxtCreds := map[string]interface{}{
-		"apiKey":   creds.APIKey.String(),
-		"secret":   creds.Secret.String(),
-		"password": creds.Passphrase.String(),
+	var ccxtCreds map[string]interface{}
+	if hasAuth {
+		ccxtCreds = map[string]interface{}{
+			"apiKey":   creds.APIKey.String(),
+			"secret":   creds.Secret.String(),
+			"password": creds.Passphrase.String(),
+		}
 	}
 
 	client := ccxt.NewOkx(ccxtCreds)
+	publicClient := ccxt.NewOkx(nil)
 
 	if testnet {
 		client.SetSandboxMode(true)
+		publicClient.SetSandboxMode(true)
 	}
 
-	if _, err := client.LoadMarkets(); err != nil {
-		return nil, fmt.Errorf("okx: load markets: %w", err)
+	if hasAuth {
+		if _, err := client.LoadMarkets(); err != nil {
+			return nil, fmt.Errorf("okx: load markets: %w", err)
+		}
 	}
 
 	return &OKXExchange{
-		client:    client,
-		isTestnet: testnet,
+		client:       client,
+		publicClient: publicClient,
+		isTestnet:    testnet,
+		hasAuth:      hasAuth,
 	}, nil
+}
+
+func (o *OKXExchange) requireAuth() error {
+	if !o.hasAuth {
+		return fmt.Errorf("okx: api_key, secret, and passphrase are required for this operation")
+	}
+	return nil
 }
 
 // Name returns the exchange identifier.
@@ -58,6 +77,9 @@ func (o *OKXExchange) SupportedWalletTypes() []string {
 
 // GetBalances implements the basic Exchange interface (trading account only).
 func (o *OKXExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
+	if err := o.requireAuth(); err != nil {
+		return nil, err
+	}
 	wb, err := o.getTradingBalances(ctx)
 	if err != nil {
 		return nil, err
@@ -71,6 +93,9 @@ func (o *OKXExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, err
 
 // GetWalletBalances implements WalletExchange.
 func (o *OKXExchange) GetWalletBalances(ctx context.Context, walletType string) ([]exchanges.WalletBalance, error) {
+	if err := o.requireAuth(); err != nil {
+		return nil, err
+	}
 	switch walletType {
 	case "trading":
 		return o.getTradingBalances(ctx)
@@ -103,12 +128,12 @@ func (o *OKXExchange) FetchPrice(_ context.Context, asset, quote string) (float6
 		return 0, nil
 	}
 
-	if ticker, err := o.client.FetchTicker(upper + "/" + upperQuote); err == nil && ticker.Last != nil {
+	if ticker, err := o.publicClient.FetchTicker(upper + "/" + upperQuote); err == nil && ticker.Last != nil {
 		return *ticker.Last, nil
 	}
 
 	if upperQuote != "USDT" {
-		if ticker, err := o.client.FetchTicker(upper + "/USDT"); err == nil && ticker.Last != nil {
+		if ticker, err := o.publicClient.FetchTicker(upper + "/USDT"); err == nil && ticker.Last != nil {
 			if usdLike[upperQuote] {
 				return *ticker.Last, nil
 			}

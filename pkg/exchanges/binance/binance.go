@@ -17,26 +17,33 @@ const Name = "binance"
 
 // BinanceExchange implements exchanges.WalletExchange using the CCXT Go library.
 type BinanceExchange struct {
-	spot      *ccxt.Binance      // spot / funding / cross-margin
-	usdm      *ccxt.Binanceusdm  // USDT-M perpetual futures
-	coinm     *ccxt.Binancecoinm // Coin-M futures
-	isTestnet bool
+	spot       *ccxt.Binance      // spot / funding / cross-margin (authenticated)
+	usdm       *ccxt.Binanceusdm  // USDT-M perpetual futures (authenticated)
+	coinm      *ccxt.Binancecoinm // Coin-M futures (authenticated)
+	publicSpot *ccxt.Binance      // credential-free instance for public endpoints
+	isTestnet  bool
+	hasAuth    bool
 }
 
 // NewBinanceExchange creates a new BinanceExchange using resolved credentials.
+// If both APIKey and Secret are empty, a public-only instance is created.
+// Public endpoints (OHLCV, tickers, order book) always use a credential-free
+// CCXT instance so that IP-restricted API keys do not interfere.
 func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExchange, error) {
-	if creds.APIKey.String() == "" || creds.Secret.String() == "" {
-		return nil, fmt.Errorf("binance: api_key and secret are required")
-	}
+	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
 
-	ccxtCreds := map[string]interface{}{
-		"apiKey": creds.APIKey.String(),
-		"secret": creds.Secret.String(),
+	var ccxtCreds map[string]interface{}
+	if hasAuth {
+		ccxtCreds = map[string]interface{}{
+			"apiKey": creds.APIKey.String(),
+			"secret": creds.Secret.String(),
+		}
 	}
 
 	spot := ccxt.NewBinance(ccxtCreds)
 	usdm := ccxt.NewBinanceusdm(ccxtCreds)
 	coinm := ccxt.NewBinancecoinm(ccxtCreds)
+	publicSpot := ccxt.NewBinance(nil) // no credentials — for OHLCV / tickers / order book
 
 	noSymbolWarn := map[string]interface{}{"warnOnFetchOpenOrdersWithoutSymbol": false}
 	spot.ExtendExchangeOptions(noSymbolWarn)
@@ -47,14 +54,24 @@ func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExc
 		spot.SetSandboxMode(true)
 		usdm.SetSandboxMode(true)
 		coinm.SetSandboxMode(true)
+		publicSpot.SetSandboxMode(true)
 	}
 
 	return &BinanceExchange{
-		spot:      spot,
-		usdm:      usdm,
-		coinm:     coinm,
-		isTestnet: testnet,
+		spot:       spot,
+		usdm:       usdm,
+		coinm:      coinm,
+		publicSpot: publicSpot,
+		isTestnet:  testnet,
+		hasAuth:    hasAuth,
 	}, nil
+}
+
+func (b *BinanceExchange) requireAuth() error {
+	if !b.hasAuth {
+		return fmt.Errorf("binance: api_key and secret are required for this operation")
+	}
+	return nil
 }
 
 // Name returns the exchange identifier.
@@ -72,6 +89,9 @@ func (b *BinanceExchange) SupportedQuotes() []string {
 
 // GetBalances implements the basic Exchange interface (spot only, for backward compat).
 func (b *BinanceExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	wb, err := b.getSpotBalances(ctx)
 	if err != nil {
 		return nil, err
@@ -85,6 +105,9 @@ func (b *BinanceExchange) GetBalances(ctx context.Context) ([]exchanges.Balance,
 
 // GetWalletBalances implements WalletExchange.
 func (b *BinanceExchange) GetWalletBalances(ctx context.Context, walletType string) ([]exchanges.WalletBalance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	switch walletType {
 	case "spot":
 		return b.getSpotBalances(ctx)
@@ -135,13 +158,13 @@ func (b *BinanceExchange) FetchPrice(_ context.Context, asset, quote string) (fl
 	}
 
 	// Try base/quote (e.g. BTC/USDT)
-	if ticker, err := b.spot.FetchTicker(base + "/" + upperQuote); err == nil && ticker.Last != nil {
+	if ticker, err := b.publicSpot.FetchTicker(base + "/" + upperQuote); err == nil && ticker.Last != nil {
 		return *ticker.Last, nil
 	}
 
 	// Fallback: try base/USDT then convert if quote != USDT
 	if upperQuote != "USDT" {
-		if ticker, err := b.spot.FetchTicker(base + "/USDT"); err == nil && ticker.Last != nil {
+		if ticker, err := b.publicSpot.FetchTicker(base + "/USDT"); err == nil && ticker.Last != nil {
 			// We have USDT price; if quote is another stablecoin treat as 1:1
 			if usdLike[upperQuote] {
 				return *ticker.Last, nil

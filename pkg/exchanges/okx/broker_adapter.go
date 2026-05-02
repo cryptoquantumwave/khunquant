@@ -25,9 +25,15 @@ func newBrokerAdapter(creds config.OKXExchangeAccount, testnet bool) (*OKXBroker
 	if err != nil {
 		return nil, err
 	}
-	logger.RegisterSecret(creds.APIKey.String())
-	logger.RegisterSecret(creds.Secret.String())
-	logger.RegisterSecret(creds.Passphrase.String())
+	if creds.APIKey.String() != "" {
+		logger.RegisterSecret(creds.APIKey.String())
+	}
+	if creds.Secret.String() != "" {
+		logger.RegisterSecret(creds.Secret.String())
+	}
+	if creds.Passphrase.String() != "" {
+		logger.RegisterSecret(creds.Passphrase.String())
+	}
 	return &OKXBrokerAdapter{OKXExchange: ex}, nil
 }
 
@@ -38,7 +44,7 @@ func (a *OKXBrokerAdapter) ID() string { return Name }
 func (a *OKXBrokerAdapter) Category() broker.AssetCategory { return broker.CategoryCrypto }
 
 func (a *OKXBrokerAdapter) GetMarketStatus(_ context.Context, symbol string) (broker.MarketStatus, error) {
-	ticker, err := a.client.FetchTicker(symbol)
+	ticker, err := a.publicClient.FetchTicker(symbol)
 	if err != nil {
 		return broker.MarketUnknown, fmt.Errorf("okx: GetMarketStatus: %w", err)
 	}
@@ -89,16 +95,16 @@ func (a *OKXBrokerAdapter) SupportedWalletTypes() []string {
 // --- broker.MarketDataProvider ---
 
 func (a *OKXBrokerAdapter) FetchTicker(_ context.Context, symbol string) (ccxt.Ticker, error) {
-	return a.client.FetchTicker(symbol)
+	return a.publicClient.FetchTicker(symbol)
 }
 
 func (a *OKXBrokerAdapter) FetchTickers(_ context.Context, symbols []string) (map[string]ccxt.Ticker, error) {
 	var tickers ccxt.Tickers
 	var err error
 	if len(symbols) == 0 {
-		tickers, err = a.client.FetchTickers()
+		tickers, err = a.publicClient.FetchTickers()
 	} else {
-		tickers, err = a.client.FetchTickers(ccxt.WithFetchTickersSymbols(symbols))
+		tickers, err = a.publicClient.FetchTickers(ccxt.WithFetchTickersSymbols(symbols))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("okx: FetchTickers: %w", err)
@@ -114,18 +120,18 @@ func (a *OKXBrokerAdapter) FetchOHLCV(_ context.Context, symbol, timeframe strin
 	if limit > 0 {
 		opts = append(opts, ccxt.WithFetchOHLCVLimit(int64(limit)))
 	}
-	return a.client.FetchOHLCV(symbol, opts...)
+	return a.publicClient.FetchOHLCV(symbol, opts...)
 }
 
 func (a *OKXBrokerAdapter) FetchOrderBook(_ context.Context, symbol string, depth int) (ccxt.OrderBook, error) {
 	if depth > 0 {
-		return a.client.FetchOrderBook(symbol, ccxt.WithFetchOrderBookLimit(int64(depth)))
+		return a.publicClient.FetchOrderBook(symbol, ccxt.WithFetchOrderBookLimit(int64(depth)))
 	}
-	return a.client.FetchOrderBook(symbol)
+	return a.publicClient.FetchOrderBook(symbol)
 }
 
 func (a *OKXBrokerAdapter) LoadMarkets(_ context.Context) (map[string]ccxt.MarketInterface, error) {
-	return a.client.LoadMarkets()
+	return a.publicClient.LoadMarkets()
 }
 
 // --- broker.TradingProvider ---
@@ -194,7 +200,7 @@ func init() {
 	broker.RegisterFactory(Name, func(cfg *config.Config) (broker.Provider, error) {
 		acc, ok := cfg.Exchanges.OKX.ResolveAccount("")
 		if !ok {
-			return nil, fmt.Errorf("%s: no accounts configured", Name)
+			return newBrokerAdapter(config.OKXExchangeAccount{}, cfg.Exchanges.OKX.Testnet)
 		}
 		return newBrokerAdapter(acc, cfg.Exchanges.OKX.Testnet)
 	})

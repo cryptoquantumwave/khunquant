@@ -28,18 +28,26 @@ type BinanceTHExchange struct {
 	apiKey    string
 	apiSecret string
 	client    *http.Client
+	hasAuth   bool
 }
 
 // NewBinanceTHExchange creates a new BinanceTHExchange using resolved credentials.
+// If credentials are empty, a public-only instance is created for market data endpoints.
 func NewBinanceTHExchange(creds config.ExchangeAccount) (*BinanceTHExchange, error) {
-	if creds.APIKey.String() == "" || creds.Secret.String() == "" {
-		return nil, fmt.Errorf("binanceth: api_key and secret are required")
-	}
+	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
 	return &BinanceTHExchange{
 		apiKey:    creds.APIKey.String(),
 		apiSecret: creds.Secret.String(),
 		client:    &http.Client{Timeout: 15 * time.Second},
+		hasAuth:   hasAuth,
 	}, nil
+}
+
+func (b *BinanceTHExchange) requireAuth() error {
+	if !b.hasAuth {
+		return fmt.Errorf("binanceth: api_key and secret are required for this operation")
+	}
+	return nil
 }
 
 // Name returns the exchange identifier.
@@ -52,6 +60,9 @@ func (b *BinanceTHExchange) SupportedWalletTypes() []string {
 
 // GetBalances implements the basic Exchange interface.
 func (b *BinanceTHExchange) GetBalances(ctx context.Context) ([]exchanges.Balance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	wb, err := b.getSpotBalances(ctx)
 	if err != nil {
 		return nil, err
@@ -65,6 +76,9 @@ func (b *BinanceTHExchange) GetBalances(ctx context.Context) ([]exchanges.Balanc
 
 // GetWalletBalances implements WalletExchange.
 func (b *BinanceTHExchange) GetWalletBalances(ctx context.Context, walletType string) ([]exchanges.WalletBalance, error) {
+	if err := b.requireAuth(); err != nil {
+		return nil, err
+	}
 	switch walletType {
 	case "spot":
 		return b.getSpotBalances(ctx)

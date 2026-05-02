@@ -34,8 +34,12 @@ func newBrokerAdapter(creds config.ExchangeAccount) (*BinanceTHBrokerAdapter, er
 	if err != nil {
 		return nil, err
 	}
-	logger.RegisterSecret(creds.APIKey.String())
-	logger.RegisterSecret(creds.Secret.String())
+	if creds.APIKey.String() != "" {
+		logger.RegisterSecret(creds.APIKey.String())
+	}
+	if creds.Secret.String() != "" {
+		logger.RegisterSecret(creds.Secret.String())
+	}
 	return &BinanceTHBrokerAdapter{BinanceTHExchange: ex}, nil
 }
 
@@ -328,7 +332,7 @@ func init() {
 	broker.RegisterFactory(Name, func(cfg *config.Config) (broker.Provider, error) {
 		acc, ok := cfg.Exchanges.BinanceTH.ResolveAccount("")
 		if !ok {
-			return nil, fmt.Errorf("%s: no accounts configured", Name)
+			return newBrokerAdapter(config.ExchangeAccount{})
 		}
 		return newBrokerAdapter(acc)
 	})

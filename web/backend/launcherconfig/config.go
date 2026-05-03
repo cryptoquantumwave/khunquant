@@ -18,9 +18,10 @@ const (
 
 // Config stores launch parameters for the web backend service.
 type Config struct {
-	Port         int      `json:"port"`
-	Public       bool     `json:"public"`
-	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	Port          int      `json:"port"`
+	Public        bool     `json:"public"`
+	AllowedCIDRs  []string `json:"allowed_cidrs,omitempty"`
+	LauncherToken string   `json:"launcher_token,omitempty"`
 }
 
 // Default returns default launcher settings.

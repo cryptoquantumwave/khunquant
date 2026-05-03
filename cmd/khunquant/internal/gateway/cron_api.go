@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -19,21 +20,39 @@ type cronUpdateRequest struct {
 	To       *string            `json:"to,omitempty"`
 }
 
+// loopbackOnly rejects requests that do not originate from the loopback interface.
+// The gateway HTTP server may bind to 0.0.0.0 (for webhook channels), so we restrict
+// the internal management API to localhost explicitly.
+func loopbackOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.RemoteAddr
+		if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			host = h
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			http.Error(w, `{"error":"access denied"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // registerCronAPI registers live cron management routes on the gateway HTTP mux.
 // These routes mutate the in-memory CronService directly, avoiding the stale-file race.
 func registerCronAPI(mux interface {
 	Handle(pattern string, handler http.Handler)
 }, cs *cron.CronService) {
-	mux.Handle("GET /api/cron/jobs", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/cron/jobs", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jobs := cs.ListJobs(true)
 		if jobs == nil {
 			jobs = []cron.CronJob{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
-	}))
+	})))
 
-	mux.Handle("PATCH /api/cron/jobs/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PATCH /api/cron/jobs/{id}", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
 			http.Error(w, "id is required", http.StatusBadRequest)
@@ -103,9 +122,9 @@ func registerCronAPI(mux interface {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	}))
+	})))
 
-	mux.Handle("POST /api/cron/jobs/{id}/run", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /api/cron/jobs/{id}/run", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
 			http.Error(w, "id is required", http.StatusBadRequest)
@@ -117,9 +136,9 @@ func registerCronAPI(mux interface {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	}))
+	})))
 
-	mux.Handle("DELETE /api/cron/jobs/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /api/cron/jobs/{id}", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
 			http.Error(w, "id is required", http.StatusBadRequest)
@@ -133,5 +152,5 @@ func registerCronAPI(mux interface {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	}))
+	})))
 }

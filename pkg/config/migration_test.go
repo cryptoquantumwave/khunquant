@@ -622,15 +622,15 @@ func TestInheritProviderCredentials_FillsMissingAPIKey(t *testing.T) {
 	}
 	providers := ProvidersConfig{
 		DeepSeek: ProviderConfig{
-			APIKey:  "sk-deepseek-from-providers",
+			APIKey:  "test-key-deepseek-from-providers",
 			APIBase: "https://api.deepseek.com/v1",
 		},
 	}
 
 	InheritProviderCredentials(models, providers)
 
-	if models[0].APIKey.String() != "sk-deepseek-from-providers" {
-		t.Errorf("APIKey = %q, want %q", models[0].APIKey.String(), "sk-deepseek-from-providers")
+	if models[0].APIKey.String() != "test-key-deepseek-from-providers" {
+		t.Errorf("APIKey = %q, want %q", models[0].APIKey.String(), "test-key-deepseek-from-providers")
 	}
 	if models[0].APIBase != "https://api.deepseek.com/v1" {
 		t.Errorf("APIBase = %q, want %q", models[0].APIBase, "https://api.deepseek.com/v1")

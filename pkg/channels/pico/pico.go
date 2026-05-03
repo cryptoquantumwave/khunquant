@@ -70,7 +70,9 @@ func NewPicoChannel(cfg config.PicoConfig, messageBus *bus.MessageBus) (*PicoCha
 	allowOrigins := cfg.AllowOrigins
 	checkOrigin := func(r *http.Request) bool {
 		if len(allowOrigins) == 0 {
-			return true // allow all if not configured
+			// No origins configured: deny cross-origin browser connections.
+			// Callers without an Origin header (e.g. native clients) still pass.
+			return r.Header.Get("Origin") == ""
 		}
 		origin := r.Header.Get("Origin")
 		for _, allowed := range allowOrigins {

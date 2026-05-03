@@ -12,6 +12,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -106,6 +108,24 @@ func main() {
 		log.Fatalf("Invalid port %q: %v", effectivePort, err)
 	}
 
+	// Refuse to start in public mode without an explicit CIDR allowlist — the
+	// IP allowlist is the only network-level boundary for LAN access.
+	if effectivePublic && len(launcherCfg.AllowedCIDRs) == 0 {
+		log.Fatalf(
+			"Refusing to start in public mode without an IP allowlist.\n" +
+				"Add allowed_cidrs to launcher-config.json (e.g. \"192.168.1.0/24\") or\n" +
+				"remove the -public flag to restrict access to localhost only.",
+		)
+	}
+
+	// Ensure a persistent launcher token exists.
+	if launcherCfg.LauncherToken == "" {
+		launcherCfg.LauncherToken = generateLauncherToken()
+		if saveErr := launcherconfig.Save(launcherPath, launcherCfg); saveErr != nil {
+			log.Printf("Warning: failed to persist launcher token: %v", saveErr)
+		}
+	}
+
 	// Determine listen address
 	var addr string
 	if effectivePublic {
@@ -130,10 +150,18 @@ func main() {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
+	// Non-loopback callers (LAN) are auto-authed only when an explicit CIDR
+	// allowlist is in place — they've already passed the IP check.
+	autoAuthNonLoopback := effectivePublic && len(launcherCfg.AllowedCIDRs) > 0
+
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
-			middleware.JSONContentType(accessControlledMux),
+			middleware.SecurityHeaders(
+				middleware.JSONContentType(
+					middleware.SessionAuth(launcherCfg.LauncherToken, autoAuthNonLoopback, accessControlledMux),
+				),
+			),
 		),
 	)
 
@@ -147,6 +175,8 @@ func main() {
 		if ip := utils.GetLocalIP(); ip != "" {
 			fmt.Printf("    >> http://%s:%s <<\n", ip, effectivePort)
 		}
+		fmt.Println()
+		fmt.Printf("  Launcher token (required for LAN access): %s\n", launcherCfg.LauncherToken)
 	}
 	fmt.Println()
 
@@ -168,7 +198,23 @@ func main() {
 	}()
 
 	// Start the Server
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
+}
+
+func generateLauncherToken() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("Failed to generate launcher token: %v", err)
+	}
+	return hex.EncodeToString(b)
 }

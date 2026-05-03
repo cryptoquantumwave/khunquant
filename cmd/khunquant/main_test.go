@@ -43,6 +43,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"model",
 		"onboard",
 		"skills",
+		"start",
 		"status",
 		"update",
 		"version",

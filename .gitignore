@@ -25,7 +25,20 @@ plans/
 
 # Secrets & Config (keep templates, ignore actual secrets)
 .env
+.env.*
+!.env.example
 config/config.json
+launcher-config.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+credentials*.json
+service-account*.json
+secrets.yaml
+secrets.yml
 
 # Test
 coverage.txt
@@ -57,5 +70,3 @@ dist/
 !web/backend/dist/
 web/backend/dist/*
 !web/backend/dist/.gitkeep
-
-.claude/

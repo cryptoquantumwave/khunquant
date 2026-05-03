@@ -7,7 +7,6 @@ interface PicoTokenResponse {
 }
 
 interface PicoSetupResponse {
-  token: string
   ws_url: string
   enabled: boolean
   changed: boolean

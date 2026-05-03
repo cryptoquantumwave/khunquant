@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -21,6 +22,15 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/web/backend/utils"
 )
+
+// parseOrigin parses an Origin header value and returns its host component.
+func parseOrigin(origin string) (string, error) {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", err
+	}
+	return u.Host, nil
+}
 
 // gateway holds the state for the managed gateway process.
 var gateway = struct {
@@ -746,7 +756,13 @@ func (h *Handler) handleGatewayEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Reflect the request Origin only when it matches the server host so that
+	// same-origin browser pages work while cross-origin pages are blocked.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		if parsed, err := parseOrigin(origin); err == nil && parsed == r.Host {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+	}
 
 	// Subscribe to gateway events
 	ch := gateway.events.Subscribe()

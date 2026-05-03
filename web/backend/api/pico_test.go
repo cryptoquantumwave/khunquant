@@ -222,8 +222,8 @@ func TestHandlePicoSetup_Response(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if resp["token"] == nil || resp["token"] == "" {
-		t.Error("response should contain a non-empty token")
+	if _, hasToken := resp["token"]; hasToken {
+		t.Error("response must not contain the token (security: C6)")
 	}
 	if resp["ws_url"] == nil || resp["ws_url"] == "" {
 		t.Error("response should contain ws_url")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -16,6 +17,15 @@ func newTestPicoChannel(t *testing.T) *PicoChannel {
 	t.Helper()
 
 	cfg := config.PicoConfig{Token: *config.NewSecureString("test-token")}
+	return newTestPicoChannelWithConfig(t, cfg)
+}
+
+func newTestPicoChannelWithConfig(t *testing.T, cfg config.PicoConfig) *PicoChannel {
+	t.Helper()
+
+	if cfg.Token.String() == "" {
+		cfg.Token = *config.NewSecureString("test-token")
+	}
 	ch, err := NewPicoChannel(cfg, bus.NewMessageBus())
 	if err != nil {
 		t.Fatalf("NewPicoChannel: %v", err)
@@ -23,6 +33,52 @@ func newTestPicoChannel(t *testing.T) *PicoChannel {
 
 	ch.ctx = context.Background()
 	return ch
+}
+
+func TestCheckOrigin_AllowsSameOriginWhenAllowOriginsEmpty(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	req := httptest.NewRequest("GET", "http://launcher.local/pico/ws", nil)
+	req.Host = "192.168.1.9:18800"
+	req.Header.Set("Origin", "http://192.168.1.9:18800")
+
+	if !ch.upgrader.CheckOrigin(req) {
+		t.Fatal("same-origin browser websocket request should be allowed")
+	}
+}
+
+func TestCheckOrigin_DeniesCrossOriginWhenAllowOriginsEmpty(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	req := httptest.NewRequest("GET", "http://launcher.local/pico/ws", nil)
+	req.Host = "192.168.1.9:18800"
+	req.Header.Set("Origin", "http://evil.example.com")
+
+	if ch.upgrader.CheckOrigin(req) {
+		t.Fatal("cross-origin browser websocket request should be denied")
+	}
+}
+
+func TestCheckOrigin_AllowsNoOriginWhenAllowOriginsEmpty(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	req := httptest.NewRequest("GET", "http://launcher.local/pico/ws", nil)
+	req.Host = "192.168.1.9:18800"
+
+	if !ch.upgrader.CheckOrigin(req) {
+		t.Fatal("websocket request without Origin should be allowed")
+	}
+}
+
+func TestCheckOrigin_UsesExplicitAllowOrigins(t *testing.T) {
+	ch := newTestPicoChannelWithConfig(t, config.PicoConfig{
+		Token:        *config.NewSecureString("test-token"),
+		AllowOrigins: []string{"https://myapp.example.com"},
+	})
+	req := httptest.NewRequest("GET", "http://launcher.local/pico/ws", nil)
+	req.Host = "192.168.1.9:18800"
+	req.Header.Set("Origin", "https://myapp.example.com")
+
+	if !ch.upgrader.CheckOrigin(req) {
+		t.Fatal("explicitly allowed origin should be allowed")
+	}
 }
 
 func TestCreateAndAddConnection_RespectsMaxConnectionsConcurrently(t *testing.T) {

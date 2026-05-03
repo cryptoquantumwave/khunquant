@@ -10,6 +10,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
+var interfaceAddrs = net.InterfaceAddrs
+
 type cronUpdateRequest struct {
 	Name     *string            `json:"name,omitempty"`
 	Message  *string            `json:"message,omitempty"`
@@ -30,12 +32,35 @@ func loopbackOnly(next http.Handler) http.Handler {
 			host = h
 		}
 		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
+		if ip == nil || !isLocalManagementIP(ip) {
 			http.Error(w, `{"error":"access denied"}`, http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLocalManagementIP(ip net.IP) bool {
+	if ip.IsLoopback() {
+		return true
+	}
+	addrs, err := interfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		switch v := addr.(type) {
+		case *net.IPNet:
+			if v.IP.Equal(ip) {
+				return true
+			}
+		case *net.IPAddr:
+			if v.IP.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // registerCronAPI registers live cron management routes on the gateway HTTP mux.

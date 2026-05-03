@@ -72,6 +72,44 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 	}
 }
 
+func TestPutLauncherConfigPreservesLauncherToken(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	launcherPath := launcherconfig.PathForAppConfig(configPath)
+	if err := launcherconfig.Save(launcherPath, launcherconfig.Config{
+		Port:          18800,
+		Public:        true,
+		AllowedCIDRs:  []string{"192.168.1.0/24"},
+		LauncherToken: "existing-token",
+	}); err != nil {
+		t.Fatalf("launcherconfig.Save() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/system/launcher-config",
+		strings.NewReader(`{"port":18080,"public":true,"allowed_cidrs":["10.0.0.0/8"]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	cfg, err := launcherconfig.Load(launcherPath, launcherconfig.Default())
+	if err != nil {
+		t.Fatalf("launcherconfig.Load() error = %v", err)
+	}
+	if cfg.LauncherToken != "existing-token" {
+		t.Fatalf("launcher_token = %q, want %q", cfg.LauncherToken, "existing-token")
+	}
+}
+
 func TestPutLauncherConfigRejectsInvalidPort(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)

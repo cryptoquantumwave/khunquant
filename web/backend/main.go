@@ -150,16 +150,12 @@ func main() {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
-	// Non-loopback callers (LAN) are auto-authed only when an explicit CIDR
-	// allowlist is in place — they've already passed the IP check.
-	autoAuthNonLoopback := effectivePublic && len(launcherCfg.AllowedCIDRs) > 0
-
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
 			middleware.SecurityHeaders(
 				middleware.JSONContentType(
-					middleware.SessionAuth(launcherCfg.LauncherToken, autoAuthNonLoopback, accessControlledMux),
+					middleware.SessionAuth(launcherCfg.LauncherToken, accessControlledMux),
 				),
 			),
 		),
@@ -174,6 +170,7 @@ func main() {
 	if effectivePublic {
 		if ip := utils.GetLocalIP(); ip != "" {
 			fmt.Printf("    >> http://%s:%s <<\n", ip, effectivePort)
+			fmt.Printf("    >> http://%s:%s/?launcher_token=%s <<\n", ip, effectivePort, launcherCfg.LauncherToken)
 		}
 		fmt.Println()
 		fmt.Printf("  Launcher token (required for LAN access): %s\n", launcherCfg.LauncherToken)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,9 +71,7 @@ func NewPicoChannel(cfg config.PicoConfig, messageBus *bus.MessageBus) (*PicoCha
 	allowOrigins := cfg.AllowOrigins
 	checkOrigin := func(r *http.Request) bool {
 		if len(allowOrigins) == 0 {
-			// No origins configured: deny cross-origin browser connections.
-			// Callers without an Origin header (e.g. native clients) still pass.
-			return r.Header.Get("Origin") == ""
+			return isSameOriginRequest(r)
 		}
 		origin := r.Header.Get("Origin")
 		for _, allowed := range allowOrigins {
@@ -94,6 +93,15 @@ func NewPicoChannel(cfg config.PicoConfig, messageBus *bus.MessageBus) (*PicoCha
 		connections:        make(map[string]*picoConn),
 		sessionConnections: make(map[string]map[string]*picoConn),
 	}, nil
+}
+
+func isSameOriginRequest(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Host == r.Host
 }
 
 // createAndAddConnection checks MaxConnections and registers a connection atomically.
@@ -576,7 +584,6 @@ func truncate(s string, maxLen int) string {
 	}
 	return string(runes[:maxLen]) + "..."
 }
-
 
 // setContextUsagePayload adds context window usage stats to a pico payload.
 func setContextUsagePayload(payload map[string]any, u *bus.ContextUsage) {

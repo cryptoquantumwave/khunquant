@@ -356,23 +356,28 @@ func (a *BitkubBrokerAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 	out := make([]ccxt.Trade, 0, len(orders))
 	for _, o := range orders {
 		price, _ := strconv.ParseFloat(string(o.Rat), 64)
-		rec, _ := strconv.ParseFloat(string(o.Rec), 64)
+		// Bitkub v3 order-history: "amount" is THB spent for buys, base coins for sells.
+		// There is no separate "received" field.
+		amtRaw, _ := strconv.ParseFloat(string(o.Amt), 64)
 		feeAmt, _ := strconv.ParseFloat(string(o.Fee), 64)
-		tsMs := int64(o.Ts) // already Unix milliseconds
+		tsMs := int64(o.Ts)
 
 		id := o.ID
 		ccxtSym := strings.ReplaceAll(strings.ToUpper(o.Sym), "_", "/")
 		side := o.Sd
 		typ := o.Typ
 
-		var amount float64
+		var amount, cost float64
 		if o.Sd == "buy" {
-			amount = rec // base received
-		} else {
-			// sell: rec is THB received; amount in base = rec/price
+			// amtRaw = THB spent; derive base received from rate
+			cost = amtRaw
 			if price > 0 {
-				amount = rec / price
+				amount = amtRaw / price
 			}
+		} else {
+			// amtRaw = base coins sold; derive THB received from rate
+			amount = amtRaw
+			cost = amtRaw * price
 		}
 
 		out = append(out, ccxt.Trade{
@@ -382,9 +387,10 @@ func (a *BitkubBrokerAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 			Type:      &typ,
 			Price:     &price,
 			Amount:    &amount,
+			Cost:      &cost,
 			Timestamp: &tsMs,
 			Fee:       ccxt.Fee{Cost: &feeAmt},
-			Info:      map[string]interface{}{"id": o.ID, "sym": o.Sym, "rec": o.Rec},
+			Info:      map[string]interface{}{"id": o.ID, "sym": o.Sym, "amt": o.Amt},
 		})
 	}
 	return out, nil

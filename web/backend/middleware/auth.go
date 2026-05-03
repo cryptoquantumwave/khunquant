@@ -8,39 +8,43 @@ import (
 )
 
 const SessionCookieName = "kq_session"
+const LauncherTokenQueryParam = "launcher_token"
 
 // SessionAuth issues and validates session cookies for the launcher web UI.
 //
 // Trust rules (applied in order):
 //  1. Valid kq_session cookie → allow.
 //  2. Loopback caller whose Origin (if present) matches the server host → auto-issue cookie.
-//  3. Non-loopback caller when autoAuthNonLoopback is true (LAN users that already passed
-//     the IP allowlist) → auto-issue cookie.
-//  4. Bearer / X-Launcher-Token header matches secret → auto-issue cookie.
-//  5. Otherwise → 401.
+//  3. Bearer / X-Launcher-Token header or launcher_token query parameter matches secret
+//     → auto-issue cookie.
+//  4. Otherwise → 401 for API requests.
 //
 // SameSite=Strict on the issued cookie blocks CSRF from cross-origin pages: a page
 // from evil.com cannot carry the cookie when reaching back to localhost.
-func SessionAuth(secret string, autoAuthNonLoopback bool, next http.Handler) http.Handler {
+func SessionAuth(secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !apiRequiresAuth(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		if hasValidSession(r, secret) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		if isTrustedCaller(r, autoAuthNonLoopback) {
+		if isTrustedLoopbackCaller(r) {
 			issueSessionCookie(w, r, secret)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		if checkBearerToken(r, secret) {
+		if checkRequestToken(r, secret) {
 			issueSessionCookie(w, r, secret)
+			if shouldRedirectAfterQueryToken(r) {
+				http.Redirect(w, r, sanitizedTokenURL(r), http.StatusFound)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if !apiRequiresAuth(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -60,37 +64,54 @@ func apiRequiresAuth(r *http.Request) bool {
 }
 
 func hasValidSession(r *http.Request, secret string) bool {
+	if secret == "" {
+		return false
+	}
 	c, err := r.Cookie(SessionCookieName)
 	return err == nil && c.Value == secret
 }
 
-// isTrustedCaller returns true when the IP is loopback (and the Origin header, if
-// present, matches the server so we don't auto-auth CSRF requests from other origins)
-// OR when autoAuthNonLoopback is set (the IP has already passed the CIDR allowlist).
-func isTrustedCaller(r *http.Request, autoAuthNonLoopback bool) bool {
+// isTrustedLoopbackCaller returns true when the IP is loopback and the Origin
+// header, if present, matches the server so we don't auto-auth CSRF requests.
+func isTrustedLoopbackCaller(r *http.Request) bool {
 	ip := clientIPFromRemoteAddr(r.RemoteAddr)
-	if ip == nil {
+	if ip == nil || !ip.IsLoopback() {
 		return false
 	}
-	if ip.IsLoopback() {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // plain curl / non-browser call — no CSRF risk
-		}
-		parsed, err := url.Parse(origin)
-		if err != nil {
-			return false
-		}
-		return parsed.Host == r.Host
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // plain curl / non-browser call: no CSRF risk
 	}
-	return autoAuthNonLoopback
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return parsed.Host == r.Host
 }
 
-func checkBearerToken(r *http.Request, secret string) bool {
+func checkRequestToken(r *http.Request, secret string) bool {
+	if secret == "" {
+		return false
+	}
 	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
 		return tok == secret
 	}
-	return r.Header.Get("X-Launcher-Token") == secret
+	return r.Header.Get("X-Launcher-Token") == secret ||
+		r.URL.Query().Get(LauncherTokenQueryParam) == secret
+}
+
+func shouldRedirectAfterQueryToken(r *http.Request) bool {
+	return r.URL.Query().Get(LauncherTokenQueryParam) != "" &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		!strings.HasPrefix(r.URL.Path, "/api/")
+}
+
+func sanitizedTokenURL(r *http.Request) string {
+	u := *r.URL
+	q := u.Query()
+	q.Del(LauncherTokenQueryParam)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func issueSessionCookie(w http.ResponseWriter, r *http.Request, secret string) {

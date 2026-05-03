@@ -286,9 +286,74 @@ type openOrdersResponse struct {
 	Result []bitkubOpenOrder `json:"result"`
 }
 
+// bitkubHistoryOrder handles the my-order-history response which may use either
+// compact field names (sd, typ, rat, amt, rec) or full names (side, type, rate, amount, receive).
+type bitkubHistoryOrder struct {
+	ID  string
+	Sym string
+	Sd  string
+	Typ string
+	Rat numericString
+	Amt numericString
+	Rec numericString
+	Fee numericString
+	Ts  flexInt64
+	St  string
+	Ci  string
+}
+
+func (o *bitkubHistoryOrder) UnmarshalJSON(b []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+
+	getString := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k]; ok {
+				var s string
+				if json.Unmarshal(v, &s) == nil {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+
+	getNumeric := func(keys ...string) numericString {
+		for _, k := range keys {
+			if v, ok := m[k]; ok {
+				var n numericString
+				if json.Unmarshal(v, &n) == nil && string(n) != "" && string(n) != "null" {
+					return n
+				}
+			}
+		}
+		return ""
+	}
+
+	// txn_id is the trade-level ID; order_id is the order-level ID. Prefer txn_id.
+	o.ID = getString("txn_id", "id", "order_id")
+	o.Sym = getString("sym", "symbol")
+	o.Sd = getString("sd", "side")
+	o.Typ = getString("typ", "type")
+	o.Rat = getNumeric("rat", "rate")
+	// "amount" in the v3 order-history response is THB for buys, base for sells.
+	// There is no "received" (rec) field; amount IS the spend/receive value.
+	o.Amt = getNumeric("amt", "amount")
+	o.Rec = getNumeric("rec", "receive") // absent in v3; stays empty
+	o.Fee = getNumeric("fee")
+	o.St = getString("st", "status")
+	o.Ci = getString("ci", "client_id")
+	if v, ok := m["ts"]; ok {
+		_ = json.Unmarshal(v, &o.Ts)
+	}
+	return nil
+}
+
 type orderHistoryResponse struct {
-	Error  int           `json:"error"`
-	Result []bitkubOrder `json:"result"`
+	Error  int                  `json:"error"`
+	Result []bitkubHistoryOrder `json:"result"`
 }
 
 type orderInfoResponse struct {
@@ -473,7 +538,27 @@ func (b *BitkubExchange) fetchOrderHistory(ctx context.Context, sym string, page
 	if resp.Error != 0 {
 		return nil, fmt.Errorf("bitkub: order history error code %d", resp.Error)
 	}
-	return resp.Result, nil
+	out := make([]bitkubOrder, len(resp.Result))
+	for i, h := range resp.Result {
+		resSym := h.Sym
+		if resSym == "" {
+			resSym = sym // fallback to request symbol if API omits it
+		}
+		out[i] = bitkubOrder{
+			ID:  h.ID,
+			Sym: resSym,
+			Sd:  h.Sd,
+			Typ: h.Typ,
+			Rat: h.Rat,
+			Amt: h.Amt,
+			Rec: h.Rec,
+			Fee: h.Fee,
+			Ts:  h.Ts,
+			St:  h.St,
+			Ci:  h.Ci,
+		}
+	}
+	return out, nil
 }
 
 // fetchOrderInfo returns details for a single order (authenticated).

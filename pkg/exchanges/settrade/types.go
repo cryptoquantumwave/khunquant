@@ -13,14 +13,19 @@ type accountInfoResponse struct {
 
 // portfolioItem maps one entry in portfolioList from /api/seos/v3/{broker}/accounts/{acc}/portfolios.
 type portfolioItem struct {
-	Symbol        string  `json:"symbol"`
-	CurrentVolume float64 `json:"currentVolume"` // total shares held
-	ActualVolume  float64 `json:"actualVolume"`  // shares available to sell
-	AveragePrice  float64 `json:"averagePrice"`  // average cost price
-	MarketPrice   float64 `json:"marketPrice"`
-	MarketValue   float64 `json:"marketValue"`
-	Profit        float64 `json:"profit"` // unrealized P&L
-	PercentProfit float64 `json:"percentProfit"`
+	Symbol         string  `json:"symbol"`
+	CurrentVolume  float64 `json:"currentVolume"`  // total shares held
+	ActualVolume   float64 `json:"actualVolume"`   // shares available to sell
+	AveragePrice   float64 `json:"averagePrice"`   // average cost price
+	MarketPrice    float64 `json:"marketPrice"`
+	MarketValue    float64 `json:"marketValue"`
+	Profit         float64 `json:"profit"`         // unrealized P&L
+	PercentProfit  float64 `json:"percentProfit"`
+	Amount         float64 `json:"amount"`         // cost basis = avgPrice × currentVolume
+	CommissionRate float64 `json:"commissionRate"`
+	Flag           string  `json:"flag"`           // e.g. "N" (normal), "T" (transfer), etc.
+	Liabilities    float64 `json:"liabilities"`
+	MarginRate     float64 `json:"marginRate"`
 }
 
 // portfolioResponse maps the /portfolios response.
@@ -40,9 +45,11 @@ type createOrderRequest struct {
 	Volume        int     `json:"volume"`
 	QtyOpen       int     `json:"qtyOpen"`
 	Price         float64 `json:"price,omitempty"`
-	PriceType     string  `json:"priceType"`    // "Limit" | "ATO"
-	ValidityType  string  `json:"validityType"` // "Day"
-	ClientType    string  `json:"clientType"`   // "Individual"
+	PriceType     string  `json:"priceType"`              // "Limit" | "ATO"
+	ValidityType  string  `json:"validityType"`           // "Day"
+	ClientType    string  `json:"clientType"`             // "Individual"
+	BypassWarning *bool   `json:"bypassWarning,omitempty"`
+	ValidTillDate string  `json:"validTillDate,omitempty"` // "YYYY-MM-DD", for GTD orders
 }
 
 type cancelOrderRequest struct {
@@ -51,11 +58,12 @@ type cancelOrderRequest struct {
 
 // changeOrderRequest matches equity.change_order() body.
 type changeOrderRequest struct {
-	PIN           string   `json:"pin"`
-	NewPrice      *float64 `json:"newPrice,omitempty"`
-	NewVolume     *int     `json:"newVolume,omitempty"`
-	TrusteeIDType string   `json:"newTrusteeIdType,omitempty"`
-	BypassWarning *bool    `json:"bypassWarning,omitempty"`
+	PIN              string   `json:"pin"`
+	NewPrice         *float64 `json:"newPrice,omitempty"`
+	NewVolume        *int     `json:"newVolume,omitempty"`
+	NewIcebergVolume *int     `json:"newIcebergVolume,omitempty"`
+	TrusteeIDType    string   `json:"newTrusteeIdType,omitempty"`
+	BypassWarning    *bool    `json:"bypassWarning,omitempty"`
 }
 
 // cancelOrdersRequest matches equity.cancel_orders() body (bulk cancel).
@@ -124,13 +132,19 @@ type OHLCV struct {
 // --- Trades (SEOS v4) ---
 
 type tradeRecord struct {
-	TradeID   string  `json:"tradeId"`
-	OrderNo   string  `json:"orderNo"`
-	Symbol    string  `json:"symbol"`
-	Side      string  `json:"side"`
-	Volume    float64 `json:"volume"` // shares (consistent with order vol and portfolio)
-	Price     float64 `json:"price"`
-	TradeDate string  `json:"tradeDate"`
+	TradeID      string  `json:"tradeId"`
+	OrderNo      string  `json:"orderNo"`
+	Symbol       string  `json:"symbol"`
+	Side         string  `json:"side"`
+	Volume       float64 `json:"volume"` // shares (consistent with order vol and portfolio)
+	Price        float64 `json:"price"`
+	TradeDate    string  `json:"tradeDate"`
+	AccountNo    string  `json:"accountNo"`
+	BrokerID     string  `json:"brokerId"`
+	BrokerageFee float64 `json:"brokerageFee"`
+	ClearingFee  float64 `json:"clearingFee"`
+	DealNo       string  `json:"dealNo"`
+	EntryID      string  `json:"entryId"`
 }
 
 type tradesResponse struct {

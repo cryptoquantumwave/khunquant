@@ -673,7 +673,9 @@
           "markets": "市场数据",
           "orders": "订单执行",
           "analysis": "技术分析",
-          "alerts": "提醒与划转"
+          "alerts": "提醒与划转",
+          "dca": "定期定额投资",
+          "pnl": "盈亏分析"
         },
         "reasons": {
           "requires_linux": "该工具仅在 Linux 主机上可用，并且需要暴露对应的设备文件。",

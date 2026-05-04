@@ -5,11 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +41,81 @@ type tokenResponse struct {
 }
 
 type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refreshToken"`
 	APIKey       string `json:"apiKey"`
+}
+
+// rateLimiter tracks the per-second and per-minute API quotas reported in
+// response headers (X-RateLimit-Remaining-second / X-RateLimit-Remaining-minute).
+// When either counter hits zero it sleeps until the next block boundary.
+type rateLimiter struct {
+	mu sync.Mutex
+
+	// Capacities (updated from response headers).
+	limitPerSecond int
+	limitPerMinute int
+
+	// Remaining calls in the current block (updated from response headers).
+	remainPerSecond int
+	remainPerMinute int
+
+	lastRequestAt time.Time // wall-clock time of the last request
+}
+
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{
+		limitPerSecond:  5,
+		limitPerMinute:  60,
+		remainPerSecond: 5,
+		remainPerMinute: 60,
+	}
+}
+
+// wait blocks until sending another request is safe.
+func (r *rateLimiter) wait() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+
+	// Per-minute exhausted?
+	if r.remainPerMinute <= 0 {
+		nextMin := r.lastRequestAt.Truncate(time.Minute).Add(time.Minute)
+		if sleep := time.Until(nextMin); sleep > 0 {
+			time.Sleep(sleep)
+		}
+		r.remainPerSecond = r.limitPerSecond
+		r.remainPerMinute = r.limitPerMinute
+	}
+
+	// Per-second exhausted?
+	if r.remainPerSecond <= 0 {
+		nextSec := r.lastRequestAt.Truncate(time.Second).Add(time.Second)
+		if sleep := time.Until(nextSec); sleep > 0 {
+			time.Sleep(sleep)
+		}
+		r.remainPerSecond = r.limitPerSecond
+	}
+
+	r.lastRequestAt = now
+}
+
+// update refreshes counters from response headers.
+func (r *rateLimiter) update(h http.Header) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if v, err := strconv.Atoi(h.Get("X-RateLimit-Remaining-second")); err == nil {
+		r.remainPerSecond = v
+	}
+	if v, err := strconv.Atoi(h.Get("X-RateLimit-Remaining-minute")); err == nil {
+		r.remainPerMinute = v
+	}
+	if v, err := strconv.Atoi(h.Get("X-RateLimit-Limit-second")); err == nil && v > 0 {
+		r.limitPerSecond = v
+	}
+	if v, err := strconv.Atoi(h.Get("X-RateLimit-Limit-minute")); err == nil && v > 0 {
+		r.limitPerMinute = v
+	}
 }
 
 // SettradeClient is an authenticated HTTP client for the SETTRADE Open API.
@@ -48,10 +124,48 @@ type SettradeClient struct {
 	httpClient *http.Client
 	privateKey *ecdsa.PrivateKey
 
+	// ntpOffsetMs is the difference (NTP time − local time) in milliseconds,
+	// used to correct the timestamp in ECDSA login signatures.
+	ntpOffsetMs int64
+
+	rl *rateLimiter
+
 	mu           sync.Mutex
 	accessToken  string
 	refreshToken string
 	tokenExpiry  time.Time
+}
+
+// syncNTPOffset queries an NTP server and returns the offset (NTP − local) in ms.
+// Returns 0 on any error so callers can proceed with local time.
+func syncNTPOffset() int64 {
+	conn, err := net.DialTimeout("udp", "2.asia.pool.ntp.org:123", 3*time.Second)
+	if err != nil {
+		return 0
+	}
+	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// Minimal NTP request packet: version 3, mode 3 (client).
+	req := make([]byte, 48)
+	req[0] = 0x1B // LI=0, VN=3, Mode=3
+
+	if _, err := conn.Write(req); err != nil {
+		return 0
+	}
+
+	resp := make([]byte, 48)
+	if _, err := conn.Read(resp); err != nil {
+		return 0
+	}
+
+	// Transmit timestamp starts at byte 40 — seconds since 1900-01-01.
+	secs := binary.BigEndian.Uint32(resp[40:44])
+	const ntpEpochOffset = 2208988800 // seconds between 1900 and 1970
+	ntpMs := (int64(secs) - ntpEpochOffset) * 1000
+	localMs := time.Now().UnixMilli()
+	return ntpMs - localMs
 }
 
 // NewSettradeClient creates a new client and decodes the ECDSA private key.
@@ -81,10 +195,18 @@ func NewSettradeClient(cfg config.SettradeExchangeAccount) (*SettradeClient, err
 	if err != nil {
 		return nil, fmt.Errorf("settrade: %w", err)
 	}
+
+	ntpOffset := syncNTPOffset()
+	if ntpOffset != 0 {
+		logger.DebugCF("settrade", "NTP offset applied", map[string]any{"offset_ms": ntpOffset})
+	}
+
 	return &SettradeClient{
-		cfg:        cfg,
-		httpClient: httpClient,
-		privateKey: key,
+		cfg:         cfg,
+		httpClient:  httpClient,
+		privateKey:  key,
+		ntpOffsetMs: ntpOffset,
+		rl:          newRateLimiter(),
 	}, nil
 }
 
@@ -92,7 +214,7 @@ func NewSettradeClient(cfg config.SettradeExchangeAccount) (*SettradeClient, err
 
 func (c *SettradeClient) login(ctx context.Context) error {
 	const params = ""
-	sigHex, tsMs, err := sign(c.privateKey, c.cfg.APIKey.String(), params)
+	sigHex, tsMs, err := sign(c.privateKey, c.cfg.APIKey.String(), params, c.ntpOffsetMs)
 	if err != nil {
 		return err
 	}
@@ -174,11 +296,20 @@ func (c *SettradeClient) doRequest(ctx context.Context, method, host, path strin
 		req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	}
 
+	// Apply rate limiting before authenticated requests to avoid 429s.
+	if auth && c.rl != nil {
+		c.rl.wait()
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("settrade: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
+
+	if auth && c.rl != nil {
+		c.rl.update(resp.Header)
+	}
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {

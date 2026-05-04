@@ -56,7 +56,7 @@ func TestSign_ProducesValidSignature(t *testing.T) {
 		t.Fatalf("loadPrivateKey: %v", err)
 	}
 
-	sigHex, tsMs, err := sign(key, "test-api-key", "param1=value1")
+	sigHex, tsMs, err := sign(key, "test-api-key", "param1=value1", 0)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -94,8 +94,8 @@ func TestSign_SignatureChangesWithDifferentInputs(t *testing.T) {
 	b64, _ := generateTestKeyB64(t)
 	key, _ := loadPrivateKey(b64)
 
-	sig1, _, _ := sign(key, "api-key-1", "params")
-	sig2, _, _ := sign(key, "api-key-2", "params")
+	sig1, _, _ := sign(key, "api-key-1", "params", 0)
+	sig2, _, _ := sign(key, "api-key-2", "params", 0)
 
 	if sig1 == sig2 {
 		t.Error("expected different signatures for different API keys (ECDSA is randomized)")

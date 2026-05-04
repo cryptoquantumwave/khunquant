@@ -130,6 +130,12 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("list_portfolios") {
 		toolsRegistry.Register(tools.NewListPortfoliosTool(cfg))
 	}
+	if cfg.Tools.IsToolEnabled("get_pnl_summary") {
+		toolsRegistry.Register(tools.NewGetPnLSummaryTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("get_pnl_detail") {
+		toolsRegistry.Register(tools.NewGetPnLDetailTool(cfg))
+	}
 	if cfg.Tools.IsToolEnabled("config_encrypt_keys") {
 		toolsRegistry.Register(tools.NewConfigEncryptKeysTool(cfg))
 	}

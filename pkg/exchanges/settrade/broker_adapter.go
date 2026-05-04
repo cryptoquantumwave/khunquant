@@ -102,11 +102,16 @@ func (a *SettradeFullAdapter) GetWalletBalances(ctx context.Context, walletType 
 				Balance:    broker.Balance{Asset: item.Symbol, Free: item.ActualVolume, Locked: item.CurrentVolume - item.ActualVolume},
 				WalletType: "stock",
 				Extra: map[string]string{
-					"avg_cost":       fmt.Sprintf("%g", item.AveragePrice),
-					"market_price":   fmt.Sprintf("%g", item.MarketPrice),
-					"market_value":   fmt.Sprintf("%g", item.MarketValue),
-					"unrealized_pl":  fmt.Sprintf("%g", item.Profit),
-					"percent_profit": fmt.Sprintf("%g", item.PercentProfit),
+					"avg_cost":        fmt.Sprintf("%g", item.AveragePrice),
+					"market_price":    fmt.Sprintf("%g", item.MarketPrice),
+					"market_value":    fmt.Sprintf("%g", item.MarketValue),
+					"unrealized_pl":   fmt.Sprintf("%g", item.Profit),
+					"percent_profit":  fmt.Sprintf("%g", item.PercentProfit),
+					"amount":          fmt.Sprintf("%g", item.Amount),
+					"commission_rate": fmt.Sprintf("%g", item.CommissionRate),
+					"flag":            item.Flag,
+					"liabilities":     fmt.Sprintf("%g", item.Liabilities),
+					"margin_rate":     fmt.Sprintf("%g", item.MarginRate),
 				},
 			}
 		}
@@ -334,6 +339,8 @@ func (a *SettradeFullAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 		side := strings.ToLower(tr.Side)
 		typ := "limit"
 		shares := tr.Volume
+		cost := tr.Volume * tr.Price
+		totalFee := tr.BrokerageFee + tr.ClearingFee
 		out[i] = ccxt.Trade{
 			Id:     &id,
 			Symbol: &ccxtSym,
@@ -341,7 +348,18 @@ func (a *SettradeFullAdapter) FetchMyTrades(ctx context.Context, symbol string, 
 			Type:   &typ,
 			Price:  &tr.Price,
 			Amount: &shares,
-			Info:   map[string]interface{}{"order_no": tr.OrderNo, "trade_date": tr.TradeDate},
+			Cost:   &cost,
+			Fee:    ccxt.Fee{Cost: &totalFee},
+			Info: map[string]interface{}{
+				"order_no":      tr.OrderNo,
+				"trade_date":    tr.TradeDate,
+				"account_no":    tr.AccountNo,
+				"broker_id":     tr.BrokerID,
+				"brokerage_fee": tr.BrokerageFee,
+				"clearing_fee":  tr.ClearingFee,
+				"deal_no":       tr.DealNo,
+				"entry_id":      tr.EntryID,
+			},
 		}
 	}
 	return out, nil

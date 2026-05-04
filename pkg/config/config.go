@@ -1047,6 +1047,19 @@ type ToolsConfig struct {
 	SetIndicatorAlert ToolConfig `json:"set_indicator_alert" envPrefix:"KHUNQUANT_TOOLS_SET_INDICATOR_ALERT_"`
 	TransferFunds     ToolConfig `json:"transfer_funds"      envPrefix:"KHUNQUANT_TOOLS_TRANSFER_FUNDS_"`
 
+	// DCA — Dollar Cost Averaging (Track E)
+	CreateDCAPlan   ToolConfig `json:"create_dca_plan"   envPrefix:"KHUNQUANT_TOOLS_CREATE_DCA_PLAN_"`
+	ListDCAPlans    ToolConfig `json:"list_dca_plans"    envPrefix:"KHUNQUANT_TOOLS_LIST_DCA_PLANS_"`
+	UpdateDCAPlan   ToolConfig `json:"update_dca_plan"   envPrefix:"KHUNQUANT_TOOLS_UPDATE_DCA_PLAN_"`
+	DeleteDCAPlan   ToolConfig `json:"delete_dca_plan"   envPrefix:"KHUNQUANT_TOOLS_DELETE_DCA_PLAN_"`
+	ExecuteDCAOrder ToolConfig `json:"execute_dca_order" envPrefix:"KHUNQUANT_TOOLS_EXECUTE_DCA_ORDER_"`
+	GetDCAHistory   ToolConfig `json:"get_dca_history"   envPrefix:"KHUNQUANT_TOOLS_GET_DCA_HISTORY_"`
+	GetDCASummary   ToolConfig `json:"get_dca_summary"   envPrefix:"KHUNQUANT_TOOLS_GET_DCA_SUMMARY_"`
+
+	// PnL — Profit and Loss (Track F)
+	GetPnLSummary ToolConfig `json:"get_pnl_summary" envPrefix:"KHUNQUANT_TOOLS_GET_PNL_SUMMARY_"`
+	GetPnLDetail  ToolConfig `json:"get_pnl_detail"  envPrefix:"KHUNQUANT_TOOLS_GET_PNL_DETAIL_"`
+
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
 }
@@ -1453,6 +1466,24 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.TransferFunds.Enabled
 	case "config_encrypt_keys":
 		return t.ConfigEncryptKeys.Enabled
+	case "create_dca_plan":
+		return t.CreateDCAPlan.Enabled
+	case "list_dca_plans":
+		return t.ListDCAPlans.Enabled
+	case "update_dca_plan":
+		return t.UpdateDCAPlan.Enabled
+	case "delete_dca_plan":
+		return t.DeleteDCAPlan.Enabled
+	case "execute_dca_order":
+		return t.ExecuteDCAOrder.Enabled
+	case "get_dca_history":
+		return t.GetDCAHistory.Enabled
+	case "get_dca_summary":
+		return t.GetDCASummary.Enabled
+	case "get_pnl_summary":
+		return t.GetPnLSummary.Enabled
+	case "get_pnl_detail":
+		return t.GetPnLDetail.Enabled
 	default:
 		return true
 	}

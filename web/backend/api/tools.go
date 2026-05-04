@@ -313,6 +313,64 @@ var toolCatalog = []toolCatalogEntry{
 		Category:    tools.CatAlerts,
 		ConfigKey:   tools.NameTransferFunds,
 	},
+
+	// DCA — Dollar Cost Averaging (Track E)
+	{
+		Name:        tools.NameCreateDCAPlan,
+		Description: tools.DescCreateDCAPlan,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameCreateDCAPlan,
+	},
+	{
+		Name:        tools.NameListDCAPlans,
+		Description: tools.DescListDCAPlans,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameListDCAPlans,
+	},
+	{
+		Name:        tools.NameUpdateDCAPlan,
+		Description: tools.DescUpdateDCAPlan,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameUpdateDCAPlan,
+	},
+	{
+		Name:        tools.NameDeleteDCAPlan,
+		Description: tools.DescDeleteDCAPlan,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameDeleteDCAPlan,
+	},
+	{
+		Name:        tools.NameExecuteDCAOrder,
+		Description: tools.DescExecuteDCAOrder,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameExecuteDCAOrder,
+	},
+	{
+		Name:        tools.NameGetDCAHistory,
+		Description: tools.DescGetDCAHistory,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameGetDCAHistory,
+	},
+	{
+		Name:        tools.NameGetDCASummary,
+		Description: tools.DescGetDCASummary,
+		Category:    tools.CatDCA,
+		ConfigKey:   tools.NameGetDCASummary,
+	},
+
+	// PnL — Profit and Loss (Track F)
+	{
+		Name:        tools.NameGetPnLSummary,
+		Description: tools.DescGetPnLSummary,
+		Category:    tools.CatPnL,
+		ConfigKey:   tools.NameGetPnLSummary,
+	},
+	{
+		Name:        tools.NameGetPnLDetail,
+		Description: tools.DescGetPnLDetail,
+		Category:    tools.CatPnL,
+		ConfigKey:   tools.NameGetPnLDetail,
+	},
 }
 
 func (h *Handler) registerToolRoutes(mux *http.ServeMux) {
@@ -519,6 +577,24 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.CancelOrder.Enabled = enabled
 	case tools.NameEmergencyStop:
 		cfg.Tools.EmergencyStop.Enabled = enabled
+	case tools.NameCreateDCAPlan:
+		cfg.Tools.CreateDCAPlan.Enabled = enabled
+	case tools.NameListDCAPlans:
+		cfg.Tools.ListDCAPlans.Enabled = enabled
+	case tools.NameUpdateDCAPlan:
+		cfg.Tools.UpdateDCAPlan.Enabled = enabled
+	case tools.NameDeleteDCAPlan:
+		cfg.Tools.DeleteDCAPlan.Enabled = enabled
+	case tools.NameExecuteDCAOrder:
+		cfg.Tools.ExecuteDCAOrder.Enabled = enabled
+	case tools.NameGetDCAHistory:
+		cfg.Tools.GetDCAHistory.Enabled = enabled
+	case tools.NameGetDCASummary:
+		cfg.Tools.GetDCASummary.Enabled = enabled
+	case tools.NameGetPnLSummary:
+		cfg.Tools.GetPnLSummary.Enabled = enabled
+	case tools.NameGetPnLDetail:
+		cfg.Tools.GetPnLDetail.Enabled = enabled
 	default:
 		return fmt.Errorf("tool %q cannot be updated", toolName)
 	}

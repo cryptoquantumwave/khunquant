@@ -1,6 +1,7 @@
 package settrade
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -237,6 +238,21 @@ func TestIsUnauthorized_ShortError(t *testing.T) {
 	// Error string shorter than 22 bytes — should not panic.
 	if isUnauthorized(errors.New("short")) {
 		t.Error("isUnauthorized: expected false for short error")
+	}
+}
+
+// --- refreshRequest ---
+
+func TestRefreshRequest_MarshalsSDKFieldNames(t *testing.T) {
+	body := refreshRequest{APIKey: "app-id", RefreshToken: "refresh-token"}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal refreshRequest: %v", err)
+	}
+
+	want := `{"refreshToken":"refresh-token","apiKey":"app-id"}`
+	if string(data) != want {
+		t.Fatalf("refreshRequest JSON: want %s, got %s", want, data)
 	}
 }
 

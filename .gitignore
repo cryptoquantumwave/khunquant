@@ -27,6 +27,7 @@ plans/
 .env
 .env.*
 !.env.example
+.security.yml
 config/config.json
 launcher-config.json
 *.pem

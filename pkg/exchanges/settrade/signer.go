@@ -44,9 +44,10 @@ type ecdsaDERSig struct {
 // Hash: SHA-256 of the UTF-8 payload.
 // Signature: ECDSA P-256 → ASN.1 DER → hex string.
 //
+// ntpOffsetMs corrects local clock drift (NTP time − local time in ms).
 // Returns the hex-encoded DER signature and the Unix millisecond timestamp used.
-func sign(key *ecdsa.PrivateKey, apiKey, params string) (sigHex string, tsMs int64, err error) {
-	tsMs = time.Now().UnixMilli()
+func sign(key *ecdsa.PrivateKey, apiKey, params string, ntpOffsetMs int64) (sigHex string, tsMs int64, err error) {
+	tsMs = time.Now().UnixMilli() + ntpOffsetMs
 	payload := fmt.Sprintf("%s.%s.%d", apiKey, params, tsMs)
 	digest := sha256.Sum256([]byte(payload))
 

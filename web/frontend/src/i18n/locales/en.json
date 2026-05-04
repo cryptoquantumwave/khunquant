@@ -567,7 +567,9 @@
           "markets": "Market Data",
           "orders": "Order Execution",
           "analysis": "Technical Analysis",
-          "alerts": "Alerts & Transfers"
+          "alerts": "Alerts & Transfers",
+          "dca": "Dollar Cost Averaging",
+          "pnl": "Profit & Loss"
         },
         "reasons": {
           "requires_linux": "This tool only works on Linux hosts with the required device files exposed.",

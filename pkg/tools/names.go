@@ -59,6 +59,10 @@ const (
 	// Security
 	NameConfigEncryptKeys = "config_encrypt_keys"
 
+	// PnL — Profit and Loss (Track F)
+	NameGetPnLSummary = "get_pnl_summary"
+	NameGetPnLDetail  = "get_pnl_detail"
+
 	// DCA — Dollar Cost Averaging (Track E)
 	NameCreateDCAPlan   = "create_dca_plan"
 	NameListDCAPlans    = "list_dca_plans"
@@ -84,6 +88,8 @@ const (
 	CatOrders        = "orders"
 	CatAnalysis      = "analysis"
 	CatAlerts        = "alerts"
+	CatDCA           = "dca"
+	CatPnL           = "pnl"
 )
 
 // Catalog description constants — short, UI-facing summaries for the web tool catalog.
@@ -114,4 +120,15 @@ const (
 	DescSPI             = "Interact with SPI hardware devices exposed on the host."
 	DescToolSearchRegex = "Discover hidden MCP tools by regex search when tool discovery is enabled."
 	DescToolSearchBM25  = "Discover hidden MCP tools by semantic ranking when tool discovery is enabled."
+	DescGetPnLSummary  = "Compute cost basis and unrealized (and optionally realized) PnL for all currently held assets across one or all exchange accounts."
+	DescGetPnLDetail   = "Per-symbol PnL audit: replay buy/sell trade history to show realized profit, average cost, current unrealized gain/loss, and fees paid."
+
+	// DCA tool descriptions
+	DescCreateDCAPlan   = "Create a new Dollar Cost Averaging plan to automatically invest a fixed amount on a schedule."
+	DescListDCAPlans    = "List all configured DCA plans with their status, schedule, and recent execution history."
+	DescUpdateDCAPlan   = "Update an existing DCA plan's amount, schedule, or other parameters."
+	DescDeleteDCAPlan   = "Delete a DCA plan. In-flight executions are not cancelled."
+	DescExecuteDCAOrder = "Manually trigger a DCA plan order execution outside its normal schedule."
+	DescGetDCAHistory   = "Retrieve the execution history for a DCA plan: amounts invested, prices paid, and timestamps."
+	DescGetDCASummary   = "Summarize a DCA plan's performance: total invested, average cost, current value, and unrealized PnL."
 )

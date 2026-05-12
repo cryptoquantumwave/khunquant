@@ -272,11 +272,17 @@ release-local:
 	GOVERSION=$$(go version | awk '{print $$3}') goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=sign,announce
 
 ## release: Tag and publish a release via GoReleaser (5 platforms, 2 parallel jobs). Suitable for local dev machines.
-## Usage: make release RELEASE_TAG=v0.2.0
+## Usage: make release RELEASE_TAG=v0.2.0 [REPLACE_TAGS=1]
+REPLACE_TAGS?=0
 release:
 	@if [ -z "$(RELEASE_TAG)" ]; then echo "ERROR: set RELEASE_TAG, e.g. make release RELEASE_TAG=v0.2.0"; exit 1; fi
 	@if [ -z "$$GITHUB_TOKEN" ]; then echo "ERROR: GITHUB_TOKEN is not set"; exit 1; fi
 	@which goreleaser > /dev/null 2>&1 || (echo "ERROR: goreleaser not installed. Run: brew install goreleaser"; exit 1)
+	@if [ "$(REPLACE_TAGS)" = "1" ] && git rev-parse "$(RELEASE_TAG)" > /dev/null 2>&1; then \
+		echo "Tag $(RELEASE_TAG) exists, replacing..."; \
+		git tag -d $(RELEASE_TAG); \
+		git push origin :refs/tags/$(RELEASE_TAG); \
+	fi
 	@echo "Tagging $(RELEASE_TAG)..."
 	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
 	git push origin $(RELEASE_TAG)

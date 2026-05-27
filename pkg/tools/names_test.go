@@ -23,6 +23,8 @@ func TestToolNameConstants_NonEmpty(t *testing.T) {
 		tools.NameCreateOrder, tools.NameCancelOrder, tools.NameGetOrder,
 		tools.NameGetOpenOrders, tools.NameGetOrderHistory, tools.NameGetTradeHistory,
 		tools.NameEmergencyStop, tools.NamePaperTrade, tools.NameGetOrderRateStatus,
+		tools.NameFuturesSetLeverage, tools.NameFuturesOpenPosition, tools.NameFuturesGetOrder,
+		tools.NameFuturesGetPositions, tools.NameFuturesGetFunding,
 		tools.NameCalculateIndicators, tools.NameMarketAnalysis, tools.NamePortfolioAllocation,
 		tools.NameSetPriceAlert, tools.NameSetIndicatorAlert, tools.NameTransferFunds,
 	}
@@ -51,6 +53,8 @@ func TestToolNameConstants_Unique(t *testing.T) {
 		tools.NameCreateOrder, tools.NameCancelOrder, tools.NameGetOrder,
 		tools.NameGetOpenOrders, tools.NameGetOrderHistory, tools.NameGetTradeHistory,
 		tools.NameEmergencyStop, tools.NamePaperTrade, tools.NameGetOrderRateStatus,
+		tools.NameFuturesSetLeverage, tools.NameFuturesOpenPosition, tools.NameFuturesGetOrder,
+		tools.NameFuturesGetPositions, tools.NameFuturesGetFunding,
 		tools.NameCalculateIndicators, tools.NameMarketAnalysis, tools.NamePortfolioAllocation,
 		tools.NameSetPriceAlert, tools.NameSetIndicatorAlert, tools.NameTransferFunds,
 	}

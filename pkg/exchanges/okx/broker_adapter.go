@@ -7,6 +7,7 @@ package okx
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
@@ -226,6 +227,111 @@ func (a *OKXBrokerAdapter) FetchMyTrades(_ context.Context, symbol string, since
 
 func (a *OKXBrokerAdapter) Transfer(_ context.Context, asset string, amount float64, fromAccount, toAccount string) (ccxt.TransferEntry, error) {
 	return a.client.Transfer(asset, amount, fromAccount, toAccount)
+}
+
+// --- broker.FuturesProvider ---
+
+func (a *OKXBrokerAdapter) SetFuturesLeverage(_ context.Context, symbol string, leverage int64, marginMode, positionSide string) (out map[string]interface{}, err error) {
+	if err := a.requireAuth(); err != nil {
+		return nil, err
+	}
+	params := map[string]interface{}{}
+	if marginMode != "" {
+		params["marginMode"] = strings.ToLower(marginMode)
+	}
+	if positionSide != "" {
+		params["posSide"] = strings.ToLower(positionSide)
+	}
+	err = catchPanic(func() error {
+		out, err = a.client.SetLeverage(leverage, ccxt.WithSetLeverageSymbol(symbol), ccxt.WithSetLeverageParams(params))
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("okx futures: set leverage: %w", err)
+	}
+	return out, nil
+}
+
+func (a *OKXBrokerAdapter) CreateFuturesOrder(_ context.Context, req broker.FuturesOrderRequest) (o ccxt.Order, err error) {
+	if err := a.requireAuth(); err != nil {
+		return o, err
+	}
+	opts := []ccxt.CreateOrderOptions{}
+	if req.Price != nil {
+		opts = append(opts, ccxt.WithCreateOrderPrice(*req.Price))
+	}
+	params := copyParams(req.Params)
+	if req.MarginMode != "" {
+		params["tdMode"] = strings.ToLower(req.MarginMode)
+	}
+	if req.PositionSide != "" {
+		params["posSide"] = strings.ToLower(req.PositionSide)
+	}
+	if req.ReduceOnly {
+		params["reduceOnly"] = true
+	}
+	if len(params) > 0 {
+		opts = append(opts, ccxt.WithCreateOrderParams(params))
+	}
+	err = catchPanic(func() error {
+		o, err = a.client.CreateOrder(req.Symbol, req.OrderType, req.Side, req.Amount, opts...)
+		return err
+	})
+	return
+}
+
+func (a *OKXBrokerAdapter) FetchFuturesOrder(_ context.Context, id, symbol string) (o ccxt.Order, err error) {
+	err = catchPanic(func() error { o, err = a.client.FetchOrder(id, ccxt.WithFetchOrderSymbol(symbol)); return err })
+	return
+}
+
+func (a *OKXBrokerAdapter) FetchFuturesOpenOrders(_ context.Context, symbol string) (orders []ccxt.Order, err error) {
+	err = catchPanic(func() error {
+		if symbol != "" {
+			orders, err = a.client.FetchOpenOrders(ccxt.WithFetchOpenOrdersSymbol(symbol))
+		} else {
+			orders, err = a.client.FetchOpenOrders()
+		}
+		return err
+	})
+	return
+}
+
+func (a *OKXBrokerAdapter) FetchFuturesPositions(_ context.Context, symbols []string) (positions []ccxt.Position, err error) {
+	opts := []ccxt.FetchPositionsOptions{}
+	if len(symbols) > 0 {
+		opts = append(opts, ccxt.WithFetchPositionsSymbols(symbols))
+	}
+	err = catchPanic(func() error { positions, err = a.client.FetchPositions(opts...); return err })
+	return
+}
+
+func (a *OKXBrokerAdapter) FetchFuturesFundingRate(_ context.Context, symbol string) (rate ccxt.FundingRate, err error) {
+	err = catchPanic(func() error { rate, err = a.client.FetchFundingRate(symbol); return err })
+	return
+}
+
+func (a *OKXBrokerAdapter) FetchFuturesFundingHistory(_ context.Context, symbol string, since *int64, limit int) (history []ccxt.FundingHistory, err error) {
+	opts := []ccxt.FetchFundingHistoryOptions{}
+	if symbol != "" {
+		opts = append(opts, ccxt.WithFetchFundingHistorySymbol(symbol))
+	}
+	if since != nil {
+		opts = append(opts, ccxt.WithFetchFundingHistorySince(*since))
+	}
+	if limit > 0 {
+		opts = append(opts, ccxt.WithFetchFundingHistoryLimit(int64(limit)))
+	}
+	err = catchPanic(func() error { history, err = a.client.FetchFundingHistory(opts...); return err })
+	return
+}
+
+func copyParams(in map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func init() {

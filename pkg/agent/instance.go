@@ -210,6 +210,21 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("get_order_rate_status") {
 		toolsRegistry.Register(tools.NewGetOrderRateStatusTool())
 	}
+	if cfg.Tools.IsToolEnabled("futures_set_leverage") {
+		toolsRegistry.Register(tools.NewFuturesSetLeverageTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("futures_open_position") {
+		toolsRegistry.Register(tools.NewFuturesOpenPositionTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("futures_get_order") {
+		toolsRegistry.Register(tools.NewFuturesGetOrderTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("futures_get_positions") {
+		toolsRegistry.Register(tools.NewFuturesGetPositionsTool(cfg))
+	}
+	if cfg.Tools.IsToolEnabled("futures_get_funding") {
+		toolsRegistry.Register(tools.NewFuturesGetFundingTool(cfg))
+	}
 
 	// Technical analysis tools (Track C).
 	if cfg.Tools.IsToolEnabled("calculate_indicators") {

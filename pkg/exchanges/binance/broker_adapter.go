@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
@@ -227,6 +228,123 @@ func (a *BinanceBrokerAdapter) FetchMyTrades(_ context.Context, symbol string, s
 
 func (a *BinanceBrokerAdapter) Transfer(_ context.Context, asset string, amount float64, fromAccount, toAccount string) (ccxt.TransferEntry, error) {
 	return a.spot.Transfer(asset, amount, fromAccount, toAccount)
+}
+
+// --- broker.FuturesProvider ---
+
+func (a *BinanceBrokerAdapter) SetFuturesLeverage(_ context.Context, symbol string, leverage int64, marginMode, positionSide string) (out map[string]interface{}, err error) {
+	if err := a.requireAuth(); err != nil {
+		return nil, err
+	}
+	params := map[string]interface{}{}
+	if positionSide != "" {
+		params["positionSide"] = strings.ToUpper(positionSide)
+	}
+	if marginMode != "" {
+		// Binance requires margin mode to be changed with a separate endpoint.
+		marginErr := catchPanic(func() error {
+			_, err = a.usdm.SetMarginMode(strings.ToUpper(marginMode), ccxt.WithSetMarginModeSymbol(symbol))
+			return err
+		})
+		if marginErr != nil && !strings.Contains(strings.ToLower(marginErr.Error()), "no need to change margin type") {
+			return nil, fmt.Errorf("binance futures: set margin mode: %w", marginErr)
+		}
+	}
+	err = catchPanic(func() error {
+		res := <-a.usdm.Core.SetLeverage(leverage, symbol, params)
+		if ccxt.IsError(res) {
+			return ccxt.CreateReturnError(res)
+		}
+		if m, ok := res.(map[string]interface{}); ok {
+			out = m
+			return nil
+		}
+		out = map[string]interface{}{"response": res}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("binance futures: set leverage: %w", err)
+	}
+	return out, nil
+}
+
+func (a *BinanceBrokerAdapter) CreateFuturesOrder(_ context.Context, req broker.FuturesOrderRequest) (o ccxt.Order, err error) {
+	if err := a.requireAuth(); err != nil {
+		return o, err
+	}
+	opts := []ccxt.CreateOrderOptions{}
+	if req.Price != nil {
+		opts = append(opts, ccxt.WithCreateOrderPrice(*req.Price))
+	}
+	params := copyParams(req.Params)
+	if req.PositionSide != "" {
+		params["positionSide"] = strings.ToUpper(req.PositionSide)
+	}
+	if req.ReduceOnly {
+		params["reduceOnly"] = true
+	}
+	if len(params) > 0 {
+		opts = append(opts, ccxt.WithCreateOrderParams(params))
+	}
+	err = catchPanic(func() error {
+		o, err = a.usdm.CreateOrder(req.Symbol, req.OrderType, req.Side, req.Amount, opts...)
+		return err
+	})
+	return
+}
+
+func (a *BinanceBrokerAdapter) FetchFuturesOrder(_ context.Context, id, symbol string) (o ccxt.Order, err error) {
+	err = catchPanic(func() error { o, err = a.usdm.FetchOrder(id, ccxt.WithFetchOrderSymbol(symbol)); return err })
+	return
+}
+
+func (a *BinanceBrokerAdapter) FetchFuturesOpenOrders(_ context.Context, symbol string) (orders []ccxt.Order, err error) {
+	err = catchPanic(func() error {
+		if symbol != "" {
+			orders, err = a.usdm.FetchOpenOrders(ccxt.WithFetchOpenOrdersSymbol(symbol))
+		} else {
+			orders, err = a.usdm.FetchOpenOrders()
+		}
+		return err
+	})
+	return
+}
+
+func (a *BinanceBrokerAdapter) FetchFuturesPositions(_ context.Context, symbols []string) (positions []ccxt.Position, err error) {
+	opts := []ccxt.FetchPositionsOptions{}
+	if len(symbols) > 0 {
+		opts = append(opts, ccxt.WithFetchPositionsSymbols(symbols))
+	}
+	err = catchPanic(func() error { positions, err = a.usdm.FetchPositions(opts...); return err })
+	return
+}
+
+func (a *BinanceBrokerAdapter) FetchFuturesFundingRate(_ context.Context, symbol string) (rate ccxt.FundingRate, err error) {
+	err = catchPanic(func() error { rate, err = a.usdm.FetchFundingRate(symbol); return err })
+	return
+}
+
+func (a *BinanceBrokerAdapter) FetchFuturesFundingHistory(_ context.Context, symbol string, since *int64, limit int) (history []ccxt.FundingHistory, err error) {
+	opts := []ccxt.FetchFundingHistoryOptions{}
+	if symbol != "" {
+		opts = append(opts, ccxt.WithFetchFundingHistorySymbol(symbol))
+	}
+	if since != nil {
+		opts = append(opts, ccxt.WithFetchFundingHistorySince(*since))
+	}
+	if limit > 0 {
+		opts = append(opts, ccxt.WithFetchFundingHistoryLimit(int64(limit)))
+	}
+	err = catchPanic(func() error { history, err = a.usdm.FetchFundingHistory(opts...); return err })
+	return
+}
+
+func copyParams(in map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func init() {

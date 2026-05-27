@@ -562,6 +562,21 @@ func DefaultConfig() *Config {
 			GetOrderRateStatus: ToolConfig{
 				Enabled: true,
 			},
+			FuturesSetLeverage: ToolConfig{
+				Enabled: false,
+			},
+			FuturesOpenPosition: ToolConfig{
+				Enabled: false,
+			},
+			FuturesGetOrder: ToolConfig{
+				Enabled: true,
+			},
+			FuturesGetPositions: ToolConfig{
+				Enabled: true,
+			},
+			FuturesGetFunding: ToolConfig{
+				Enabled: true,
+			},
 
 			// Technical analysis tools (Track C)
 			CalculateIndicators: ToolConfig{

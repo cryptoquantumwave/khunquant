@@ -8,7 +8,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.0
-	github.com/ccxt/ccxt/go/v4 v4.5.43
+	github.com/ccxt/ccxt/go/v4 v4.5.52
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
 	github.com/expr-lang/expr v1.17.8
@@ -52,8 +52,8 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
-	github.com/elliottech/lighter-go v1.0.2 // indirect
-	github.com/elliottech/poseidon_crypto v0.0.11 // indirect
+	github.com/elliottech/lighter-go v1.0.6 // indirect
+	github.com/elliottech/poseidon_crypto v0.0.15 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.5 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect

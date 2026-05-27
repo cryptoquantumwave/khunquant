@@ -73,8 +73,59 @@ Show current rate-limit token counts per provider. No parameters.
 Cancel ALL open orders across all configured providers. Irreversible.
 - `confirm`: must be true to execute
 
+## Futures / Perpetual Swaps
+
+Use these tools when the user asks for perpetual futures, perps, leverage,
+long/short futures positions, funding fees, liquidation, or futures PnL.
+Only `binance` and `okx` support this path. `binanceth` and `bitkub` are
+spot-only in KhunQuant and must not be used for futures.
+
+Symbol format is CCXT contract format:
+- Binance USDT perpetual: `BTC/USDT:USDT`
+- OKX USDT swap: `BTC/USDT:USDT`
+- User shorthand like `BTCUSDT` or `BTC/USDT` is accepted by the futures tools
+  and normalized to `BTC/USDT:USDT`.
+
+### futures_open_position
+Open a long/short perpetual futures position with leverage. It sets leverage,
+places the entry, then optionally places reduce-only protection orders.
+- `provider`: `binance` or `okx`
+- `account`: optional
+- `symbol`: perp symbol as above
+- `side`: `long` or `short`
+- `amount`: contract/base quantity as expected by that CCXT market
+- `leverage`: 1-125
+- `margin_mode`: `cross` or `isolated` (default `cross`)
+- `order_type`: `market` or `limit` (default `market`)
+- `price`: required for limit entries
+- `stop_loss`: optional trigger price
+- `take_profit`: optional trigger price
+- `confirm`: must be true for live execution
+
+### futures_set_leverage
+Set leverage without opening a position.
+- `provider`, `account`, `symbol`, `leverage`, `margin_mode`, `position_side`, `confirm`
+
+### futures_get_positions
+List current futures positions with contracts, leverage, entry, mark,
+unrealized PnL, and realized PnL if the exchange reports it.
+- `provider`, `account`
+- `symbol`: optional filter
+
+### futures_get_order
+Retrieve futures order details by ID.
+- `provider`, `account`, `symbol`, `order_id`
+
+### futures_get_funding
+Check current funding rate and optionally account funding-fee history.
+- `provider`, `account`, `symbol`
+- `include_history`: true to include paid/received funding fees
+- `since`: optional history start (`30d`, `2026-01-01`, ISO 8601)
+- `limit`: max 100
+
 ## Notes
 - **Bitkub**: `get_open_orders` and `get_order_history` require a `symbol` parameter (e.g. `BTC/THB`). Calling without a symbol will fail — always ask the user which trading pair to check, or iterate over known pairs.
+- **Binance TH and Bitkub**: no futures trading support. Use futures tools only with `binance` and `okx`.
 - **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares. PIN is required in config.
 - The default rate limit is 5 orders per minute per provider.
 - Always confirm with the user before placing orders with notional ≥ $200. Never place orders over $3,000 without explicit confirmation regardless of context.

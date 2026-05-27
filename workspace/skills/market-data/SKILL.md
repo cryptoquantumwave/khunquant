@@ -52,5 +52,7 @@ List all tradeable markets on a provider.
 
 ## Notes
 - All symbols use CCXT unified format with "/" separator (e.g. "BTC/USDT").
+- Perpetual futures/swaps use CCXT contract symbols with a settlement suffix,
+  e.g. Binance and OKX USDT perps are `BTC/USDT:USDT`.
 - BinanceTH and Bitkub have limited market data capabilities (price feed only).
 - **Settrade (SET equity)**: use "PTT/THB" or just "PTT" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.

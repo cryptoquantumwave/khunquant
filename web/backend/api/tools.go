@@ -293,6 +293,36 @@ var toolCatalog = []toolCatalogEntry{
 		Category:    tools.CatOrders,
 		ConfigKey:   tools.NameEmergencyStop,
 	},
+	{
+		Name:        tools.NameFuturesSetLeverage,
+		Description: tools.DescFuturesSetLeverage,
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameFuturesSetLeverage,
+	},
+	{
+		Name:        tools.NameFuturesOpenPosition,
+		Description: tools.DescFuturesOpenPosition,
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameFuturesOpenPosition,
+	},
+	{
+		Name:        tools.NameFuturesGetOrder,
+		Description: tools.DescFuturesGetOrder,
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameFuturesGetOrder,
+	},
+	{
+		Name:        tools.NameFuturesGetPositions,
+		Description: tools.DescFuturesGetPositions,
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameFuturesGetPositions,
+	},
+	{
+		Name:        tools.NameFuturesGetFunding,
+		Description: tools.DescFuturesGetFunding,
+		Category:    tools.CatOrders,
+		ConfigKey:   tools.NameFuturesGetFunding,
+	},
 
 	// Alert and transfer tools (Track D)
 	{
@@ -577,6 +607,16 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.CancelOrder.Enabled = enabled
 	case tools.NameEmergencyStop:
 		cfg.Tools.EmergencyStop.Enabled = enabled
+	case tools.NameFuturesSetLeverage:
+		cfg.Tools.FuturesSetLeverage.Enabled = enabled
+	case tools.NameFuturesOpenPosition:
+		cfg.Tools.FuturesOpenPosition.Enabled = enabled
+	case tools.NameFuturesGetOrder:
+		cfg.Tools.FuturesGetOrder.Enabled = enabled
+	case tools.NameFuturesGetPositions:
+		cfg.Tools.FuturesGetPositions.Enabled = enabled
+	case tools.NameFuturesGetFunding:
+		cfg.Tools.FuturesGetFunding.Enabled = enabled
 	case tools.NameCreateDCAPlan:
 		cfg.Tools.CreateDCAPlan.Enabled = enabled
 	case tools.NameListDCAPlans:

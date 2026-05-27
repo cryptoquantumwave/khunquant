@@ -483,6 +483,8 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 		"get_markets", "create_order", "cancel_order", "get_order",
 		"get_open_orders", "get_order_history", "get_trade_history",
 		"emergency_stop", "paper_trade", "get_order_rate_status",
+		"futures_set_leverage", "futures_open_position", "futures_get_order",
+		"futures_get_positions", "futures_get_funding",
 		"calculate_indicators", "market_analysis", "portfolio_allocation",
 		"set_price_alert", "set_indicator_alert", "transfer_funds",
 		"config_encrypt_keys", "create_dca_plan", "list_dca_plans",

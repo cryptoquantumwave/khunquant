@@ -35,6 +35,8 @@ github.com/caarlos0/env/v11 v11.4.0 h1:Kcb6t5kIIr4XkoQC9AF2j+8E1Jsrl3Wz/hhm1LtoG
 github.com/caarlos0/env/v11 v11.4.0/go.mod h1:qupehSf/Y0TUTsxKywqRt/vJjN5nz6vauiYEUUr8P4U=
 github.com/ccxt/ccxt/go/v4 v4.5.43 h1:ZjbCM77u5MG1MyNBeQT1LUvSG5uniPZLtUVIiRyB1D4=
 github.com/ccxt/ccxt/go/v4 v4.5.43/go.mod h1:VJhLriztQ9ycOhOuhFDkb0Nhd9NdgW0uWrzYXyvxkdE=
+github.com/ccxt/ccxt/go/v4 v4.5.52 h1:hWEycN+nGSWWBtuLKdWppUde3DwSeTMVf3POJLtTNbo=
+github.com/ccxt/ccxt/go/v4 v4.5.52/go.mod h1:ZlfdeGgcwbRRnUVIdGO5boZ6JNh9m6JQv5YmOZrhZUk=
 github.com/cespare/xxhash/v2 v2.1.2/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/cespare/xxhash/v2 v2.2.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
@@ -65,8 +67,12 @@ github.com/elliotchance/orderedmap/v3 v3.1.0 h1:j4DJ5ObEmMBt/lcwIecKcoRxIQUEnw0L
 github.com/elliotchance/orderedmap/v3 v3.1.0/go.mod h1:G+Hc2RwaZvJMcS4JpGCOyViCnGeKf0bTYCGTO4uhjSo=
 github.com/elliottech/lighter-go v1.0.2 h1:b6uEk9v+ImqvVvnkG7zXqg+QRSo7jUCESs7dOGyH4O8=
 github.com/elliottech/lighter-go v1.0.2/go.mod h1:9ag9xaUe6jIFHcclX8BE8H5k6sdQEa6FYNwsmiMZnE0=
+github.com/elliottech/lighter-go v1.0.6 h1:KI+A09jyGRBNMNCtQt8NemQ5noxdVJ9xWwLshouHoes=
+github.com/elliottech/lighter-go v1.0.6/go.mod h1:G5QpWXZfa/ge3EGjrAL3ls11IPUa5KCVt+PG2CQmYnU=
 github.com/elliottech/poseidon_crypto v0.0.11 h1:iX4rCg0m1XIX/7mhXVUEYUJIdQD57zNGNLeb6RZRl7g=
 github.com/elliottech/poseidon_crypto v0.0.11/go.mod h1:NhWxSjPGr5JXRuB2Aepl/+ZrbmUG3hvku/GarB1JR8c=
+github.com/elliottech/poseidon_crypto v0.0.15 h1:+f/YTnIFEWX1Xss75Ky7QRvhDpR372XAAMtpWxKvp+k=
+github.com/elliottech/poseidon_crypto v0.0.15/go.mod h1:/nFxH8V+3yk3eakI+Arlu5U8XwRXgydBvsiwfA/yYrg=
 github.com/emicklei/dot v1.6.2 h1:08GN+DD79cy/tzN6uLCT84+2Wk9u+wvqP+Hkx/dIR8A=
 github.com/emicklei/dot v1.6.2/go.mod h1:DeV7GvQtIw4h2u73RKBkkFdvVAz0D9fzeJrgPW6gy/s=
 github.com/ergochat/irc-go v0.6.0 h1:Y0AGV76aeihJfCtLaQh+OyJKFiKGrYC0VTkeMZ6XW28=

@@ -205,9 +205,9 @@ type OKXExchangeAccount struct {
 // APIKey = Settrade app login ID; Secret = base64-encoded PKCS#8 ECDSA P-256 private key.
 type SettradeExchangeAccount struct {
 	ExchangeAccount
-	BrokerID  string       `json:"broker_id"         yaml:"-"` // e.g. "FSSVP"
-	AppCode   string       `json:"app_code"          yaml:"-"` // e.g. "ALGO" — used in all OAM URL paths
-	AccountNo string       `json:"account_no"        yaml:"-"` // trading account number
+	BrokerID  string       `json:"broker_id"         yaml:"-"`             // e.g. "FSSVP"
+	AppCode   string       `json:"app_code"          yaml:"-"`             // e.g. "ALGO" — used in all OAM URL paths
+	AccountNo string       `json:"account_no"        yaml:"-"`             // trading account number
 	PIN       SecureString `json:"pin,omitzero"      yaml:"pin,omitempty"` // trading PIN; stored in config for auto-verify
 }
 
@@ -1037,6 +1037,13 @@ type ToolsConfig struct {
 	PaperTrade         ToolConfig `json:"paper_trade"          envPrefix:"KHUNQUANT_TOOLS_PAPER_TRADE_"`
 	GetOrderRateStatus ToolConfig `json:"get_order_rate_status" envPrefix:"KHUNQUANT_TOOLS_GET_ORDER_RATE_STATUS_"`
 
+	// Futures / perpetual swaps (Track B2)
+	FuturesSetLeverage  ToolConfig `json:"futures_set_leverage"  envPrefix:"KHUNQUANT_TOOLS_FUTURES_SET_LEVERAGE_"`
+	FuturesOpenPosition ToolConfig `json:"futures_open_position" envPrefix:"KHUNQUANT_TOOLS_FUTURES_OPEN_POSITION_"`
+	FuturesGetOrder     ToolConfig `json:"futures_get_order"     envPrefix:"KHUNQUANT_TOOLS_FUTURES_GET_ORDER_"`
+	FuturesGetPositions ToolConfig `json:"futures_get_positions" envPrefix:"KHUNQUANT_TOOLS_FUTURES_GET_POSITIONS_"`
+	FuturesGetFunding   ToolConfig `json:"futures_get_funding"   envPrefix:"KHUNQUANT_TOOLS_FUTURES_GET_FUNDING_"`
+
 	// Technical analysis tools (Track C)
 	CalculateIndicators ToolConfig `json:"calculate_indicators" envPrefix:"KHUNQUANT_TOOLS_CALCULATE_INDICATORS_"`
 	MarketAnalysis      ToolConfig `json:"market_analysis"      envPrefix:"KHUNQUANT_TOOLS_MARKET_ANALYSIS_"`
@@ -1452,6 +1459,16 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.PaperTrade.Enabled
 	case "get_order_rate_status":
 		return t.GetOrderRateStatus.Enabled
+	case "futures_set_leverage":
+		return t.FuturesSetLeverage.Enabled
+	case "futures_open_position":
+		return t.FuturesOpenPosition.Enabled
+	case "futures_get_order":
+		return t.FuturesGetOrder.Enabled
+	case "futures_get_positions":
+		return t.FuturesGetPositions.Enabled
+	case "futures_get_funding":
+		return t.FuturesGetFunding.Enabled
 	case "calculate_indicators":
 		return t.CalculateIndicators.Enabled
 	case "market_analysis":

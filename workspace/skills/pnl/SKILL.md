@@ -21,7 +21,10 @@ portfolios short-circuit to live exchange data — no trade reconstruction neede
 4. **Realized profit asked** ("realized gains", "what did I already cash out"):
    set `include_realized=true` on `get_pnl_summary`, or use `get_pnl_detail`
    which always shows realized PnL.
-5. Use `list_portfolios` first when uncertain about provider or account names.
+5. **Futures/perpetual PnL asked** ("perp PnL", "futures unrealized",
+   "funding fees", "liquidation", "short position"): use `futures_get_positions`
+   and `futures_get_funding` instead of spot PnL tools.
+6. Use `list_portfolios` first when uncertain about provider or account names.
 
 ## Tools
 
@@ -59,5 +62,8 @@ weighted-average cost basis, unrealized gain/loss, and fees paid.
   to retrieve a specific period.
 - **Cross-venue totals**: each exchange is shown in its own native quote (THB or
   USDT). There is no automatic conversion between quote currencies.
-- **Spot only**: only spot wallet balances are analyzed. Futures, margin, and
-  earn positions are not included in v1.
+- **Spot PnL vs futures PnL**: `get_pnl_summary` and `get_pnl_detail` analyze
+  spot balances/trades. For Binance/OKX perpetual futures, use
+  `futures_get_positions` for unrealized/realized position PnL and
+  `futures_get_funding` with `include_history=true` for paid/received funding fees.
+- **Binance TH and Bitkub**: no futures trading support.

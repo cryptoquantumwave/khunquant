@@ -123,6 +123,36 @@ type TransferProvider interface {
 	Transfer(ctx context.Context, asset string, amount float64, fromAccount, toAccount string) (ccxt.TransferEntry, error)
 }
 
+// FuturesOrderRequest is the exchange-neutral futures order input.
+// Symbols should use CCXT contract notation, e.g. "BTC/USDT:USDT" for USDT-settled
+// perpetual swaps.
+type FuturesOrderRequest struct {
+	Symbol       string
+	OrderType    string
+	Side         string
+	Amount       float64
+	Price        *float64
+	MarginMode   string
+	PositionSide string
+	ReduceOnly   bool
+	Params       map[string]interface{}
+}
+
+// FuturesProvider extends Provider with perpetual/futures trading and account data.
+// Binance TH and Bitkub intentionally do not implement this interface because they
+// do not offer futures trading through this app.
+type FuturesProvider interface {
+	Provider
+
+	SetFuturesLeverage(ctx context.Context, symbol string, leverage int64, marginMode, positionSide string) (map[string]interface{}, error)
+	CreateFuturesOrder(ctx context.Context, req FuturesOrderRequest) (ccxt.Order, error)
+	FetchFuturesOrder(ctx context.Context, id, symbol string) (ccxt.Order, error)
+	FetchFuturesOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error)
+	FetchFuturesPositions(ctx context.Context, symbols []string) ([]ccxt.Position, error)
+	FetchFuturesFundingRate(ctx context.Context, symbol string) (ccxt.FundingRate, error)
+	FetchFuturesFundingHistory(ctx context.Context, symbol string, since *int64, limit int) ([]ccxt.FundingHistory, error)
+}
+
 // Balance mirrors pkg/exchanges.Balance so callers don't need to import both.
 type Balance struct {
 	Asset  string

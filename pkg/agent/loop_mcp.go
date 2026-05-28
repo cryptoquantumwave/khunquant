@@ -89,6 +89,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 		}
 
 		if err := mcpManager.LoadFromMCPConfig(ctx, al.cfg.Tools.MCP, workspacePath); err != nil {
+			al.mcp.setInitErr(fmt.Errorf("failed to load MCP servers: %w", err))
 			logger.WarnCF("agent", "Failed to load MCP servers, MCP tools will not be available",
 				map[string]any{
 					"error": err.Error(),

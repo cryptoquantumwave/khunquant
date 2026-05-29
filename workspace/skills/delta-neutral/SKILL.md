@@ -301,7 +301,7 @@ Each opportunity is labeled with its direction: **"short perp"** (positive fundi
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `provider` | string | ✓ | — | Exchange: `"binance"` or `"okx"` |
+| `provider` | string | | "" / "all" | Exchange: `"binance"`, `"okx"`, or empty/`"all"` to scan **every** supported exchange and combine the ranked results (each row tagged with its exchange) |
 | `account` | string | | "" | Account name (empty = default account) |
 | `top_n` | integer | | 100 | Top N coins by market cap to screen (max 500) |
 | `quote` | string | | "USDT" | Quote currency for futures symbols |
@@ -324,26 +324,38 @@ Each opportunity is labeled with its direction: **"short perp"** (positive fundi
 
 This fetches top 300 coins by CMC market cap, ranks them by APR on Binance perpetuals, and returns the top 30 in the output table.
 
+### Example: Scan All Supported Exchanges
+
+```json
+{
+  "top_n": 300,
+  "limit_results": 30
+}
+```
+
+Omitting `provider` (or passing `"all"`) scans **every** supported exchange (currently Binance and OKX) and merges them into one ranked table, so the same coin can appear once per exchange and you see where the funding is richest. Each row's **Exch** column shows which exchange it came from; if one exchange can't be reached, the others still return with a partial-results caution. (New exchanges are picked up automatically as they're added to the scanner's supported list.)
+
 ### Sample Output
 
 ```
 === Delta-Neutral Funding Carry Scan ===
+Exchanges scanned: binance, okx
 
-Rank Asset Futures         Spot     Funding%   APR%   Direction   7d Mean%   7d Std%   14d Mean%  14d Std%   Label
-———————————————————————————————————————————————————————————————————————————————————————————————————————————————
-1    ETH   ETH/USDT:USDT   yes      0.008500   26.22   short perp  +0.0082    0.0015    +0.0078    0.0014    attractive
-2    BTC   BTC/USDT:USDT   yes      0.006200   22.77   short perp  +0.0061    0.0010    +0.0059    0.0012    attractive
-3    XYZ   XYZ/USDT:USDT   NO-SPOT  0.005400   19.71   short perp  +0.0050    0.0030    +0.0052    0.0031    watch
-4    SOL   SOL/USDT:USDT   yes      0.005100   18.67   short perp  +0.0048    0.0025    +0.0050    0.0028    watch
+Rank  Exch    Asset Futures         Spot     Funding%   APR%   Direction   7d Mean%   7d Std%   14d Mean%  14d Std%   Label
+———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+1     okx     ETH   ETH/USDT:USDT   yes      0.008500   26.22   short perp  +0.0082    0.0015    +0.0078    0.0014    attractive
+2     binance BTC   BTC/USDT:USDT   yes      0.006200   22.77   short perp  +0.0061    0.0010    +0.0059    0.0012    attractive
+3     binance XYZ   XYZ/USDT:USDT   NO-SPOT  0.005400   19.71   short perp  +0.0050    0.0030    +0.0052    0.0031    watch
+4     okx     SOL   SOL/USDT:USDT   yes      0.005100   18.67   short perp  +0.0048    0.0025    +0.0050    0.0028    watch
 ...
 
-⚠️  No spot pair on this exchange for: XYZ — funding rank is still valid, but the delta-neutral spot leg cannot be opened here (source spot elsewhere, or treat as futures-only).
-Spot column: 'yes' = spot pair available | 'no-spot' = perp only on this exchange | 'unknown' = could not verify.
+⚠️  No spot pair on its exchange for: XYZ — funding rank is still valid, but the delta-neutral spot leg cannot be opened there (source spot elsewhere, or treat as futures-only).
+Spot column: 'yes' = spot pair available | 'no-spot' = perp only on that exchange | 'unknown' = could not verify.
 Note: Funding-only screen — drill into top picks with get_orderbook/futures_risk_summary before building a plan.
 Legend: 'attractive' = positive carry + stable | 'watch' = near-zero/unstable/no-spot | 'blocked' = no perp or no funding
 ```
 
-The **Spot** column flags whether the asset also has a spot pair on the chosen exchange. Assets with a perp but **no spot** are **kept** in the ranked list (so you still see correct sorted funding data) and marked `NO-SPOT` — their funding rank is real, but the delta-neutral spot leg can't be opened on that exchange (source the spot elsewhere, or treat as futures-only). `unknown` means spot markets couldn't be verified.
+The **Exch** column shows which exchange each row came from (when scanning a single exchange it's constant). The **Spot** column flags whether the asset also has a spot pair on that exchange. Assets with a perp but **no spot** are **kept** in the ranked list (so you still see correct sorted funding data) and marked `NO-SPOT` — their funding rank is real, but the delta-neutral spot leg can't be opened on that exchange (source the spot elsewhere, or treat as futures-only). `unknown` means spot markets couldn't be verified.
 
 ### After The Scan: Drill Down Before Opening
 

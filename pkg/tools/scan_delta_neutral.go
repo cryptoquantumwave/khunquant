@@ -24,6 +24,26 @@ var cmcListingFn = func(ctx context.Context, cfg *config.Config, baseURL string,
 	return fetchCMCListing(ctx, baseURL, topN)
 }
 
+// futuresCapableProviders lists the exchanges the scanner can screen for
+// delta-neutral funding opportunities. An empty or "all" provider argument scans
+// every entry here and combines the results. To support a new exchange, add its
+// provider name here (it must implement broker.FuturesProvider) — no other change
+// to the scanner is required.
+var futuresCapableProviders = []string{"binance", "okx"}
+
+// resolveScanProviders maps the user's provider argument to the concrete list to
+// scan: empty or "all" (case-insensitive) → every futures-capable provider;
+// otherwise the single named provider.
+func resolveScanProviders(provider string) []string {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if p == "" || p == "all" {
+		out := make([]string, len(futuresCapableProviders))
+		copy(out, futuresCapableProviders)
+		return out
+	}
+	return []string{p}
+}
+
 type ScanDeltaNeutralOpportunitiesTool struct {
 	cfg *config.Config
 }
@@ -46,7 +66,7 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"provider": map[string]any{
 				"type":        "string",
-				"description": "Exchange provider name: 'binance' or 'okx'.",
+				"description": "Exchange provider name: 'binance' or 'okx'. Leave empty or pass 'all' to scan every supported exchange and combine the ranked results.",
 			},
 			"account": map[string]any{
 				"type":        "string",
@@ -87,6 +107,7 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Parameters() map[string]any {
 
 type opportunityRow struct {
 	rank               int
+	exchange           string
 	asset              string
 	symbol             string
 	spotSymbol         string
@@ -113,9 +134,8 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 	cmcBaseURL := stringArg(args, "cmc_base_url")
 
 	// Validation and defaults.
-	if provider == "" {
-		return ErrorResult("provider is required (e.g. 'binance' or 'okx')")
-	}
+	// Empty or "all" provider → scan every supported exchange and combine.
+	scanProviders := resolveScanProviders(provider)
 	if topN <= 0 || topN > 500 {
 		topN = 100
 	}
@@ -141,123 +161,35 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 		return UserResult("No symbols found in CMC listing.")
 	}
 
-	// Stage 1: Acquire provider and fetch markets.
-	fp, err := futuresProvider(ctx, t.cfg, provider, account)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("provider error: %v", err)).WithError(err)
-	}
-
-	markets, _ := fp.LoadFuturesMarkets(ctx) // Silently ignore error; we'll proceed without filtering.
-
-	// Load spot markets to flag whether each asset also has a spot pair on this
-	// exchange. We do NOT filter on this — symbols without spot stay in the ranked
-	// list with a caution flag so the user still sees correct sorted funding data.
-	// spotMarkets == nil means we couldn't determine spot availability (status "unknown").
-	var spotMarkets map[string]ccxt.MarketInterface
-	if md, ok := fp.(broker.MarketDataProvider); ok {
-		spotMarkets, _ = md.LoadMarkets(ctx) // Silently ignore error → spot status "unknown".
-	}
-
-	// Build candidate symbols and filter active/swap.
-	candidateSymbols := make([]string, 0)
-	symbolToBase := make(map[string]string) // futures symbol -> base asset
-	symbolToIdx := make(map[string]int)     // futures symbol -> CMC rank index
-	for i, base := range symbols {
-		futSym := normalizeFuturesSymbol(base + "/" + quote)
-		candidateSymbols = append(candidateSymbols, futSym)
-		symbolToBase[futSym] = base
-		symbolToIdx[futSym] = i
-		// Track by index for ranking.
-		if i >= len(symbols) {
-			break
-		}
-	}
-
-	// Filter by active swap if markets are available.
-	if len(markets) > 0 {
-		filtered := make([]string, 0)
-		for _, sym := range candidateSymbols {
-			if m, exists := markets[sym]; exists {
-				if isActiveSwap(m) {
-					filtered = append(filtered, sym)
-				}
-			}
-		}
-		candidateSymbols = filtered
-	}
-
-	// Stage 1b: Batch fetch funding rates.
-	rates, err := fp.FetchFuturesFundingRates(ctx, candidateSymbols)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("batch funding fetch failed: %v", err)).WithError(err)
-	}
-
-	// Build opportunity list.
+	// Stage 1: Scan each requested provider and combine the results. A per-symbol
+	// provider handle is retained so stage 2 (history stability) can fetch from the
+	// right exchange when scanning "all".
 	opportunities := make([]opportunityRow, 0)
-	for _, futSym := range candidateSymbols {
-		rate, exists := rates[futSym]
-		if !exists {
-			// Rate not found, skip
+	provHandles := make(map[string]broker.FuturesProvider) // exchange -> provider handle
+	var providerErrs []string
+	for _, prov := range scanProviders {
+		rows, fp, err := t.scanProvider(ctx, prov, account, quote, symbols, minAbsFundingAPR)
+		if err != nil {
+			providerErrs = append(providerErrs, fmt.Sprintf("%s: %v", prov, err))
 			continue
 		}
-		if rate.FundingRate == nil {
-			// No funding rate
-			continue
-		}
-
-		fr := *rate.FundingRate
-		ppd := periodsPerDay(rate.Interval)
-		apr := fr * ppd * 365 * 100 // percent
-
-		// Filter by min abs APR.
-		if minAbsFundingAPR != 0 && math.Abs(apr) < minAbsFundingAPR {
-			continue
-		}
-
-		base := symbolToBase[futSym]
-		var dir string
-		if fr > 0 {
-			dir = "short perp"
-		} else {
-			dir = "long perp"
-		}
-
-		spotSym := base + "/" + quote
-		spotStatus := spotStatusFor(spotMarkets, spotSym)
-
-		rankIdx := symbolToIdx[futSym]
-		row := opportunityRow{
-			rank:           rankIdx + 1,
-			asset:          base,
-			symbol:         futSym,
-			spotSymbol:     spotSym,
-			spotStatus:     spotStatus,
-			fundingPercent: fr * 100,
-			apr:            apr,
-			direction:      dir,
-			label:          "watch", // default
-		}
-
-		// Label logic: positive APR + stable = attractive.
-		if apr > 0 {
-			row.label = "attractive"
-		}
-		// No spot pair on this exchange → cannot build the spot leg here; flag as watch.
-		if spotStatus == "no-spot" {
-			row.label = "watch"
-		}
-
-		opportunities = append(opportunities, row)
+		provHandles[prov] = fp
+		opportunities = append(opportunities, rows...)
 	}
 
-	// Sort by abs(APR) descending.
+	// If every requested provider failed, surface the error.
+	if len(opportunities) == 0 && len(providerErrs) > 0 {
+		return ErrorResult(fmt.Sprintf("scan failed for all providers: %s", strings.Join(providerErrs, "; ")))
+	}
+
+	// Sort the combined set by abs(APR) descending.
 	sort.Slice(opportunities, func(i, j int) bool {
 		return math.Abs(opportunities[i].apr) > math.Abs(opportunities[j].apr)
 	})
 
-	// Stage 2: Optionally fetch stability for top K.
+	// Stage 2: Optionally fetch stability for the top K (across all exchanges),
+	// using each row's own provider handle.
 	if includeStability && len(opportunities) > 0 {
-		var eg *errgroup.Group
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.SetLimit(4)
 
@@ -269,14 +201,14 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 		mu := sync.Mutex{}
 		for i := 0; i < topK; i++ {
 			i := i // capture
+			fp := provHandles[opportunities[i].exchange]
+			if fp == nil {
+				continue
+			}
 			eg.Go(func() error {
 				history, err := fp.FetchPublicFundingRateHistory(egCtx, opportunities[i].symbol, nil, 200)
-				if err != nil {
-					// Silently skip on error.
-					return nil
-				}
-				if len(history) == 0 {
-					return nil
+				if err != nil || len(history) == 0 {
+					return nil // Silently skip on error / no data.
 				}
 
 				stats7d := computeFundingStatsWindow(history, 7*24*time.Hour)
@@ -295,13 +227,103 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 		_ = eg.Wait() // Ignore partial failures.
 	}
 
-	// Build output table.
-	// Debug: if no opportunities, mention that
 	if len(opportunities) == 0 {
 		return UserResult("No opportunities found (opportunities list is empty).")
 	}
-	out := formatScanResults(opportunities, limitResults, includeStability)
+	out := formatScanResults(opportunities, limitResults, includeStability, scanProviders, providerErrs)
 	return UserResult(out)
+}
+
+// scanProvider screens a single exchange: loads its futures + spot markets, batch-
+// fetches funding rates for the candidate symbols, and returns ranked-but-unsorted
+// opportunity rows tagged with the exchange, plus the provider handle (for stage 2).
+func (t *ScanDeltaNeutralOpportunitiesTool) scanProvider(
+	ctx context.Context,
+	provider, account, quote string,
+	symbols []string,
+	minAbsFundingAPR float64,
+) ([]opportunityRow, broker.FuturesProvider, error) {
+	fp, err := futuresProvider(ctx, t.cfg, provider, account)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	markets, _ := fp.LoadFuturesMarkets(ctx) // Silently ignore error; proceed without filtering.
+
+	// Load spot markets to flag whether each asset also has a spot pair on this
+	// exchange. We do NOT filter on this — symbols without spot stay in the list
+	// with a caution flag. spotMarkets == nil → spot status "unknown".
+	var spotMarkets map[string]ccxt.MarketInterface
+	if md, ok := fp.(broker.MarketDataProvider); ok {
+		spotMarkets, _ = md.LoadMarkets(ctx)
+	}
+
+	// Build candidate symbols (preserving CMC rank index) and filter active/swap.
+	candidateSymbols := make([]string, 0, len(symbols))
+	symbolToBase := make(map[string]string)
+	symbolToIdx := make(map[string]int)
+	for i, base := range symbols {
+		futSym := normalizeFuturesSymbol(base + "/" + quote)
+		symbolToBase[futSym] = base
+		symbolToIdx[futSym] = i
+		if len(markets) > 0 {
+			m, exists := markets[futSym]
+			if !exists || !isActiveSwap(m) {
+				continue // No active perp on this exchange.
+			}
+		}
+		candidateSymbols = append(candidateSymbols, futSym)
+	}
+
+	rates, err := fp.FetchFuturesFundingRates(ctx, candidateSymbols)
+	if err != nil {
+		return nil, nil, fmt.Errorf("batch funding fetch: %w", err)
+	}
+
+	rows := make([]opportunityRow, 0, len(candidateSymbols))
+	for _, futSym := range candidateSymbols {
+		rate, exists := rates[futSym]
+		if !exists || rate.FundingRate == nil {
+			continue
+		}
+
+		fr := *rate.FundingRate
+		apr := fr * periodsPerDay(rate.Interval) * 365 * 100 // percent
+
+		if minAbsFundingAPR != 0 && math.Abs(apr) < minAbsFundingAPR {
+			continue
+		}
+
+		base := symbolToBase[futSym]
+		dir := "short perp"
+		if fr < 0 {
+			dir = "long perp"
+		}
+
+		spotSym := base + "/" + quote
+		spotStatus := spotStatusFor(spotMarkets, spotSym)
+
+		row := opportunityRow{
+			rank:           symbolToIdx[futSym] + 1,
+			exchange:       provider,
+			asset:          base,
+			symbol:         futSym,
+			spotSymbol:     spotSym,
+			spotStatus:     spotStatus,
+			fundingPercent: fr * 100,
+			apr:            apr,
+			direction:      dir,
+			label:          "watch",
+		}
+		// Positive carry → attractive, unless there's no spot leg available here.
+		if apr > 0 && spotStatus != "no-spot" {
+			row.label = "attractive"
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows, fp, nil
 }
 
 // spotStatusFor reports whether a spot pair exists on the exchange for the given
@@ -412,11 +434,14 @@ func computeFundingStatsWindow(history []ccxt.FundingRateHistory, duration time.
 	}
 }
 
-// formatScanResults builds a human-readable table.
-func formatScanResults(opportunities []opportunityRow, limitResults int, includeStability bool) string {
+// formatScanResults builds a human-readable table. scannedProviders are the
+// exchanges that were screened (for the header); providerErrs lists any that
+// failed (surfaced as a caution so partial results are clearly labeled).
+func formatScanResults(opportunities []opportunityRow, limitResults int, includeStability bool, scannedProviders, providerErrs []string) string {
 	var sb strings.Builder
 
-	sb.WriteString("=== Delta-Neutral Funding Carry Scan ===\n\n")
+	sb.WriteString("=== Delta-Neutral Funding Carry Scan ===\n")
+	sb.WriteString(fmt.Sprintf("Exchanges scanned: %s\n\n", strings.Join(scannedProviders, ", ")))
 
 	if len(opportunities) == 0 {
 		sb.WriteString("No opportunities found matching the criteria.\n")
@@ -431,13 +456,13 @@ func formatScanResults(opportunities []opportunityRow, limitResults int, include
 
 	// Header.
 	if includeStability {
-		sb.WriteString(fmt.Sprintf("%-5s %-8s %-15s %-8s %10s %10s %-12s %10s %10s %10s %10s %s\n",
-			"Rank", "Asset", "Futures", "Spot", "Funding%", "APR%", "Direction", "7d Mean%", "7d Std%", "14d Mean%", "14d Std%", "Label"))
-		sb.WriteString(strings.Repeat("-", 150) + "\n")
+		sb.WriteString(fmt.Sprintf("%-5s %-8s %-8s %-15s %-8s %10s %10s %-12s %10s %10s %10s %10s %s\n",
+			"Rank", "Exch", "Asset", "Futures", "Spot", "Funding%", "APR%", "Direction", "7d Mean%", "7d Std%", "14d Mean%", "14d Std%", "Label"))
+		sb.WriteString(strings.Repeat("-", 160) + "\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("%-5s %-8s %-15s %-8s %10s %10s %-12s %s\n",
-			"Rank", "Asset", "Futures", "Spot", "Funding%", "APR%", "Direction", "Label"))
-		sb.WriteString(strings.Repeat("-", 90) + "\n")
+		sb.WriteString(fmt.Sprintf("%-5s %-8s %-8s %-15s %-8s %10s %10s %-12s %s\n",
+			"Rank", "Exch", "Asset", "Futures", "Spot", "Funding%", "APR%", "Direction", "Label"))
+		sb.WriteString(strings.Repeat("-", 100) + "\n")
 	}
 
 	// Rows.
@@ -461,12 +486,12 @@ func formatScanResults(opportunities []opportunityRow, limitResults int, include
 			if row.stability14dStddev != nil {
 				s14dStd = fmt.Sprintf("%.4f", *row.stability14dStddev*100)
 			}
-			line = fmt.Sprintf("%-5d %-8s %-15s %-8s %10.6f %10.2f %-12s %10s %10s %10s %10s %s\n",
-				rank, row.asset, row.symbol, spotCell(row.spotStatus), row.fundingPercent, row.apr, row.direction,
+			line = fmt.Sprintf("%-5d %-8s %-8s %-15s %-8s %10.6f %10.2f %-12s %10s %10s %10s %10s %s\n",
+				rank, row.exchange, row.asset, row.symbol, spotCell(row.spotStatus), row.fundingPercent, row.apr, row.direction,
 				s7dMean, s7dStd, s14dMean, s14dStd, row.label)
 		} else {
-			line = fmt.Sprintf("%-5d %-8s %-15s %-8s %10.6f %10.2f %-12s %s\n",
-				rank, row.asset, row.symbol, spotCell(row.spotStatus), row.fundingPercent, row.apr, row.direction, row.label)
+			line = fmt.Sprintf("%-5d %-8s %-8s %-15s %-8s %10.6f %10.2f %-12s %s\n",
+				rank, row.exchange, row.asset, row.symbol, spotCell(row.spotStatus), row.fundingPercent, row.apr, row.direction, row.label)
 		}
 		sb.WriteString(line)
 	}
@@ -484,14 +509,18 @@ func formatScanResults(opportunities []opportunityRow, limitResults int, include
 	}
 
 	sb.WriteString("\n")
+	if len(providerErrs) > 0 {
+		sb.WriteString(fmt.Sprintf("⚠️  Some exchanges could not be scanned (results are partial): %s\n",
+			strings.Join(providerErrs, "; ")))
+	}
 	if len(noSpot) > 0 {
-		sb.WriteString(fmt.Sprintf("⚠️  No spot pair on this exchange for: %s — funding rank is still valid, but the delta-neutral spot leg cannot be opened here (source spot elsewhere, or treat as futures-only).\n",
+		sb.WriteString(fmt.Sprintf("⚠️  No spot pair on its exchange for: %s — funding rank is still valid, but the delta-neutral spot leg cannot be opened there (source spot elsewhere, or treat as futures-only).\n",
 			strings.Join(noSpot, ", ")))
 	}
 	if unknownSpot {
 		sb.WriteString("⚠️  Spot availability could not be verified for some rows (spot markets unavailable) — shown as 'unknown'.\n")
 	}
-	sb.WriteString("Spot column: 'yes' = spot pair available | 'no-spot' = perp only on this exchange | 'unknown' = could not verify.\n")
+	sb.WriteString("Spot column: 'yes' = spot pair available | 'no-spot' = perp only on that exchange | 'unknown' = could not verify.\n")
 	sb.WriteString("Note: Funding-only screen — drill into top picks with get_orderbook/futures_risk_summary before building a plan.\n")
 	sb.WriteString("Legend: 'attractive' = positive carry + stable | 'watch' = near-zero/unstable/no-spot | 'blocked' = no perp or no funding\n")
 

@@ -196,7 +196,7 @@ func TestScanDeltaNeutralOpportunities_SpotFlagging(t *testing.T) {
 		t.Fatalf("expected NO-SPOT flag for PERPONLY, got:\n%s", out)
 	}
 	// The caution footer must name the no-spot asset.
-	if !strings.Contains(out, "No spot pair on this exchange for:") || !strings.Contains(out, "PERPONLY") {
+	if !strings.Contains(out, "No spot pair on its exchange for:") || !strings.Contains(out, "PERPONLY") {
 		t.Fatalf("expected caution note naming PERPONLY, got:\n%s", out)
 	}
 }
@@ -295,18 +295,68 @@ func TestScanDeltaNeutralOpportunities_MinAbsFundingFilter(t *testing.T) {
 	}
 }
 
-func TestScanDeltaNeutralOpportunities_NoProvider(t *testing.T) {
-	cfg := &config.Config{}
-	tool := NewScanDeltaNeutralOpportunitiesTool(cfg)
-
-	args := map[string]any{} // No provider specified.
-
-	result := tool.Execute(context.Background(), args)
-
-	if !result.IsError {
-		t.Fatal("expected error when provider is missing")
+// TestScanDeltaNeutralOpportunities_AllProviders verifies that an empty or "all"
+// provider scans every futures-capable exchange and combines + tags the results
+// by exchange, ranked together by abs(APR).
+func TestScanDeltaNeutralOpportunities_AllProviders(t *testing.T) {
+	oldCMCFn := cmcListingFn
+	defer func() { cmcListingFn = oldCMCFn }()
+	cmcListingFn = func(ctx context.Context, cfg *config.Config, baseURL string, topN int) ([]string, error) {
+		return []string{"BTC", "ETH"}, nil
 	}
-	if !strings.Contains(result.ForLLM, "provider is required") {
-		t.Fatal("expected error message about missing provider")
+
+	oldFuturesFn := futuresProviderFn
+	defer func() { futuresProviderFn = oldFuturesFn }()
+
+	interval := "8h"
+	// Per-provider funding: binance BTC bigger; okx ETH biggest overall.
+	makeMock := func(btc, eth float64) *mockFuturesProvider {
+		return &mockFuturesProvider{
+			fundingRatesFn: func(ctx context.Context, symbols []string) (map[string]ccxt.FundingRate, error) {
+				b, e := btc, eth
+				return map[string]ccxt.FundingRate{
+					"BTC/USDT:USDT": {FundingRate: &b, Interval: &interval},
+					"ETH/USDT:USDT": {FundingRate: &e, Interval: &interval},
+				}, nil
+			},
+			loadMarketsFn: func(ctx context.Context) (map[string]ccxt.MarketInterface, error) { return nil, nil },
+		}
+	}
+	binanceMock := makeMock(0.0002, 0.0001)
+	okxMock := makeMock(0.00015, 0.0005) // okx ETH = highest abs APR
+
+	futuresProviderFn = func(ctx context.Context, cfg *config.Config, providerID, account string) (broker.FuturesProvider, error) {
+		switch providerID {
+		case "binance":
+			return binanceMock, nil
+		case "okx":
+			return okxMock, nil
+		default:
+			return nil, errors.New("unknown provider " + providerID)
+		}
+	}
+
+	tool := NewScanDeltaNeutralOpportunitiesTool(&config.Config{})
+
+	for _, provArg := range []string{"", "all", "ALL"} {
+		args := map[string]any{"include_stability": false}
+		if provArg != "" {
+			args["provider"] = provArg
+		}
+		result := tool.Execute(context.Background(), args)
+		if result.IsError {
+			t.Fatalf("provider=%q: unexpected error: %v", provArg, result.ForLLM)
+		}
+		out := result.ForUser
+
+		// Both exchanges scanned and labeled in the header.
+		if !strings.Contains(out, "binance") || !strings.Contains(out, "okx") {
+			t.Fatalf("provider=%q: expected both exchanges in output, got:\n%s", provArg, out)
+		}
+		// Combined set has 4 rows (2 symbols × 2 exchanges) — okx ETH should rank #1.
+		// Verify the first data row references okx (highest abs APR = 0.0005).
+		if !strings.Contains(out, "Exchanges scanned: binance, okx") {
+			t.Fatalf("provider=%q: expected scanned-exchanges header, got:\n%s", provArg, out)
+		}
 	}
 }

@@ -572,15 +572,16 @@ This skill uses the following existing tools. Note that **dedicated delta-neutra
 
 ### Execution (Once Available)
 
-- `create_delta_neutral_plan` — Create and persist a plan; registers cron monitor job.
+- `create_delta_neutral_plan` — Create and persist a plan; registers cron monitor job. Accepts `leverage` parameter and `risk_policy.max_leverage`; sizes both legs to equal notional; rejects if leverage exceeds max.
 - `list_delta_neutral_plans` — List all active and inactive plans with health status.
 - `get_delta_neutral_plan` — Retrieve a specific plan and its recent monitor snapshots, alerts, and execution history.
-- `update_delta_neutral_plan` — Update plan name, monitor interval, risk thresholds, or pause/resume.
+- `update_delta_neutral_plan` — Update plan name, monitor interval, risk thresholds, or pause/resume. Accepts `leverage` parameter: for draft/ready plans, stored for next open; for active plans, requires `confirm=true` and applies live on exchange with liquidation-distance re-validation.
 - `delete_delta_neutral_plan` — Delete a draft or closed plan.
 - `get_delta_neutral_summary` — Fetch plan-level PnL summary from the delta-neutral store.
 - `get_delta_neutral_history` — Fetch execution history, monitor snapshots, and alerts for a plan.
 - `open_delta_neutral_position` — Execute a two-leg opening (spot long + futures short) with full approval workflow and state machine.
 - `unwind_delta_neutral_position` — Execute a two-leg closing (sell spot + close futures short) with recovery path.
+- `resize_delta_neutral_position` — Adjust the notional size of an active plan by resizing both legs equally. Accepts `delta_pct` or `delta_notional_usdt` (exactly one required); active plans only. Dry-run with `confirm=false`; execute with `confirm=true`. Partial fill transitions plan to `recovery_required`.
 
 ## Worked Example: Find The Best ETH Opportunity
 
@@ -745,6 +746,152 @@ Agent: Suggests either:
 
 User reviews and approves exact order before it executes.
 ```
+
+### Setting Leverage at Create
+
+When creating a new delta-neutral plan via `create_delta_neutral_plan`, you specify:
+
+- **`leverage`** (optional, default 1): The futures leverage multiplier for the position.
+- **`risk_policy.max_leverage`** (optional): The maximum leverage allowed by your risk policy.
+
+The plan sizes both legs to **equal notional**:
+
+```text
+Formula: N = (capital - reserve) × leverage / (leverage + 1)
+
+Example with capital=10,000 USDT, reserve=500 USDT, leverage=2:
+  N = (10,000 - 500) × 2 / (2 + 1) = 9,500 × 0.667 = 6,333.33 USDT
+  
+  Spot notional:     6,333.33 USDT
+  Futures notional:  6,333.33 USDT (at 2x leverage)
+  Total margin use:  3,166.67 USDT (half the notional on futures)
+```
+
+The tool **rejects** `leverage > max_leverage` at creation time. This ensures you cannot exceed your configured safety limit.
+
+Example call:
+
+```json
+{
+  "plan_name": "BTC High-Leverage Carry",
+  "asset": "BTC",
+  "spot_provider": "binance",
+  "spot_symbol": "BTC/USDT",
+  "futures_provider": "binance",
+  "futures_symbol": "BTC/USDT:USDT",
+  "capital_usdt": 10000,
+  "leverage": 2,
+  "risk_policy": {
+    "max_leverage": 3,
+    "min_liquidation_distance_pct": 25
+  }
+}
+```
+
+### Editing Leverage on Existing Plans
+
+Use `update_delta_neutral_plan` with the `leverage` parameter to adjust the leverage of an existing plan.
+
+**For draft or ready plans**: The new leverage is stored and applied when the plan is next opened. No live exchange action occurs.
+
+**For active plans**: Leverage change applies **immediately** on the exchange:
+
+1. **Requires `confirm=true`**: You must explicitly approve a live leverage change.
+2. **Applied via `SetFuturesLeverage`**: The exchange's leverage setting is updated in real-time.
+3. **Re-validated against liquidation distance**: After the lever change, the tool computes the new liquidation distance and **rejects** the change if it would breach `risk_policy.min_liquidation_distance_pct`.
+4. **Does not change delta**: Leverage adjusts **margin requirement and liquidation risk**, NOT the matched notional. Delta remains the same (equal spot and futures notional).
+
+Example calls:
+
+```json
+{
+  "plan_id": 42,
+  "leverage": 3,
+  "confirm": true
+}
+```
+
+If the leverage change would drop liquidation distance below your policy minimum, you'll see:
+
+```
+Error: leverage 3 would drop liquidation distance to 18%, below policy minimum 25% — reverting
+```
+
+**Note**: A leverage *change* on an active position **does not rebalance the legs**. Both legs retain their current notional. What changes is the margin requirement and liquidation price. If you want to resize the notional, use `resize_delta_neutral_position` instead.
+
+### Resizing a Position
+
+Use `resize_delta_neutral_position` to adjust the notional size of an active delta-neutral plan. This maintains equal notional on both legs (spot and futures).
+
+**Parameters:**
+
+- `plan_id` (required): ID of the active plan.
+- Exactly one of:
+  - `delta_pct`: Percentage change (e.g., `-10` to remove 10%, `+20` to add 20%).
+  - `delta_notional_usdt`: Absolute USDT change (e.g., `-500` to reduce by $500, `+1000` to add $1000).
+- `confirm` (optional, default false): Set `confirm=true` to execute. Without it, dry-run shows the proposed resize.
+
+**Behavior:**
+
+- **Active plans only**: Draft or ready plans cannot be resized; they have no open position.
+- **Equal notional on both legs**: If you resize by −10%, both spot and futures notional decrease by 10%. If you resize by +20%, both increase by 20%.
+- **Decrease path**: Uses reduce-only close for futures (close short position) and sell for spot (sell holdings).
+- **Increase path**: Adds to both futures (using the plan's leverage setting) and spot (buy more).
+- **Dry-run (confirm=false)**: Shows a resize review with the proposed notionals and direction, but does not place orders.
+- **Live (confirm=true)**: Places orders on both legs. If one leg fails, the plan enters `recovery_required` status with a CRITICAL alert. You must run `unwind_delta_neutral_position` or manually rebalance to recover.
+
+Example call to dry-run a 10% reduction:
+
+```json
+{
+  "plan_id": 42,
+  "delta_pct": -10,
+  "confirm": false
+}
+```
+
+Response (dry-run):
+
+```
+Resize review (DRY-RUN):
+  Plan:                    ETH Funding Carry (ID 42)
+  Status:                  active
+
+Current Position:
+  Spot Notional (USDT):    5000.00
+  Futures Notional (USDT): 5000.00
+
+Resize Parameters:
+  Delta (USDT):            -500.00
+  Direction:               decrease
+
+New Position (both legs equal):
+  Spot Notional (USDT):    4500.00
+  Futures Notional (USDT): 4500.00
+
+Set confirm=true to execute.
+```
+
+To execute:
+
+```json
+{
+  "plan_id": 42,
+  "delta_pct": -10,
+  "confirm": true
+}
+```
+
+**Validation:**
+
+- Both `delta_pct` and `delta_notional_usdt` cannot be provided at the same time.
+- At least one must be provided; neither is an error.
+- Cannot decrease by more than the current notional.
+
+**Failure modes:**
+
+- **First leg fails**: Plan transitions to `failed` and second leg is not placed. Position unchanged.
+- **Second leg fails**: Plan transitions to `recovery_required` with a CRITICAL alert. First leg has executed; you have partial, unhedged exposure. **Immediately run `unwind_delta_neutral_position` to close or rebalance.**
 
 ### Close a Plan Early
 

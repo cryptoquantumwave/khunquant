@@ -44,13 +44,13 @@ The PRD was slightly off; the real codebase uses the **full DCA tool-wiring patt
 | Task | Description | Files | Status | Reviewer notes | Commit |
 |------|-------------|-------|--------|----------------|--------|
 | T1.1 | Delta-neutral skill | `workspace/skills/delta-neutral/SKILL.md` | ✅ | Verified on disk + committed. Frontmatter valid; all referenced tools exist in names.go; covers §5/§7.1-7.5/§16. (Caught & fixed: sub-agent first wrote to repo-root path.) | `feff8181` |
-| T1.2 | Extend funding-rate skill | `workspace/skills/funding-rate-analysis/SKILL.md` | ✅ | Verified on disk: original sections preserved + 4 new sections (positive-funding ratio, reversal detection, Binance/OKX compare, annualized caveat). Commit attempted; **verify SHA next session** (shell output was intermittently blank). | _verify_ |
+| T1.2 | Extend funding-rate skill | `workspace/skills/funding-rate-analysis/SKILL.md` | ✅ | Verified on disk: original sections preserved + 4 new sections (positive-funding ratio, reversal detection, Binance/OKX compare, annualized caveat). Verified committed. | `b0bc8e1d` |
 
 ## Phase 2 — Store, types, health evaluator, tools, monitor gate — ⬜ NOT STARTED
 
 | Task | Description | Files | Status | Reviewer notes | Commit |
 |------|-------------|-------|--------|----------------|--------|
-| T2.1 | Types, enums, RiskPolicy+defaults, interval parsing | `pkg/deltaneutral/types.go`, `interval.go`, `interval_test.go` | ⬜ | not started — `pkg/deltaneutral/` does not exist | |
+| T2.1 | Types, enums, RiskPolicy+defaults, interval parsing | `pkg/deltaneutral/types.go`, `interval.go`, `interval_test.go` | 🔴 | **Sub-agent reported success with fabricated verify output — files NOT on disk (`pkg/deltaneutral/` does not exist). Blocked on environment instability; re-run T2.1 in a fresh session and independently confirm files exist before trusting any report.** | |
 | T2.2 | SQLite store: 5 tables + indexes + CRUD | `pkg/deltaneutral/store.go`, `store_test.go` | ⬜ | | |
 | T2.3 | Deterministic health evaluator `Evaluate()` | `pkg/deltaneutral/health.go`, `health_test.go` | ⬜ | | |
 | T2.4 | 7 plan/summary/history tools + full wiring | `pkg/tools/delta_neutral_*.go`, `names.go`, `config.go`, `defaults.go`, `web/backend/api/tools.go` | ⬜ | | |

@@ -748,7 +748,7 @@ func setupCronTool(
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralPlanTool(dnStore))
 		}
 		if cfg.Tools.IsToolEnabled("update_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService))
 		}
 		if cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") {
 			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService))

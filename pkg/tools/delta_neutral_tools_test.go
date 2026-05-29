@@ -207,7 +207,7 @@ func TestUpdateDeltaNeutralPlanTool_ChangeMonitorInterval(t *testing.T) {
 	store.UpdatePlan(context.Background(), plan)
 
 	// Now update the monitor interval
-	tool := NewUpdateDeltaNeutralPlanTool(store, cronService)
+	tool := NewUpdateDeltaNeutralPlanTool(&config.Config{}, store, cronService)
 	args := map[string]any{
 		"plan_id":          float64(planID),
 		"monitor_interval": "10m",
@@ -555,5 +555,232 @@ func TestCreateDeltaNeutralPlanTool_SummaryIncludesNotionalAndReserve(t *testing
 	}
 	if !strings.Contains(output, "Reserve margin") {
 		t.Errorf("Expected 'Reserve margin' in summary output")
+	}
+}
+
+// --- Leverage update tests ---
+
+func TestUpdateDeltaNeutralPlanTool_DraftPlanLeverageStored(t *testing.T) {
+	store, _ := deltaneutral.NewStore(t.TempDir())
+	cronService := newTestCronServiceForDN(t)
+	cfg := &config.Config{}
+
+	// Create a draft plan with leverage 2
+	plan := &deltaneutral.Plan{
+		Name:            "Draft Plan",
+		Asset:           "BTC",
+		Status:          deltaneutral.PlanStatusDraft,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotSymbol:      "BTC/USDT",
+		FuturesProvider: "binance",
+		FuturesSymbol:   "BTC/USDT:USDT",
+		CapitalUSDT:     1000.0,
+		FuturesLeverage: 2,
+		MonitorInterval: "5m",
+		Enabled:         true,
+		RiskPolicy:      deltaneutral.DefaultRiskPolicy(),
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	planID, _ := store.SavePlan(context.Background(), plan)
+
+	// Update leverage to 3 (no exchange call needed for draft)
+	tool := NewUpdateDeltaNeutralPlanTool(cfg, store, cronService)
+	args := map[string]any{
+		"plan_id":  float64(planID),
+		"leverage": 3.0,
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	// Verify leverage was stored
+	updated, _ := store.GetPlan(context.Background(), planID)
+	if updated.FuturesLeverage != 3 {
+		t.Errorf("Expected leverage 3, got %d", updated.FuturesLeverage)
+	}
+}
+
+func TestUpdateDeltaNeutralPlanTool_LeverageExceedsMax(t *testing.T) {
+	store, _ := deltaneutral.NewStore(t.TempDir())
+	cronService := newTestCronServiceForDN(t)
+	cfg := &config.Config{}
+
+	// Create a draft plan with max_leverage 5
+	policy := deltaneutral.DefaultRiskPolicy()
+	policy.MaxLeverage = 5
+	plan := &deltaneutral.Plan{
+		Name:            "Draft Plan",
+		Asset:           "BTC",
+		Status:          deltaneutral.PlanStatusDraft,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotSymbol:      "BTC/USDT",
+		FuturesProvider: "binance",
+		FuturesSymbol:   "BTC/USDT:USDT",
+		CapitalUSDT:     1000.0,
+		FuturesLeverage: 2,
+		MonitorInterval: "5m",
+		Enabled:         true,
+		RiskPolicy:      policy,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	planID, _ := store.SavePlan(context.Background(), plan)
+
+	// Try to update leverage to 10 (exceeds max_leverage 5)
+	tool := NewUpdateDeltaNeutralPlanTool(cfg, store, cronService)
+	args := map[string]any{
+		"plan_id":  float64(planID),
+		"leverage": 10.0,
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Errorf("Expected error for leverage exceeding max_leverage, got success")
+	}
+	if !strings.Contains(result.ForLLM, "exceeds max_leverage") {
+		t.Errorf("Expected error message about max_leverage, got: %s", result.ForLLM)
+	}
+
+	// Verify leverage was NOT changed
+	updated, _ := store.GetPlan(context.Background(), planID)
+	if updated.FuturesLeverage != 2 {
+		t.Errorf("Expected leverage to remain 2, got %d", updated.FuturesLeverage)
+	}
+}
+
+func TestUpdateDeltaNeutralPlanTool_ActivePlanWithoutConfirm(t *testing.T) {
+	store, _ := deltaneutral.NewStore(t.TempDir())
+	cronService := newTestCronServiceForDN(t)
+	cfg := &config.Config{}
+
+	// Create an active plan
+	plan := &deltaneutral.Plan{
+		Name:            "Active Plan",
+		Asset:           "BTC",
+		Status:          deltaneutral.PlanStatusActive,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotSymbol:      "BTC/USDT",
+		FuturesProvider: "binance",
+		FuturesSymbol:   "BTC/USDT:USDT",
+		CapitalUSDT:     1000.0,
+		FuturesLeverage: 2,
+		MonitorInterval: "5m",
+		Enabled:         true,
+		RiskPolicy:      deltaneutral.DefaultRiskPolicy(),
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	planID, _ := store.SavePlan(context.Background(), plan)
+
+	// Try to update leverage WITHOUT confirm=true (should fail)
+	tool := NewUpdateDeltaNeutralPlanTool(cfg, store, cronService)
+	args := map[string]any{
+		"plan_id":  float64(planID),
+		"leverage": 3.0,
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Errorf("Expected error for active plan without confirm, got success")
+	}
+	if !strings.Contains(result.ForLLM, "requires confirm=true") {
+		t.Errorf("Expected error message about confirm, got: %s", result.ForLLM)
+	}
+
+	// Verify leverage was NOT changed
+	updated, _ := store.GetPlan(context.Background(), planID)
+	if updated.FuturesLeverage != 2 {
+		t.Errorf("Expected leverage to remain 2, got %d", updated.FuturesLeverage)
+	}
+}
+
+func TestUpdateDeltaNeutralPlanTool_ReadyPlanLeverageStored(t *testing.T) {
+	store, _ := deltaneutral.NewStore(t.TempDir())
+	cronService := newTestCronServiceForDN(t)
+	cfg := &config.Config{}
+
+	// Create a ready plan
+	plan := &deltaneutral.Plan{
+		Name:            "Ready Plan",
+		Asset:           "BTC",
+		Status:          deltaneutral.PlanStatusReady,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotSymbol:      "BTC/USDT",
+		FuturesProvider: "binance",
+		FuturesSymbol:   "BTC/USDT:USDT",
+		CapitalUSDT:     1000.0,
+		FuturesLeverage: 2,
+		MonitorInterval: "5m",
+		Enabled:         true,
+		RiskPolicy:      deltaneutral.DefaultRiskPolicy(),
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	planID, _ := store.SavePlan(context.Background(), plan)
+
+	// Update leverage (no exchange call needed for ready status)
+	tool := NewUpdateDeltaNeutralPlanTool(cfg, store, cronService)
+	args := map[string]any{
+		"plan_id":  float64(planID),
+		"leverage": 4.0,
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	// Verify leverage was stored
+	updated, _ := store.GetPlan(context.Background(), planID)
+	if updated.FuturesLeverage != 4 {
+		t.Errorf("Expected leverage 4, got %d", updated.FuturesLeverage)
+	}
+}
+
+func TestUpdateDeltaNeutralPlanTool_RejectClosedPlanLeverage(t *testing.T) {
+	store, _ := deltaneutral.NewStore(t.TempDir())
+	cronService := newTestCronServiceForDN(t)
+	cfg := &config.Config{}
+
+	// Create a closed plan
+	plan := &deltaneutral.Plan{
+		Name:            "Closed Plan",
+		Asset:           "BTC",
+		Status:          deltaneutral.PlanStatusClosed,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotSymbol:      "BTC/USDT",
+		FuturesProvider: "binance",
+		FuturesSymbol:   "BTC/USDT:USDT",
+		CapitalUSDT:     1000.0,
+		FuturesLeverage: 2,
+		MonitorInterval: "5m",
+		Enabled:         true,
+		RiskPolicy:      deltaneutral.DefaultRiskPolicy(),
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	planID, _ := store.SavePlan(context.Background(), plan)
+
+	// Try to update leverage on a closed plan
+	tool := NewUpdateDeltaNeutralPlanTool(cfg, store, cronService)
+	args := map[string]any{
+		"plan_id":  float64(planID),
+		"leverage": 3.0,
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Errorf("Expected error for closed plan, got success")
+	}
+	if !strings.Contains(result.ForLLM, "cannot change leverage") {
+		t.Errorf("Expected error message about closed plan, got: %s", result.ForLLM)
 	}
 }

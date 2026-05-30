@@ -96,6 +96,16 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Parameters() map[string]any {
 				"type":        "number",
 				"description": "Filter assets with |APR| below this threshold (percent, optional, default 0).",
 			},
+			"sort_by": map[string]any{
+				"type":        "string",
+				"enum":        []string{"funding_rate", "apr", "7d_avg", "14d_avg"},
+				"description": "Field to sort by (default 'funding_rate'). Values are SIGNED: 'funding_rate'/'apr' use the current funding/APR; '7d_avg'/'14d_avg' use the funding-history mean. Sorting by '7d_avg' or '14d_avg' computes stability for ALL candidates (more API calls).",
+			},
+			"sort_order": map[string]any{
+				"type":        "string",
+				"enum":        []string{"asc", "desc"},
+				"description": "Sort direction (default 'desc'). 'desc' = most-positive first → most-negative last; 'asc' = most-negative first → most-positive last.",
+			},
 			"cmc_base_url": map[string]any{
 				"type":        "string",
 				"description": "Override CMC API base URL (for testing or custom endpoints).",
@@ -132,10 +142,29 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 	topKStability := int(numberArg(args, "top_k_stability"))
 	minAbsFundingAPR := numberArg(args, "min_abs_funding_apr")
 	cmcBaseURL := stringArg(args, "cmc_base_url")
+	sortBy := strings.ToLower(strings.TrimSpace(stringArg(args, "sort_by")))
+	sortOrder := strings.ToLower(strings.TrimSpace(stringArg(args, "sort_order")))
 
 	// Validation and defaults.
 	// Empty or "all" provider → scan every supported exchange and combine.
 	scanProviders := resolveScanProviders(provider)
+	if sortBy == "" {
+		sortBy = "funding_rate"
+	}
+	if !validSortBy(sortBy) {
+		return ErrorResult(fmt.Sprintf("invalid sort_by %q (valid: funding_rate, apr, 7d_avg, 14d_avg)", sortBy))
+	}
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	if sortOrder != "asc" && sortOrder != "desc" {
+		return ErrorResult(fmt.Sprintf("invalid sort_order %q (valid: asc, desc)", sortOrder))
+	}
+	// Sorting by a stability field requires stability stats for every candidate.
+	sortByStability := sortBy == "7d_avg" || sortBy == "14d_avg"
+	if sortByStability {
+		includeStability = true
+	}
 	if topN <= 0 || topN > 500 {
 		topN = 100
 	}
@@ -182,18 +211,27 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 		return ErrorResult(fmt.Sprintf("scan failed for all providers: %s", strings.Join(providerErrs, "; ")))
 	}
 
-	// Sort the combined set by abs(APR) descending.
+	// Pre-rank by abs(APR) descending — this only decides WHICH rows get stability
+	// fetched in the top-K case; the final user-facing sort is applied after stage 2.
 	sort.Slice(opportunities, func(i, j int) bool {
 		return math.Abs(opportunities[i].apr) > math.Abs(opportunities[j].apr)
 	})
 
-	// Stage 2: Optionally fetch stability for the top K (across all exchanges),
-	// using each row's own provider handle.
+	// Stage 2: Optionally fetch stability (across all exchanges) using each row's
+	// own provider handle. When sorting by a stability field, fetch for ALL
+	// candidates (bounded by maxStabilityFetch) so the final sort is correct;
+	// otherwise just the top-K most-interesting rows.
 	if includeStability && len(opportunities) > 0 {
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.SetLimit(4)
 
 		topK := topKStability
+		if sortByStability {
+			topK = len(opportunities)
+			if topK > maxStabilityFetch {
+				topK = maxStabilityFetch
+			}
+		}
 		if len(opportunities) < topK {
 			topK = len(opportunities)
 		}
@@ -227,11 +265,79 @@ func (t *ScanDeltaNeutralOpportunitiesTool) Execute(ctx context.Context, args ma
 		_ = eg.Wait() // Ignore partial failures.
 	}
 
+	// Final user-facing sort (after stage 2 so stability values are populated).
+	sortOpportunities(opportunities, sortBy, sortOrder)
+
 	if len(opportunities) == 0 {
 		return UserResult("No opportunities found (opportunities list is empty).")
 	}
-	out := formatScanResults(opportunities, limitResults, includeStability, scanProviders, providerErrs)
+	out := formatScanResults(opportunities, limitResults, includeStability, scanProviders, providerErrs, sortBy, sortOrder)
 	return UserResult(out)
+}
+
+// maxStabilityFetch caps how many history fetches a stability-field sort triggers.
+const maxStabilityFetch = 200
+
+// validSortBy reports whether s is a recognized sort field.
+func validSortBy(s string) bool {
+	switch s {
+	case "funding_rate", "apr", "7d_avg", "14d_avg":
+		return true
+	}
+	return false
+}
+
+// sortOpportunities orders rows by the chosen signed field and direction.
+// Rows missing a stability value (nil) always sink to the bottom regardless of
+// direction, so rows without data never outrank rows with real data. Ties break
+// by abs(apr) desc then symbol for deterministic output.
+func sortOpportunities(rows []opportunityRow, sortBy, sortOrder string) {
+	// key returns (value, present). present=false → sink to bottom.
+	key := func(r opportunityRow) (float64, bool) {
+		switch sortBy {
+		case "apr":
+			return r.apr, true
+		case "7d_avg":
+			if r.stability7dMean == nil {
+				return 0, false
+			}
+			return *r.stability7dMean, true
+		case "14d_avg":
+			if r.stability14dMean == nil {
+				return 0, false
+			}
+			return *r.stability14dMean, true
+		default: // funding_rate
+			return r.fundingPercent, true
+		}
+	}
+	desc := sortOrder != "asc"
+	sort.SliceStable(rows, func(i, j int) bool {
+		vi, pi := key(rows[i])
+		vj, pj := key(rows[j])
+		if pi != pj {
+			return pi // present rows before absent rows, both directions
+		}
+		if !pi { // both absent → deterministic tiebreak
+			return tieBreak(rows[i], rows[j])
+		}
+		if vi != vj {
+			if desc {
+				return vi > vj
+			}
+			return vi < vj
+		}
+		return tieBreak(rows[i], rows[j])
+	})
+}
+
+// tieBreak gives a stable deterministic order: larger abs(apr) first, then symbol.
+func tieBreak(a, b opportunityRow) bool {
+	ai, bi := math.Abs(a.apr), math.Abs(b.apr)
+	if ai != bi {
+		return ai > bi
+	}
+	return a.symbol < b.symbol
 }
 
 // scanProvider screens a single exchange: loads its futures + spot markets, batch-
@@ -437,11 +543,12 @@ func computeFundingStatsWindow(history []ccxt.FundingRateHistory, duration time.
 // formatScanResults builds a human-readable table. scannedProviders are the
 // exchanges that were screened (for the header); providerErrs lists any that
 // failed (surfaced as a caution so partial results are clearly labeled).
-func formatScanResults(opportunities []opportunityRow, limitResults int, includeStability bool, scannedProviders, providerErrs []string) string {
+func formatScanResults(opportunities []opportunityRow, limitResults int, includeStability bool, scannedProviders, providerErrs []string, sortBy, sortOrder string) string {
 	var sb strings.Builder
 
 	sb.WriteString("=== Delta-Neutral Funding Carry Scan ===\n")
-	sb.WriteString(fmt.Sprintf("Exchanges scanned: %s\n\n", strings.Join(scannedProviders, ", ")))
+	sb.WriteString(fmt.Sprintf("Exchanges scanned: %s\n", strings.Join(scannedProviders, ", ")))
+	sb.WriteString(fmt.Sprintf("Sorted by: %s %s\n\n", sortBy, sortOrder))
 
 	if len(opportunities) == 0 {
 		sb.WriteString("No opportunities found matching the criteria.\n")

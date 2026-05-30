@@ -340,6 +340,7 @@ Omitting `provider` (or passing `"all"`) scans **every** supported exchange (cur
 ```
 === Delta-Neutral Funding Carry Scan ===
 Exchanges scanned: binance, okx
+Sorted by: funding_rate desc
 
 Rank  Exch    Asset Futures         Spot     Funding%   APR%   Direction   7d Mean%   7d Std%   14d Mean%  14d Std%   Label
 ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————

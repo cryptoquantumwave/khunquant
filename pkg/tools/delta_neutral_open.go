@@ -300,12 +300,19 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 		UpdatedAt:             time.Now(),
 	}
 
+	// Derive order side ("buy"/"sell") from position side ("long"/"short").
+	// OKX requires side="sell" to open a short; passing "short" causes a 51000 error.
+	entrySide, positionSide, err := futuresPositionSide(plan.FuturesSide)
+	if err != nil {
+		return false, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
+	}
+
 	// Apply leverage before placing the futures order
 	leverage := plan.FuturesLeverage
 	if leverage <= 0 {
 		leverage = 1 // Default to 1x if not specified
 	}
-	if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, plan.FuturesSide); err != nil {
+	if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, positionSide); err != nil {
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = fmt.Sprintf("set leverage: %v", err)
 		t.store.SaveExecutionLeg(ctx, leg)
@@ -316,9 +323,9 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
 		Symbol:       plan.FuturesSymbol,
 		OrderType:    "market",
-		Side:         plan.FuturesSide,
+		Side:         entrySide,
 		Amount:       contractSize,
-		PositionSide: plan.FuturesSide,
+		PositionSide: positionSide,
 		ReduceOnly:   false,
 	})
 	if err != nil {

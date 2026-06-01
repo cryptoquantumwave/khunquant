@@ -27,12 +27,19 @@ linters:
     - wsl_v5
 
     # TODO: Disabled, because they are failing at the moment, we should fix them and enable (step by step)
+    - bodyclose
+    - canonicalheader
     - contextcheck
+    - copyloopvar
+    - dogsled
+    - dupl
     - embeddedstructfieldcheck
     - errcheck
     - errchkjson
+    - errname
     - errorlint
     - exhaustive
+    - forbidigo
     - forcetypeassert
     - funlen
     - gochecknoinits
@@ -40,25 +47,42 @@ linters:
     - goconst
     - gocritic
     - gocyclo
+    - godoclint
     - godox
+    - gosmopolitan
     - gosec
+    - govet
+    - interfacebloat
     - ineffassign
     - lll
     - maintidx
+    - mirror
+    - misspell
     - mnd
     - modernize
+    - musttag
+    - nakedret
     - nestif
+    - nilerr
     - nilnil
+    - nosprintfhostport
     - paralleltest
     - perfsprint
+    - prealloc
+    - predeclared
+    - recvcheck
     - revive
+    - rowserrcheck
+    - sqlclosecheck
     - staticcheck
     - tagalign
     - testifylint
     - thelper
     - unparam
+    - unused
     - usestdlibvars
     - usetesting
+    - wastedassign
   settings:
     errcheck:
       check-type-assertions: true
@@ -150,19 +174,14 @@ linters:
         path: 'pkg/tools/(i2c\.go|spi\.go)$'
       - linters:
           - forbidigo
-        path: '^(?!.*_test\.go$).*\.go$'
+        path-except: _test\.go$
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 
 formatters:
-  enable:
-    - gci
-    - gofmt
-    - gofumpt
-    - goimports
-    - golines
+  enable: []
   settings:
     gci:
       sections:

@@ -632,10 +632,6 @@ func TestExecuteJobByID_EverySchedule_ComputesNextRun(t *testing.T) {
 	job, _ := svc.AddJob("recurring", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "msg", false, "cli", "direct")
 	jobID := job.ID
 
-	// Note the old next run
-	oldJob := svc.GetJob(jobID)
-	oldNextRun := oldJob.State.NextRunAtMS
-
 	// Execute it
 	svc.executeJobByID(jobID)
 
@@ -644,8 +640,12 @@ func TestExecuteJobByID_EverySchedule_ComputesNextRun(t *testing.T) {
 	if updated.State.NextRunAtMS == nil {
 		t.Error("NextRunAtMS should be computed for every schedule")
 	}
-	if oldNextRun != nil && updated.State.NextRunAtMS != nil && *updated.State.NextRunAtMS == *oldNextRun {
-		t.Error("NextRunAtMS should be updated to a future time")
+	if updated.State.LastRunAtMS == nil {
+		t.Error("LastRunAtMS should be recorded")
+	}
+	if updated.State.NextRunAtMS != nil && updated.State.LastRunAtMS != nil &&
+		*updated.State.NextRunAtMS <= *updated.State.LastRunAtMS {
+		t.Error("NextRunAtMS should be after LastRunAtMS")
 	}
 }
 
@@ -898,4 +898,3 @@ func TestRemoveJob_ConcurrentAddAndRemove(t *testing.T) {
 }
 
 // int64Ptr is defined in service_test.go as well to avoid duplication.
-

@@ -265,9 +265,6 @@ func extensionForMIMEType(mimeType string) string {
 	if mimeType == "" {
 		return ".bin"
 	}
-	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
-		return exts[0]
-	}
 
 	switch strings.ToLower(mimeType) {
 	case "image/jpeg":
@@ -286,7 +283,11 @@ func extensionForMIMEType(mimeType string) string {
 		return ".ogg"
 	case "video/mp4":
 		return ".mp4"
-	default:
-		return filepath.Ext(mimeType)
 	}
+
+	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
+		return exts[0]
+	}
+
+	return filepath.Ext(mimeType)
 }

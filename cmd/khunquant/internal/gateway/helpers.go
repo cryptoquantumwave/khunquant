@@ -164,7 +164,8 @@ func setupAndStartServices(
 
 	// Setup cron tool and service
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	services.CronService = setupCronTool(
+	var setupDNStore *deltaneutral.Store
+	services.CronService, setupDNStore = setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -251,7 +252,7 @@ func setupAndStartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService)
+	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, agentLoop)
 	}
@@ -415,7 +416,8 @@ func restartServices(
 
 	// Re-create and start cron service with new config
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	services.CronService = setupCronTool(
+	var restartDNStore *deltaneutral.Store
+	services.CronService, restartDNStore = setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -495,7 +497,7 @@ func restartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService)
+	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, al)
 	} else {
@@ -641,7 +643,7 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
-) *cron.CronService {
+) (*cron.CronService, *deltaneutral.Store) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	// Create cron service
@@ -787,7 +789,7 @@ func setupCronTool(
 		}
 	}
 
-	return cronService
+	return cronService, dnStore
 }
 
 // registerDevMCP wires the read-only developer MCP server onto the shared

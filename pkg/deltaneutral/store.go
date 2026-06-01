@@ -527,6 +527,19 @@ func (s *Store) SetCronJobID(ctx context.Context, id int64, cronJobID string) er
 	return nil
 }
 
+// SetMonitorIntervalByCronJobID updates the monitor_interval of the plan linked to the given cron job ID.
+// It is a no-op (returns nil) when no plan is linked to that cron job.
+func (s *Store) SetMonitorIntervalByCronJobID(ctx context.Context, cronJobID, interval string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE delta_neutral_plans SET monitor_interval=?, updated_at=? WHERE cron_job_id=?`,
+		interval, time.Now().Format(time.RFC3339), cronJobID,
+	)
+	if err != nil {
+		return fmt.Errorf("deltaneutral: set monitor interval for cron job %q: %w", cronJobID, err)
+	}
+	return nil
+}
+
 // DeletePlan removes a plan and cascades delete its snapshots, alerts, and executions.
 func (s *Store) DeletePlan(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM delta_neutral_plans WHERE id = ?`, id)

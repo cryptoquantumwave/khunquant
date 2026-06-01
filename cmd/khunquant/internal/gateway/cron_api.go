@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 )
 
 var interfaceAddrs = net.InterfaceAddrs
@@ -65,9 +68,11 @@ func isLocalManagementIP(ip net.IP) bool {
 
 // registerCronAPI registers live cron management routes on the gateway HTTP mux.
 // These routes mutate the in-memory CronService directly, avoiding the stale-file race.
+// dnStore is optional (may be nil); when provided, schedule changes on dn:* jobs sync
+// the linked plan's monitor_interval automatically.
 func registerCronAPI(mux interface {
 	Handle(pattern string, handler http.Handler)
-}, cs *cron.CronService) {
+}, cs *cron.CronService, dnStore *deltaneutral.Store) {
 	mux.Handle("GET /api/cron/jobs", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jobs := cs.ListJobs(true)
 		if jobs == nil {
@@ -145,6 +150,16 @@ func registerCronAPI(mux interface {
 			return
 		}
 
+		// When the schedule interval changes on a dn:* job, sync monitor_interval on the
+		// linked delta-neutral plan so both views stay in agreement.
+		if req.Schedule != nil && dnStore != nil &&
+			strings.HasPrefix(target.Name, "dn:") &&
+			target.Schedule.Kind == "every" && target.Schedule.EveryMS != nil {
+			if interval, ok := deltaneutral.IntervalFromMS(*target.Schedule.EveryMS); ok {
+				_ = syncDNPlanInterval(r.Context(), dnStore, target.ID, interval)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})))
@@ -178,4 +193,10 @@ func registerCronAPI(mux interface {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})))
+}
+
+// syncDNPlanInterval updates the monitor_interval of the delta-neutral plan linked to
+// the given cron job ID. Errors are non-fatal (logged by caller).
+func syncDNPlanInterval(ctx context.Context, store *deltaneutral.Store, cronJobID, interval string) error {
+	return store.SetMonitorIntervalByCronJobID(ctx, cronJobID, interval)
 }

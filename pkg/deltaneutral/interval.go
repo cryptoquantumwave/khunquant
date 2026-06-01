@@ -52,3 +52,15 @@ func ValidInterval(s string) bool {
 	_, ok := supportedIntervals[s]
 	return ok
 }
+
+// IntervalFromMS converts milliseconds back to an interval string.
+// Returns the string and true if found, or "" and false if no match.
+func IntervalFromMS(ms int64) (string, bool) {
+	target := time.Duration(ms) * time.Millisecond
+	for s, d := range supportedIntervals {
+		if d == target {
+			return s, true
+		}
+	}
+	return "", false
+}

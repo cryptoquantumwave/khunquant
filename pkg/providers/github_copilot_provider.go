@@ -31,7 +31,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 		return nil, fmt.Errorf("stdio mode not implemented for GitHub Copilot provider; please use 'grpc' mode instead")
 	case "grpc":
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIUrl: uri,
+			Connection: copilot.URIConnection{URL: uri},
 		})
 		if err := client.Start(context.Background()); err != nil {
 			return nil, fmt.Errorf(
@@ -111,14 +111,17 @@ func (p *GitHubCopilotProvider) Chat(
 	if resp == nil {
 		return nil, fmt.Errorf("empty response from copilot")
 	}
-	if resp.Data.Content == nil {
+	data, ok := resp.Data.(*copilot.AssistantMessageData)
+	if !ok {
+		return nil, fmt.Errorf("unexpected copilot response type %T", resp.Data)
+	}
+	if data.Content == "" {
 		return nil, fmt.Errorf("no content in copilot response")
 	}
-	content := *resp.Data.Content
 
 	return &LLMResponse{
 		FinishReason: "stop",
-		Content:      content,
+		Content:      data.Content,
 	}, nil
 }
 

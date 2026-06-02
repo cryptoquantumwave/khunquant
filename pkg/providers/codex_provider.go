@@ -118,7 +118,7 @@ func (p *CodexProvider) Chat(
 				streamedContent.WriteString(codexMessageContent(evt.Item.Content))
 			}
 			if evt.Item.Type == "function_call" {
-				if tc, ok := codexToolCallFromParts(evt.Item.CallID, evt.Item.Name, evt.Item.Arguments); ok {
+				if tc, ok := codexToolCallFromParts(evt.Item.CallID, evt.Item.Name, codexArgumentsString(evt.Item.Arguments)); ok {
 					streamedToolCalls = appendUniqueCodexToolCall(streamedToolCalls, streamedToolCallIDs, tc)
 				}
 			}
@@ -417,7 +417,7 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 				}
 			}
 		case "function_call":
-			if tc, ok := codexToolCallFromParts(item.CallID, item.Name, item.Arguments); ok {
+			if tc, ok := codexToolCallFromParts(item.CallID, item.Name, codexArgumentsString(item.Arguments)); ok {
 				toolCalls = append(toolCalls, tc)
 			}
 		}
@@ -456,6 +456,19 @@ func codexMessageContent(parts []responses.ResponseOutputMessageContentUnion) st
 		}
 	}
 	return content.String()
+}
+
+func codexArgumentsString(arguments responses.ResponseOutputItemUnionArguments) string {
+	if arguments.JSON.OfString.Valid() {
+		return arguments.OfString
+	}
+	if arguments.JSON.OfResponseToolSearchCallArguments.Valid() {
+		data, err := json.Marshal(arguments.OfResponseToolSearchCallArguments)
+		if err == nil {
+			return string(data)
+		}
+	}
+	return ""
 }
 
 func codexToolCallFromParts(callID, name, arguments string) (ToolCall, bool) {

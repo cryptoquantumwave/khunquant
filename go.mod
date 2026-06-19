@@ -5,10 +5,10 @@ go 1.25.11
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/adhocore/gronx v1.20.0
-	github.com/anthropics/anthropic-sdk-go v1.50.1
+	github.com/anthropics/anthropic-sdk-go v1.51.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/ccxt/ccxt/go/v4 v4.5.58
+	github.com/ccxt/ccxt/go/v4 v4.5.59
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
 	github.com/expr-lang/expr v1.17.8
@@ -17,12 +17,12 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3
-	github.com/larksuite/oapi-sdk-go/v3 v3.9.5
+	github.com/larksuite/oapi-sdk-go/v3 v3.9.6
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/mymmrac/telego v1.10.0
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
-	github.com/openai/openai-go/v3 v3.39.0
+	github.com/openai/openai-go/v3 v3.41.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
 	github.com/slack-go/slack v0.26.0
@@ -36,7 +36,7 @@ require (
 	golang.org/x/time v0.15.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
-	maunium.net/go/mautrix v0.28.0
+	maunium.net/go/mautrix v0.28.1
 	modernc.org/sqlite v1.52.0
 )
 
@@ -50,7 +50,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.21.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -90,13 +90,13 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
-	go.mau.fi/util v0.9.9 // indirect
+	go.mau.fi/util v0.9.10 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	modernc.org/libc v1.72.3 // indirect
@@ -111,7 +111,7 @@ require (
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/github/copilot-sdk/go v1.0.1
+	github.com/github/copilot-sdk/go v1.0.2
 	github.com/go-resty/resty/v2 v2.17.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -129,7 +129,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/arch v0.24.0 // indirect
 	golang.org/x/crypto v0.53.0
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
 )

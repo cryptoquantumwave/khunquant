@@ -95,7 +95,14 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 	}
 }
 
-// forceCompression aggressively reduces context when the limit is hit.
+// forceCompression is the legacy manager's emergency reducer. It delegates to
+// the shared forceCompressSessionHistory helper, which both the legacy and
+// seahorse managers use for emergency (proactive + retry) compaction.
+func (m *legacyContextManager) forceCompression(sessionKey string) {
+	forceCompressSessionHistory(m.al.registry.GetDefaultAgent(), sessionKey)
+}
+
+// forceCompressSessionHistory aggressively reduces context when the limit is hit.
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
 //
@@ -107,8 +114,11 @@ func (m *legacyContextManager) maybeSummarize(sessionKey string) {
 // prompt is built dynamically by BuildMessages and is NOT stored here.
 // The compression note is recorded in the session summary so that
 // BuildMessages can include it in the next system prompt.
-func (m *legacyContextManager) forceCompression(sessionKey string) {
-	agent := m.al.registry.GetDefaultAgent()
+//
+// It writes the trimmed history back to the session store — the source of
+// truth the agent loop reads from on every (re-)build — so a re-read after
+// compaction sees the shrunk result.
+func forceCompressSessionHistory(agent *AgentInstance, sessionKey string) {
 	if agent == nil {
 		return
 	}

@@ -3,10 +3,58 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
+
+// TestSeahorseContextManager_EmergencyCompactShrinksSessions verifies the fix
+// for the bug where seahorse's emergency Compact only touched its own SQLite
+// engine, leaving agent.Sessions (the store the loop actually re-reads) intact —
+// so the context-overflow retry kept resending the same oversized history.
+// After Compact with ContextCompressReasonRetry, agent.Sessions must be shorter.
+func TestSeahorseContextManager_EmergencyCompactShrinksSessions(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatalf("expected default agent, got nil")
+	}
+
+	mgrAny, err := newSeahorseContextManager(nil, al)
+	if err != nil {
+		t.Fatalf("construct seahorse manager: %v", err)
+	}
+	mgr := mgrAny.(*seahorseContextManager)
+
+	sessionKey := "seahorse-emergency-compact"
+	history := []providers.Message{
+		{Role: "user", Content: "message 1"},
+		{Role: "assistant", Content: "response 1"},
+		{Role: "user", Content: "message 2"},
+		{Role: "assistant", Content: "response 2"},
+		{Role: "user", Content: "message 3"},
+		{Role: "assistant", Content: "response 3"},
+	}
+	agent.Sessions.SetHistory(sessionKey, history)
+
+	if err := mgr.Compact(context.Background(), &CompactRequest{
+		SessionKey: sessionKey,
+		Reason:     ContextCompressReasonRetry,
+		Budget:     agent.ContextWindow,
+	}); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	newHistory := agent.Sessions.GetHistory(sessionKey)
+	if len(newHistory) >= len(history) {
+		t.Errorf("expected emergency compaction to shrink session history: %d -> %d",
+			len(history), len(newHistory))
+	}
+}
 
 func TestProviderToSeahorseMessage_Basic(t *testing.T) {
 	msg := protocoltypes.Message{

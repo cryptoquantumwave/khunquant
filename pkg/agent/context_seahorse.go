@@ -19,6 +19,7 @@ import (
 type seahorseContextManager struct {
 	engine   *seahorse.Engine
 	sessions session.SessionStore // for startup bootstrap
+	al       *AgentLoop           // resolves the live session store for emergency compaction
 }
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
@@ -46,6 +47,7 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	mgr := &seahorseContextManager{
 		engine:   engine,
 		sessions: agent.Sessions,
+		al:       al,
 	}
 
 	// Register seahorse tools with the agent's tool registry
@@ -128,19 +130,34 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return nil
 	}
 
-	// For retry (LLM overflow), use aggressive CompactUntilUnder to guarantee
-	// context shrinks below budget (spec lines ~1410).
-	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		_, err := m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
-		return err
+	// Emergency compaction (proactive budget check + LLM-overflow retry).
+	//
+	// The agent loop builds and re-reads its LLM request straight from
+	// agent.Sessions — it never calls Assemble — so the load-bearing action is
+	// shrinking agent.Sessions directly. Compacting only the seahorse engine
+	// would leave the re-read unchanged, so the retry would resend the same
+	// oversized history and overflow again. Mirror the legacy turn-dropping
+	// logic on the live session store.
+	if req.Reason == ContextCompressReasonProactive || req.Reason == ContextCompressReasonRetry {
+		forceCompressSessionHistory(m.al.registry.GetDefaultAgent(), req.SessionKey)
+		// Best-effort: keep the seahorse engine roughly in sync for its grep/
+		// expand tools. Non-load-bearing (the loop doesn't read it), so a
+		// failure here must not abort the shrink above.
+		if req.Budget > 0 {
+			if _, err := m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget); err != nil {
+				logger.WarnCF("seahorse", "best-effort engine compaction failed",
+					map[string]any{"session": req.SessionKey, "error": err.Error()})
+			}
+		}
+		return nil
 	}
 
+	// Post-turn summarize: compress the seahorse engine store.
 	var budgetPtr *int
 	if req.Budget > 0 {
 		budgetPtr = &req.Budget
 	}
 	_, err := m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-		Force:  req.Reason == ContextCompressReasonRetry,
 		Budget: budgetPtr,
 	})
 	return err

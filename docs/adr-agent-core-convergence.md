@@ -72,8 +72,30 @@ Refactoring a core with no spec → use characterization tests as the safety net
   - Still seam-testable but deferred to broaden later: context-budget/summarization triggers and
     multi-agent delegate/spawn routing (both need more setup — a summarizing provider / a
     multi-agent registry — and are lower-churn than the core turn loop).
-- ▶ **Step 3 (spike):** on a branch, swap ONE subsystem to upstream's, re-green it; measure the
-  real per-subsystem cost before committing to the full rebase.
+- ✅ **Step 3 (spike — done, measured & discarded):** dropped upstream v0.2.9's *entire* `pkg/agent`
+  onto a throwaway branch (import paths rewritten), kept our seam characterization test, measured
+  the blast radius, then discarded. Findings (decision-grade):
+  1. **Caller blast radius is tiny:** only **3 packages** outside `pkg/agent` import it
+     (`cmd/khunquant/internal/agent`, `cmd/khunquant/internal/gateway`, `pkg/devmcp`). The core is
+     well-encapsulated — re-integration touches a narrow surface.
+  2. **Adopting upstream's agent is dependency-closure work, not logic-untangling:** the wholesale
+     overlay produced **12 compile errors, all "missing package/symbol"** — upstream sibling
+     packages our fork lacks (`pkg/audio`, `pkg/events`, `pkg/isolation`, `pkg/evolution`, + 2
+     `pkg/providers` symbols). **Zero** were semantic conflicts inside the agent logic. So the
+     rebase is "bring ~5 sibling packages + wire," which is far more tractable than feared.
+  3. **The seam methodology is validated:** 8 of our 9 characterization tests rely on public API
+     that survives the refactor **unchanged** — `NewAgentLoop` (even stays backward-compatible via
+     new variadic opts), `ProcessDirect` (identical), `RegisterTool`, `toolLimitResponse`. The
+     **one** drift: upstream removed the fork-specific `noHistory` param from
+     `ProcessDirectWithChannel`, so `CHAR-6 (NoHistoryIsolation)` is the single test needing a
+     conscious ADAPT (re-add `noHistory` as our delta, or adopt upstream's no-history mechanism).
+     This is exactly the kind of decision point the guard exists to surface.
+  - **Net:** the spike *lowered* the risk estimate. The agent rebase looks like a bounded
+    bring-the-deps + thin-reintegration effort (encapsulated, conflict-free logic), not a
+    multi-week untangle. Recommend: bring the ~5 sibling packages first, then the wholesale
+    `pkg/agent` adoption, re-greening this suite (adapting CHAR-6 consciously).
+- ▶ **Step 3b (next):** repeat the measurement against the **latest stable upstream** (not v0.2.9)
+  to confirm the dependency closure there before scheduling the rebase.
 - ▶ **Step 4:** full wholesale adoption + seam-based re-integration, suite as the gate, agent-core
   feature-freeze during the rebase, plus crypto end-to-end validation (a real paper-trade flow).
 - Meanwhile: keep hand-porting fix *logic* (network-retry etc.) to stop the bleeding — independent

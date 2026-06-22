@@ -1,0 +1,79 @@
+# ADR: Converge the agent core onto upstream to enable cheap long-term syncing
+
+**Status:** Accepted (strategy) · Step 1 implemented · remainder scheduled
+**Date:** 2026-06
+**Context source:** upstream sync of picoclaw v0.2.9 (see `upstream-sync-v0.2.9.md`)
+
+## Problem
+
+KhunQuant tracks upstream `sipeed/picoclaw` (proven: `pkg/seahorse` is byte-identical;
+multiple `sync/*` branches). But our `pkg/agent` core diverged from upstream's: upstream
+refactored the monolithic `loop.go` into a `pipeline_*` / `adapters` / `interfaces`
+architecture and added hooks + an event bus, while we kept the monolith and evolved it
+independently (~3770/592 lines of delta across non-test agent files). Result: a growing
+**fork-drift tax** — agent-core fixes increasingly land in files we don't have and must be
+hand-translated each release. We want future upstream syncs to stay cheap.
+
+## Decision
+
+Converge our agent core onto upstream's architecture so our `pkg/agent` delta trends toward
+**near-zero**, making future syncs ordinary cherry-picks. Two non-obvious principles govern
+how:
+
+1. **The goal is "minimize our core delta," not "mimic their layout."** Upstream built
+   hooks / event bus / `interfaces`+`adapters` precisely so downstream extensions don't fork
+   the core. Re-express our add-ons through those **extension seams** instead of re-patching
+   core files. Success metric: *lines of our delta remaining in `pkg/agent` core files*.
+   - Crypto tools already ride the tool registry → effectively zero core delta. Keep it that way.
+   - Trading-risk gating / observability / custom turn behavior → onto hooks/eventbus.
+   - Session/context tweaks → through interfaces/adapters where possible.
+
+2. **The recurring fix-tax is separable from architecture adoption.** Verified: blocked fixes
+   like network-retry are self-contained logic that drop into our existing LLM call-site
+   (`loop.go` `callLLM`/`Chat`) — they do *not* require the pipeline. So we hand-port fix
+   *logic* as needed regardless, and treat full architecture adoption as its own decision,
+   justified by wanting hooks/eventbus/turn-coord for KhunQuant's roadmap.
+
+## Method — characterization-test-guarded refactor (green → red → green)
+
+Refactoring a core with no spec → use characterization tests as the safety net, but:
+
+- **Test at the STABLE SEAM, not internals.** Assertions go through the public
+  `ProcessDirect` / message-bus API with provider/tool fakes (inbound → outbound, tool calls
+  + args, session/history state, system prompt). These survive the architecture swap and
+  *compile on both layouts* — tests bound to `runTurn`/`callLLM`/internal types would fail to
+  compile after the swap and are worse than nothing.
+- **Flow:** suite green on current core → adopt upstream's `pkg/agent` wholesale (red) →
+  re-integrate our deltas via extension seams → green.
+- **Re-integration is a triage, not a blind re-apply:** for each red, decide KEEP (genuine
+  fork behavior → re-apply via a seam), DROP (our parallel impl now provided by upstream), or
+  ADAPT (the assertion can't survive — change it consciously).
+
+### Convergence target & timing
+- Converge to the **latest stable upstream**, not v0.2.9 (upstream refactored the agent core
+  twice in our window; v0.2.9's layout is already superseded — converging there risks
+  re-paying soon).
+- Prefer timing the wholesale adoption to when upstream's agent architecture has settled.
+- Caveat: characterization can't capture everything (timing, concurrency, context-budget
+  math); expect a few "can't preserve" decisions.
+
+## Status / next steps
+
+- ✅ **Step 1 (done):** characterization suite at the seam — `pkg/agent/characterization_test.go`
+  (plain response, tool round-trip, session continuity, system prompt). Green on current core.
+  This is the permanent guard for every future sync.
+- ▶ **Step 2:** expand the suite to cover more must-preserve behaviors (context budgeting /
+  summarization triggers, steering/interrupt, paper-trading & leverage gating, multi-agent
+  delegate/spawn) — still at the seam.
+- ▶ **Step 3 (spike):** on a branch, swap ONE subsystem to upstream's, re-green it; measure the
+  real per-subsystem cost before committing to the full rebase.
+- ▶ **Step 4:** full wholesale adoption + seam-based re-integration, suite as the gate, agent-core
+  feature-freeze during the rebase, plus crypto end-to-end validation (a real paper-trade flow).
+- Meanwhile: keep hand-porting fix *logic* (network-retry etc.) to stop the bleeding — independent
+  of the rebase.
+
+## Alternative considered (rejected as the default)
+
+Stay diverged and only hand-port fixes forever. Rejected because the tax compounds and we
+already demonstrably want upstream's agent work (seahorse) — but the fix-logic hand-porting is
+retained as the interim measure, and full adoption is gated on wanting the new subsystems.

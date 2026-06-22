@@ -181,7 +181,8 @@ Not ported:
 | 3 | `ca70b4a3` | feishu skip empty reaction emoji |
 | 4 | `19a52cbb` | dingtalk mention-only groups |
 | 5 | `3845e851` | feishu reply context (card/file) |
-| 6 | `<skill>`  | agent-browser skill + Dockerfile.heavy |
+| 6 | `69df06c2` | agent-browser skill + Dockerfile.heavy |
+| 7 | `<telegram>` | telegram raw-OAuth-link preservation (parser reimplement + 11-case test) |
 
 (plus the verified-DONE set already present: claude_cli, line QuoteToken/body-close,
 cron test, token estimator, anthropic empty-name, GLM nil-input, WS-URL.)
@@ -192,7 +193,7 @@ Full `go build ./...` green.
   image-input recovery, tool-feedback goroutine-leak, runtime event-bus/hooks, stop command.
 - **Phase B — multi-host binding (`pkg/netbind`)**: unblocks dual-stack + console-IP fixes.
 - **Phase C — providers**: import gemini/bedrock/deepseek (feature decision) → their fixes.
-- **Phase D — telegram parser rewrite**: adopt upstream placeholder-based parser (OAuth fix).
+- **Phase D — telegram parser rewrite**: ✅ DONE (commit ports OAuth fix via placeholder parser + tests).
 - **Phase E — frontend (.tsx) fixes**: web-search draft, dark-mode, HTTP-copy, model
   test-connection — need npm build verification vs our rewritten `web/frontend` (high conflict).
 - **Phase F — config-reset endpoint**: after porting `ResetToDefaults`.

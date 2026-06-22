@@ -25,6 +25,7 @@ const (
 	NameDeleteSnapshots = "delete_snapshots"
 	NameI2C             = "i2c"
 	NameSPI             = "spi"
+	NameSerial          = "serial"
 	NameToolSearchRegex = "tool_search_tool_regex"
 	NameToolSearchBM25  = "tool_search_tool_bm25"
 

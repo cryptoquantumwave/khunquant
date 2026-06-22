@@ -486,6 +486,9 @@ func DefaultConfig() *Config {
 			SPI: ToolConfig{
 				Enabled: false, // Hardware tool - Linux only
 			},
+			Serial: ToolConfig{
+				Enabled: false, // Hardware tool - opt-in (Linux/macOS/Windows)
+			},
 			Subagent: ToolConfig{
 				Enabled: true,
 			},

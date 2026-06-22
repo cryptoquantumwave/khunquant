@@ -1029,6 +1029,7 @@ type ToolsConfig struct {
 	SendFile        ToolConfig         `json:"send_file"                                                envPrefix:"KHUNQUANT_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig         `json:"spawn"                                                    envPrefix:"KHUNQUANT_TOOLS_SPAWN_"`
 	SPI             ToolConfig         `json:"spi"                                                      envPrefix:"KHUNQUANT_TOOLS_SPI_"`
+	Serial          ToolConfig         `json:"serial"                                                   envPrefix:"KHUNQUANT_TOOLS_SERIAL_"`
 	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"KHUNQUANT_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"KHUNQUANT_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"KHUNQUANT_TOOLS_WRITE_FILE_"`
@@ -1544,6 +1545,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Spawn.Enabled
 	case "spi":
 		return t.SPI.Enabled
+	case "serial":
+		return t.Serial.Enabled
 	case "subagent":
 		return t.Subagent.Enabled
 	case "web_fetch":

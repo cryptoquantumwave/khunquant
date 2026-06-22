@@ -125,7 +125,18 @@ Target **v0.3.0** (stable, settled architecture). On branch `converge/agent-v0.3
      `pkg/env.go` with KhunQuant values mirroring upstream's symbol names → adopted code compiles
      zero-delta. `pkg/isolation` (2-symbol agent coupling) is deferred to the overlay step (bring or
      stub then) since it depends on this shim.
-2. Overlay upstream v0.3.0 `pkg/agent`; rewrite import paths.
+2. **EXTENDED-CLOSURE finding (Step 4b attempt, done):** adopting `pkg/evolution` + `pkg/isolation`
+   does **not** stop at those packages — they pull **additions in our shared `pkg/config` and
+   `pkg/skills`** our fork lacks: `config.IsolationConfig`, `config.EvolutionConfig`,
+   `config.ExposePath` (+ `Config.Isolation`/`Config.Evolution` fields), `config.GetHome`,
+   `config.EnvBuiltinSkills`, and `skills.ValidateSkillName`. These look **additive** (new
+   types/fields/funcs), so they can be brought — but `pkg/config` is our **trading-customized,
+   SecureString** package, so this is the sensitive part and must be done deliberately, not in a
+   rushed cascade. Tried, then backed out to keep the branch green; `pkg/events` (clean) stays.
+   Resequenced: **(2a)** bring the additive `pkg/config`+`pkg/skills` items (verify no collision
+   with SecureString/trading config) → **(2b)** root `pkg/env.go` shim + `pkg/isolation` +
+   `pkg/evolution` green → **(2c)** overlay `pkg/agent`; rewrite import paths. `pkg/audio` skipped
+   (0 agent coupling); 2 `pkg/providers` symbols reconciled at overlay time.
 3. Re-apply our deltas via extension seams (tools already via registry; trading observability via
    `pkg/events`/hooks; re-add `noHistory` to `ProcessDirectWithChannel` as our documented delta).
 4. Re-green the characterization suite (consciously ADAPT CHAR-6 for the `noHistory` signature).

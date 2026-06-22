@@ -133,10 +133,23 @@ Target **v0.3.0** (stable, settled architecture). On branch `converge/agent-v0.3
    types/fields/funcs), so they can be brought — but `pkg/config` is our **trading-customized,
    SecureString** package, so this is the sensitive part and must be done deliberately, not in a
    rushed cascade. Tried, then backed out to keep the branch green; `pkg/events` (clean) stays.
-   Resequenced: **(2a)** bring the additive `pkg/config`+`pkg/skills` items (verify no collision
-   with SecureString/trading config) → **(2b)** root `pkg/env.go` shim + `pkg/isolation` +
-   `pkg/evolution` green → **(2c)** overlay `pkg/agent`; rewrite import paths. `pkg/audio` skipped
-   (0 agent coupling); 2 `pkg/providers` symbols reconciled at overlay time.
+   **Closure goes one level deeper (Step 2a probe):** those config/skills items themselves pull
+   more — `skills.ValidateSkillName` → `utils.ValidateSkillIdentifier` / `MaxNameLength`;
+   `config.GetHome` / `config.EnvBuiltinSkills` live in upstream's `envkeys.go` and are tied to
+   **picoclaw-branded** env vars (`PICOCLAW_BUILTIN_SKILLS`, `pkg.DefaultPicoClawHome`) that our
+   fork systematically rebranded (`KHUNQUANT_*`, `.khunquant`). So convergence threads through
+   `config`→env-keys/**branding** and `skills`→`utils`, intersecting the fork's rebrand + the
+   trading/SecureString customizations. **This is the deliberate core**, not a mechanical overlay.
+   Resequenced: **(2a)** reconcile `pkg/config` env-keys/branding (`GetHome`, `EnvBuiltinSkills`,
+   `EnvHome`) to KhunQuant conventions + add additive `IsolationConfig`/`EvolutionConfig`/`ExposePath`
+   types & `Config` fields; bring `skills.ValidateSkillName` + its `utils` deps → **(2b)** root
+   `pkg/env.go` shim + `pkg/isolation` + `pkg/evolution` green → **(2c)** overlay `pkg/agent`.
+   `pkg/audio` skipped (0 agent coupling); 2 `pkg/providers` symbols reconciled at overlay time.
+
+   **Recommendation:** schedule 2a–2c as a deliberately-resourced effort with an agent-core
+   feature-freeze and a real paper-trade end-to-end check before merge — because 2a edits the
+   trading-critical `pkg/config`. Do NOT rush it. The foundational, safe increment (`pkg/events`)
+   is already landed and green on this branch.
 3. Re-apply our deltas via extension seams (tools already via registry; trading observability via
    `pkg/events`/hooks; re-add `noHistory` to `ProcessDirectWithChannel` as our documented delta).
 4. Re-green the characterization suite (consciously ADAPT CHAR-6 for the `noHistory` signature).

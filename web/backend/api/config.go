@@ -17,7 +17,24 @@ func (h *Handler) registerConfigRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", h.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", h.handleUpdateConfig)
 	mux.HandleFunc("PATCH /api/config", h.handlePatchConfig)
+	mux.HandleFunc("POST /api/config/reset", h.handleResetConfig)
 	mux.HandleFunc("POST /api/config/test-command-patterns", h.handleTestCommandPatterns)
+}
+
+// handleResetConfig resets the configuration to factory defaults. Security
+// credentials (API keys, channel secrets) are preserved and a timestamped
+// backup is taken first. Changes apply on the next gateway (re)start, matching
+// handleUpdateConfig behaviour. Port of upstream picoclaw f53222f6a.
+//
+//	POST /api/config/reset
+func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
+	if err := config.ResetToDefaults(h.configPath); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to reset config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleGetConfig returns the complete system configuration.

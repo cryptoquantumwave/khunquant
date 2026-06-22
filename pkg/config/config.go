@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -1329,6 +1331,46 @@ func SaveConfig(path string, cfg *Config) error {
 
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
 	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+// MakeBackup copies the config file (and its .security.yml sidecar, if present)
+// to timestamped ".<date>.bak" siblings. No-op if the config file is absent.
+// Ported from upstream picoclaw (alongside ResetToDefaults).
+func MakeBackup(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	}
+	dateSuffix := time.Now().Format(".20060102.bak")
+	// Backup config file.
+	bakPath := path + dateSuffix
+	if err := fileutil.CopyFile(path, bakPath, 0o600); err != nil {
+		logger.ErrorF("failed to create config backup", map[string]any{"error": err})
+		return fmt.Errorf("failed to create config backup: %w", err)
+	}
+	// Backup security config file (.security.yml).
+	secPath := securityPath(path)
+	if _, err := os.Stat(secPath); err == nil {
+		secBakPath := secPath + dateSuffix
+		if secErr := fileutil.CopyFile(secPath, secBakPath, 0o600); secErr != nil {
+			logger.ErrorF("failed to create security backup", map[string]any{"error": secErr})
+			return fmt.Errorf("failed to create security backup: %w", secErr)
+		}
+	}
+	return nil
+}
+
+// ResetToDefaults resets the config at configPath to factory defaults while
+// preserving security credentials (API keys, channel secrets). A timestamped
+// backup is taken first. Port of upstream picoclaw d61902d4 / f53222f6a.
+func ResetToDefaults(configPath string) error {
+	if err := MakeBackup(configPath); err != nil {
+		return fmt.Errorf("backup before reset: %w", err)
+	}
+	cfg := DefaultConfig()
+	if err := cfg.SecurityCopyFrom(configPath); err != nil {
+		logger.WarnF("could not preserve security config", map[string]any{"error": err})
+	}
+	return SaveConfig(configPath, cfg)
 }
 
 func (c *Config) WorkspacePath() string {

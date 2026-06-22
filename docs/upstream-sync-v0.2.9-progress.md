@@ -101,3 +101,39 @@ MANUAL after presence/base checks.
 **Committed so far:**
 - `ecbedb7a` docs(sync): tracking + progress
 - `c9d95571` fix(cron): independent session per job execution (verified)
+- `5fc1c5ff` docs(sync): Wave 1 execution log
+- `<feishu>` fix(feishu): invalidate cached token on auth error (verified; cherry-pick
+  auto-merged 10 call sites + new `token_cache.go`; resolved 1 conflict — kept
+  `AppSecret.String()` SecureString — build+vet+test pass)
+
+### ⚠️ Defining structural blocker (discovered during Wave 1)
+
+**Upstream refactored `pkg/agent` after our March divergence**, and added new infra
+packages. Confirmed via `git ls-tree v0.2.9 pkg/agent`:
+- **Our fork (pre-refactor):** `loop.go`, `loop_mcp.go`, `loop_media.go` (monolithic).
+- **Upstream v0.2.9 (post-refactor):** `pipeline.go`, `pipeline_execute.go`,
+  `pipeline_llm.go`, `pipeline_streaming.go`, `pipeline_finalize.go`,
+  `pipeline_setup.go`, `adapters/`, `interfaces/`, `llm_media.go`.
+- **`pkg/netbind`** does not exist in our fork (upstream added it for multi-host binding).
+
+**Consequence:** agent-core fixes (`06fad9571` network retry → `pipeline_llm.go`;
+`1245f2ddf` image recovery → `llm_media.go`; `5db008f38` tool-feedback leak →
+`adapters/`+`interfaces/`+`pipeline_execute.go`) and all `pkg/netbind`/dual-stack
+fixes (`0bb9bedc4`) target files we don't have → they need **hand-translation
+across an architectural refactor**, not ports. These are reclassified from
+RESOLVE/TAKE to **DEFER (blocked on agent-pipeline refactor decision)**.
+
+### Verified DONE (already in fork under different shas — do NOT re-port)
+
+`56fb0dc4e` claude_cli (=our `c9019be3`) · `6d7d1b090` line QuoteToken ·
+`bacb9aba7` line body-close · `61a899cfb` cron test · `1a44752dc` token estimator
+(perPartOverhead present) · `54654d279` anthropic empty-name (provider.go:183) ·
+`8d97896a0` GLM nil input · `6a8552a66` WS-URL (controller.ts:149).
+
+### Cheaply-portable remaining (files still align — channel/config/provider level)
+
+Channel-specific fixes are the tractable bucket. Candidates still open & absent:
+`8b3e50269` feishu reply context, `43095543a` feishu emoji, `b6951b692` dingtalk
+mention-only, `11dec0c80` weixin token persist, plus `34b9d5d6f` telegram OAuth
+(MANUAL reimplement — parser merged into telegram.go). TUI/web items need
+case-by-case base checks (web heavily rewritten).

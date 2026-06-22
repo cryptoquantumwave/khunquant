@@ -68,3 +68,36 @@ Findings folded into `upstream-sync-v0.2.9.md`. Key sanity checks and correction
 Outstanding to verify during execution: feishu/weixin/wecom fork layouts; web
 backend `SecureString` API vs upstream model-test handler; whether the fork uses
 systray (tray-fallback commits).
+
+---
+
+## Wave 1 execution log (branch `sync/upstream-v0.2.9`)
+
+**Environment fix (blocker):** `goenv` exported stale `GOROOT`/`GOTOOLDIR` (go1.24.1)
+while go.mod requires 1.25.11, so the re-exec'd toolchain used the 1.24.1
+`compile` → "version go1.24.1 does not match go tool version go1.25.11". Workaround
+for all builds/tests: `env -u GOTOOLDIR -u GOROOT go ...`.
+
+**Key recalibration — dispositions were over-optimistic.** Cherry-pick almost never
+applies: the subagents checked "did *we* modify this file" but not "does the base
+file still exist / was it reorganized / is the fix already present." Three failure
+modes found empirically:
+1. **Already ported under a different sha** (prior sync work): `56fb0dc4e` claude_cli
+   (= our `c9019be3`), `6d7d1b090` line QuoteToken, `bacb9aba7` line body-close,
+   `61a899cfb` cron OutboundChan test. → reclassify **DONE**.
+2. **Base file reorganized/absent** → cherry-pick conflicts, needs MANUAL port:
+   `0f5207676` serial tool (fork flattened `pkg/tools/hardware/`); `34b9d5d6f`
+   telegram OAuth (fork merged the parser into `telegram.go` with a *different*
+   regex pipeline → real reimplementation, not a port).
+3. **Genuinely portable** (done): `36b9693d3` cron independent session — manually
+   applied + fork test `cron_test.go` updated to assert the `cron-{id}-{ts}` prefix;
+   `go test ./pkg/tools -run TestCron` passes. Committed `c9d95571`.
+
+**Implication:** real Wave-1 effort is per-commit engineering (presence-check →
+port/reimplement → fix fork tests → build), not bulk cherry-pick. The "TAKE"
+counts overstate clean ports; expect a meaningful fraction to collapse to DONE or
+MANUAL after presence/base checks.
+
+**Committed so far:**
+- `ecbedb7a` docs(sync): tracking + progress
+- `c9d95571` fix(cron): independent session per job execution (verified)

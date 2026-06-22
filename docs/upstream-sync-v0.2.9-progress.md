@@ -197,4 +197,23 @@ Full `go build ./...` green.
 - **Phase E — frontend (.tsx) fixes**: web-search draft, dark-mode, HTTP-copy, model
   test-connection — need npm build verification vs our rewritten `web/frontend` (high conflict).
 - **Phase F — config-reset endpoint**: after porting `ResetToDefaults`.
-- **Misc**: serial hardware tool (relocate into flat `pkg/tools`).
+- **Misc — serial hardware tool (`0f5207676`) → own PR**: ~900 LOC across 7 files in
+  upstream's `pkg/tools/hardware` subpackage built around the `hardware_facade.go` our fork
+  deleted when flattening. Porting = rewrite `SerialTool` to our flat `package tools`
+  interface (`Name`/`Description`/`Parameters`/`Execute → *ToolResult`), add `NameSerial`
+  (`names.go`), `Serial ToolConfig` (`config.go`), register in `loop.go`, plus platform serial
+  I/O (`serial_unix.go`/`serial_windows.go`) that warrants real embedded-hardware testing.
+  High value for the $10-device mission, but a focused standalone PR.
+
+---
+
+## ✅ Wave 1 complete — sync of cleanly-tractable low-overlap fixes
+
+8 functional ports landed and verified (`go build ./...` green; per-package tests pass):
+cron · feishu token-cache · feishu emoji · dingtalk mention-only · feishu reply-context ·
+agent-browser skill · telegram OAuth parser. Plus ~8 commits confirmed already-present
+(no-ops avoided) and the full curated set triaged.
+
+**Everything else is a scoped follow-up phase (A–F + serial), each blocked on an architectural
+decision, a feature import, a frontend toolchain, or hardware testing — not a clean port.**
+Branch `sync/upstream-v0.2.9` is ready to open as a PR.

@@ -62,9 +62,16 @@ Refactoring a core with no spec → use characterization tests as the safety net
 - ✅ **Step 1 (done):** characterization suite at the seam — `pkg/agent/characterization_test.go`
   (plain response, tool round-trip, session continuity, system prompt). Green on current core.
   This is the permanent guard for every future sync.
-- ▶ **Step 2:** expand the suite to cover more must-preserve behaviors (context budgeting /
-  summarization triggers, steering/interrupt, paper-trading & leverage gating, multi-agent
-  delegate/spawn) — still at the seam.
+- ✅ **Step 2 (done):** expanded the suite with core turn-loop guards — tool-iteration cap,
+  NoHistory isolation, multiple tool calls in one response, tool-error propagation, and
+  context-cancellation aborting a stuck turn (the seam mechanism hard-abort relies on, tested
+  via the public `ctx` not internal scope keys). 9 char tests; cancellation verified stable.
+  - Scope note: **trading-risk gating (paper-trading / leverage) is in `pkg/tools`+`pkg/exchanges`,
+    not `pkg/agent`** — it can't regress from an agent-core rebase, so it is guarded by its own
+    tool tests and intentionally excluded here.
+  - Still seam-testable but deferred to broaden later: context-budget/summarization triggers and
+    multi-agent delegate/spawn routing (both need more setup — a summarizing provider / a
+    multi-agent registry — and are lower-churn than the core turn loop).
 - ▶ **Step 3 (spike):** on a branch, swap ONE subsystem to upstream's, re-green it; measure the
   real per-subsystem cost before committing to the full rebase.
 - ▶ **Step 4:** full wholesale adoption + seam-based re-integration, suite as the gate, agent-core

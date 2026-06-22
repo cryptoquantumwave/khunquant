@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -39,6 +40,7 @@ var (
 	reListItem   = regexp.MustCompile(`^[-*]\s+`)
 	reCodeBlock  = regexp.MustCompile("```[\\w]*\\n?([\\s\\S]*?)```")
 	reInlineCode = regexp.MustCompile("`([^`]+)`")
+	reRawURL     = regexp.MustCompile(`https?://[^\s<]+`)
 )
 
 type TelegramChannel struct {
@@ -920,9 +922,17 @@ func markdownToTelegramHTML(text string) string {
 
 	text = reBlockquote.ReplaceAllString(text, "$1")
 
-	text = escapeHTML(text)
+	// Extract markdown links and raw URLs to placeholders BEFORE markdown
+	// processing so bold/italic regexes cannot corrupt URL characters (e.g.
+	// underscores in OAuth query params). Links first, so URLs inside
+	// [label](url) are not double-captured as raw URLs (upstream 34b9d5d6f).
+	links := extractLinks(text)
+	text = links.text
 
-	text = reLink.ReplaceAllString(text, `<a href="$2">$1</a>`)
+	rawURLs := extractRawURLs(text)
+	text = rawURLs.text
+
+	text = escapeHTML(text)
 
 	text = reBoldStar.ReplaceAllString(text, "<b>$1</b>")
 
@@ -939,6 +949,21 @@ func markdownToTelegramHTML(text string) string {
 	text = reStrike.ReplaceAllString(text, "<s>$1</s>")
 
 	text = reListItem.ReplaceAllString(text, "• ")
+
+	for i, lnk := range links.links {
+		label := escapeHTML(lnk[0])
+		url := escapeHTMLAttr(lnk[1])
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00LK%d\x00", i), fmt.Sprintf(`<a href="%s">%s</a>`, url, label))
+	}
+
+	for i, rawURL := range rawURLs.urls {
+		escaped := escapeHTML(rawURL)
+		text = strings.ReplaceAll(
+			text,
+			fmt.Sprintf("\x00RU%d\x00", i),
+			fmt.Sprintf(`<a href="%s">%s</a>`, escapeHTMLAttr(rawURL), escaped),
+		)
+	}
 
 	for i, code := range inlineCodes.codes {
 		escaped := escapeHTML(code)
@@ -1008,6 +1033,62 @@ func escapeHTML(text string) string {
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
 	return text
+}
+
+// escapeHTMLAttr escapes a string for safe use inside an HTML attribute value
+// (e.g. an <a href="..."> URL), including quotes that escapeHTML leaves intact.
+func escapeHTMLAttr(text string) string {
+	return html.EscapeString(text)
+}
+
+type linkMatch struct {
+	text  string
+	links [][2]string // [label, url]
+}
+
+// extractLinks replaces markdown links [label](url) with \x00LK%d\x00 placeholders
+// so later markdown/escape passes cannot corrupt the URL; the originals are
+// restored (with the URL HTML-attr-escaped) after formatting.
+func extractLinks(text string) linkMatch {
+	matches := reLink.FindAllStringSubmatch(text, -1)
+
+	extracted := make([][2]string, 0, len(matches))
+	for _, match := range matches {
+		extracted = append(extracted, [2]string{match[1], match[2]})
+	}
+
+	i := 0
+	text = reLink.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("\x00LK%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return linkMatch{text: text, links: extracted}
+}
+
+type rawURLMatch struct {
+	text string
+	urls []string
+}
+
+// extractRawURLs replaces bare http(s) URLs with \x00RU%d\x00 placeholders so
+// markdown formatting does not mangle URL characters (e.g. underscores in OAuth
+// query params); restored as clickable links afterwards.
+func extractRawURLs(text string) rawURLMatch {
+	matches := reRawURL.FindAllString(text, -1)
+
+	urls := make([]string, 0, len(matches))
+	urls = append(urls, matches...)
+
+	i := 0
+	text = reRawURL.ReplaceAllStringFunc(text, func(string) string {
+		placeholder := fmt.Sprintf("\x00RU%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return rawURLMatch{text: text, urls: urls}
 }
 
 // isBotMentioned checks if the bot is mentioned in the message via entities.

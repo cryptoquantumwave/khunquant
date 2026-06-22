@@ -94,8 +94,36 @@ Refactoring a core with no spec → use characterization tests as the safety net
     bring-the-deps + thin-reintegration effort (encapsulated, conflict-free logic), not a
     multi-week untangle. Recommend: bring the ~5 sibling packages first, then the wholesale
     `pkg/agent` adoption, re-greening this suite (adapting CHAR-6 consciously).
-- ▶ **Step 3b (next):** repeat the measurement against the **latest stable upstream** (not v0.2.9)
-  to confirm the dependency closure there before scheduling the rebase.
+- ✅ **Step 3b (done):** sized the **real** target. After `git fetch upstream`, the latest stable
+  tag is **v0.3.0** (upstream/main is +283 from v0.2.9). Findings:
+  1. **The agent architecture has STABILIZED.** `pkg/agent` is essentially unchanged v0.2.9→v0.3.0
+     (only a new `turn_state_test.go`; no source/structural changes). The "moving target" risk is
+     resolved — v0.3.0 is a settled convergence point.
+  2. **Dependency closure is clean and small.** Upstream's v0.3.0 agent needs only 4 sibling
+     packages we lack; none pull further missing `pkg/*`. By *actual agent coupling*:
+     - **`pkg/events`** — 19 agent files / 45 symbols, core to the new architecture → **must bring**
+       (1174 LOC, pure stdlib, no external deps — easy).
+     - **`pkg/isolation`** — 2 files / 2 symbols (`Configure`, `Start`) → trivial: bring (949 LOC)
+       or a 2-func stub.
+     - **`pkg/audio`** — **0 agent files / 0 symbols at v0.3.0** → **skip** (avoids pulling
+       `pion/webrtc`+`pion/rtp`; keeps footprint).
+     - **`pkg/evolution`** — 1 agent file but 30 symbols (self-evolution) → **product decision**:
+       bring (5874 LOC, clean, no ext deps) or exclude that one feature file.
+  - **Revised estimate:** the mandatory dependency cost collapses to **one small clean package
+    (`pkg/events`)** + a trivial isolation shim. Audio drops out; evolution is opt-in. Combined
+    with the tiny caller blast radius (3 importers) and conflict-free agent logic, the convergence
+    is a **bounded, well-scoped project**, not a fork-threatening rewrite.
+
+## Recommended execution (updated by the spikes)
+
+Target **v0.3.0** (stable, settled architecture). On a branch:
+1. Bring `pkg/events` (clean) and decide isolation (bring/stub) + evolution (adopt/exclude) + skip audio.
+2. Overlay upstream v0.3.0 `pkg/agent`; rewrite import paths.
+3. Re-apply our deltas via extension seams (tools already via registry; trading observability via
+   `pkg/events`/hooks; re-add `noHistory` to `ProcessDirectWithChannel` as our documented delta).
+4. Re-green the characterization suite (consciously ADAPT CHAR-6 for the `noHistory` signature).
+5. Update the 3 caller packages (`cmd/.../agent`, `cmd/.../gateway`, `pkg/devmcp`) for any API drift.
+6. Crypto end-to-end validation (a real paper-trade flow) before merge.
 - ▶ **Step 4:** full wholesale adoption + seam-based re-integration, suite as the gate, agent-core
   feature-freeze during the rebase, plus crypto end-to-end validation (a real paper-trade flow).
 - Meanwhile: keep hand-porting fix *logic* (network-retry etc.) to stop the bleeding — independent

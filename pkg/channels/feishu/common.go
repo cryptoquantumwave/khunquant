@@ -84,3 +84,64 @@ func stripMentionPlaceholders(content string, mentions []*larkim.MentionEvent) s
 	content = mentionPlaceholderRegex.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
 }
+
+// extractCardImageKeys parses a Feishu interactive-card JSON payload and returns
+// the Feishu-hosted image keys and external image URLs it references. Ported
+// alongside upstream 8b3e50269 (depends on upstream card-parsing helpers).
+func extractCardImageKeys(rawContent string) (feishuKeys []string, externalURLs []string) {
+	if rawContent == "" {
+		return nil, nil
+	}
+
+	var card map[string]any
+	if err := json.Unmarshal([]byte(rawContent), &card); err != nil {
+		return nil, nil
+	}
+
+	extractImageKeysRecursive(card, &feishuKeys, &externalURLs)
+	return feishuKeys, externalURLs
+}
+
+// isExternalURL returns true if the string is an external HTTP/HTTPS URL.
+func isExternalURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// extractImageKeysRecursive traverses card structure to find all image keys.
+// Collects both Feishu-hosted keys and external URLs separately.
+func extractImageKeysRecursive(v any, feishuKeys, externalURLs *[]string) {
+	switch val := v.(type) {
+	case map[string]any:
+		// Check if this is an img element
+		if tag, ok := val["tag"].(string); ok {
+			switch tag {
+			case "img":
+				// Try img_key first (always Feishu-hosted)
+				if imgKey, ok := val["img_key"].(string); ok && imgKey != "" {
+					*feishuKeys = append(*feishuKeys, imgKey)
+				}
+				// Check src - could be Feishu key or external URL
+				if src, ok := val["src"].(string); ok && src != "" {
+					if isExternalURL(src) {
+						*externalURLs = append(*externalURLs, src)
+					} else {
+						*feishuKeys = append(*feishuKeys, src)
+					}
+				}
+			case "icon":
+				// Icon elements use icon_key
+				if iconKey, ok := val["icon_key"].(string); ok && iconKey != "" {
+					*feishuKeys = append(*feishuKeys, iconKey)
+				}
+			}
+		}
+		// Recurse into all nested structures
+		for _, child := range val {
+			extractImageKeysRecursive(child, feishuKeys, externalURLs)
+		}
+	case []any:
+		for _, item := range val {
+			extractImageKeysRecursive(item, feishuKeys, externalURLs)
+		}
+	}
+}

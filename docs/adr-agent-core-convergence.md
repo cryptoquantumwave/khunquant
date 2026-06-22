@@ -116,8 +116,15 @@ Refactoring a core with no spec → use characterization tests as the safety net
 
 ## Recommended execution (updated by the spikes)
 
-Target **v0.3.0** (stable, settled architecture). On a branch:
-1. Bring `pkg/events` (clean) and decide isolation (bring/stub) + evolution (adopt/exclude) + skip audio.
+Target **v0.3.0** (stable, settled architecture). On branch `converge/agent-v0.3.0`:
+1. ✅ **Step 4a (done):** brought `pkg/events` (clean, pure stdlib) — committed; full build green,
+   upstream events tests pass. Additive, so it lands safely ahead of the overlay.
+   - NEW finding: upstream centralized app/branding constants in a **root `pkg` package**
+     (`pkg/env.go`: `AppName`, `WorkspaceName`, `DefaultPicoClawHome`, `Logo`) that our fork
+     scattered. Adopted code (e.g. `pkg/isolation`, likely the agent) imports it. Provide a root
+     `pkg/env.go` with KhunQuant values mirroring upstream's symbol names → adopted code compiles
+     zero-delta. `pkg/isolation` (2-symbol agent coupling) is deferred to the overlay step (bring or
+     stub then) since it depends on this shim.
 2. Overlay upstream v0.3.0 `pkg/agent`; rewrite import paths.
 3. Re-apply our deltas via extension seams (tools already via registry; trading observability via
    `pkg/events`/hooks; re-add `noHistory` to `ProcessDirectWithChannel` as our documented delta).

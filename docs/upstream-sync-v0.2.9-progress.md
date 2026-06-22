@@ -153,10 +153,47 @@ Not ported:
 `19a52cbb` dingtalk · `3845e851` feishu reply context. (claude_cli/line/token-est/
 anthropic/GLM/WS-URL were already present.) Full `go build ./...` passes.
 
-### Remaining backlog (not yet ported)
-- **DEFER (blocked on agent-pipeline refactor):** network retry, image-input recovery,
-  tool-feedback goroutine-leak, dual-stack netbind, runtime event-bus/hooks, stop command.
-- **DEFER (provider absent):** gemini/bedrock/deepseek fixes.
-- **MANUAL/own-PR:** telegram OAuth parser; serial hardware tool (fork flattened `pkg/tools/hardware`).
-- **Open, tractable later:** TUI pages (`cmd/khunquant-launcher-tui`), agent-browser skill,
-  assorted web fixes (need per-item base checks vs our rewritten web/).
+### TUI / skill / web batch — results
+
+Ported + committed:
+- `<skill>` feat: agent-browser skill + Dockerfile.heavy (`520391643`) — Dockerfile.heavy
+  rewritten to fork conventions (khunquant binary/user, `~/.khunquant` workspace,
+  golang 1.26.3, health on 18790). SKILL.md clean.
+
+Not ported:
+- **TUI pages** (`8c44597c3`, `02da11719`, `7b4d5d451`, `545b7afe4`, `119cc2e8e`, `955d6e70f`)
+  → **N/A**: upstream's `cmd/picoclaw-launcher-tui` doesn't even exist at the v0.2.9 tag
+  (restructured upstream), and our `cmd/khunquant-launcher-tui` is a crypto-specific rewrite
+  (`internal/ui/{exchange,channel,gateway_*}.go`) that already has gateway/channel pages.
+- `cd48c3bd5` config wecom merge fields → **N/A**: no `mergeChannelsSecurity` in our config.
+- `f53222f6a` config-reset endpoint → **DEFER**: needs `config.ResetToDefaults` (absent) +
+  credential-preserving reset logic against our divergent SecureString config; risky for a
+  medium-value admin endpoint.
+- `79f87d151`, `24382271d` console localhost/advertise-IP → **DEFER**: depend on `pkg/netbind`
+  (`IsUnspecifiedHost`, `wildcardAdvertiseIP`) — absent (multi-host binding feature).
+
+### Wave 1 — FINAL (7 functional ports, all build/test-verified)
+
+| # | Commit | Fix |
+|---|--------|-----|
+| 1 | `c9d95571` | cron independent session per execution |
+| 2 | `c3911b78` | feishu token-cache invalidation (2h auth-lockout) |
+| 3 | `ca70b4a3` | feishu skip empty reaction emoji |
+| 4 | `19a52cbb` | dingtalk mention-only groups |
+| 5 | `3845e851` | feishu reply context (card/file) |
+| 6 | `<skill>`  | agent-browser skill + Dockerfile.heavy |
+
+(plus the verified-DONE set already present: claude_cli, line QuoteToken/body-close,
+cron test, token estimator, anthropic empty-name, GLM nil-input, WS-URL.)
+Full `go build ./...` green.
+
+### Remaining backlog → follow-up phases (each its own PR)
+- **Phase A — agent-pipeline refactor adoption** (largest): unblocks network retry,
+  image-input recovery, tool-feedback goroutine-leak, runtime event-bus/hooks, stop command.
+- **Phase B — multi-host binding (`pkg/netbind`)**: unblocks dual-stack + console-IP fixes.
+- **Phase C — providers**: import gemini/bedrock/deepseek (feature decision) → their fixes.
+- **Phase D — telegram parser rewrite**: adopt upstream placeholder-based parser (OAuth fix).
+- **Phase E — frontend (.tsx) fixes**: web-search draft, dark-mode, HTTP-copy, model
+  test-connection — need npm build verification vs our rewritten `web/frontend` (high conflict).
+- **Phase F — config-reset endpoint**: after porting `ResetToDefaults`.
+- **Misc**: serial hardware tool (relocate into flat `pkg/tools`).

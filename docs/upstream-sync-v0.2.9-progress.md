@@ -130,10 +130,33 @@ RESOLVE/TAKE to **DEFER (blocked on agent-pipeline refactor decision)**.
 (perPartOverhead present) · `54654d279` anthropic empty-name (provider.go:183) ·
 `8d97896a0` GLM nil input · `6a8552a66` WS-URL (controller.ts:149).
 
-### Cheaply-portable remaining (files still align — channel/config/provider level)
+### Channel batch — results
 
-Channel-specific fixes are the tractable bucket. Candidates still open & absent:
-`8b3e50269` feishu reply context, `43095543a` feishu emoji, `b6951b692` dingtalk
-mention-only, `11dec0c80` weixin token persist, plus `34b9d5d6f` telegram OAuth
-(MANUAL reimplement — parser merged into telegram.go). TUI/web items need
-case-by-case base checks (web heavily rewritten).
+Ported + verified (build/vet/test pass), all committed:
+- `c3911b78` feishu token-cache invalidation (`3e9b7ce9c`)
+- `ca70b4a3` feishu skip empty reaction emoji (`43095543a`) — manual block port + `strings` import
+- `19a52cbb` dingtalk mention-only groups (`b6951b692`) — cherry-pick; adapted test to SecureString API
+- `3845e851` feishu reply context (`8b3e50269`) — cherry-pick + brought along the 3 standalone
+  card-image-key helpers (`extractCardImageKeys`/`isExternalURL`/`extractImageKeysRecursive`)
+  from upstream `common.go` that the reply path depends on
+
+Not ported:
+- `11dec0c80` weixin token persist → **N/A**: no `pkg/channels/weixin` in fork (channel absent).
+- `34b9d5d6f` telegram OAuth → **DEFER**: needs adopting upstream's whole placeholder-based
+  parser (`extractLinks` + `extractRawURLs` + `escapeHTMLAttr` + reorder). Our fork uses a
+  direct `reLink` regex-replace that conflicts with raw-URL extraction (URLs inside markdown
+  links would be wrongly placeholdered). A parser rewrite risking all Telegram rendering —
+  warrants its own focused PR with the upstream test suite as the safety net.
+
+### Full Wave-1 ported set (6 fixes, all build/test-verified)
+`c9d95571` cron · `c3911b78` feishu token-cache · `ca70b4a3` feishu emoji ·
+`19a52cbb` dingtalk · `3845e851` feishu reply context. (claude_cli/line/token-est/
+anthropic/GLM/WS-URL were already present.) Full `go build ./...` passes.
+
+### Remaining backlog (not yet ported)
+- **DEFER (blocked on agent-pipeline refactor):** network retry, image-input recovery,
+  tool-feedback goroutine-leak, dual-stack netbind, runtime event-bus/hooks, stop command.
+- **DEFER (provider absent):** gemini/bedrock/deepseek fixes.
+- **MANUAL/own-PR:** telegram OAuth parser; serial hardware tool (fork flattened `pkg/tools/hardware`).
+- **Open, tractable later:** TUI pages (`cmd/khunquant-launcher-tui`), agent-browser skill,
+  assorted web fixes (need per-item base checks vs our rewritten web/).

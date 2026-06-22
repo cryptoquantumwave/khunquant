@@ -229,8 +229,10 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
-	if executor.lastKey != "cron-job-1" {
-		t.Fatalf("sessionKey = %q, want cron-job-1", executor.lastKey)
+	// Each execution uses a unique session key "cron-{jobID}-{timestamp}" so
+	// conversation history does not accumulate across runs (upstream 36b9693d3).
+	if !strings.HasPrefix(executor.lastKey, "cron-job-1-") {
+		t.Fatalf("sessionKey = %q, want prefix cron-job-1-", executor.lastKey)
 	}
 	if executor.lastChan != "telegram" || executor.lastChatID != "chat-1" {
 		t.Fatalf("executor target = %s/%s, want telegram/chat-1", executor.lastChan, executor.lastChatID)

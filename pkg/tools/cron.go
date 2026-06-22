@@ -379,8 +379,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return "ok"
 	}
 
-	// For deliver=false OR directive mode, process through agent
-	sessionKey := fmt.Sprintf("cron-%s", job.ID)
+	// For deliver=false OR directive mode, process through agent.
+	// Use a unique key per execution ("cron-{jobID}-{timestamp}") so conversation
+	// history does not accumulate across runs of the same job (upstream 36b9693d3).
+	sessionKey := fmt.Sprintf("cron-%s-%d", job.ID, time.Now().UnixMilli())
 
 	// Prepare the prompt based on type
 	prompt := job.Payload.Message

@@ -144,6 +144,14 @@ Target **v0.3.0** (stable, settled architecture). On branch `converge/agent-v0.3
    `EnvHome`) to KhunQuant conventions + add additive `IsolationConfig`/`EvolutionConfig`/`ExposePath`
    types & `Config` fields; bring `skills.ValidateSkillName` + its `utils` deps → **(2b)** root
    `pkg/env.go` shim + `pkg/isolation` + `pkg/evolution` green → **(2c)** overlay `pkg/agent`.
+   - ✅ **2a partial (done):** `skills.ValidateSkillName` brought (deps already in fork:
+     `utils.ValidateSkillIdentifier`, `namePattern`, `MaxNameLength`) + self-verifying test; green.
+   - ⏸ **2a remainder (the sensitive boundary — intentionally NOT done speculatively):** the
+     `pkg/config` env-keys/branding reconciliation + additive `IsolationConfig`/`EvolutionConfig`/
+     `ExposePath` types. These would be **unused dead code** until their consumers
+     (isolation/evolution/agent) land, and they edit the **trading-critical SecureString config**.
+     Decision: bring them **together with** their consumers in the resourced 2b–2c overlay push so
+     they're immediately exercised — not added blind to the sensitive package at session tail.
    `pkg/audio` skipped (0 agent coupling); 2 `pkg/providers` symbols reconciled at overlay time.
 
    **Recommendation:** schedule 2a–2c as a deliberately-resourced effort with an agent-core

@@ -9,6 +9,12 @@ pkg/tools/i2c_other.go
 pkg/tools/spi.go
 pkg/tools/spi_linux.go
 pkg/tools/spi_other.go
+pkg/tools/serial.go
+pkg/tools/serial_darwin.go
+pkg/tools/serial_linux.go
+pkg/tools/serial_unix.go
+pkg/tools/serial_windows.go
+pkg/tools/serial_other.go
 
 # OS-specific process shims (platform dispatch; logic is in cross-platform files)
 pkg/tools/shell_process_unix.go

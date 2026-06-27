@@ -116,48 +116,9 @@ Refactoring a core with no spec → use characterization tests as the safety net
 
 ## Recommended execution (updated by the spikes)
 
-Target **v0.3.0** (stable, settled architecture). On branch `converge/agent-v0.3.0`:
-1. ✅ **Step 4a (done):** brought `pkg/events` (clean, pure stdlib) — committed; full build green,
-   upstream events tests pass. Additive, so it lands safely ahead of the overlay.
-   - NEW finding: upstream centralized app/branding constants in a **root `pkg` package**
-     (`pkg/env.go`: `AppName`, `WorkspaceName`, `DefaultPicoClawHome`, `Logo`) that our fork
-     scattered. Adopted code (e.g. `pkg/isolation`, likely the agent) imports it. Provide a root
-     `pkg/env.go` with KhunQuant values mirroring upstream's symbol names → adopted code compiles
-     zero-delta. `pkg/isolation` (2-symbol agent coupling) is deferred to the overlay step (bring or
-     stub then) since it depends on this shim.
-2. **EXTENDED-CLOSURE finding (Step 4b attempt, done):** adopting `pkg/evolution` + `pkg/isolation`
-   does **not** stop at those packages — they pull **additions in our shared `pkg/config` and
-   `pkg/skills`** our fork lacks: `config.IsolationConfig`, `config.EvolutionConfig`,
-   `config.ExposePath` (+ `Config.Isolation`/`Config.Evolution` fields), `config.GetHome`,
-   `config.EnvBuiltinSkills`, and `skills.ValidateSkillName`. These look **additive** (new
-   types/fields/funcs), so they can be brought — but `pkg/config` is our **trading-customized,
-   SecureString** package, so this is the sensitive part and must be done deliberately, not in a
-   rushed cascade. Tried, then backed out to keep the branch green; `pkg/events` (clean) stays.
-   **Closure goes one level deeper (Step 2a probe):** those config/skills items themselves pull
-   more — `skills.ValidateSkillName` → `utils.ValidateSkillIdentifier` / `MaxNameLength`;
-   `config.GetHome` / `config.EnvBuiltinSkills` live in upstream's `envkeys.go` and are tied to
-   **picoclaw-branded** env vars (`PICOCLAW_BUILTIN_SKILLS`, `pkg.DefaultPicoClawHome`) that our
-   fork systematically rebranded (`KHUNQUANT_*`, `.khunquant`). So convergence threads through
-   `config`→env-keys/**branding** and `skills`→`utils`, intersecting the fork's rebrand + the
-   trading/SecureString customizations. **This is the deliberate core**, not a mechanical overlay.
-   Resequenced: **(2a)** reconcile `pkg/config` env-keys/branding (`GetHome`, `EnvBuiltinSkills`,
-   `EnvHome`) to KhunQuant conventions + add additive `IsolationConfig`/`EvolutionConfig`/`ExposePath`
-   types & `Config` fields; bring `skills.ValidateSkillName` + its `utils` deps → **(2b)** root
-   `pkg/env.go` shim + `pkg/isolation` + `pkg/evolution` green → **(2c)** overlay `pkg/agent`.
-   - ✅ **2a partial (done):** `skills.ValidateSkillName` brought (deps already in fork:
-     `utils.ValidateSkillIdentifier`, `namePattern`, `MaxNameLength`) + self-verifying test; green.
-   - ⏸ **2a remainder (the sensitive boundary — intentionally NOT done speculatively):** the
-     `pkg/config` env-keys/branding reconciliation + additive `IsolationConfig`/`EvolutionConfig`/
-     `ExposePath` types. These would be **unused dead code** until their consumers
-     (isolation/evolution/agent) land, and they edit the **trading-critical SecureString config**.
-     Decision: bring them **together with** their consumers in the resourced 2b–2c overlay push so
-     they're immediately exercised — not added blind to the sensitive package at session tail.
-   `pkg/audio` skipped (0 agent coupling); 2 `pkg/providers` symbols reconciled at overlay time.
-
-   **Recommendation:** schedule 2a–2c as a deliberately-resourced effort with an agent-core
-   feature-freeze and a real paper-trade end-to-end check before merge — because 2a edits the
-   trading-critical `pkg/config`. Do NOT rush it. The foundational, safe increment (`pkg/events`)
-   is already landed and green on this branch.
+Target **v0.3.0** (stable, settled architecture). On a branch:
+1. Bring `pkg/events` (clean) and decide isolation (bring/stub) + evolution (adopt/exclude) + skip audio.
+2. Overlay upstream v0.3.0 `pkg/agent`; rewrite import paths.
 3. Re-apply our deltas via extension seams (tools already via registry; trading observability via
    `pkg/events`/hooks; re-add `noHistory` to `ProcessDirectWithChannel` as our documented delta).
 4. Re-green the characterization suite (consciously ADAPT CHAR-6 for the `noHistory` signature).

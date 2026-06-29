@@ -5,10 +5,10 @@ go 1.25.11
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/adhocore/gronx v1.20.0
-	github.com/anthropics/anthropic-sdk-go v1.51.0
+	github.com/anthropics/anthropic-sdk-go v1.52.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/ccxt/ccxt/go/v4 v4.5.59
+	github.com/ccxt/ccxt/go/v4 v4.5.61
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
 	github.com/expr-lang/expr v1.17.8
@@ -17,7 +17,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3
-	github.com/larksuite/oapi-sdk-go/v3 v3.9.6
+	github.com/larksuite/oapi-sdk-go/v3 v3.9.7
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/mymmrac/telego v1.10.0
@@ -25,7 +25,7 @@ require (
 	github.com/openai/openai-go/v3 v3.41.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
-	github.com/slack-go/slack v0.26.0
+	github.com/slack-go/slack v0.27.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tencent-connect/botgo v0.2.1
@@ -111,7 +111,7 @@ require (
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/github/copilot-sdk/go v1.0.2
+	github.com/github/copilot-sdk/go v1.0.4
 	github.com/go-resty/resty/v2 v2.17.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect

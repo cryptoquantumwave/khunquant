@@ -18,7 +18,7 @@ RUN make build
 # ============================================================
 # Stage 2: Node.js runtime with Python + browser + MCP support
 # ============================================================
-FROM node:24-alpine3.23
+FROM node:26-alpine3.23
 
 RUN apk add --no-cache \
   ca-certificates \

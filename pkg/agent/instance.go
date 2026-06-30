@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -51,6 +52,9 @@ type AgentInstance struct {
 
 	// snapshotStore is the shared snapshot database, closed when the agent shuts down.
 	snapshotStore *snapshot.Store
+
+	// financialCollector injects portfolio/DCA/DN summary into dynamic prompt.
+	financialCollector *FinancialContextCollector
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -162,6 +166,21 @@ func NewAgentInstance(
 		}
 		if cfg.Tools.IsToolEnabled("delete_snapshots") {
 			toolsRegistry.Register(tools.NewDeleteSnapshotsTool(snapshotStore))
+		}
+	}
+
+	// Financial context collector — injects portfolio/DCA/DN summary into dynamic prompt.
+	var financialCollector *FinancialContextCollector
+	if defaults.InjectFinancialContext {
+		contributors := buildFinancialContributors(
+			workspace,
+			defaults.MaxContextAssets,
+			defaults.MaxContextDCAPlans,
+			defaults.MaxContextDNPlans,
+		)
+		if len(contributors) > 0 {
+			ttl := time.Duration(defaults.FinancialContextTTLMinutes) * time.Minute
+			financialCollector = NewFinancialContextCollector(contributors, ttl)
 		}
 	}
 
@@ -292,6 +311,9 @@ func NewAgentInstance(
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 	)
+	if financialCollector != nil {
+		contextBuilder = contextBuilder.WithFinancialCollector(financialCollector)
+	}
 
 	agentID := routing.DefaultAgentID
 	agentName := ""
@@ -388,6 +410,7 @@ func NewAgentInstance(
 
 	return &AgentInstance{
 		snapshotStore:             snapshotStore,
+		financialCollector:        financialCollector,
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -520,6 +543,9 @@ func mediaTempDirPattern() string {
 func (a *AgentInstance) Close() error {
 	if a.snapshotStore != nil {
 		a.snapshotStore.Close()
+	}
+	if a.financialCollector != nil {
+		a.financialCollector.Close()
 	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()

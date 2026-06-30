@@ -392,6 +392,86 @@ export function TradingRiskSection({ form, onFieldChange }: TradingRiskSectionPr
   )
 }
 
+interface FinancialContextSectionProps {
+  form: CoreConfigForm
+  onFieldChange: UpdateCoreField
+}
+
+export function FinancialContextSection({
+  form,
+  onFieldChange,
+}: FinancialContextSectionProps) {
+  const { t } = useTranslation()
+
+  return (
+    <ConfigSectionCard title={t("pages.config.sections.financial_context", "Financial Context")}>
+      <SwitchCardField
+        label={t("pages.config.inject_financial_context")}
+        hint={t("pages.config.inject_financial_context_hint")}
+        layout="setting-row"
+        checked={form.injectFinancialContext}
+        onCheckedChange={(checked) => onFieldChange("injectFinancialContext", checked)}
+      />
+
+      {form.injectFinancialContext && (
+        <>
+          <Field
+            label={t("pages.config.financial_context_ttl")}
+            hint={t("pages.config.financial_context_ttl_hint")}
+            layout="setting-row"
+          >
+            <Input
+              type="number"
+              min={0}
+              value={form.financialContextTtlMinutes}
+              onChange={(e) => onFieldChange("financialContextTtlMinutes", e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label={t("pages.config.max_context_assets")}
+            hint={t("pages.config.max_context_assets_hint")}
+            layout="setting-row"
+          >
+            <Input
+              type="number"
+              min={1}
+              value={form.maxContextAssets}
+              onChange={(e) => onFieldChange("maxContextAssets", e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label={t("pages.config.max_context_dca_plans")}
+            hint={t("pages.config.max_context_dca_plans_hint")}
+            layout="setting-row"
+          >
+            <Input
+              type="number"
+              min={0}
+              value={form.maxContextDcaPlans}
+              onChange={(e) => onFieldChange("maxContextDcaPlans", e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label={t("pages.config.max_context_dn_plans")}
+            hint={t("pages.config.max_context_dn_plans_hint")}
+            layout="setting-row"
+          >
+            <Input
+              type="number"
+              min={0}
+              value={form.maxContextDnPlans}
+              onChange={(e) => onFieldChange("maxContextDnPlans", e.target.value)}
+            />
+          </Field>
+        </>
+      )}
+    </ConfigSectionCard>
+  )
+}
+
 interface DevicesSectionProps {
   form: CoreConfigForm
   onFieldChange: UpdateCoreField

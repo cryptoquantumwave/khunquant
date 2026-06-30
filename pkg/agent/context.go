@@ -44,11 +44,18 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	financialCollector *FinancialContextCollector
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
 	cb.toolDiscoveryBM25 = useBM25
 	cb.toolDiscoveryRegex = useRegex
+	return cb
+}
+
+func (cb *ContextBuilder) WithFinancialCollector(c *FinancialContextCollector) *ContextBuilder {
+	cb.financialCollector = c
 	return cb
 }
 
@@ -211,7 +218,7 @@ func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []st
 
 	// Dynamic context is small and varies per request; use a representative estimate.
 	// Actual buildDynamicContext produces ~200-400 chars of time/runtime/session info.
-	const dynamicContextChars = 300
+	const dynamicContextChars = 800
 
 	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
 
@@ -505,6 +512,12 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+	}
+
+	if cb.financialCollector != nil {
+		if fin := cb.financialCollector.GetSummary(); fin != "" {
+			fmt.Fprintf(&sb, "\n\n%s", fin)
+		}
 	}
 
 	return sb.String()

@@ -16,6 +16,11 @@ export interface CoreConfigForm {
   devicesEnabled: boolean
   monitorUSB: boolean
   followUpNudge: boolean
+  injectFinancialContext: boolean
+  financialContextTtlMinutes: string
+  maxContextAssets: string
+  maxContextDcaPlans: string
+  maxContextDnPlans: string
   allowLeverage: boolean
   paperTradingMode: boolean
   debugDevMcpEnabled: boolean
@@ -91,6 +96,11 @@ export const EMPTY_FORM: CoreConfigForm = {
   devicesEnabled: false,
   monitorUSB: true,
   followUpNudge: false,
+  injectFinancialContext: false,
+  financialContextTtlMinutes: "30",
+  maxContextAssets: "5",
+  maxContextDcaPlans: "3",
+  maxContextDnPlans: "3",
   allowLeverage: true,
   paperTradingMode: false,
   debugDevMcpEnabled: false,
@@ -186,6 +196,26 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       defaults.follow_up_nudge === undefined
         ? EMPTY_FORM.followUpNudge
         : asBool(defaults.follow_up_nudge),
+    injectFinancialContext:
+      defaults.inject_financial_context === undefined
+        ? EMPTY_FORM.injectFinancialContext
+        : asBool(defaults.inject_financial_context),
+    financialContextTtlMinutes: asNumberString(
+      defaults.financial_context_ttl_minutes,
+      EMPTY_FORM.financialContextTtlMinutes,
+    ),
+    maxContextAssets: asNumberString(
+      defaults.max_context_assets,
+      EMPTY_FORM.maxContextAssets,
+    ),
+    maxContextDcaPlans: asNumberString(
+      defaults.max_context_dca_plans,
+      EMPTY_FORM.maxContextDcaPlans,
+    ),
+    maxContextDnPlans: asNumberString(
+      defaults.max_context_dn_plans,
+      EMPTY_FORM.maxContextDnPlans,
+    ),
     allowLeverage:
       tradingRisk.allow_leverage === undefined
         ? EMPTY_FORM.allowLeverage

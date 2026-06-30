@@ -16,6 +16,7 @@ import {
   AgentDefaultsSection,
   DebugSection,
   DevicesSection,
+  FinancialContextSection,
   LauncherSection,
   RuntimeSection,
   TradingRiskSection,
@@ -166,6 +167,26 @@ export function ConfigPage() {
           "Heartbeat interval",
           { min: 1 },
         )
+        const financialContextTtlMinutes = parseIntField(
+          form.financialContextTtlMinutes,
+          "Financial Context TTL",
+          { min: 0 },
+        )
+        const maxContextAssets = parseIntField(
+          form.maxContextAssets,
+          "Max Context Assets",
+          { min: 1 },
+        )
+        const maxContextDcaPlans = parseIntField(
+          form.maxContextDcaPlans,
+          "Max Context DCA Plans",
+          { min: 0 },
+        )
+        const maxContextDnPlans = parseIntField(
+          form.maxContextDnPlans,
+          "Max Context DN Plans",
+          { min: 0 },
+        )
 
         // Validate temperature as a float between 0 and 2
         const temperatureValue = Number(form.temperature)
@@ -179,6 +200,11 @@ export function ConfigPage() {
               workspace,
               restrict_to_workspace: form.restrictToWorkspace,
               follow_up_nudge: form.followUpNudge,
+              inject_financial_context: form.injectFinancialContext,
+              financial_context_ttl_minutes: financialContextTtlMinutes,
+              max_context_assets: maxContextAssets,
+              max_context_dca_plans: maxContextDcaPlans,
+              max_context_dn_plans: maxContextDnPlans,
               temperature: temperatureValue,
               max_tokens: maxTokens,
               max_tool_iterations: maxToolIterations,
@@ -296,6 +322,8 @@ export function ConfigPage() {
               )}
 
               <AgentDefaultsSection form={form} onFieldChange={updateField} />
+
+              <FinancialContextSection form={form} onFieldChange={updateField} />
 
               <RuntimeSection form={form} onFieldChange={updateField} />
 

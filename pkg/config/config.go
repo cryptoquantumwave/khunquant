@@ -455,27 +455,32 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                       env:"KHUNQUANT_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool               `json:"restrict_to_workspace"           env:"KHUNQUANT_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"    env:"KHUNQUANT_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                        env:"KHUNQUANT_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string             `json:"model,omitempty"                 env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"             env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"     env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	ContextManager            string             `json:"context_manager,omitempty"       env:"KHUNQUANT_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
-	ContextManagerConfig      json.RawMessage    `json:"context_manager_config,omitempty"`
-	FollowUpNudge             bool               `json:"follow_up_nudge"                 env:"KHUNQUANT_AGENTS_DEFAULTS_FOLLOW_UP_NUDGE"`
+	Workspace                  string             `json:"workspace"                       env:"KHUNQUANT_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace        bool               `json:"restrict_to_workspace"           env:"KHUNQUANT_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace  bool               `json:"allow_read_outside_workspace"    env:"KHUNQUANT_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                   string             `json:"provider"                        env:"KHUNQUANT_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                  string             `json:"model_name"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                      string             `json:"model,omitempty"                 env:"KHUNQUANT_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	ModelFallbacks             []string           `json:"model_fallbacks,omitempty"`
+	ImageModel                 string             `json:"image_model,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks        []string           `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                  int                `json:"max_tokens"                      env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow              int                `json:"context_window,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature                *float64           `json:"temperature,omitempty"           env:"KHUNQUANT_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations          int                `json:"max_tool_iterations"             env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold  int                `json:"summarize_message_threshold"     env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent      int                `json:"summarize_token_percent"         env:"KHUNQUANT_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize               int                `json:"max_media_size,omitempty"        env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	Routing                    *RoutingConfig     `json:"routing,omitempty"`
+	ToolFeedback               ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	ContextManager             string             `json:"context_manager,omitempty"       env:"KHUNQUANT_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig       json.RawMessage    `json:"context_manager_config,omitempty"`
+	FollowUpNudge              bool               `json:"follow_up_nudge"                 env:"KHUNQUANT_AGENTS_DEFAULTS_FOLLOW_UP_NUDGE"`
+	InjectFinancialContext     bool               `json:"inject_financial_context"        env:"KHUNQUANT_AGENTS_DEFAULTS_INJECT_FINANCIAL_CONTEXT"`
+	FinancialContextTTLMinutes int                `json:"financial_context_ttl_minutes"   env:"KHUNQUANT_AGENTS_DEFAULTS_FINANCIAL_CONTEXT_TTL_MINUTES"`
+	MaxContextAssets           int                `json:"max_context_assets"              env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_ASSETS"`
+	MaxContextDCAPlans         int                `json:"max_context_dca_plans"           env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_DCA_PLANS"`
+	MaxContextDNPlans          int                `json:"max_context_dn_plans"            env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_DN_PLANS"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB

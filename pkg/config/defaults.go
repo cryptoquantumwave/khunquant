@@ -26,17 +26,22 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:                 workspacePath,
-				RestrictToWorkspace:       true,
-				Provider:                  "",
-				Model:                     "",
-				MaxTokens:                 32768,
-				Temperature:               nil, // nil means use provider default
-				MaxToolIterations:         30,
-				SummarizeMessageThreshold: 20,
-				SummarizeTokenPercent:     75,
-				ContextManager:            "seahorse",
-				FollowUpNudge:             true,
+				Workspace:                  workspacePath,
+				RestrictToWorkspace:        true,
+				Provider:                   "",
+				Model:                      "",
+				MaxTokens:                  32768,
+				Temperature:                nil, // nil means use provider default
+				MaxToolIterations:          30,
+				SummarizeMessageThreshold:  20,
+				SummarizeTokenPercent:      75,
+				ContextManager:             "seahorse",
+				FollowUpNudge:              true,
+				InjectFinancialContext:     true,
+				FinancialContextTTLMinutes: 30,
+				MaxContextAssets:           5,
+				MaxContextDCAPlans:         3,
+				MaxContextDNPlans:          3,
 			},
 		},
 		Bindings: []AgentBinding{},

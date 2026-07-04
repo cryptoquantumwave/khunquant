@@ -1661,6 +1661,13 @@ func (al *AgentLoop) runLLMIteration(
 			opts.Channel,
 			al.targetReasoningChannelID(opts.Channel),
 		)
+		// For the pico channel, also publish the reasoning as a "thought" message
+		// so the web UI can render it in a collapsible box.  This is best-effort
+		// and independent of the per-channel reasoning-channel-ID path above
+		// (which no-ops for pico because targetReasoningChannelID is empty).
+		if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
+			go al.publishPicoReasoning(ctx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+		}
 
 		logger.DebugCF("agent", "LLM response",
 			map[string]any{
@@ -1677,9 +1684,10 @@ func (al *AgentLoop) runLLMIteration(
 			if strings.TrimSpace(response.Content) != "" {
 				outCtx, outCancel := context.WithTimeout(ctx, 3*time.Second)
 				err := al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-					Channel: opts.Channel,
-					ChatID:  opts.ChatID,
-					Content: response.Content,
+					Channel:   opts.Channel,
+					ChatID:    opts.ChatID,
+					Content:   response.Content,
+					ModelName: activeModel,
 				})
 				outCancel()
 				if err != nil {
@@ -1691,6 +1699,7 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 			}
+			al.publishPicoToolCalls(ctx, opts.ChatID, opts.SessionKey, activeModel, response.ToolCalls)
 		}
 
 		// Check if no tool calls - then check reasoning content if any

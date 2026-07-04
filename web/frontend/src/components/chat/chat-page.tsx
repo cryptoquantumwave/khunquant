@@ -1,4 +1,5 @@
 import { IconPlus } from "@tabler/icons-react"
+import { useAtom } from "jotai"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -11,10 +12,12 @@ import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
 import { useSessionHistory } from "@/hooks/use-session-history"
+import { showThoughtsAtom } from "@/store/chat"
 
 export function ChatPage() {
   const { t } = useTranslation()
@@ -22,6 +25,7 @@ export function ChatPage() {
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [hasScrolled, setHasScrolled] = useState(false)
   const [input, setInput] = useState("")
+  const [showThoughts, setShowThoughts] = useAtom(showThoughtsAtom)
 
   const {
     messages,
@@ -106,6 +110,15 @@ export function ChatPage() {
           )
         }
       >
+        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+          <Switch
+            checked={showThoughts}
+            onCheckedChange={setShowThoughts}
+            aria-label={t("chat.showAssistantDetails")}
+          />
+          <span className="hidden sm:inline">{t("chat.showAssistantDetails")}</span>
+        </label>
+
         <Button
           variant="secondary"
           size="sm"
@@ -147,7 +160,15 @@ export function ChatPage() {
             />
           )}
 
-          {messages.map((msg) => (
+          {messages
+            .filter((msg) => {
+              if (!showThoughts && msg.role === "assistant") {
+                const kind = msg.kind ?? "normal"
+                if (kind === "thought" || kind === "tool_calls") return false
+              }
+              return true
+            })
+            .map((msg) => (
             <div key={msg.id} className="flex w-full">
               {msg.role === "assistant" && msg.imageDataUri ? (
                 <div className="flex w-full flex-col gap-1 py-2">
@@ -166,6 +187,9 @@ export function ChatPage() {
               ) : msg.role === "assistant" ? (
                 <AssistantMessage
                   content={msg.content}
+                  kind={msg.kind}
+                  modelName={msg.modelName}
+                  toolCalls={msg.toolCalls}
                   timestamp={msg.timestamp}
                 />
               ) : (

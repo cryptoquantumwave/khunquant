@@ -248,9 +248,31 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	}
 
 	payload := map[string]any{
-		"content": msg.Content,
+		PayloadKeyContent: msg.Content,
 	}
 	setContextUsagePayload(payload, msg.ContextUsage)
+
+	// Carry reasoning/tool-call kind metadata into the payload so the
+	// web client can render the appropriate collapsed box.
+	if modelName := strings.TrimSpace(msg.ModelName); modelName != "" {
+		payload[PayloadKeyModelName] = modelName
+	}
+	switch msg.Kind {
+	case MessageKindThought:
+		payload[PayloadKeyKind] = MessageKindThought
+		payload[PayloadKeyThought] = true
+	case MessageKindToolCalls:
+		payload[PayloadKeyKind] = MessageKindToolCalls
+		if len(msg.ToolCalls) > 0 {
+			if rawTC, err := json.Marshal(msg.ToolCalls); err == nil {
+				var decoded any
+				if err := json.Unmarshal(rawTC, &decoded); err == nil {
+					payload[PayloadKeyToolCalls] = decoded
+				}
+			}
+		}
+	}
+
 	outMsg := newMessage(TypeMessageCreate, payload)
 
 	return c.broadcastToSession(msg.ChatID, outMsg)

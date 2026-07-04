@@ -39,12 +39,38 @@ type ContextUsage struct {
 	UsedPercent      int `json:"used_percent"`       // 0-100
 }
 
+// VisibleToolCallFunction holds the function name and truncated JSON arguments
+// shown in the web UI tool-call box.
+type VisibleToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// VisibleToolCallExtraContent carries optional tool-feedback metadata shown
+// alongside the call in the UI.
+type VisibleToolCallExtraContent struct {
+	ToolFeedbackExplanation string `json:"tool_feedback_explanation,omitempty"`
+}
+
+// VisibleToolCall is a frontend-safe representation of a tool call that is
+// serialized into Pico Protocol tool_calls payloads.
+type VisibleToolCall struct {
+	ID           string                       `json:"id,omitempty"`
+	Type         string                       `json:"type,omitempty"`
+	Function     *VisibleToolCallFunction     `json:"function,omitempty"`
+	ExtraContent *VisibleToolCallExtraContent `json:"extra_content,omitempty"`
+}
+
 type OutboundMessage struct {
 	Channel          string        `json:"channel"`
 	ChatID           string        `json:"chat_id"`
 	Content          string        `json:"content"`
 	ReplyToMessageID string        `json:"reply_to_message_id,omitempty"`
 	ContextUsage     *ContextUsage `json:"context_usage,omitempty"`
+	// Pico reasoning/tool-call fields — set only for pico channel (best-effort).
+	Kind      string            `json:"kind,omitempty"`       // "" | "thought" | "tool_calls"
+	ModelName string            `json:"model_name,omitempty"` // model that produced this message
+	ToolCalls []VisibleToolCall `json:"tool_calls,omitempty"` // populated when Kind == "tool_calls"
 }
 
 // MediaPart describes a single media attachment to send.

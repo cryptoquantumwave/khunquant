@@ -1,5 +1,7 @@
 import { normalizeUnixTimestamp } from "@/features/chat/state"
+import { parseToolCallsValue } from "@/features/chat/tool-calls"
 import {
+  type AssistantMessageKind,
   type ContextUsage,
   updateChatStore,
 } from "@/store/chat"
@@ -52,6 +54,16 @@ export function handlePicoMessage(
           ? normalizeUnixTimestamp(Number(message.timestamp))
           : Date.now()
 
+      // Reasoning / tool-call kind metadata
+      const rawKind = payload.kind as string | undefined
+      const kind: AssistantMessageKind =
+        rawKind === "thought" || rawKind === "tool_calls" ? rawKind : "normal"
+      const modelName = typeof payload.model_name === "string" ? payload.model_name : undefined
+      const toolCalls =
+        kind === "tool_calls"
+          ? parseToolCallsValue(payload.tool_calls)
+          : undefined
+
       updateChatStore((prev) => ({
         messages: [
           ...prev.messages,
@@ -60,6 +72,9 @@ export function handlePicoMessage(
             role: "assistant",
             content,
             timestamp,
+            kind,
+            ...(modelName ? { modelName } : {}),
+            ...(toolCalls ? { toolCalls } : {}),
           },
         ],
         isTyping: false,

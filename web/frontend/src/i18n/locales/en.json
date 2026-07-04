@@ -85,7 +85,20 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "Local"
-    }
+    },
+    "toolCallsLabel": "Tool Calls",
+    "toolCallExplanationLabel": "Call note",
+    "toolCallFunctionLabel": "Call summary",
+    "toolCallArgumentsLabel": "Arguments",
+    "showAssistantDetails": "Show reasoning and tool calls",
+    "copiedLabel": "Copied!",
+    "copyMessage": "Copy message",
+    "codeLabel": "Code",
+    "copyCode": "Copy",
+    "collapseCode": "Collapse",
+    "expandCode": "Expand",
+    "enableCodeWrap": "Wrap",
+    "disableCodeWrap": "No wrap"
   },
   "header": {
     "gateway": {

@@ -1,9 +1,28 @@
 import { atom, getDefaultStore } from "jotai"
+import { atomWithStorage } from "jotai/utils"
 
 import {
   getInitialActiveSessionId,
   writeStoredSessionId,
 } from "@/features/chat/state"
+
+export type AssistantMessageKind = "normal" | "thought" | "tool_calls"
+
+export interface ChatToolCallFunction {
+  name?: string
+  arguments?: string
+}
+
+export interface ChatToolCallExtraContent {
+  toolFeedbackExplanation?: string
+}
+
+export interface ChatToolCall {
+  id?: string
+  type?: string
+  function?: ChatToolCallFunction
+  extraContent?: ChatToolCallExtraContent
+}
 
 export interface ChatMessage {
   id: string
@@ -13,6 +32,10 @@ export interface ChatMessage {
   imageDataUri?: string  // set when the message is a media.create delivery
   imageCaption?: string
   imageFilename?: string
+  // reasoning/tool-call fields — populated only for live pico streaming
+  kind?: AssistantMessageKind
+  modelName?: string
+  toolCalls?: ChatToolCall[]
 }
 
 export interface ContextUsage {
@@ -49,7 +72,12 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
 
 export const chatAtom = atom<ChatStoreState>(DEFAULT_CHAT_STATE)
 
-export const showThoughtsAtom = atom<boolean>(true)
+export const showThoughtsAtom = atomWithStorage<boolean>(
+  "khunquant:chat-show-reasoning",
+  true,
+  undefined,
+  { getOnInit: true },
+)
 
 const store = getDefaultStore()
 

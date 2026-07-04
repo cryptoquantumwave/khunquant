@@ -19,6 +19,21 @@ const (
 	TypePong          = "pong"
 )
 
+// Payload key constants used in message.create payloads.
+const (
+	PayloadKeyContent   = "content"
+	PayloadKeyKind      = "kind"
+	PayloadKeyThought   = "thought"
+	PayloadKeyToolCalls = "tool_calls"
+	PayloadKeyModelName = "model_name"
+)
+
+// MessageKind values for the "kind" payload field.
+const (
+	MessageKindThought   = "thought"
+	MessageKindToolCalls = "tool_calls"
+)
+
 // PicoMessage is the wire format for all Pico Protocol messages.
 type PicoMessage struct {
 	Type      string         `json:"type"`

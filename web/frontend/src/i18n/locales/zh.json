@@ -85,7 +85,21 @@
     "imageTooLarge": "“{{name}}”超过了 {{size}} 限制。",
     "imageReadFailed": "读取“{{name}}”失败。",
     "contextTitle": "上下文",
-    "contextDetail": "查看详情"
+    "contextDetail": "查看详情",
+    "reasoningLabel": "推理过程",
+    "toolCallsLabel": "工具调用",
+    "toolCallExplanationLabel": "调用说明",
+    "toolCallFunctionLabel": "调用摘要",
+    "toolCallArgumentsLabel": "参数",
+    "showAssistantDetails": "显示推理和工具调用",
+    "copiedLabel": "已复制！",
+    "copyMessage": "复制消息",
+    "codeLabel": "代码",
+    "copyCode": "复制",
+    "collapseCode": "折叠",
+    "expandCode": "展开",
+    "enableCodeWrap": "换行",
+    "disableCodeWrap": "不换行"
   },
   "header": {
     "gateway": {

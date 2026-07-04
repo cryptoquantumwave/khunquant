@@ -57,7 +57,21 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "ในเครื่อง"
-    }
+    },
+    "reasoningLabel": "การให้เหตุผล",
+    "toolCallsLabel": "การเรียกใช้เครื่องมือ",
+    "toolCallExplanationLabel": "หมายเหตุการเรียก",
+    "toolCallFunctionLabel": "สรุปการเรียก",
+    "toolCallArgumentsLabel": "อาร์กิวเมนต์",
+    "showAssistantDetails": "แสดงการให้เหตุผลและการเรียกใช้เครื่องมือ",
+    "copiedLabel": "คัดลอกแล้ว!",
+    "copyMessage": "คัดลอกข้อความ",
+    "codeLabel": "โค้ด",
+    "copyCode": "คัดลอก",
+    "collapseCode": "ย่อ",
+    "expandCode": "ขยาย",
+    "enableCodeWrap": "ตัดบรรทัด",
+    "disableCodeWrap": "ไม่ตัดบรรทัด"
   },
   "header": {
     "gateway": {

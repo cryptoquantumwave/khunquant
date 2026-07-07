@@ -42,6 +42,8 @@ type DiscordChannel struct {
 	typingMu   sync.Mutex
 	typingStop map[string]chan struct{} // chatID → stop signal
 	botUserID  string                   // stored for mention checking
+	roleMu     sync.Mutex
+	botRoleIDs map[string]map[string]bool // guildID → set of bot's managed role IDs
 }
 
 func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordChannel, error) {
@@ -58,6 +60,13 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 		return nil, fmt.Errorf("failed to create discord session: %w", err)
 	}
 
+	// discordgo.New defaults to IntentsAllWithoutPrivileged, which omits the
+	// privileged MessageContent intent. Without it Discord strips message
+	// content AND the mentions array for guild messages, so mention_only never
+	// triggers. Request it explicitly (must also be enabled in the Developer
+	// Portal → Bot → Privileged Gateway Intents).
+	session.Identify.Intents |= discordgo.IntentMessageContent
+
 	if err := applyDiscordProxy(session, cfg.Proxy); err != nil {
 		return nil, err
 	}
@@ -73,6 +82,7 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 		config:      cfg,
 		ctx:         context.Background(),
 		typingStop:  make(map[string]chan struct{}),
+		botRoleIDs:  make(map[string]map[string]bool),
 	}, nil
 }
 
@@ -354,7 +364,32 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 				break
 			}
 		}
+		// Fallback: the gateway sometimes omits the resolved mentions array even
+		// though the raw content carries the <@ID> / <@!ID> token. Match directly
+		// so mention_only still triggers.
+		if !isMentioned && c.botUserID != "" {
+			if strings.Contains(m.Content, "<@"+c.botUserID+">") ||
+				strings.Contains(m.Content, "<@!"+c.botUserID+">") {
+				isMentioned = true
+			}
+		}
+		// Role mention: users often @mention the bot's auto-created integration
+		// role (<@&ROLE_ID>, in MentionRoles) instead of the bot user. Treat a
+		// mention of the bot's own managed role as a mention of the bot.
+		botRoles := c.botManagedRoleIDs(s, m.GuildID)
+		if !isMentioned && len(botRoles) > 0 {
+			for _, rid := range m.MentionRoles {
+				if botRoles[rid] {
+					isMentioned = true
+					break
+				}
+			}
+		}
 		content = c.stripBotMention(content)
+		// Strip the bot's role-mention token(s) too so the agent sees clean text.
+		for rid := range botRoles {
+			content = strings.TrimSpace(strings.ReplaceAll(content, "<@&"+rid+">", ""))
+		}
 		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
 		if !respond {
 			logger.DebugCF("discord", "Group message ignored by group trigger", map[string]any{
@@ -611,4 +646,56 @@ func (c *DiscordChannel) stripBotMention(text string) string {
 	text = strings.ReplaceAll(text, fmt.Sprintf("<@%s>", c.botUserID), "")
 	text = strings.ReplaceAll(text, fmt.Sprintf("<@!%s>", c.botUserID), "")
 	return strings.TrimSpace(text)
+}
+
+// botManagedRoleIDs returns the set of role IDs belonging to the bot's own
+// managed integration role(s) in a guild. When a bot is invited, Discord
+// auto-creates a role named after it; users frequently @mention that role
+// (rendered identically to a user mention) which lands in Message.MentionRoles
+// as <@&ROLE_ID>, NOT in Message.Mentions as <@USER_ID>. Results are cached
+// per guild; failures are not cached so they can be retried.
+func (c *DiscordChannel) botManagedRoleIDs(s *discordgo.Session, guildID string) map[string]bool {
+	if guildID == "" || c.botUserID == "" {
+		return nil
+	}
+
+	c.roleMu.Lock()
+	if set, ok := c.botRoleIDs[guildID]; ok {
+		c.roleMu.Unlock()
+		return set
+	}
+	c.roleMu.Unlock()
+
+	member, err := s.GuildMember(guildID, c.botUserID)
+	if err != nil {
+		logger.DebugCF("discord", "role resolve: fetch bot member failed", map[string]any{
+			"guild_id": guildID, "error": err.Error(),
+		})
+		return nil
+	}
+	roles, err := s.GuildRoles(guildID)
+	if err != nil {
+		logger.DebugCF("discord", "role resolve: fetch guild roles failed", map[string]any{
+			"guild_id": guildID, "error": err.Error(),
+		})
+		return nil
+	}
+
+	managed := make(map[string]bool)
+	for _, r := range roles {
+		if r.Managed {
+			managed[r.ID] = true
+		}
+	}
+	set := make(map[string]bool)
+	for _, rid := range member.Roles {
+		if managed[rid] {
+			set[rid] = true
+		}
+	}
+
+	c.roleMu.Lock()
+	c.botRoleIDs[guildID] = set
+	c.roleMu.Unlock()
+	return set
 }

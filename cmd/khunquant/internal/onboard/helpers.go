@@ -101,6 +101,8 @@ func onboard(nonInteractive bool) {
 				fmt.Println("     - okx:       https://www.okx.com/account/my-api")
 			case "settrade":
 				fmt.Println("     - settrade:  https://settrade.com/developer (app_code, broker_id, account_no)")
+			case "webull":
+				fmt.Println("     - webull:    https://developer.webull.com/apis/docs — create an app, get app key/secret, apply for API access")
 			}
 		}
 		fmt.Println("")

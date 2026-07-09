@@ -58,6 +58,15 @@ func ListConfiguredAccounts(cfg *config.Config) []AccountRef {
 			refs = append(refs, AccountRef{ProviderID: "settrade", Account: name})
 		}
 	}
+	if ex.Webull.Enabled {
+		for i, acc := range ex.Webull.Accounts {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			refs = append(refs, AccountRef{ProviderID: "webull", Account: name})
+		}
+	}
 
 	return refs
 }

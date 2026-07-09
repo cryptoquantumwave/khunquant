@@ -8,6 +8,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // CollectOptions controls which exchanges/accounts to snapshot.
@@ -275,35 +276,11 @@ func effectiveQuote(ex exchanges.Exchange, requestedQuote string) string {
 
 // listExchangeAccounts returns all configured exchange/account pairs from config.
 func listExchangeAccounts(cfg *config.Config) []exchangeAccount {
-	var result []exchangeAccount
-	ex := cfg.Exchanges
-
-	if ex.Binance.Enabled {
-		for _, acc := range ex.Binance.Accounts {
-			result = append(result, exchangeAccount{"binance", acc.Name})
-		}
+	refs := broker.ListConfiguredAccounts(cfg)
+	result := make([]exchangeAccount, len(refs))
+	for i, ref := range refs {
+		result[i] = exchangeAccount{ref.ProviderID, ref.Account}
 	}
-	if ex.BinanceTH.Enabled {
-		for _, acc := range ex.BinanceTH.Accounts {
-			result = append(result, exchangeAccount{"binanceth", acc.Name})
-		}
-	}
-	if ex.Bitkub.Enabled {
-		for _, acc := range ex.Bitkub.Accounts {
-			result = append(result, exchangeAccount{"bitkub", acc.Name})
-		}
-	}
-	if ex.OKX.Enabled {
-		for _, acc := range ex.OKX.Accounts {
-			result = append(result, exchangeAccount{"okx", acc.Name})
-		}
-	}
-	if ex.Settrade.Enabled {
-		for _, acc := range ex.Settrade.Accounts {
-			result = append(result, exchangeAccount{"settrade", acc.Name})
-		}
-	}
-
 	return result
 }
 

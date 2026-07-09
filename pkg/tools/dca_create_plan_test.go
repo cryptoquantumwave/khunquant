@@ -6,10 +6,65 @@ import (
 	"strings"
 	"testing"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// mockTradingProvider is a minimal broker.TradingProvider stand-in used so
+// dca_create_plan tests can exercise the provider-resolution gate without
+// depending on real exchange credentials or adapters.
+type mockTradingProvider struct {
+	id       string
+	category broker.AssetCategory
+}
+
+func (m mockTradingProvider) ID() string                     { return m.id }
+func (m mockTradingProvider) Category() broker.AssetCategory { return m.category }
+func (m mockTradingProvider) GetMarketStatus(context.Context, string) (broker.MarketStatus, error) {
+	return broker.MarketOpen, nil
+}
+func (m mockTradingProvider) CreateOrder(context.Context, string, string, string, float64, *float64, map[string]any) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+func (m mockTradingProvider) CancelOrder(context.Context, string, string) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+func (m mockTradingProvider) FetchOrder(context.Context, string, string) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+func (m mockTradingProvider) FetchOpenOrders(context.Context, string) ([]ccxt.Order, error) {
+	return nil, nil
+}
+func (m mockTradingProvider) FetchClosedOrders(context.Context, string, *int64, int) ([]ccxt.Order, error) {
+	return nil, nil
+}
+func (m mockTradingProvider) FetchMyTrades(context.Context, string, *int64, int) ([]ccxt.Trade, error) {
+	return nil, nil
+}
+
+// mockNonTradingProvider implements broker.Provider but not broker.TradingProvider,
+// mirroring Webull's adapter (read-only: market data + portfolio, no order execution).
+type mockNonTradingProvider struct {
+	id string
+}
+
+func (m mockNonTradingProvider) ID() string                     { return m.id }
+func (m mockNonTradingProvider) Category() broker.AssetCategory { return broker.CategoryStock }
+func (m mockNonTradingProvider) GetMarketStatus(context.Context, string) (broker.MarketStatus, error) {
+	return broker.MarketOpen, nil
+}
+
+func init() {
+	broker.RegisterFactory("bitkub", func(*config.Config) (broker.Provider, error) {
+		return mockTradingProvider{id: "bitkub", category: broker.CategoryCrypto}, nil
+	})
+	broker.RegisterFactory("settrade", func(*config.Config) (broker.Provider, error) {
+		return mockTradingProvider{id: "settrade", category: broker.CategoryStock}, nil
+	})
+}
 
 func newTestDCAStore(t *testing.T) *dca.Store {
 	t.Helper()
@@ -592,6 +647,28 @@ func TestCreateDCAPlan_SettradeRejectsQuoteUnit(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Fatal("expected error when using amount_unit=quote with settrade")
+	}
+}
+
+func TestCreateDCAPlan_RejectsNonTradingProvider(t *testing.T) {
+	const provider = "dca-create-non-trading-provider"
+	broker.RegisterFactory(provider, func(*config.Config) (broker.Provider, error) {
+		return mockNonTradingProvider{id: provider}, nil
+	})
+
+	tool := newTestCreatePlanTool(t)
+	result := tool.Execute(testCtx(), map[string]any{
+		"plan_name":        "Webull Test",
+		"provider":         provider,
+		"symbol":           "AAPL",
+		"amount_per_order": float64(1),
+		"schedule":         map[string]any{"cron": "0 9 * * 1"},
+	})
+	if !result.IsError {
+		t.Fatal("expected error when provider does not support order execution")
+	}
+	if !strings.Contains(result.ForLLM, "does not support order execution") {
+		t.Errorf("expected 'does not support order execution', got: %s", result.ForLLM)
 	}
 }
 

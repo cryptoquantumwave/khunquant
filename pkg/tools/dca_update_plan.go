@@ -62,7 +62,7 @@ func (t *UpdateDCAPlanTool) Parameters() map[string]any {
 			"amount_unit": map[string]any{
 				"type":        "string",
 				"enum":        []string{"quote", "base"},
-				"description": "Unit of amount_per_order. 'quote' = divide by price; 'base' = pass directly to CreateOrder (required for Settrade).",
+				"description": "Unit of amount_per_order. 'quote' = divide by price; 'base' = pass directly to CreateOrder (required for stock brokers: Settrade, Webull).",
 			},
 			"trigger": map[string]any{
 				"type": "object",
@@ -206,15 +206,16 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		if v != "quote" && v != "base" {
 			return ErrorResult("amount_unit must be 'quote' or 'base'")
 		}
-		if strings.EqualFold(plan.Provider, "settrade") && v == "quote" {
-			return ErrorResult("Settrade stocks are ordered in share units — use amount_unit='base'")
+		// Stock brokers (Settrade, Webull) require base-unit (share) ordering.
+		if isStockProvider(plan.Provider) && v == "quote" {
+			return ErrorResult("Stock brokers are ordered in share units — use amount_unit='base'")
 		}
 		plan.AmountUnit = v
 		changed = true
 	}
 
-	// Validate base unit for Settrade after any amount changes.
-	if strings.EqualFold(plan.Provider, "settrade") && plan.AmountUnit == "base" {
+	// Settrade requires whole-number shares; Webull supports fractional shares.
+	if plan.AmountUnit == "base" && strings.EqualFold(plan.Provider, "settrade") {
 		if plan.AmountPerOrder < 1 || plan.AmountPerOrder != float64(int(plan.AmountPerOrder)) {
 			return ErrorResult("Settrade share orders must be whole numbers (e.g. amount_per_order=10)")
 		}

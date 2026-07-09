@@ -34,13 +34,15 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
-	"github.com/cryptoquantumwave/khunquant/pkg/devmcp"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/devices"
+	"github.com/cryptoquantumwave/khunquant/pkg/devmcp"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binance"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binanceth"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/bitkub"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/okx"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/settrade"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/webull"
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -67,7 +69,7 @@ type gatewayServices struct {
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
-	DebugTap         *debugtap.Store  // non-nil only while dev-mcp is enabled
+	DebugTap         *debugtap.Store     // non-nil only while dev-mcp is enabled
 	LogBuf           *debugtap.LogBuffer // persists across reloads while dev-mcp is on
 }
 

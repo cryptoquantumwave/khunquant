@@ -300,6 +300,71 @@ func TestSettradeExchangeConfig_UnmarshalYAML_PartialPINUpdate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Webull
+// ---------------------------------------------------------------------------
+
+func TestWebullExchangeConfig_UnmarshalYAML_PreservesNewCredential(t *testing.T) {
+	cfg := WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{
+				ExchangeAccount: ExchangeAccount{Name: "main", APIKey: *NewSecureString("NEW_KEY"), Secret: *NewSecureString("NEW_SECRET")},
+				AccountID:       "acct-1",
+			},
+		},
+	}
+
+	secYAML := "main:\n  api_key: OLD_KEY\n  secret: OLD_SECRET\n"
+	mustDecodeExchangeYAML(t, &cfg, secYAML)
+
+	if got := cfg.Accounts[0].APIKey.String(); got != "NEW_KEY" {
+		t.Errorf("APIKey: want NEW_KEY, got %q", got)
+	}
+	if got := cfg.Accounts[0].Secret.String(); got != "NEW_SECRET" {
+		t.Errorf("Secret: want NEW_SECRET, got %q", got)
+	}
+}
+
+func TestWebullExchangeConfig_UnmarshalYAML_FillsEmptyCredential(t *testing.T) {
+	cfg := WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{ExchangeAccount: ExchangeAccount{Name: "main"}},
+		},
+	}
+
+	secYAML := "main:\n  api_key: STORED_KEY\n  secret: STORED_SECRET\n"
+	mustDecodeExchangeYAML(t, &cfg, secYAML)
+
+	if got := cfg.Accounts[0].APIKey.String(); got != "STORED_KEY" {
+		t.Errorf("APIKey: want STORED_KEY, got %q", got)
+	}
+	if got := cfg.Accounts[0].Secret.String(); got != "STORED_SECRET" {
+		t.Errorf("Secret: want STORED_SECRET, got %q", got)
+	}
+}
+
+func TestWebullExchangeConfig_UnmarshalYAML_PartialSecretUpdate(t *testing.T) {
+	// User changes only Secret; api_key empty → filled from security.
+	cfg := WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{
+				ExchangeAccount: ExchangeAccount{Name: "main", Secret: *NewSecureString("NEW_SECRET")},
+				AccountID:       "acct-1",
+			},
+		},
+	}
+
+	secYAML := "main:\n  api_key: STORED_KEY\n  secret: OLD_SECRET\n"
+	mustDecodeExchangeYAML(t, &cfg, secYAML)
+
+	if got := cfg.Accounts[0].APIKey.String(); got != "STORED_KEY" {
+		t.Errorf("APIKey: want STORED_KEY, got %q", got)
+	}
+	if got := cfg.Accounts[0].Secret.String(); got != "NEW_SECRET" {
+		t.Errorf("Secret: want NEW_SECRET (preserved), got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SecureModelList
 // ---------------------------------------------------------------------------
 

@@ -394,6 +394,11 @@ type settradeSecEntry struct {
 	PIN    SecureString `yaml:"pin,omitempty"`
 }
 
+type webullSecEntry struct {
+	APIKey SecureString `yaml:"api_key,omitempty"`
+	Secret SecureString `yaml:"secret,omitempty"`
+}
+
 func accountKey(name string, i int) string {
 	if name != "" {
 		return name
@@ -569,7 +574,7 @@ func (c SettradeExchangeConfig) MarshalYAML() (any, error) {
 func (c *SettradeExchangeConfig) UnmarshalYAML(value *yaml.Node) error {
 	mm := make(map[string]*settradeSecEntry)
 	if err := value.Decode(&mm); err != nil {
-		return nil
+		return err
 	}
 	for i := range c.Accounts {
 		key := accountKey(c.Accounts[i].Name, i)
@@ -585,6 +590,35 @@ func (c *SettradeExchangeConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		if c.Accounts[i].PIN.String() == "" {
 			c.Accounts[i].PIN = e.PIN
+		}
+	}
+	return nil
+}
+
+func (c WebullExchangeConfig) MarshalYAML() (any, error) {
+	mm := make(map[string]webullSecEntry, len(c.Accounts))
+	for i, acc := range c.Accounts {
+		mm[accountKey(acc.Name, i)] = webullSecEntry{APIKey: acc.APIKey, Secret: acc.Secret}
+	}
+	return mm, nil
+}
+
+func (c *WebullExchangeConfig) UnmarshalYAML(value *yaml.Node) error {
+	mm := make(map[string]*webullSecEntry)
+	if err := value.Decode(&mm); err != nil {
+		return err
+	}
+	for i := range c.Accounts {
+		key := accountKey(c.Accounts[i].Name, i)
+		e := mm[key]
+		if e == nil {
+			continue
+		}
+		if c.Accounts[i].APIKey.String() == "" {
+			c.Accounts[i].APIKey = e.APIKey
+		}
+		if c.Accounts[i].Secret.String() == "" {
+			c.Accounts[i].Secret = e.Secret
 		}
 	}
 	return nil

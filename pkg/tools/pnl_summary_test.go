@@ -328,17 +328,22 @@ func TestNativeQuoteForProvider(t *testing.T) {
 }
 
 func TestWalletTypeForPnL(t *testing.T) {
-	cases := []struct{ provider, want string }{
-		{"settrade", "stock"},
-		{"okx", "all"},
-		{"binance", "all"},
-		{"bitkub", "spot"},
-		{"unknown", "spot"},
+	cases := []struct {
+		category broker.AssetCategory
+		provider string
+		want     string
+	}{
+		{broker.CategoryStock, "settrade", "stock"},
+		{broker.CategoryStock, "webull", "stock"},
+		{broker.CategoryCrypto, "okx", "all"},
+		{broker.CategoryCrypto, "binance", "all"},
+		{broker.CategoryCrypto, "bitkub", "spot"},
+		{broker.CategoryCrypto, "unknown", "spot"},
 	}
 	for _, tc := range cases {
-		got := walletTypeForPnL(tc.provider)
+		got := walletTypeForPnL(tc.category, tc.provider)
 		if got != tc.want {
-			t.Errorf("walletTypeForPnL(%q) = %q, want %q", tc.provider, got, tc.want)
+			t.Errorf("walletTypeForPnL(%q, %q) = %q, want %q", tc.category, tc.provider, got, tc.want)
 		}
 	}
 }

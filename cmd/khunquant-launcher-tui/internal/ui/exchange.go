@@ -32,6 +32,9 @@ func (s *appState) buildExchangeMenuItems() []MenuItem {
 		exchangeItem("Settrade", "Thai stock broker (SET)", ex.Settrade.Enabled, func() {
 			s.push("exchange-settrade", s.settradeMenu())
 		}),
+		exchangeItem("Webull", "US stock broker", ex.Webull.Enabled, func() {
+			s.push("exchange-webull", s.webullMenu())
+		}),
 	}
 }
 
@@ -162,6 +165,29 @@ func (s *appState) settradeMenu() tview.Primitive {
 			s.dirty = true
 			s.pop()
 			s.push("exchange-settrade", s.settradeMenu())
+		},
+	)
+}
+
+func (s *appState) webullMenu() tview.Primitive {
+	return s.genericAccountMenu("Webull", "exchange-webull",
+		func() int { return len(s.config.Exchanges.Webull.Accounts) },
+		func(i int) string { return s.config.Exchanges.Webull.Accounts[i].Name },
+		func(i int) tview.Primitive { return s.webullAccountForm(i) },
+		func() {
+			s.config.Exchanges.Webull.Accounts = append(
+				s.config.Exchanges.Webull.Accounts,
+				khunquantconfig.WebullExchangeAccount{
+					ExchangeAccount: khunquantconfig.ExchangeAccount{
+						Name: s.nextAccountName(webullAccountNames(s.config.Exchanges.Webull.Accounts)),
+					},
+					Region: "us",
+				},
+			)
+			s.config.Exchanges.Webull.Enabled = true
+			s.dirty = true
+			s.pop()
+			s.push("exchange-webull", s.webullMenu())
 		},
 	)
 }
@@ -337,6 +363,35 @@ func (s *appState) settradeAccountForm(index int) tview.Primitive {
 	return wrapWithBack(form, s)
 }
 
+func (s *appState) webullAccountForm(index int) tview.Primitive {
+	acc := &s.config.Exchanges.Webull.Accounts[index]
+	form := baseExchangeAccountForm("Webull", acc.Name)
+	addInput(form, "API Key (app key)", acc.APIKey.String(), func(v string) {
+		acc.APIKey.Set(v)
+		s.dirty = true
+		refreshMainMenuIfPresent(s)
+	})
+	addInput(form, "Secret (app secret)", acc.Secret.String(), func(v string) {
+		acc.Secret.Set(v)
+		s.dirty = true
+	})
+	addInput(form, "Account ID", acc.AccountID, func(v string) {
+		acc.AccountID = v
+		s.dirty = true
+	})
+	addInput(form, "Region (e.g. us)", acc.Region, func(v string) {
+		acc.Region = v
+		s.dirty = true
+	})
+	addExchangeDeleteButton(form, s, func() {
+		s.config.Exchanges.Webull.Accounts = removeWebullAccount(s.config.Exchanges.Webull.Accounts, index)
+		if len(s.config.Exchanges.Webull.Accounts) == 0 {
+			s.config.Exchanges.Webull.Enabled = false
+		}
+	})
+	return wrapWithBack(form, s)
+}
+
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
@@ -398,6 +453,13 @@ func removeSettradeAccount(accounts []khunquantconfig.SettradeExchangeAccount, i
 	return append(accounts[:index:index], accounts[index+1:]...)
 }
 
+func removeWebullAccount(accounts []khunquantconfig.WebullExchangeAccount, index int) []khunquantconfig.WebullExchangeAccount {
+	if index < 0 || index >= len(accounts) {
+		return accounts
+	}
+	return append(accounts[:index:index], accounts[index+1:]...)
+}
+
 func accountNamesSlice(accounts []khunquantconfig.ExchangeAccount) []string {
 	names := make([]string, len(accounts))
 	for i, a := range accounts {
@@ -415,6 +477,14 @@ func okxAccountNames(accounts []khunquantconfig.OKXExchangeAccount) []string {
 }
 
 func settradeAccountNames(accounts []khunquantconfig.SettradeExchangeAccount) []string {
+	names := make([]string, len(accounts))
+	for i, a := range accounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
+func webullAccountNames(accounts []khunquantconfig.WebullExchangeAccount) []string {
 	names := make([]string, len(accounts))
 	for i, a := range accounts {
 		names[i] = a.Name
@@ -449,7 +519,7 @@ numbered:
 func (s *appState) hasEnabledExchange() bool {
 	ex := s.config.Exchanges
 	return ex.Binance.Enabled || ex.BinanceTH.Enabled || ex.Bitkub.Enabled ||
-		ex.OKX.Enabled || ex.Settrade.Enabled
+		ex.OKX.Enabled || ex.Settrade.Enabled || ex.Webull.Enabled
 }
 
 func (s *appState) countExchanges() (enabled, total int) {
@@ -460,6 +530,7 @@ func (s *appState) countExchanges() (enabled, total int) {
 		ex.Bitkub.Enabled,
 		ex.OKX.Enabled,
 		ex.Settrade.Enabled,
+		ex.Webull.Enabled,
 	}
 	total = len(entries)
 	for _, v := range entries {

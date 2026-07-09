@@ -19,6 +19,7 @@ var exchangeDefs = []exchangeDef{
 	{id: "bitkub", label: "Bitkub"},
 	{id: "okx", label: "OKX"},
 	{id: "settrade", label: "Settrade"},
+	{id: "webull", label: "Webull"},
 }
 
 // setupPortfolios prompts the user to enable one or more exchanges, flips
@@ -113,6 +114,9 @@ func enableExchange(cfg *config.Config, id string) error {
 	case "settrade":
 		cfg.Exchanges.Settrade.Enabled = true
 		cfg.Exchanges.Settrade.Accounts = appendIfNoMainSettrade(cfg.Exchanges.Settrade.Accounts, config.SettradeExchangeAccount{ExchangeAccount: placeholder})
+	case "webull":
+		cfg.Exchanges.Webull.Enabled = true
+		cfg.Exchanges.Webull.Accounts = appendIfNoMainWebull(cfg.Exchanges.Webull.Accounts, config.WebullExchangeAccount{ExchangeAccount: placeholder, Region: "us"})
 	default:
 		return fmt.Errorf("unknown exchange %q", id)
 	}
@@ -138,6 +142,15 @@ func appendIfNoMainOKX(accounts []config.OKXExchangeAccount, placeholder config.
 }
 
 func appendIfNoMainSettrade(accounts []config.SettradeExchangeAccount, placeholder config.SettradeExchangeAccount) []config.SettradeExchangeAccount {
+	for _, a := range accounts {
+		if strings.EqualFold(a.Name, "main") || a.Name == "" {
+			return accounts
+		}
+	}
+	return append(accounts, placeholder)
+}
+
+func appendIfNoMainWebull(accounts []config.WebullExchangeAccount, placeholder config.WebullExchangeAccount) []config.WebullExchangeAccount {
 	for _, a := range accounts {
 		if strings.EqualFold(a.Name, "main") || a.Name == "" {
 			return accounts

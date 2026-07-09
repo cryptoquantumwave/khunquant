@@ -158,6 +158,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             icon: IconBuildingBank,
             translateTitle: true,
           },
+          {
+            title: "navigation.portfolios_webull",
+            url: "/portfolios/webull",
+            icon: IconBuildingBank,
+            translateTitle: true,
+          },
         ],
       },
       {

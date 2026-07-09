@@ -37,7 +37,7 @@ func (t *GetPnLDetailTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"provider": map[string]any{
 				"type":        "string",
-				"description": "Exchange name (e.g. binance, bitkub, settrade).",
+				"description": "Exchange name (e.g. binance, bitkub, settrade, webull).",
 			},
 			"account": map[string]any{
 				"type":        "string",

@@ -490,6 +490,60 @@ func TestResolveAccount_Settrade_Positional(t *testing.T) {
 	}
 }
 
+func TestResolveAccount_Webull_ByName(t *testing.T) {
+	cfg := &WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{
+				ExchangeAccount: ExchangeAccount{Name: "main"},
+				AccountID:       "acct-1",
+			},
+		},
+	}
+	acc, ok := cfg.ResolveAccount("main")
+	if !ok || acc.Name != "main" {
+		t.Errorf("Webull ResolveAccount = %v, %v", acc, ok)
+	}
+}
+
+func TestResolveAccount_Webull_EmptyName_ReturnsFirst(t *testing.T) {
+	cfg := &WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{ExchangeAccount: ExchangeAccount{Name: "main"}},
+		},
+	}
+	acc, ok := cfg.ResolveAccount("")
+	if !ok || acc.Name != "main" {
+		t.Errorf("Webull ResolveAccount(\"\") should return first account, got %v", acc)
+	}
+}
+
+func TestResolveAccount_Webull_Positional(t *testing.T) {
+	cfg := &WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{}, // no Name — positional "1"
+		},
+	}
+	acc, ok := cfg.ResolveAccount("1")
+	if !ok {
+		t.Error("Webull ResolveAccount should resolve positional name '1'")
+	}
+	if acc.Name != "1" {
+		t.Errorf("Webull positional account Name = %q, want '1'", acc.Name)
+	}
+}
+
+func TestResolveAccount_Webull_NotFound(t *testing.T) {
+	cfg := &WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{ExchangeAccount: ExchangeAccount{Name: "main"}},
+		},
+	}
+	_, ok := cfg.ResolveAccount("nope")
+	if ok {
+		t.Error("Webull ResolveAccount should return false for non-existent account")
+	}
+}
+
 func TestResolveAccount_OKX_EmptyName_ReturnsFirst(t *testing.T) {
 	cfg := &OKXExchangeConfig{
 		Accounts: []OKXExchangeAccount{

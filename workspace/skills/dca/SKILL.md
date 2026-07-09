@@ -78,10 +78,11 @@ Executes on schedule, but only places an order when the expression is true. The 
 }
 ```
 
-### Stock DCA on Settrade
+### Stock DCA on Settrade and Webull
 
-Settrade orders are in **share units**, not quote currency. Use `amount_unit: "base"` and set `amount_per_order` to the number of shares. The tool auto-defaults to `base` for Settrade — but pass it explicitly to be safe.
+Stock orders on Settrade and Webull are in **share units**, not quote currency. Use `amount_unit: "base"` and set `amount_per_order` to the number of shares. The tool auto-defaults to `base` for both — but pass it explicitly to be safe.
 
+**Settrade (Thai equities)**:
 ```json
 {
   "plan_name": "PTT Shares Weekly",
@@ -93,7 +94,21 @@ Settrade orders are in **share units**, not quote currency. Use `amount_unit: "b
 }
 ```
 
-`amount_unit: "quote"` is rejected for Settrade — it has no quote currency divisor.
+**Webull (US equities)**:
+```json
+{
+  "plan_name": "AAPL Shares Weekly",
+  "provider": "webull",
+  "symbol": "AAPL",
+  "amount_per_order": 5,
+  "amount_unit": "base",
+  "schedule": { "cron": "0 9 * * 1", "timezone": "America/New_York" }
+}
+```
+
+`amount_unit: "quote"` is rejected for both Settrade and Webull — they have no quote currency divisor.
+
+**Note on Webull execution**: Webull DCA execution is pending completion of trading support. Plans may be created and scheduled, but execution will fail until order placement is available.
 
 ### Base-unit crypto (fixed BTC amount)
 

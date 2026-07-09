@@ -17,6 +17,7 @@
     "portfolios_bitkub": "Bitkub",
     "portfolios_binanceth": "Binance TH",
     "portfolios_settrade": "Settrade",
+    "portfolios_webull": "Webull",
     "config": "การตั้งค่า",
     "logs": "บันทึก",
     "cron": "งานตามตาราง",
@@ -736,6 +737,18 @@
       "pin_hint": "PIN ที่ใช้ยืนยันการส่งคำสั่งซื้อขาย",
       "pin_placeholder": "กรอก PIN",
       "pin_set": "มีค่าที่ตั้งไว้แล้ว — กรอกค่าใหม่เพื่ออัปเดต"
+    },
+    "webull": {
+      "api_key": "App Key",
+      "api_key_placeholder": "App Key ของ Webull",
+      "secret": "App Secret",
+      "secret_placeholder": "App Secret ของ Webull",
+      "credential_set": "มีค่าที่ตั้งไว้แล้ว — กรอกค่าใหม่เพื่ออัปเดต",
+      "account_id": "Account ID",
+      "account_id_placeholder": "ID บัญชีซื้อขาย Webull ของคุณ",
+      "region": "Region",
+      "region_placeholder": "us",
+      "doc_link": "เอกสาร Webull OpenAPI"
     }
   }
 }

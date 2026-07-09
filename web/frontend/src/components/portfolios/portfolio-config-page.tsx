@@ -57,6 +57,11 @@ interface SettradeAccountDraft extends AccountDraft {
   pinEdit: string
 }
 
+interface WebullAccountDraft extends AccountDraft {
+  accountId: string
+  region: string
+}
+
 // ── Exchange-level form ────────────────────────────────────────────────────
 
 interface ExchangeForm {
@@ -84,6 +89,10 @@ interface SettradeForm extends ExchangeForm {
   accounts: SettradeAccountDraft[]
 }
 
+interface WebullForm extends ExchangeForm {
+  accounts: WebullAccountDraft[]
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function emptyAccount(): AccountDraft {
@@ -102,6 +111,14 @@ function emptySettradeAccount(): SettradeAccountDraft {
     accountNo: "",
     pin: "",
     pinEdit: "",
+  }
+}
+
+function emptyWebullAccount(): WebullAccountDraft {
+  return {
+    ...emptyAccount(),
+    accountId: "",
+    region: "us",
   }
 }
 
@@ -166,6 +183,14 @@ function serializeSettradeAccount(acc: SettradeAccountDraft) {
   }
 }
 
+function serializeWebullAccount(acc: WebullAccountDraft) {
+  return {
+    ...serializeAccount(acc),
+    account_id: acc.accountId,
+    region: acc.region,
+  }
+}
+
 function parseSettradeAccounts(raw: unknown): SettradeAccountDraft[] {
   if (!Array.isArray(raw)) return []
   return raw.map((item) => {
@@ -186,6 +211,23 @@ function parseSettradeAccounts(raw: unknown): SettradeAccountDraft[] {
   })
 }
 
+function parseWebullAccounts(raw: unknown): WebullAccountDraft[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => {
+    const r = asRecord(item)
+    return {
+      name: typeof r.name === "string" ? r.name : "",
+      apiKey: typeof r.api_key === "string" ? r.api_key : "",
+      apiKeyEdit: "",
+      secret: typeof r.secret === "string" ? r.secret : "",
+      secretEdit: "",
+      accountId: typeof r.account_id === "string" ? r.account_id : "",
+      region: typeof r.region === "string" && r.region !== "" ? r.region : "us",
+      proxy: typeof r.proxy === "string" ? r.proxy : "",
+    }
+  })
+}
+
 function getExchangeDisplayName(name: string): string {
   switch (name) {
     case "binance":
@@ -198,6 +240,8 @@ function getExchangeDisplayName(name: string): string {
       return "Binance TH"
     case "settrade":
       return "Settrade"
+    case "webull":
+      return "Webull"
     default:
       return name.charAt(0).toUpperCase() + name.slice(1)
   }
@@ -239,6 +283,7 @@ const SETTRADE_BROKER_LIST_URL =
   "https://developer.settrade.com/open-api/document/broker-list"
 const SETTRADE_OPEN_API_DOC_URL =
   "https://developer.settrade.com/open-api/document"
+const WEBULL_DOC_URL = "https://developer.webull.com/apis/docs"
 
 // ── Account card ───────────────────────────────────────────────────────────
 
@@ -247,33 +292,44 @@ function AccountCard({
   account,
   hasPassphrase,
   isSettrade,
+  isWebull,
   onChange,
   onRemove,
 }: {
   index: number
-  account: AccountDraft | OKXAccountDraft | SettradeAccountDraft
+  account: AccountDraft | OKXAccountDraft | SettradeAccountDraft | WebullAccountDraft
   hasPassphrase?: boolean
   isSettrade?: boolean
-  onChange: (patch: Partial<OKXAccountDraft & SettradeAccountDraft>) => void
+  isWebull?: boolean
+  onChange: (patch: Partial<OKXAccountDraft & SettradeAccountDraft & WebullAccountDraft>) => void
   onRemove: () => void
 }) {
   const { t } = useTranslation()
   const placeholder = `Account ${index + 1}`
   const okxAcc = account as OKXAccountDraft
   const stAcc = account as SettradeAccountDraft
+  const wbAcc = account as WebullAccountDraft
 
   const apiKeyLabel = isSettrade
     ? t("portfolios.settrade.api_key")
-    : t("portfolios.binance.api_key")
+    : isWebull
+      ? t("portfolios.webull.api_key")
+      : t("portfolios.binance.api_key")
   const apiKeyPlaceholder = isSettrade
     ? (account.apiKey ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.api_key_placeholder"))
-    : (account.apiKey ? t("portfolios.binance.credential_set") : t("portfolios.binance.api_key_placeholder"))
+    : isWebull
+      ? (account.apiKey ? t("portfolios.webull.credential_set") : t("portfolios.webull.api_key_placeholder"))
+      : (account.apiKey ? t("portfolios.binance.credential_set") : t("portfolios.binance.api_key_placeholder"))
   const secretLabel = isSettrade
     ? t("portfolios.settrade.secret")
-    : t("portfolios.binance.secret")
+    : isWebull
+      ? t("portfolios.webull.secret")
+      : t("portfolios.binance.secret")
   const secretPlaceholder = isSettrade
     ? (account.secret ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.secret_placeholder"))
-    : (account.secret ? t("portfolios.binance.credential_set") : t("portfolios.binance.secret_placeholder"))
+    : isWebull
+      ? (account.secret ? t("portfolios.webull.credential_set") : t("portfolios.webull.secret_placeholder"))
+      : (account.secret ? t("portfolios.binance.credential_set") : t("portfolios.binance.secret_placeholder"))
 
   return (
     <div className="border-border/60 rounded-lg border">
@@ -310,6 +366,17 @@ function AccountCard({
                 <IconInfoCircle className="size-4" />
               </a>
             )}
+            {isWebull && (
+              <a
+                href={WEBULL_DOC_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-muted-foreground hover:text-foreground"
+                title={t("portfolios.webull.doc_link")}
+              >
+                <IconInfoCircle className="size-4" />
+              </a>
+            )}
           </p>
           <div className="w-64">
             <Input
@@ -331,6 +398,17 @@ function AccountCard({
                 rel="noreferrer"
                 className="text-muted-foreground hover:text-foreground"
                 title={t("portfolios.settrade.open_api_doc_link")}
+              >
+                <IconInfoCircle className="size-4" />
+              </a>
+            )}
+            {isWebull && (
+              <a
+                href={WEBULL_DOC_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-muted-foreground hover:text-foreground"
+                title={t("portfolios.webull.doc_link")}
               >
                 <IconInfoCircle className="size-4" />
               </a>
@@ -450,6 +528,31 @@ function AccountCard({
           </>
         )}
 
+        {isWebull && (
+          <>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.webull.account_id")}</p>
+              <div className="w-64">
+                <Input
+                  value={wbAcc.accountId ?? ""}
+                  placeholder={t("portfolios.webull.account_id_placeholder")}
+                  onChange={(e) => onChange({ accountId: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.webull.region")}</p>
+              <div className="w-64">
+                <Input
+                  value={wbAcc.region ?? "us"}
+                  placeholder={t("portfolios.webull.region_placeholder")}
+                  onChange={(e) => onChange({ region: e.target.value })}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
         <div className="flex items-center justify-between px-4 py-3">
           <div>
             <p className="text-sm">{t("portfolios.proxy")}</p>
@@ -470,7 +573,7 @@ function AccountCard({
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-type AnyForm = BinanceForm | OKXForm | BitkubForm | BinanceTHForm | SettradeForm
+type AnyForm = BinanceForm | OKXForm | BitkubForm | BinanceTHForm | SettradeForm | WebullForm
 
 const EMPTY_FORM: BinanceForm = { enabled: false, testnet: false, accounts: [] }
 
@@ -487,7 +590,7 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
   const [form, setForm] = useState<AnyForm>(EMPTY_FORM)
 
   const loadData = useCallback(async () => {
-    if (!["binance", "okx", "bitkub", "binanceth", "settrade"].includes(exchangeName)) {
+    if (!["binance", "okx", "bitkub", "binanceth", "settrade", "webull"].includes(exchangeName)) {
       setFetchError(t("portfolios.notFound", { name: exchangeName }))
       setLoading(false)
       return
@@ -525,6 +628,12 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
           enabled: asBool(d.enabled),
           accounts: parseSettradeAccounts(d.accounts),
         } satisfies SettradeForm
+      } else if (exchangeName === "webull") {
+        const d = asRecord(exchangesData.webull)
+        loaded = {
+          enabled: asBool(d.enabled),
+          accounts: parseWebullAccounts(d.accounts),
+        } satisfies WebullForm
       } else {
         const d = asRecord(exchangesData.binanceth)
         loaded = {
@@ -578,9 +687,10 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
     setForm((prev) => {
       const isOKX = exchangeName === "okx"
       const isSettrade = exchangeName === "settrade"
+      const isWebull = exchangeName === "webull"
       const accounts = [
         ...(prev as BinanceForm).accounts,
-        isOKX ? emptyOKXAccount() : isSettrade ? emptySettradeAccount() : emptyAccount(),
+        isOKX ? emptyOKXAccount() : isSettrade ? emptySettradeAccount() : isWebull ? emptyWebullAccount() : emptyAccount(),
       ]
       return { ...prev, accounts }
     })
@@ -653,6 +763,16 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
             settrade: {
               enabled: f.enabled,
               accounts: f.accounts.map(serializeSettradeAccount),
+            },
+          },
+        })
+      } else if (exchangeName === "webull") {
+        const f = form as WebullForm
+        await patchAppConfig({
+          exchanges: {
+            webull: {
+              enabled: f.enabled,
+              accounts: f.accounts.map(serializeWebullAccount),
             },
           },
         })

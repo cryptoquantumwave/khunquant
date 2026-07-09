@@ -8,6 +8,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // ExchangeTotalValueTool estimates the total portfolio value in a quote currency
@@ -33,7 +34,7 @@ func (t *ExchangeTotalValueTool) Parameters() map[string]any {
 			"exchange": map[string]any{
 				"type":        "string",
 				"description": "Exchange to query (default: \"binance\")",
-				"enum":        []string{"binance", "binanceth", "bitkub", "okx", "settrade"},
+				"enum":        []string{"binance", "binanceth", "bitkub", "okx", "settrade", "webull"},
 			},
 			"account": map[string]any{
 				"type":        "string",
@@ -76,65 +77,8 @@ func (t *ExchangeTotalValueTool) Execute(ctx context.Context, args map[string]an
 	return t.executeSingle(ctx, exchangeName, accountName, walletType, quote)
 }
 
-type accountRef struct {
-	exchange string
-	account  string
-}
-
-func (t *ExchangeTotalValueTool) enabledAccounts() []accountRef {
-	var refs []accountRef
-	ex := t.cfg.Exchanges
-
-	if ex.Binance.Enabled {
-		for i, acc := range ex.Binance.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			refs = append(refs, accountRef{exchange: "binance", account: name})
-		}
-	}
-	if ex.BinanceTH.Enabled {
-		for i, acc := range ex.BinanceTH.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			refs = append(refs, accountRef{exchange: "binanceth", account: name})
-		}
-	}
-	if ex.Bitkub.Enabled {
-		for i, acc := range ex.Bitkub.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			refs = append(refs, accountRef{exchange: "bitkub", account: name})
-		}
-	}
-	if ex.OKX.Enabled {
-		for i, acc := range ex.OKX.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			refs = append(refs, accountRef{exchange: "okx", account: name})
-		}
-	}
-	if ex.Settrade.Enabled {
-		for i, acc := range ex.Settrade.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			refs = append(refs, accountRef{exchange: "settrade", account: name})
-		}
-	}
-	return refs
-}
-
 func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quote string) *ToolResult {
-	refs := t.enabledAccounts()
+	refs := broker.ListConfiguredAccounts(t.cfg)
 	if len(refs) == 0 {
 		return UserResult("No exchange accounts are configured.")
 	}
@@ -150,12 +94,12 @@ func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quo
 	var grandTotal float64
 
 	for _, ref := range refs {
-		label := ref.exchange
-		if ref.account != "" {
-			label += " (" + ref.account + ")"
+		label := ref.ProviderID
+		if ref.Account != "" {
+			label += " (" + ref.Account + ")"
 		}
 
-		ex, err := exchanges.CreateExchangeForAccount(ref.exchange, ref.account, t.cfg)
+		ex, err := exchanges.CreateExchangeForAccount(ref.ProviderID, ref.Account, t.cfg)
 		if err != nil {
 			lines = append(lines, lineItem{label: label, err: err.Error()})
 			continue

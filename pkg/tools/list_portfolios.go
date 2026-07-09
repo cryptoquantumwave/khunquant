@@ -7,6 +7,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // ListPortfoliosTool lists all enabled exchange accounts from config.
@@ -44,57 +45,8 @@ func (t *ListPortfoliosTool) Execute(_ context.Context, _ map[string]any) *ToolR
 	}
 
 	var rows []row
-
-	ex := t.cfg.Exchanges
-
-	if ex.Binance.Enabled {
-		for i, acc := range ex.Binance.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			rows = append(rows, row{exchange: "binance", account: name})
-		}
-	}
-
-	if ex.BinanceTH.Enabled {
-		for i, acc := range ex.BinanceTH.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			rows = append(rows, row{exchange: "binanceth", account: name})
-		}
-	}
-
-	if ex.Bitkub.Enabled {
-		for i, acc := range ex.Bitkub.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			rows = append(rows, row{exchange: "bitkub", account: name})
-		}
-	}
-
-	if ex.OKX.Enabled {
-		for i, acc := range ex.OKX.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			rows = append(rows, row{exchange: "okx", account: name})
-		}
-	}
-
-	if ex.Settrade.Enabled {
-		for i, acc := range ex.Settrade.Accounts {
-			name := acc.Name
-			if name == "" {
-				name = fmt.Sprintf("%d", i+1)
-			}
-			rows = append(rows, row{exchange: "settrade", account: name})
-		}
+	for _, ref := range broker.ListConfiguredAccounts(t.cfg) {
+		rows = append(rows, row{exchange: ref.ProviderID, account: ref.Account})
 	}
 
 	if len(rows) == 0 {

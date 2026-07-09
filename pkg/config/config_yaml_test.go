@@ -482,6 +482,70 @@ account1:
 	}
 }
 
+func TestWebullExchangeConfig_MarshalYAML(t *testing.T) {
+	cfg := WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{
+				ExchangeAccount: ExchangeAccount{
+					Name:   "main",
+					APIKey: *NewSecureString("app-key-123"),
+					Secret: *NewSecureString("app-secret-xyz"),
+				},
+				AccountID: "acct-1",
+				Region:    "us",
+			},
+		},
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("MarshalYAML failed: %v", err)
+	}
+
+	var m map[string]map[string]string
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		t.Fatalf("failed to unmarshal marshaled data: %v", err)
+	}
+	entry, ok := m["main"]
+	if !ok {
+		t.Fatalf("expected key 'main' in marshaled data, got: %v", m)
+	}
+	if entry["api_key"] != "app-key-123" {
+		t.Errorf("api_key = %q, want app-key-123", entry["api_key"])
+	}
+	if entry["secret"] != "app-secret-xyz" {
+		t.Errorf("secret = %q, want app-secret-xyz", entry["secret"])
+	}
+}
+
+func TestWebullExchangeConfig_UnmarshalYAML(t *testing.T) {
+	cfg := &WebullExchangeConfig{
+		Accounts: []WebullExchangeAccount{
+			{ExchangeAccount: ExchangeAccount{Name: "main"}},
+		},
+	}
+
+	nodeData := `
+main:
+  api_key: app-key-123
+  secret: app-secret-xyz
+`
+	node := &yaml.Node{}
+	if err := yaml.Unmarshal([]byte(nodeData), node); err != nil {
+		t.Fatalf("Failed to create test node: %v", err)
+	}
+
+	if err := cfg.UnmarshalYAML(node); err != nil {
+		t.Fatalf("UnmarshalYAML failed: %v", err)
+	}
+	if cfg.Accounts[0].APIKey.String() != "app-key-123" {
+		t.Errorf("APIKey = %q, want app-key-123", cfg.Accounts[0].APIKey.String())
+	}
+	if cfg.Accounts[0].Secret.String() != "app-secret-xyz" {
+		t.Errorf("Secret = %q, want app-secret-xyz", cfg.Accounts[0].Secret.String())
+	}
+}
+
 func TestChannelConfig_IsZero_TelegramEmpty(t *testing.T) {
 	cfg := TelegramConfig{
 		Token: *NewSecureString(""),

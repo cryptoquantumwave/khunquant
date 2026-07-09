@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // CreateDCAPlanTool creates a new DCA plan and schedules the recurring cron job.
@@ -28,7 +29,7 @@ func (t *CreateDCAPlanTool) Name() string { return NameCreateDCAPlan }
 func (t *CreateDCAPlanTool) Description() string {
 	return "Create a new DCA (Dollar Cost Averaging) plan.\n" +
 		"Supports buy (DCA-in) and sell (DCA-out) sides.\n" +
-		"amount_unit controls whether amount_per_order is in quote currency (crypto default) or base units (shares for Settrade stocks).\n" +
+		"amount_unit controls whether amount_per_order is in quote currency (crypto default) or base units (shares for stock brokers like Settrade and Webull).\n" +
 		"Plans execute on a fixed cron schedule; an optional trigger gates execution on indicator conditions.\n" +
 		"The trigger.expression is a boolean formula referencing indicator aliases and bar variables " +
 		"(close, open, high, low, volume, *_prev variants). Examples: " +
@@ -43,7 +44,7 @@ func (t *CreateDCAPlanTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"plan_name": map[string]any{"type": "string", "description": "Unique human-readable plan name (e.g. 'BTC RSI Dip Buy')."},
-			"provider":  map[string]any{"type": "string", "description": "Exchange/provider ID (e.g. 'bitkub', 'binance', 'settrade')."},
+			"provider":  map[string]any{"type": "string", "description": "Exchange/provider ID (e.g. 'bitkub', 'binance', 'settrade', 'webull')."},
 			"account":   map[string]any{"type": "string", "description": "Account name. Leave empty for the default account."},
 			"symbol":    map[string]any{"type": "string", "description": "Trading pair in CCXT format (e.g. 'BTC/USDT', 'PTT/THB')."},
 			"side": map[string]any{
@@ -59,9 +60,9 @@ func (t *CreateDCAPlanTool) Parameters() map[string]any {
 				"type": "string",
 				"enum": []string{"quote", "base"},
 				"description": "Unit of amount_per_order. " +
-					"'quote' (default for non-Settrade): quote-currency budget; the tool divides by current price to get the base quantity. " +
+					"'quote' (default for non-stock brokers): quote-currency budget; the tool divides by current price to get the base quantity. " +
 					"'base': base-asset quantity passed directly to CreateOrder. " +
-					"Required for Settrade stocks — use 'base' and set amount_per_order to the share count (e.g. 10 for 10 PTT shares). " +
+					"Required for stock brokers (Settrade, Webull) — use 'base' and set amount_per_order to the share count (e.g. 10 for 10 PTT shares). " +
 					"Also useful for crypto: 'DCA 0.001 BTC weekly' uses amount_unit=base.",
 			},
 			"schedule": map[string]any{
@@ -170,19 +171,33 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("side must be 'buy' or 'sell'")
 	}
 
+	// Resolve the provider up front — plans for providers that don't support
+	// order execution must be rejected here, not silently saved to fail on
+	// every scheduled fire.
+	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve provider %q: %v", providerID, err))
+	}
+	if _, ok := p.(broker.TradingProvider); !ok {
+		return ErrorResult(fmt.Sprintf("provider %q does not support order execution", providerID))
+	}
+	isStock := p.Category() == broker.CategoryStock
+
 	// Resolve amount_unit with provider-aware default.
 	amountUnit := "quote"
 	if v, ok := args["amount_unit"].(string); ok && v != "" {
 		amountUnit = v
-	} else if strings.EqualFold(providerID, "settrade") {
+	} else if isStock {
 		amountUnit = "base"
 	}
 	if amountUnit != "quote" && amountUnit != "base" {
 		return ErrorResult("amount_unit must be 'quote' or 'base'")
 	}
-	if strings.EqualFold(providerID, "settrade") && amountUnit == "quote" {
-		return ErrorResult("Settrade stocks are ordered in share units — set amount_unit='base' and amount_per_order to the number of shares (e.g. 10 for 10 shares)")
+	// Stock brokers (Settrade, Webull) require base-unit (share) ordering.
+	if isStock && amountUnit == "quote" {
+		return ErrorResult("Stock brokers are ordered in share units — set amount_unit='base' and amount_per_order to the number of shares (e.g. 10 for 10 shares)")
 	}
+	// Settrade requires whole-number shares; Webull supports fractional shares.
 	if amountUnit == "base" && strings.EqualFold(providerID, "settrade") {
 		if amountPerOrder < 1 || amountPerOrder != float64(int(amountPerOrder)) {
 			return ErrorResult("Settrade share orders must be whole numbers (e.g. amount_per_order=10)")
@@ -403,6 +418,13 @@ func parseTrigger(trigMap map[string]any) (*dca.Trigger, *ToolResult) {
 		return nil, ErrorResult(fmt.Sprintf("trigger expression error: %v", err))
 	}
 	return t, nil
+}
+
+// isStockProvider checks if a provider is a stock broker that requires base-unit (share) ordering.
+// Both Settrade and Webull are stock brokers; they require amount_unit='base' and disallow 'quote'.
+// Note: Settrade requires whole-number shares, but Webull supports fractional shares.
+func isStockProvider(providerID string) bool {
+	return strings.EqualFold(providerID, "settrade") || strings.EqualFold(providerID, "webull")
 }
 
 // amountUnitLabel returns a human-readable unit description.

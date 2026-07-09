@@ -32,10 +32,10 @@ portfolios short-circuit to live exchange data — no trade reconstruction neede
 Cross-account or single-account overview of unrealized PnL on currently held
 assets, with optional realized PnL from trade history.
 
-- `provider`: optional, omit to scan all enabled accounts (binance, bitkub, settrade, etc.)
+- `provider`: optional, omit to scan all enabled accounts (binance, bitkub, settrade, webull, etc.)
 - `account`: optional, defaults to the first configured account
-- `quote`: `"auto"` (default), `"USDT"`, or `"THB"`. `"auto"` uses each venue's
-  native quote (THB for bitkub/settrade, USDT for crypto venues)
+- `quote`: `"auto"` (default), `"USDT"`, `"THB"`, or `"USD"`. `"auto"` uses each venue's
+  native quote (THB for bitkub/settrade, USD for webull, USDT for crypto venues)
 - `assets`: optional comma-separated filter, e.g. `"BTC,ETH"` or `"PTT,KBANK"`
 - `include_realized`: optional bool (default false). Adds realized PnL from
   trade history; slower — one FetchMyTrades call per held asset
@@ -53,6 +53,8 @@ weighted-average cost basis, unrealized gain/loss, and fees paid.
 ## Notes
 
 - **Settrade**: cost basis and unrealized PnL come directly from Settrade's live
+  portfolio data — no trade reconstruction. Highly accurate.
+- **Webull**: cost basis and unrealized PnL come directly from Webull's live
   portfolio data — no trade reconstruction. Highly accurate.
 - **Bitkub**: Bitkub has no per-fill trade endpoint; trades are reconstructed
   from filled orders. Fees may be denominated in the bought asset rather than THB.

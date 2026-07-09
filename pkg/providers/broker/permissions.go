@@ -51,6 +51,15 @@ func resolveExchangeAccount(cfg *config.Config, providerID, accountName string) 
 			Secret:      acc.Secret,
 			Permissions: acc.Permissions,
 		}, acc.APIKey.String() != ""
+	case "webull":
+		acc, _ := ex.Webull.ResolveAccount(accountName)
+		// WebullExchangeAccount embeds ExchangeAccount — return it directly
+		return config.ExchangeAccount{
+			Name:        acc.Name,
+			APIKey:      acc.APIKey,
+			Secret:      acc.Secret,
+			Permissions: acc.Permissions,
+		}, acc.APIKey.String() != ""
 	}
 	return config.ExchangeAccount{}, false
 }

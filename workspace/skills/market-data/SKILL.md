@@ -56,3 +56,4 @@ List all tradeable markets on a provider.
   e.g. Binance and OKX USDT perps are `BTC/USDT:USDT`.
 - BinanceTH and Bitkub have limited market data capabilities (price feed only).
 - **Settrade (SET equity)**: use "PTT/THB" or just "PTT" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.
+- **Webull (US equity)**: use "AAPL/USD" or just "AAPL" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.

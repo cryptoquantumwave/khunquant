@@ -24,6 +24,7 @@ import (
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/bitkub"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/okx"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/settrade"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/webull"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,

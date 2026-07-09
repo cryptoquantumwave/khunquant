@@ -119,7 +119,7 @@ func (t *GetPnLSummaryTool) Execute(ctx context.Context, args map[string]any) *T
 		if q == "auto" {
 			q = nativeQuoteForProvider(ref.ProviderID)
 		}
-		wt := walletTypeForPnL(ref.ProviderID)
+		wt := walletTypeForPnL(p.Category(), ref.ProviderID)
 
 		balances, err := pp.GetWalletBalances(ctx, wt)
 		if err != nil {
@@ -162,14 +162,13 @@ func (t *GetPnLSummaryTool) Execute(ctx context.Context, args map[string]any) *T
 			r.asset = asset
 			r.qty = qty
 
-			if ref.ProviderID == "settrade" {
-				// Settrade already provides PnL fields.
+			if p.Category() == broker.CategoryStock {
+				// Stock broker adapters (Settrade, Webull) already provide PnL fields.
 				r.avgCost = parseExtraFloat(b.Extra, "avg_cost")
-				r.price = parseExtraFloat(b.Extra, "market_price")
+				r.price = parseExtraFloatAny(b.Extra, "market_price", "current_price")
 				r.mktValue = parseExtraFloat(b.Extra, "market_value")
 				r.unrealized = parseExtraFloat(b.Extra, "unrealized_pl")
-				pct := parseExtraFloat(b.Extra, "percent_profit")
-				r.unrealizedPct = pct
+				r.unrealizedPct = parseExtraFloatAny(b.Extra, "percent_profit", "percent_pnl")
 			} else {
 				// Compute from trade history.
 				var notes []string
@@ -365,16 +364,19 @@ func nativeQuoteForProvider(providerID string) string {
 	switch providerID {
 	case "bitkub", "settrade":
 		return "THB"
+	case "webull":
+		return "USD"
 	default:
 		return "USDT"
 	}
 }
 
 // walletTypeForPnL returns the appropriate wallet type for PnL balance queries.
-func walletTypeForPnL(providerID string) string {
-	switch providerID {
-	case "settrade":
+func walletTypeForPnL(category broker.AssetCategory, providerID string) string {
+	if category == broker.CategoryStock {
 		return "stock"
+	}
+	switch providerID {
 	case "okx", "binance":
 		return "all"
 	default:
@@ -391,6 +393,19 @@ func parseExtraFloat(extra map[string]string, key string) float64 {
 		return 0
 	}
 	return v
+}
+
+// parseExtraFloatAny tries each key in order and returns the value for the
+// first one present in the map, so callers can support adapters that use
+// different Extra key names for the same field (e.g. Settrade's "market_price"
+// vs Webull's "current_price").
+func parseExtraFloatAny(extra map[string]string, keys ...string) float64 {
+	for _, k := range keys {
+		if _, ok := extra[k]; ok {
+			return parseExtraFloat(extra, k)
+		}
+	}
+	return 0
 }
 
 func pnlSignStr(f float64) string {

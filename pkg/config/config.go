@@ -237,6 +237,37 @@ func (c *SettradeExchangeConfig) ResolveAccount(name string) (SettradeExchangeAc
 	return SettradeExchangeAccount{}, false
 }
 
+// WebullExchangeAccount extends ExchangeAccount with Webull-specific fields.
+// APIKey = Webull app key; Secret = Webull app secret.
+type WebullExchangeAccount struct {
+	ExchangeAccount
+	AccountID string `json:"account_id"       yaml:"-"` // Webull trading account id
+	Region    string `json:"region,omitempty" yaml:"-"` // default "us"
+}
+
+// WebullExchangeConfig holds the Webull exchange credentials and settings.
+type WebullExchangeConfig struct {
+	Enabled  bool                    `json:"enabled" env:"KHUNQUANT_EXCHANGES_WEBULL_ENABLED"`
+	Accounts []WebullExchangeAccount `json:"accounts,omitempty"`
+}
+
+// ResolveAccount returns the Webull account matching name, or the first account when name is "".
+func (c *WebullExchangeConfig) ResolveAccount(name string) (WebullExchangeAccount, bool) {
+	for i, acc := range c.Accounts {
+		effectiveName := acc.Name
+		if effectiveName == "" {
+			effectiveName = fmt.Sprintf("%d", i+1)
+		}
+		if name == "" || strings.EqualFold(effectiveName, name) {
+			if acc.Name == "" {
+				acc.Name = effectiveName
+			}
+			return acc, true
+		}
+	}
+	return WebullExchangeAccount{}, false
+}
+
 // ExchangesConfig holds configuration for all supported exchanges.
 type ExchangesConfig struct {
 	Binance   BinanceExchangeConfig   `json:"binance"`
@@ -244,6 +275,7 @@ type ExchangesConfig struct {
 	Bitkub    BitkubExchangeConfig    `json:"bitkub"`
 	BinanceTH BinanceTHExchangeConfig `json:"binanceth"`
 	Settrade  SettradeExchangeConfig  `json:"settrade"`
+	Webull    WebullExchangeConfig    `json:"webull"`
 }
 
 // BinanceExchangeConfig holds the Binance exchange credentials and settings.

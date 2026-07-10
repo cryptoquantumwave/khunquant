@@ -229,3 +229,95 @@ type WalletBalance struct {
 	WalletType string
 	Extra      map[string]string
 }
+
+// --- Options (Market Data + Trading) ---
+
+// OptionContract represents a single options contract specification.
+type OptionContract struct {
+	Underlying string // e.g. "AAPL"
+	Expiry     string // yyyy-MM-dd format
+	Strike     float64
+	OptionType string // CALL or PUT
+}
+
+// OptionQuote represents the quote data for an options contract.
+// Includes price, greeks, and open interest.
+type OptionQuote struct {
+	Contract    OptionContract
+	Symbol      string // Encoded symbol (e.g. AAPL260821C00320000)
+	Price       float64
+	Bid         float64
+	Ask         float64
+	BidSize     float64
+	AskSize     float64
+	Open        float64
+	High        float64
+	Low         float64
+	PreClose    float64
+	Change      float64
+	ChangeRatio float64
+	// Greeks
+	Delta        float64
+	Gamma        float64
+	Theta        float64
+	Vega         float64
+	Rho          float64
+	ImpVol       float64 // Implied Volatility
+	Volume       float64
+	OpenInterest float64
+	StrikePrice  float64
+	Timestamp    int64 // Unix milliseconds
+}
+
+// OptionLeg represents a single leg in an options order.
+type OptionLeg struct {
+	Side       string // buy or sell
+	Quantity   float64
+	Underlying string
+	Strike     float64
+	Expiry     string // yyyy-MM-dd
+	OptionType string // CALL or PUT
+}
+
+// OptionOrderRequest represents an options order placement request.
+type OptionOrderRequest struct {
+	Underlying  string // e.g. "AAPL"
+	Strategy    string // SINGLE for now (VERTICAL, STRADDLE, etc. deferred)
+	OrderType   string // limit, stop_loss, stop_loss_limit
+	Side        string // buy or sell
+	Quantity    float64
+	LimitPrice  *float64
+	StopPrice   *float64
+	TimeInForce string // DAY or GTC
+	Legs        []OptionLeg
+}
+
+// OptionMarketDataProvider extends Provider with options market data.
+type OptionMarketDataProvider interface {
+	Provider
+
+	// FetchOptionSnapshot returns quotes for multiple option contracts.
+	FetchOptionSnapshot(ctx context.Context, contracts []OptionContract) ([]OptionQuote, error)
+
+	// FetchOptionOHLCV returns candlestick data for an options contract.
+	// timeframe: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w (CCXT unified format)
+	FetchOptionOHLCV(ctx context.Context, contract OptionContract, timeframe string, limit int) ([]ccxt.OHLCV, error)
+}
+
+// OptionTradingProvider extends Provider with options order management.
+// Declared here but implemented in a separate task.
+type OptionTradingProvider interface {
+	Provider
+
+	// PlaceOptionOrder submits a new options order.
+	PlaceOptionOrder(ctx context.Context, req OptionOrderRequest) (ccxt.Order, error)
+
+	// CancelOptionOrder cancels an open options order by client_order_id.
+	CancelOptionOrder(ctx context.Context, clientOrderID string) (ccxt.Order, error)
+
+	// FetchOptionOrder retrieves a single options order by client_order_id.
+	FetchOptionOrder(ctx context.Context, clientOrderID string) (ccxt.Order, error)
+
+	// FetchOpenOptionOrders returns all open options orders.
+	FetchOpenOptionOrders(ctx context.Context) ([]ccxt.Order, error)
+}

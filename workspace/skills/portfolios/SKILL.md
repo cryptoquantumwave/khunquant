@@ -23,7 +23,7 @@ Retrieve asset balances for a specific exchange account.
 - `wallet_type`: depends on exchange:
   - crypto (binance, bitkub, okx): spot, funding, futures_usdt, margin, earn, all
   - settrade: `cash` (THB cash balance), `stock` (equity holdings), `all`
-  - webull: `cash` (USD cash balance), `stock` (US equity holdings), `all`
+  - webull: `cash` (USD cash balance), `stock` (US equity + ETF holdings), `option` (US option holdings), `all`
 - `asset`: optional filter by symbol (e.g. "BTC", "PTT")
 
 ### get_total_value
@@ -41,9 +41,9 @@ Estimate total portfolio value in a quote currency.
 - For price lookups and OHLCV charts on SET stocks, use the `market-data` skill with `provider: "settrade"`
 
 ## Webull Notes
-- Webull supports two wallet types: `cash` (USD balance) and `stock` (US equity holdings)
+- Webull supports three wallet types: `cash` (USD balance), `stock` (US equity + ETF holdings), and `option` (US option holdings)
 - Always use `quote: "USD"` when calling `get_total_value` for webull
-- Stock volumes are in **shares** (e.g. 100 shares of AAPL)
-- The `stock` wallet shows: avg_cost, current_price, market_value, unrealized_pl, percent_pnl per holding
-- For price lookups and OHLCV charts on US stocks, use the `market-data` skill with `provider: "webull"`
-- Webull supports portfolio queries, market data, and equity order placement (see the `trading` skill for order types and constraints)
+- Stock volumes are in **shares** (e.g. 100 shares of AAPL); option volumes are in **contracts** (1 contract = 100 shares)
+- The `stock`/`option` wallets show: avg_cost, current_price, market_value, unrealized_pl, percent_pnl per holding
+- For price lookups and OHLCV charts on US stocks/ETFs, use the `market-data` skill with `provider: "webull"`; for option quotes + greeks use the `option_quote` tool
+- Webull supports portfolio queries, market data, and order placement for equities/ETFs (see the `trading` skill) and single-leg options (see the `option_*` tools). Crypto/futures are US-only and not available on this account.

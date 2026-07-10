@@ -29,6 +29,10 @@ type Client struct {
 	tokenMu     sync.Mutex
 	token       string
 	tokenExpiry time.Time
+
+	// Category cache for ETF fallback: maps symbol to resolved category (US_STOCK or US_ETF)
+	categoryMu    sync.Mutex
+	categoryCache map[string]string // symbol -> category
 }
 
 // Option is a functional option for Client configuration.
@@ -77,10 +81,11 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 	baseURL := BaseURLForEnvironment(environment)
 
 	c := &Client{
-		baseURL:    baseURL,
-		httpClient: httpClient,
-		signer:     NewSigner(acc.APIKey.String(), acc.Secret.String()),
-		accountID:  acc.AccountID,
+		baseURL:       baseURL,
+		httpClient:    httpClient,
+		signer:        NewSigner(acc.APIKey.String(), acc.Secret.String()),
+		accountID:     acc.AccountID,
+		categoryCache: make(map[string]string),
 	}
 
 	// Register secrets for redaction in logs
@@ -212,9 +217,15 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	return fmt.Errorf("webull: %s %s: exceeded retry limit", method, path)
 }
 
-// isAuthError returns true if the response indicates an authentication/authorization error.
+// isAuthError returns true if the response indicates an authentication/authorization error
+// that should trigger a token refresh. Subscription errors (401 + "Insufficient permission")
+// are NOT retried as they are data-permission issues, not token issues.
 func isAuthError(statusCode int, apiErr ErrorResponse) bool {
 	if statusCode == 401 {
+		// Check if this is a subscription permission error (not a token error)
+		if strings.Contains(strings.ToLower(apiErr.Message), "insufficient permission") {
+			return false // Don't retry subscription errors
+		}
 		return true
 	}
 	upperCode := strings.ToUpper(apiErr.ErrorCode)
@@ -251,6 +262,115 @@ func (c *Client) invalidateToken() {
 	defer c.tokenMu.Unlock()
 	c.token = ""
 	c.tokenExpiry = time.Time{}
+}
+
+// --- Category Resolution (ETF Fallback) ---
+
+// resolveCategoryForSymbol resolves the market-data category for a symbol.
+// Tries US_STOCK first; if the response is empty or INVALID_SYMBOL, tries US_ETF.
+// Caches the resolved category per symbol to avoid repeated fallback calls.
+// This is used by FetchSnapshot and FetchInstruments which support both categories.
+func (c *Client) resolveCategoryForSymbol(ctx context.Context, symbol string) (string, error) {
+	// Check cache first
+	c.categoryMu.Lock()
+	if cat, ok := c.categoryCache[symbol]; ok {
+		c.categoryMu.Unlock()
+		return cat, nil
+	}
+	c.categoryMu.Unlock()
+
+	// Try US_STOCK first
+	snapshots, err := c.fetchSnapshotWithCategory(ctx, []string{symbol}, "US_STOCK")
+	if err == nil && len(snapshots) > 0 {
+		// US_STOCK worked, cache it
+		c.categoryMu.Lock()
+		c.categoryCache[symbol] = "US_STOCK"
+		c.categoryMu.Unlock()
+		return "US_STOCK", nil
+	}
+
+	// Check if error indicates symbol not found (INVALID_SYMBOL or empty response)
+	// Try US_ETF as fallback
+	snapshots, err = c.fetchSnapshotWithCategory(ctx, []string{symbol}, "US_ETF")
+	if err == nil && len(snapshots) > 0 {
+		// US_ETF worked, cache it
+		c.categoryMu.Lock()
+		c.categoryCache[symbol] = "US_ETF"
+		c.categoryMu.Unlock()
+		return "US_ETF", nil
+	}
+
+	// Both failed; return the US_ETF error as it's the last attempt
+	if err != nil {
+		return "", err
+	}
+	// Empty response
+	return "", fmt.Errorf("webull: no data for symbol %s (tried US_STOCK and US_ETF)", symbol)
+}
+
+// fetchSnapshotWithCategory is a private helper that fetches snapshots with an explicit category.
+func (c *Client) fetchSnapshotWithCategory(ctx context.Context, symbols []string, category string) ([]Snapshot, error) {
+	query := url.Values{}
+	query.Set("category", category)
+	query.Set("symbols", strings.Join(symbols, ","))
+	var resp []Snapshot
+	if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// fetchBarsWithCategory is a private helper that fetches bars with an explicit category.
+func (c *Client) fetchBarsWithCategory(ctx context.Context, symbol, timespan, category string, count int) ([]Bar, error) {
+	query := url.Values{}
+	query.Set("symbol", symbol)
+	query.Set("category", category)
+	query.Set("timespan", timespan)
+	query.Set("real_time_required", "false")
+	if count > 0 {
+		query.Set("count", fmt.Sprintf("%d", count))
+	}
+	var resp []Bar
+	if err := c.doRequest(ctx, http.MethodGet, endpointBars, query, nil, &resp, false); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// resolveCategoryForBars resolves the market-data category for bars.
+// Similar to resolveCategoryForSymbol, uses cached resolution for efficiency.
+func (c *Client) resolveCategoryForBars(ctx context.Context, symbol string) (string, error) {
+	// Check cache first
+	c.categoryMu.Lock()
+	if cat, ok := c.categoryCache[symbol]; ok {
+		c.categoryMu.Unlock()
+		return cat, nil
+	}
+	c.categoryMu.Unlock()
+
+	// Try US_STOCK first
+	bars, err := c.fetchBarsWithCategory(ctx, symbol, "D", "US_STOCK", 1)
+	if err == nil && len(bars) > 0 {
+		c.categoryMu.Lock()
+		c.categoryCache[symbol] = "US_STOCK"
+		c.categoryMu.Unlock()
+		return "US_STOCK", nil
+	}
+
+	// Try US_ETF fallback
+	bars, err = c.fetchBarsWithCategory(ctx, symbol, "D", "US_ETF", 1)
+	if err == nil && len(bars) > 0 {
+		c.categoryMu.Lock()
+		c.categoryCache[symbol] = "US_ETF"
+		c.categoryMu.Unlock()
+		return "US_ETF", nil
+	}
+
+	// Both failed
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("webull: no bar data for symbol %s (tried US_STOCK and US_ETF)", symbol)
 }
 
 // --- High-level API methods ---
@@ -301,13 +421,15 @@ func (c *Client) FetchPositions(ctx context.Context) ([]Position, error) {
 
 // FetchInstruments fetches instrument metadata by symbols.
 // If symbols is empty, fetches all tradable instruments (pagination required).
+// Supports both US_STOCK and US_ETF categories via fallback resolution.
 //
-// TODO(webull-multiasset): market-data category is pinned to US_STOCK here and in
-// FetchSnapshot/FetchBars. Webull also exposes crypto/futures/option market data
-// (get_crypto_bars, get_futures_bars, option-historical-bars — see
-// docs/webull-api-spec.md); parameterize `category`/endpoint when those land.
+// TODO(webull-multiasset): instrument endpoint is pinned to US_STOCK category here.
+// Webull also exposes crypto/futures/option markets; parameterize `category`
+// when those land (see docs/webull-api-spec.md).
 func (c *Client) FetchInstruments(ctx context.Context, symbols []string) ([]Instrument, error) {
 	query := url.Values{}
+	// Instruments endpoint only supports US_STOCK category per API spec;
+	// ETF instruments may need to be fetched separately or via category parameterization in the future.
 	query.Set("category", "US_STOCK")
 	if len(symbols) > 0 {
 		query.Set("symbols", strings.Join(symbols, ","))
@@ -321,24 +443,52 @@ func (c *Client) FetchInstruments(ctx context.Context, symbols []string) ([]Inst
 
 // FetchSnapshot fetches snapshot (price) data for multiple symbols.
 // symbols: comma-separated or array of symbols (max 100)
+// Supports both US_STOCK and US_ETF categories via automatic fallback resolution.
+// The resolved category is cached per symbol for efficiency.
 func (c *Client) FetchSnapshot(ctx context.Context, symbols []string) ([]Snapshot, error) {
-	query := url.Values{}
-	query.Set("category", "US_STOCK")
-	query.Set("symbols", strings.Join(symbols, ","))
-	var resp []Snapshot
-	if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
-		return nil, fmt.Errorf("webull: FetchSnapshot: %w", err)
+	if len(symbols) == 0 {
+		return []Snapshot{}, nil
 	}
-	return resp, nil
+
+	// Group symbols by resolved category
+	categoryMap := make(map[string][]string)
+	for _, sym := range symbols {
+		cat, err := c.resolveCategoryForSymbol(ctx, sym)
+		if err != nil {
+			return nil, fmt.Errorf("webull: FetchSnapshot: resolve category for %s: %w", sym, err)
+		}
+		categoryMap[cat] = append(categoryMap[cat], sym)
+	}
+
+	// Fetch snapshots for each category
+	var allSnapshots []Snapshot
+	for category, syms := range categoryMap {
+		query := url.Values{}
+		query.Set("category", category)
+		query.Set("symbols", strings.Join(syms, ","))
+		var resp []Snapshot
+		if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
+			return nil, fmt.Errorf("webull: FetchSnapshot: %w", err)
+		}
+		allSnapshots = append(allSnapshots, resp...)
+	}
+	return allSnapshots, nil
 }
 
 // FetchBars fetches candlestick bars for a symbol.
 // timespan: M1, M5, M15, M30, M60, M120, M240, D, W, M, Y
 // count: number of bars (1-1200, or 1-1650 for M1; default 200)
+// Supports both US_STOCK and US_ETF categories via automatic fallback resolution.
+// The resolved category is cached per symbol for efficiency.
 func (c *Client) FetchBars(ctx context.Context, symbol, timespan string, count int) ([]Bar, error) {
+	category, err := c.resolveCategoryForBars(ctx, symbol)
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchBars %s: resolve category: %w", symbol, err)
+	}
+
 	query := url.Values{}
 	query.Set("symbol", symbol)
-	query.Set("category", "US_STOCK")
+	query.Set("category", category)
 	query.Set("timespan", timespan)
 	query.Set("real_time_required", "false")
 	if count > 0 {
@@ -347,6 +497,59 @@ func (c *Client) FetchBars(ctx context.Context, symbol, timespan string, count i
 	var resp []Bar
 	if err := c.doRequest(ctx, http.MethodGet, endpointBars, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchBars %s: %w", symbol, err)
+	}
+	return resp, nil
+}
+
+// --- Options Market Data ---
+
+// FetchOptionSnapshot fetches snapshot (quote) data for multiple option contracts.
+// encodedSymbols: OCC-encoded symbols (e.g., AAPL260821C00320000)
+// Returns option snapshot DTOs with price and greeks.
+// Note: option market data requires a US_OPTION quote subscription in production.
+// A 401 error with "Insufficient permission, please subscribe to US_OPTION quotes"
+// indicates the subscription is required; this is NOT a token auth failure.
+func (c *Client) FetchOptionSnapshot(ctx context.Context, encodedSymbols []string) ([]OptionSnapshotDTO, error) {
+	if len(encodedSymbols) == 0 {
+		return []OptionSnapshotDTO{}, nil
+	}
+
+	query := url.Values{}
+	query.Set("category", "US_OPTION")
+	query.Set("symbols", strings.Join(encodedSymbols, ","))
+	var resp []OptionSnapshotDTO
+	if err := c.doRequest(ctx, http.MethodGet, endpointOptionSnapshot, query, nil, &resp, false); err != nil {
+		// Check if error is a subscription error (401 + Insufficient permission message)
+		var apiErr ErrorResponse
+		json.Unmarshal([]byte(err.Error()), &apiErr) // best effort
+		if strings.Contains(err.Error(), "Insufficient permission") && strings.Contains(err.Error(), "US_OPTION") {
+			return nil, fmt.Errorf("webull: option market data requires a US_OPTION quote subscription: %w", err)
+		}
+		return nil, fmt.Errorf("webull: FetchOptionSnapshot: %w", err)
+	}
+	return resp, nil
+}
+
+// FetchOptionBars fetches candlestick bars for an option contract.
+// encodedSymbol: OCC-encoded symbol (e.g., AAPL260821C00320000)
+// timespan: M1, M5, M15, M30, M60, M120, M240, D, W, M, Y
+// count: number of bars (1-1200 or 1-1650 for M1; default 200)
+func (c *Client) FetchOptionBars(ctx context.Context, encodedSymbol, timespan string, count int) ([]OptionBarDTO, error) {
+	query := url.Values{}
+	query.Set("symbol", encodedSymbol)
+	query.Set("category", "US_OPTION")
+	query.Set("timespan", timespan)
+	query.Set("real_time_required", "false")
+	if count > 0 {
+		query.Set("count", fmt.Sprintf("%d", count))
+	}
+	var resp []OptionBarDTO
+	if err := c.doRequest(ctx, http.MethodGet, endpointOptionBars, query, nil, &resp, false); err != nil {
+		// Check if error is a subscription error
+		if strings.Contains(err.Error(), "Insufficient permission") && strings.Contains(err.Error(), "US_OPTION") {
+			return nil, fmt.Errorf("webull: option market data requires a US_OPTION quote subscription: %w", err)
+		}
+		return nil, fmt.Errorf("webull: FetchOptionBars %s: %w", encodedSymbol, err)
 	}
 	return resp, nil
 }

@@ -21,9 +21,13 @@ const (
 	// Instrument endpoints
 	endpointInstrumentStockList = "/openapi/instrument/stock/list"
 
-	// Market data endpoints
+	// Market data endpoints (equity/ETF)
 	endpointSnapshot = "/openapi/market-data/stock/snapshot"
 	endpointBars     = "/openapi/market-data/stock/bars"
+
+	// Market data endpoints (options)
+	endpointOptionSnapshot = "/openapi/market-data/option/snapshot"
+	endpointOptionBars     = "/openapi/market-data/option/bars"
 
 	// Trading endpoints (add as constants for future implementation)
 	endpointOrderPlace   = "/openapi/trade/order/place"

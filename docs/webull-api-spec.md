@@ -872,6 +872,27 @@ All calls returned **HTTP 200** with the Go signer described above (whole-string
 - **`client_order_id` is the round-trip key** for detail/cancel (NOT order_id) → expose it as `ccxt.Order.Id`.
 - Resting LIMIT order status = `SUBMITTED` (→ ccxt "open").
 
+## ✅ Options + ETF recon (2026-07-10, same sandbox) — for the options/ETF phase
+
+- **Options TRADING single-leg — VERIFIED (place→open→cancel all 200).** Order body:
+  `{account_id, new_orders:[{client_order_id, combo_type:NORMAL, option_strategy:SINGLE,
+  order_type:LIMIT, limit_price, quantity, side:BUY, time_in_force:DAY, entrust_type:QTY,
+  instrument_type:OPTION, market:US, symbol:<underlying>, legs:[{side,quantity,symbol:<underlying>,
+  strike_price,option_expire_date(yyyy-MM-dd),instrument_type:OPTION,option_type:CALL|PUT,
+  market:US}]}]}`. Response `{client_order_id, order_id}`.
+  - `support_trading_session` is **NOT required for options** (I omitted it; server defaulted `CORE`). Unlike equities.
+  - `open`/`detail` leg echo adds: `option_category:AMERICAN`, **`option_contract_multiplier:"100"`**,
+    `option_contract_deliverable:"100"`, `expiration_type:PM`, `option_strategy:SINGLE`,
+    `position_intent:BUY_TO_OPEN` (server-inferred — don't send).
+  - **Cost = limit_price × 100 × qty** (multiplier 100): preview `estimated_cost="100.00"` for qty1 @ limit 1.00.
+  - Order types LIMIT|STOP_LOSS|STOP_LOSS_LIMIT (no MARKET); TIF DAY|GTC (SELL day-only, GTC buy-only).
+- **Option MARKET DATA (snapshot/greeks) is SUBSCRIPTION-GATED:** `401 "Insufficient permission,
+  please subscribe to US_OPTION quotes."` — cannot verify greeks in sandbox; needs a US_OPTION
+  market-data subscription in prod. Implement per docs; document the subscription requirement.
+- **ETF market data NOT sandbox-verifiable:** sandbox market data is restricted to AAPL only
+  (`403 INVALID_SYMBOL "Only AAPL is allowed"` for SPY under both US_STOCK and US_ETF). Implement
+  the US_STOCK→US_ETF category fallback per docs; verify against a real (prod) account.
+
 **Refinements to record:**
 - **`support_trading_session` is REQUIRED for equity orders** (value `CORE`); omitting → 417 `OAUTH_OPENAPI_PARAM_ERR "invalid support_trading_session"`. Order enum = ALL|CORE|NIGHT (distinct from market-data `trading_sessions` = PRE|RTH|ATH|OVN).
 - **Positions real DTO** (`/openapi/assets/positions`): `{currency, quantity, cost, proportion, position_id, symbol, instrument_type, cost_price, last_price, market_value, unrealized_profit_loss, unrealized_profit_loss_rate, day_profit_loss, day_realized_profit_loss}`.

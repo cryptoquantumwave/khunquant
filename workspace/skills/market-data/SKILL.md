@@ -56,4 +56,5 @@ List all tradeable markets on a provider.
   e.g. Binance and OKX USDT perps are `BTC/USDT:USDT`.
 - BinanceTH and Bitkub have limited market data capabilities (price feed only).
 - **Settrade (SET equity)**: use "PTT/THB" or just "PTT" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.
-- **Webull (US equity)**: use "AAPL/USD" or just "AAPL" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.
+- **Webull (US equity)**: use "AAPL/USD" or just "AAPL" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported. ETFs (SPY, VOO, …) work with the same tools (the provider resolves the US_STOCK/US_ETF category automatically).
+- **Webull options**: use the `option_quote` tool (not `get_ticker`) — params `underlying`, `expiry` (yyyy-MM-dd), `strike`, `option_type` (`CALL`|`PUT`). Returns price, bid/ask, and greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. **Requires a US_OPTION market-data subscription** on the Webull account — without it the call returns a clear "subscribe to US_OPTION quotes" error.

@@ -150,11 +150,11 @@ func TestListConfiguredAccounts_Settrade(t *testing.T) {
 	cfg := &config.Config{
 		Exchanges: config.ExchangesConfig{
 			Settrade: config.SettradeExchangeConfig{
-				Enabled:  true,
+				Enabled: true,
 				Accounts: []config.SettradeExchangeAccount{
-				{ExchangeAccount: config.ExchangeAccount{Name: "main"}},
-				{},
-			},
+					{ExchangeAccount: config.ExchangeAccount{Name: "main"}},
+					{},
+				},
 			},
 		},
 	}

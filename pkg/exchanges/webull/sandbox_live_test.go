@@ -113,4 +113,44 @@ func TestSandboxLive(t *testing.T) {
 		t.Fatalf("CancelOrder %s: %v", *order.Id, err)
 	}
 	t.Logf("CancelOrder %s: OK", *order.Id)
+
+	// --- Options: snapshot (subscription-gated → log only) + single-leg lifecycle ---
+	contract := broker.OptionContract{Underlying: "AAPL", Expiry: "2026-08-21", Strike: 320, OptionType: "CALL"}
+	if omd, ok := interface{}(a).(broker.OptionMarketDataProvider); ok {
+		if quotes, qerr := omd.FetchOptionSnapshot(ctx, []broker.OptionContract{contract}); qerr != nil {
+			t.Logf("FetchOptionSnapshot (subscription-gated in sandbox, non-fatal): %v", qerr)
+		} else {
+			t.Logf("FetchOptionSnapshot: %d quotes (e.g. %+v)", len(quotes), quotes)
+		}
+	}
+
+	otp, ok := interface{}(a).(broker.OptionTradingProvider)
+	if !ok {
+		t.Fatal("adapter does not implement broker.OptionTradingProvider")
+	}
+	optLimit := 1.00
+	optReq := broker.OptionOrderRequest{
+		Underlying: "AAPL", Strategy: "SINGLE", OrderType: "limit", Side: "buy",
+		Quantity: 1, LimitPrice: &optLimit, TimeInForce: "DAY",
+		Legs: []broker.OptionLeg{{Side: "buy", Quantity: 1, Underlying: "AAPL", Strike: 320, Expiry: "2026-08-21", OptionType: "CALL"}},
+	}
+	optOrder, err := otp.PlaceOptionOrder(ctx, optReq)
+	if err != nil {
+		t.Fatalf("PlaceOptionOrder: %v", err)
+	}
+	if optOrder.Id == nil || *optOrder.Id == "" {
+		t.Fatal("PlaceOptionOrder returned empty Id")
+	}
+	t.Logf("PlaceOptionOrder placed: id=%s info=%v", *optOrder.Id, optOrder.Info)
+
+	optOpen, err := otp.FetchOpenOptionOrders(ctx)
+	if err != nil {
+		t.Fatalf("FetchOpenOptionOrders: %v", err)
+	}
+	t.Logf("FetchOpenOptionOrders: %d open option orders", len(optOpen))
+
+	if _, err := otp.CancelOptionOrder(ctx, *optOrder.Id); err != nil {
+		t.Fatalf("CancelOptionOrder %s: %v", *optOrder.Id, err)
+	}
+	t.Logf("CancelOptionOrder %s: OK", *optOrder.Id)
 }

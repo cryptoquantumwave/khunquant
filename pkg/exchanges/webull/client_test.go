@@ -566,3 +566,230 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+// TestETFFallback verifies that FetchSnapshot falls back from US_STOCK to US_ETF
+// when the stock category returns no data.
+func TestETFFallback(t *testing.T) {
+	callCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/auth/token/create" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{
+				Token:   "test-token",
+				Expires: 9999999999999,
+				Status:  "NORMAL",
+			})
+		} else if r.URL.Path == "/openapi/market-data/stock/snapshot" {
+			callCount++
+			category := r.URL.Query().Get("category")
+			if category == "US_STOCK" {
+				// First call: US_STOCK returns empty (symbol not found)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]Snapshot{})
+			} else if category == "US_ETF" {
+				// Second call: US_ETF returns data
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]Snapshot{
+					{
+						Symbol:        "SPY",
+						InstrumentID:  "123456",
+						Price:         "450.00",
+						PreClose:      "445.00",
+						Open:          "446.00",
+						High:          "451.00",
+						Low:           "445.50",
+						Close:         "450.00",
+						Volume:        "1000000",
+						Change:        "5.00",
+						ChangeRatio:   "0.0112",
+						Bid:           "449.99",
+						BidSize:       "100000",
+						Ask:           "450.01",
+						AskSize:       "100000",
+						Turnover:      "450000000",
+						LastTradeTime: 1234567890000,
+						QuoteTime:     1234567890000,
+						ListStatus:    "OC",
+					},
+				})
+			}
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	snapshots, err := client.FetchSnapshot(testContext(), []string{"SPY"})
+	if err != nil {
+		t.Fatalf("FetchSnapshot failed: %v", err)
+	}
+
+	if len(snapshots) != 1 {
+		t.Errorf("expected 1 snapshot, got %d", len(snapshots))
+	}
+	if snapshots[0].Symbol != "SPY" {
+		t.Errorf("Symbol mismatch: expected SPY, got %s", snapshots[0].Symbol)
+	}
+	if snapshots[0].Price != "450.00" {
+		t.Errorf("Price mismatch: expected 450.00, got %s", snapshots[0].Price)
+	}
+
+	// Verify that both US_STOCK and US_ETF were tried (2 resolution calls during first snapshot fetch)
+	if callCount < 2 {
+		t.Errorf("expected at least 2 snapshot calls (US_STOCK fallback to US_ETF), got %d", callCount)
+	}
+}
+
+// TestOptionSnapshot verifies that FetchOptionSnapshot correctly parses option market data.
+func TestOptionSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/auth/token/create" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{
+				Token:   "test-token",
+				Expires: 9999999999999,
+				Status:  "NORMAL",
+			})
+		} else if r.URL.Path == "/openapi/market-data/option/snapshot" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]OptionSnapshotDTO{
+				{
+					Symbol:        "AAPL260821C00320000",
+					InstrumentID:  "OPT001",
+					Price:         "5.50",
+					Bid:           "5.45",
+					Ask:           "5.55",
+					BidSize:       "10",
+					AskSize:       "10",
+					Open:          "5.25",
+					High:          "6.00",
+					Low:           "5.00",
+					Close:         "5.50",
+					PreClose:      "5.40",
+					Change:        "0.10",
+					ChangeRatio:   "0.0185",
+					Delta:         "0.65",
+					Gamma:         "0.03",
+					Theta:         "-0.05",
+					Vega:          "0.20",
+					Rho:           "0.10",
+					ImpVol:        "0.25",
+					Volume:        "5000",
+					OpenInterest:  "50000",
+					StrikePrice:   "320.00",
+					LastTradeTime: 1234567890000,
+					QuoteTime:     1234567890000,
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	snapshots, err := client.FetchOptionSnapshot(testContext(), []string{"AAPL260821C00320000"})
+	if err != nil {
+		t.Fatalf("FetchOptionSnapshot failed: %v", err)
+	}
+
+	if len(snapshots) != 1 {
+		t.Errorf("expected 1 snapshot, got %d", len(snapshots))
+	}
+
+	snap := snapshots[0]
+	if snap.Symbol != "AAPL260821C00320000" {
+		t.Errorf("Symbol mismatch: expected AAPL260821C00320000, got %s", snap.Symbol)
+	}
+	if snap.Price != "5.50" {
+		t.Errorf("Price mismatch: expected 5.50, got %s", snap.Price)
+	}
+	if snap.Delta != "0.65" {
+		t.Errorf("Delta mismatch: expected 0.65, got %s", snap.Delta)
+	}
+	if snap.ImpVol != "0.25" {
+		t.Errorf("ImpVol mismatch: expected 0.25, got %s", snap.ImpVol)
+	}
+}
+
+// TestOptionSubscriptionError verifies that subscription errors are NOT retried as auth failures.
+func TestOptionSubscriptionError(t *testing.T) {
+	tokenCallCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/auth/token/create" {
+			tokenCallCount++
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{
+				Token:   "test-token",
+				Expires: 9999999999999,
+				Status:  "NORMAL",
+			})
+		} else if r.URL.Path == "/openapi/market-data/option/snapshot" {
+			// Return 401 with subscription error message
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Message:   "Insufficient permission, please subscribe to US_OPTION quotes.",
+				ErrorCode: "OAUTH_PERMISSION_DENIED",
+			})
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	_, err = client.FetchOptionSnapshot(testContext(), []string{"AAPL260821C00320000"})
+	if err == nil {
+		t.Fatalf("expected error for subscription error, got nil")
+	}
+
+	// Verify the error message contains the subscription error
+	if !contains(err.Error(), "US_OPTION quote subscription") {
+		t.Errorf("error should mention subscription requirement, got: %s", err.Error())
+	}
+
+	// Verify that token was only created once (no retry)
+	// Initial token creation + 1 call to snapshot = tokenCallCount should be 1
+	if tokenCallCount != 1 {
+		t.Errorf("expected token to be created once (no retry on subscription error), got %d calls", tokenCallCount)
+	}
+}

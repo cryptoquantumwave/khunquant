@@ -4,6 +4,25 @@ Head of Engineering: Opus 4.8 (integrator/reviewer). Implementation fanned out t
 Scope: **read-only + market data** (Portfolio + MarketData providers; no trading yet). Minimal wiring.
 Plan: `~/.claude/plans/let-s-design-the-technical-reflective-wozniak.md`.
 
+## Wave 4 — ETF coverage + Options (read + single-leg trading) — ✅ COMPLETE
+
+Scope correction: crypto/futures were planned but **dropped** — they are US-only Webull products
+(Webull Crypto LLC / Webull Futures), unavailable on the user's **Webull Thailand** account, which
+trades US equities, ETFs, and options. Sandbox recon confirmed: single-leg option **trading** works
+(place→open→cancel verified); option **market data (greeks) is subscription-gated** (US_OPTION);
+**ETF market data** isn't sandbox-testable (sandbox = AAPL-only) — implemented per docs, prod-verify.
+
+| Phase | Owner | Status | Notes |
+|---|---|---|---|
+| **E — ETF market-data category** | sonnet | ✅ approved | `FetchSnapshot`/`FetchBars` resolve US_STOCK→US_ETF fallback (cached per symbol). ETF orders/positions already covered (instrument_type=EQUITY). |
+| **O1 — OptionsProvider read** | sonnet | ✅ approved | `broker.OptionMarketDataProvider`/`OptionTradingProvider` + option DTOs; OCC encoded-symbol builder; option snapshot/bars; `option` wallet (positions filtered by instrument_type; **`stock` wallet now filters EQUITY**). Subscription-401 excluded from token-retry. |
+| **O2 — single-leg trading + tools** | sonnet + opus | ✅ approved | `PlaceOptionOrder`/Cancel/Get/OpenOrders (single-leg, no MARKET, GTC buy-only, ×100 multiplier); tools `option_quote`/`option_create_order`/`option_cancel_order`/`option_get_order`/`option_open_orders` (registered in instance.go, safety gates). **Integrator added the sandbox option lifecycle the agent skipped** → verified place→open→cancel via the real Go client. `snapshot` positional→by-encoded-symbol match hardened. |
+| **O3 — skills + docs** | opus | ✅ done | trading/market-data/portfolios SKILL.md updated (option tools, `option` wallet, ETF, subscription note); this tracker; `docs/webull-api-spec.md` recon section; memory. |
+
+Verified live (build-tagged `sandbox_live_test.go`): equity + **option** place→open→cancel through
+the compiled adapter; option wallet shows real OPTION positions; snapshot returns the clean
+subscription-gated error. Full suite `go test ./...` → 81 pkg ok. Signer KAT unchanged.
+
 ## Status legend
 todo · in-progress · in-review · approved · blocked
 

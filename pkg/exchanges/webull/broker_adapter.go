@@ -128,7 +128,7 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 		return result, nil
 
 	case "stock":
-		// Stock wallet includes equity holdings
+		// Stock wallet includes EQUITY holdings only
 		positions, err := a.client.FetchPositions(ctx)
 		if err != nil {
 			return nil, err
@@ -136,6 +136,10 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 
 		result := make([]broker.WalletBalance, 0, len(positions))
 		for _, p := range positions {
+			// Only include EQUITY positions in stock wallet
+			if p.InstrumentType != "EQUITY" {
+				continue
+			}
 			qty := parseFloat(p.Quantity)
 			if qty > 0 {
 				extra := map[string]string{
@@ -158,8 +162,43 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 		}
 		return result, nil
 
+	case "option":
+		// Option wallet includes OPTION positions
+		positions, err := a.client.FetchPositions(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		result := make([]broker.WalletBalance, 0, len(positions))
+		for _, p := range positions {
+			// Only include OPTION positions in option wallet
+			if p.InstrumentType != "OPTION" {
+				continue
+			}
+			qty := parseFloat(p.Quantity)
+			if qty > 0 {
+				extra := map[string]string{
+					"avg_cost":      p.CostPrice,
+					"current_price": p.LastPrice,
+					"market_value":  p.MarketValue,
+					"unrealized_pl": p.UnrealizedProfitLoss,
+					"percent_pnl":   p.UnrealizedProfitLossRate,
+				}
+				result = append(result, broker.WalletBalance{
+					Balance: broker.Balance{
+						Asset:  p.Symbol,
+						Free:   qty,
+						Locked: 0,
+					},
+					WalletType: "option",
+					Extra:      extra,
+				})
+			}
+		}
+		return result, nil
+
 	case "all":
-		// Aggregate cash + stock
+		// Aggregate cash + stock + option
 		cash, err := a.GetWalletBalances(ctx, "cash")
 		if err != nil {
 			return nil, err
@@ -168,10 +207,14 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 		if err != nil {
 			return nil, err
 		}
-		return append(cash, stocks...), nil
+		options, err := a.GetWalletBalances(ctx, "option")
+		if err != nil {
+			return nil, err
+		}
+		return append(append(cash, stocks...), options...), nil
 
 	default:
-		return nil, fmt.Errorf("webull: unsupported wallet type %q (use \"cash\", \"stock\", or \"all\")", walletType)
+		return nil, fmt.Errorf("webull: unsupported wallet type %q (use \"cash\", \"stock\", \"option\", or \"all\")", walletType)
 	}
 }
 
@@ -205,8 +248,7 @@ func (a *webullAdapter) FetchPrice(ctx context.Context, asset, quote string) (fl
 }
 
 func (a *webullAdapter) SupportedWalletTypes() []string {
-	// TODO(webull-multiasset): add a "crypto" wallet when Webull crypto support lands.
-	return []string{"cash", "stock"}
+	return []string{"cash", "stock", "option"}
 }
 
 // --- broker.MarketDataProvider ---
@@ -296,6 +338,126 @@ func (a *webullAdapter) FetchOHLCV(ctx context.Context, symbol, timeframe string
 	}
 
 	// Reverse to oldest-first
+	for i := 0; i < len(out)/2; i++ {
+		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
+	}
+
+	return out, nil
+}
+
+// --- broker.OptionMarketDataProvider ---
+
+// FetchOptionSnapshot fetches quotes for multiple option contracts.
+// Builds OCC-encoded symbols from the contracts and fetches market data.
+// Matches snapshots to contracts by encoded symbol (not position) to handle
+// API omissions of unknown symbols gracefully.
+func (a *webullAdapter) FetchOptionSnapshot(ctx context.Context, contracts []broker.OptionContract) ([]broker.OptionQuote, error) {
+	if len(contracts) == 0 {
+		return []broker.OptionQuote{}, nil
+	}
+
+	// Build encoded symbols and map them to contracts
+	contractBySymbol := make(map[string]broker.OptionContract)
+	encodedSymbols := make([]string, 0, len(contracts))
+	for _, c := range contracts {
+		encoded := OCCSymbol(c)
+		if encoded == "" {
+			return nil, fmt.Errorf("webull: failed to encode option contract for %s", c.Underlying)
+		}
+		encodedSymbols = append(encodedSymbols, encoded)
+		contractBySymbol[encoded] = c
+	}
+
+	// Fetch snapshots
+	snapshots, err := a.client.FetchOptionSnapshot(ctx, encodedSymbols)
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchOptionSnapshot: %w", err)
+	}
+
+	// Convert DTOs to broker.OptionQuote, matching by encoded symbol
+	result := make([]broker.OptionQuote, 0, len(snapshots))
+	for _, snap := range snapshots {
+		// Lookup contract by snapshot symbol (should be encoded OCC format)
+		contract, ok := contractBySymbol[snap.Symbol]
+		if !ok {
+			// Symbol not in our request; skip it (API returned unexpected symbol)
+			continue
+		}
+
+		oq := broker.OptionQuote{
+			Contract:     contract,
+			Symbol:       snap.Symbol,
+			Price:        parseFloat(snap.Price),
+			Bid:          parseFloat(snap.Bid),
+			Ask:          parseFloat(snap.Ask),
+			BidSize:      parseFloat(snap.BidSize),
+			AskSize:      parseFloat(snap.AskSize),
+			Open:         parseFloat(snap.Open),
+			High:         parseFloat(snap.High),
+			Low:          parseFloat(snap.Low),
+			PreClose:     parseFloat(snap.PreClose),
+			Change:       parseFloat(snap.Change),
+			ChangeRatio:  parseFloat(snap.ChangeRatio),
+			Delta:        parseFloat(snap.Delta),
+			Gamma:        parseFloat(snap.Gamma),
+			Theta:        parseFloat(snap.Theta),
+			Vega:         parseFloat(snap.Vega),
+			Rho:          parseFloat(snap.Rho),
+			ImpVol:       parseFloat(snap.ImpVol),
+			Volume:       parseFloat(snap.Volume),
+			OpenInterest: parseFloat(snap.OpenInterest),
+			StrikePrice:  parseFloat(snap.StrikePrice),
+			Timestamp:    snap.LastTradeTime,
+		}
+		result = append(result, oq)
+	}
+
+	return result, nil
+}
+
+// FetchOptionOHLCV fetches candlestick data for an options contract.
+func (a *webullAdapter) FetchOptionOHLCV(ctx context.Context, contract broker.OptionContract, timeframe string, limit int) ([]ccxt.OHLCV, error) {
+	timespan, ok := webullTimeframe[timeframe]
+	if !ok {
+		timespan = "D"
+	}
+
+	encoded := OCCSymbol(contract)
+	if encoded == "" {
+		return nil, fmt.Errorf("webull: failed to encode option contract for %s", contract.Underlying)
+	}
+
+	bars, err := a.client.FetchOptionBars(ctx, encoded, timespan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchOptionOHLCV %s: %w", encoded, err)
+	}
+
+	// Convert bars to OHLCV, oldest-first
+	out := make([]ccxt.OHLCV, len(bars))
+	for i, b := range bars {
+		// Parse bar time (ISO8601 format: "2026-07-09T04:00:00.000+0000")
+		barTime, err := time.Parse("2006-01-02T15:04:05.000-0700", b.Time)
+		if err != nil {
+			barTime = time.Now()
+		}
+
+		o := parseFloat(b.Open)
+		h := parseFloat(b.High)
+		l := parseFloat(b.Low)
+		c := parseFloat(b.Close)
+		v := parseFloat(b.Volume)
+
+		out[i] = ccxt.OHLCV{
+			Timestamp: barTime.UnixMilli(),
+			Open:      o,
+			High:      h,
+			Low:       l,
+			Close:     c,
+			Volume:    v,
+		}
+	}
+
+	// Reverse to oldest-first (bars come newest-first from Webull)
 	for i := 0; i < len(out)/2; i++ {
 		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
 	}
@@ -573,6 +735,205 @@ func (a *webullAdapter) FetchMyTrades(_ context.Context, _ string, _ *int64, _ i
 	return nil, fmt.Errorf("webull: FetchMyTrades is not available via the OpenAPI (equities v1)")
 }
 
+// --- broker.OptionTradingProvider (Single-leg options) ---
+
+// PlaceOptionOrder submits a new single-leg options order.
+// Validates order type, side, TIF, and enforces single-leg constraint.
+func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionOrderRequest) (ccxt.Order, error) {
+	// Validate strategy (only SINGLE supported)
+	strategy := req.Strategy
+	if strategy == "" {
+		strategy = "SINGLE"
+	}
+	if strategy != "SINGLE" {
+		return ccxt.Order{}, fmt.Errorf("webull: only single-leg options orders are supported (got strategy %q)", strategy)
+	}
+
+	// Validate order type: only limit, stop_loss, stop_loss_limit (reject market, take_profit)
+	orderTypeUpper := strings.ToUpper(req.OrderType)
+	switch orderTypeUpper {
+	case "LIMIT":
+		if req.LimitPrice == nil {
+			return ccxt.Order{}, fmt.Errorf("webull: limit_price is required for LIMIT option orders")
+		}
+	case "STOP_LOSS":
+		if req.StopPrice == nil {
+			return ccxt.Order{}, fmt.Errorf("webull: stop_price is required for STOP_LOSS option orders")
+		}
+	case "STOP_LOSS_LIMIT":
+		if req.LimitPrice == nil || req.StopPrice == nil {
+			return ccxt.Order{}, fmt.Errorf("webull: both limit_price and stop_price are required for STOP_LOSS_LIMIT option orders")
+		}
+	case "MARKET", "TAKE_PROFIT":
+		return ccxt.Order{}, fmt.Errorf("webull: order type %q is not supported for options (use LIMIT, STOP_LOSS, or STOP_LOSS_LIMIT)", orderTypeUpper)
+	default:
+		return ccxt.Order{}, fmt.Errorf("webull: unsupported option order type %q", orderTypeUpper)
+	}
+
+	// Validate side
+	sideUpper := strings.ToUpper(req.Side)
+	if sideUpper != "BUY" && sideUpper != "SELL" {
+		return ccxt.Order{}, fmt.Errorf("webull: unknown option order side %q (must be BUY or SELL)", req.Side)
+	}
+
+	// Validate TIF: DAY or GTC (GTC rejected on SELL)
+	tifUpper := strings.ToUpper(req.TimeInForce)
+	if tifUpper != "DAY" && tifUpper != "GTC" {
+		return ccxt.Order{}, fmt.Errorf("webull: unsupported time_in_force %q for options (use DAY or GTC)", req.TimeInForce)
+	}
+	if sideUpper == "SELL" && tifUpper == "GTC" {
+		return ccxt.Order{}, fmt.Errorf("webull: GTC (Good-Till-Cancel) is not allowed on SELL orders (use DAY)")
+	}
+
+	// Validate exactly one leg
+	if len(req.Legs) != 1 {
+		return ccxt.Order{}, fmt.Errorf("webull: exactly one leg is required for single-leg orders (got %d)", len(req.Legs))
+	}
+	leg := req.Legs[0]
+
+	// Validate leg fields
+	legSideUpper := strings.ToUpper(leg.Side)
+	if legSideUpper != "BUY" && legSideUpper != "SELL" {
+		return ccxt.Order{}, fmt.Errorf("webull: invalid leg side %q", leg.Side)
+	}
+	legOptionTypeUpper := strings.ToUpper(leg.OptionType)
+	if legOptionTypeUpper != "CALL" && legOptionTypeUpper != "PUT" {
+		return ccxt.Order{}, fmt.Errorf("webull: invalid option type %q (must be CALL or PUT)", leg.OptionType)
+	}
+
+	// Generate unique client_order_id
+	clientOrderID, err := generateClientOrderID()
+	if err != nil {
+		return ccxt.Order{}, fmt.Errorf("webull: generate client_order_id: %w", err)
+	}
+
+	// Build OrderLeg
+	orderLeg := OrderLeg{
+		Side:             legSideUpper,
+		Quantity:         strconv.FormatFloat(leg.Quantity, 'f', -1, 64),
+		Symbol:           strings.ToUpper(leg.Underlying),
+		StrikePrice:      strconv.FormatFloat(leg.Strike, 'f', -1, 64),
+		OptionExpireDate: leg.Expiry, // format: yyyy-MM-dd
+		InstrumentType:   "OPTION",
+		OptionType:       legOptionTypeUpper,
+		Market:           "US",
+	}
+
+	// Build NewOrder for options
+	// Note: DO NOT set SupportTradingSession for options (server defaults to CORE)
+	order := NewOrder{
+		ClientOrderID:  clientOrderID,
+		ComboType:      "NORMAL",
+		EntryType:      "QTY",
+		InstrumentType: "OPTION",
+		Market:         "US",
+		OrderType:      orderTypeUpper,
+		Side:           sideUpper,
+		Symbol:         strings.ToUpper(req.Underlying),
+		TimeInForce:    tifUpper,
+		Quantity:       strconv.FormatFloat(req.Quantity, 'f', -1, 64),
+		OptionStrategy: strategy,
+		Legs:           []OrderLeg{orderLeg},
+	}
+
+	// Set price fields
+	if req.LimitPrice != nil {
+		order.LimitPrice = strconv.FormatFloat(*req.LimitPrice, 'f', -1, 64)
+	}
+	if req.StopPrice != nil {
+		order.StopPrice = strconv.FormatFloat(*req.StopPrice, 'f', -1, 64)
+	}
+
+	// Execute PlaceOrder
+	placeReq := PlaceOrderRequest{
+		AccountID: a.client.accountID,
+		NewOrders: []NewOrder{order},
+	}
+	resp, err := a.client.PlaceOrder(ctx, placeReq)
+	if err != nil {
+		return ccxt.Order{}, fmt.Errorf("webull: PlaceOptionOrder: %w", err)
+	}
+
+	// Return ccxt.Order with Id = client_order_id, Info contains order_id
+	underlying := strings.ToUpper(req.Underlying)
+	side := strings.ToLower(req.Side)
+	orderType := strings.ToLower(req.OrderType)
+	status := "open"
+	amount := req.Quantity
+	optionLimitPrice := req.LimitPrice
+
+	return ccxt.Order{
+		Id:     &resp.ClientOrderID,
+		Symbol: &underlying,
+		Side:   &side,
+		Type:   &orderType,
+		Amount: &amount,
+		Price:  optionLimitPrice,
+		Status: &status,
+		Info: map[string]interface{}{
+			"order_id":            resp.OrderID,
+			"option_strategy":     "SINGLE",
+			"contract_multiplier": "100",
+		},
+	}, nil
+}
+
+// CancelOptionOrder cancels an open options order by client_order_id.
+func (a *webullAdapter) CancelOptionOrder(ctx context.Context, clientOrderID string) (ccxt.Order, error) {
+	req := CancelOrderRequest{
+		AccountID:     a.client.accountID,
+		ClientOrderID: clientOrderID,
+	}
+	_, err := a.client.CancelOrder(ctx, req)
+	if err != nil {
+		return ccxt.Order{}, fmt.Errorf("webull: CancelOptionOrder %s: %w", clientOrderID, err)
+	}
+
+	// Return basic order with Id and status=canceled
+	status := "canceled"
+	return ccxt.Order{
+		Id:     &clientOrderID,
+		Status: &status,
+	}, nil
+}
+
+// FetchOptionOrder retrieves a single options order by client_order_id.
+func (a *webullAdapter) FetchOptionOrder(ctx context.Context, clientOrderID string) (ccxt.Order, error) {
+	combo, err := a.client.FetchOrderDetail(ctx, clientOrderID)
+	if err != nil {
+		return ccxt.Order{}, fmt.Errorf("webull: FetchOptionOrder %s: %w", clientOrderID, err)
+	}
+
+	// Guard against empty orders array
+	if len(combo.Orders) == 0 {
+		return ccxt.Order{}, fmt.Errorf("webull: FetchOptionOrder %s: no orders in response", clientOrderID)
+	}
+
+	// Flatten first order from combo; pass empty symbol (will be reconstructed from legs if needed)
+	return orderItemToCCXT("", &combo.Orders[0]), nil
+}
+
+// FetchOpenOptionOrders returns all open options orders (filters by instrument_type=OPTION).
+func (a *webullAdapter) FetchOpenOptionOrders(ctx context.Context) ([]ccxt.Order, error) {
+	combos, err := a.client.FetchOpenOrders(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchOpenOptionOrders: %w", err)
+	}
+
+	var result []ccxt.Order
+	for _, combo := range combos {
+		for _, item := range combo.Orders {
+			// Filter by instrument_type = OPTION
+			if item.InstrumentType != "OPTION" {
+				continue
+			}
+			result = append(result, orderItemToCCXT("", &item))
+		}
+	}
+
+	return result, nil
+}
+
 // --- Helpers ---
 
 // generateClientOrderID generates a unique client_order_id (≤32 chars).
@@ -698,6 +1059,12 @@ func snapshotToTicker(symbol string, snap *Snapshot) ccxt.Ticker {
 
 // Compile-time assertion that webullAdapter implements broker.TradingProvider.
 var _ broker.TradingProvider = (*webullAdapter)(nil)
+
+// Compile-time assertion that webullAdapter implements broker.OptionMarketDataProvider.
+var _ broker.OptionMarketDataProvider = (*webullAdapter)(nil)
+
+// Compile-time assertion that webullAdapter implements broker.OptionTradingProvider.
+var _ broker.OptionTradingProvider = (*webullAdapter)(nil)
 
 // --- init ---
 

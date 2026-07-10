@@ -202,7 +202,13 @@ Always returns a final risk summary to confirm zero exposure. Requires `confirm=
 - **Bitkub**: `get_open_orders` and `get_order_history` require a `symbol` parameter (e.g. `BTC/THB`). Calling without a symbol will fail — always ask the user which trading pair to check, or iterate over known pairs.
 - **Binance TH and Bitkub**: no futures trading support. Use futures tools only with `binance` and `okx`.
 - **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares. PIN is required in config.
-- **Webull (US equity)**: supports portfolio, market data, **and order placement** (equities). Order `type`: `market`, `limit` (needs price), `stop_loss` (price = stop price); `take_profit` is not supported. `time_in_force`: `DAY` or `GTC` only. Amount is in shares and supports fractional (e.g. 0.5) — but **fractional amounts require `market` orders** (Webull rejects fractional limit/stop). `side`: buy or sell. Options/futures/crypto/event trading are not supported (equities only).
+- **Webull (US equity)**: supports portfolio, market data, **and order placement** (equities + ETFs). Order `type`: `market`, `limit` (needs price), `stop_loss` (price = stop price); `take_profit` is not supported. `time_in_force`: `DAY` or `GTC` only. Amount is in shares and supports fractional (e.g. 0.5) — but **fractional amounts require `market` orders** (Webull rejects fractional limit/stop). `side`: buy or sell. ETFs (SPY, VOO, …) trade through the same equity order tools. **Options** are supported via the dedicated `option_*` tools (see below). Crypto and futures are US-only Webull products and are not available on this account.
+
+### Webull Options (single-leg)
+Use the dedicated option tools, not `create_order` (options need contract legs, not a plain symbol):
+- `option_create_order` — place a single-leg option. Params: `provider` (`webull`), `underlying` (e.g. "AAPL"), `expiry` (yyyy-MM-dd), `strike`, `option_type` (`CALL`|`PUT`), `side` (`buy`|`sell`), `quantity` (contracts), `type` (`limit` default, or `stop_loss`/`stop_loss_limit` — **no `market`**), `limit_price`/`stop_price`, `time_in_force` (`DAY`, or `GTC` **buy-only**), `confirm`. One contract = **100 shares** (notional = price × 100 × quantity).
+- `option_cancel_order` / `option_get_order` / `option_open_orders` — manage option orders by `id` (the client_order_id returned by placement).
+- Only **single-leg** orders are supported for now; multi-leg spreads (vertical, iron condor) are not yet available.
 - The default rate limit is 5 orders per minute per provider.
 - Always confirm with the user before placing orders with notional ≥ $200. Never place orders over $3,000 without explicit confirmation regardless of context.
 

@@ -2,6 +2,7 @@ package webull
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -300,8 +301,8 @@ func TestSupportedWalletTypes(t *testing.T) {
 	}
 
 	walletTypes := adapter.SupportedWalletTypes()
-	if len(walletTypes) != 2 {
-		t.Errorf("expected 2 wallet types, got %d", len(walletTypes))
+	if len(walletTypes) != 3 {
+		t.Errorf("expected 3 wallet types, got %d", len(walletTypes))
 	}
 
 	found := make(map[string]bool)
@@ -314,6 +315,9 @@ func TestSupportedWalletTypes(t *testing.T) {
 	}
 	if !found["stock"] {
 		t.Errorf("missing 'stock' wallet type")
+	}
+	if !found["option"] {
+		t.Errorf("missing 'option' wallet type")
 	}
 }
 
@@ -363,4 +367,265 @@ func TestAdapterMethods(t *testing.T) {
 	_, _ = adapter.LoadMarkets(ctx)
 
 	t.Log("All adapter methods exist and are callable")
+}
+
+// TestWalletFiltering verifies that the stock wallet only returns EQUITY positions
+// and the option wallet only returns OPTION positions.
+func TestWalletFiltering(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/auth/token/create" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{
+				Token:   "test-token",
+				Expires: 9999999999999,
+				Status:  "NORMAL",
+			})
+		} else if r.URL.Path == "/openapi/assets/balance" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(BalanceResponse{
+				TotalAssetCurrency:        "USD",
+				TotalNetLiquidationValue:  "100000.00",
+				TotalMarketValue:          "50000.00",
+				TotalCashBalance:          "50000.00",
+				TotalUnrealizedProfitLoss: "5000.00",
+				TotalDayProfitLoss:        "500.00",
+				AccountCurrencyAssets: []CurrencyAsset{
+					{
+						Currency:             "USD",
+						CashBalance:          "50000.00",
+						SettledCash:          "50000.00",
+						UnsettledCash:        "0.00",
+						MarketValue:          "50000.00",
+						BuyingPower:          "100000.00",
+						UnrealizedProfitLoss: "5000.00",
+						NetLiquidationValue:  "100000.00",
+						DayProfitLoss:        "500.00",
+					},
+				},
+			})
+		} else if r.URL.Path == "/openapi/assets/positions" {
+			// Return mixed EQUITY and OPTION positions
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]Position{
+				{
+					Currency:                 "USD",
+					Quantity:                 "100",
+					Cost:                     "15050.00",
+					Proportion:               "50",
+					PositionID:               "POS001",
+					Symbol:                   "AAPL",
+					InstrumentType:           "EQUITY",
+					CostPrice:                "150.50",
+					LastPrice:                "156.00",
+					MarketValue:              "15600.00",
+					UnrealizedProfitLoss:     "550.00",
+					UnrealizedProfitLossRate: "0.0365",
+					DayProfitLoss:            "100.00",
+					DayRealizedProfitLoss:    "50.00",
+				},
+				{
+					Currency:                 "USD",
+					Quantity:                 "10",
+					Cost:                     "550.00",
+					Proportion:               "50",
+					PositionID:               "POS002",
+					Symbol:                   "AAPL260821C00320000",
+					InstrumentType:           "OPTION",
+					CostPrice:                "55.00",
+					LastPrice:                "56.50",
+					MarketValue:              "565.00",
+					UnrealizedProfitLoss:     "15.00",
+					UnrealizedProfitLossRate: "0.0273",
+					DayProfitLoss:            "5.00",
+					DayRealizedProfitLoss:    "2.00",
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	adapter := &webullAdapter{client: client, cfg: cfg}
+	ctx := context.Background()
+
+	// Test "stock" wallet - should only return EQUITY
+	stockBalances, err := adapter.GetWalletBalances(ctx, "stock")
+	if err != nil {
+		t.Fatalf("GetWalletBalances(stock) failed: %v", err)
+	}
+
+	if len(stockBalances) != 1 {
+		t.Errorf("expected 1 stock position, got %d", len(stockBalances))
+	}
+	if len(stockBalances) > 0 && stockBalances[0].Balance.Asset != "AAPL" {
+		t.Errorf("expected stock asset AAPL, got %s", stockBalances[0].Balance.Asset)
+	}
+
+	// Test "option" wallet - should only return OPTION
+	optionBalances, err := adapter.GetWalletBalances(ctx, "option")
+	if err != nil {
+		t.Fatalf("GetWalletBalances(option) failed: %v", err)
+	}
+
+	if len(optionBalances) != 1 {
+		t.Errorf("expected 1 option position, got %d", len(optionBalances))
+	}
+	if len(optionBalances) > 0 && optionBalances[0].Balance.Asset != "AAPL260821C00320000" {
+		t.Errorf("expected option asset AAPL260821C00320000, got %s", optionBalances[0].Balance.Asset)
+	}
+
+	// Test "all" wallet - should return both
+	allBalances, err := adapter.GetWalletBalances(ctx, "all")
+	if err != nil {
+		t.Fatalf("GetWalletBalances(all) failed: %v", err)
+	}
+
+	// Should have: 1 cash + 1 stock + 1 option = 3
+	if len(allBalances) != 3 {
+		t.Errorf("expected 3 total balances (cash+stock+option), got %d", len(allBalances))
+	}
+}
+
+// TestOptionMarketDataProvider verifies that the adapter implements OptionMarketDataProvider.
+func TestOptionMarketDataProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/auth/token/create" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{
+				Token:   "test-token",
+				Expires: 9999999999999,
+				Status:  "NORMAL",
+			})
+		} else if r.URL.Path == "/openapi/market-data/option/snapshot" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]OptionSnapshotDTO{
+				{
+					Symbol:        "AAPL260821C00320000",
+					InstrumentID:  "OPT001",
+					Price:         "5.50",
+					Bid:           "5.45",
+					Ask:           "5.55",
+					BidSize:       "10",
+					AskSize:       "10",
+					Open:          "5.25",
+					High:          "6.00",
+					Low:           "5.00",
+					Close:         "5.50",
+					PreClose:      "5.40",
+					Change:        "0.10",
+					ChangeRatio:   "0.0185",
+					Delta:         "0.65",
+					Gamma:         "0.03",
+					Theta:         "-0.05",
+					Vega:          "0.20",
+					Rho:           "0.10",
+					ImpVol:        "0.25",
+					Volume:        "5000",
+					OpenInterest:  "50000",
+					StrikePrice:   "320.00",
+					LastTradeTime: 1234567890000,
+					QuoteTime:     1234567890000,
+				},
+			})
+		} else if r.URL.Path == "/openapi/market-data/option/bars" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]OptionBarDTO{
+				{
+					TickerID: "OPT001",
+					Symbol:   "AAPL260821C00320000",
+					Time:     "2026-07-09T04:00:00.000+0000",
+					Open:     "5.25",
+					Close:    "5.50",
+					High:     "6.00",
+					Low:      "5.00",
+					Volume:   "5000",
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	adapter := &webullAdapter{client: client, cfg: cfg}
+	ctx := context.Background()
+
+	// Test FetchOptionSnapshot
+	contracts := []broker.OptionContract{
+		{
+			Underlying: "AAPL",
+			Expiry:     "2026-08-21",
+			Strike:     320.00,
+			OptionType: "CALL",
+		},
+	}
+
+	quotes, err := adapter.FetchOptionSnapshot(ctx, contracts)
+	if err != nil {
+		t.Fatalf("FetchOptionSnapshot failed: %v", err)
+	}
+
+	if len(quotes) != 1 {
+		t.Errorf("expected 1 quote, got %d", len(quotes))
+	}
+
+	if len(quotes) > 0 {
+		q := quotes[0]
+		if q.Contract.Underlying != "AAPL" {
+			t.Errorf("expected AAPL, got %s", q.Contract.Underlying)
+		}
+		if q.Price != 5.50 {
+			t.Errorf("expected price 5.50, got %f", q.Price)
+		}
+		if q.Delta != 0.65 {
+			t.Errorf("expected delta 0.65, got %f", q.Delta)
+		}
+	}
+
+	// Test FetchOptionOHLCV
+	ohlcv, err := adapter.FetchOptionOHLCV(ctx, contracts[0], "1d", 1)
+	if err != nil {
+		t.Fatalf("FetchOptionOHLCV failed: %v", err)
+	}
+
+	if len(ohlcv) != 1 {
+		t.Errorf("expected 1 candle, got %d", len(ohlcv))
+	}
+
+	if len(ohlcv) > 0 {
+		candle := ohlcv[0]
+		if candle.Close != 5.50 {
+			t.Errorf("expected close 5.50, got %f", candle.Close)
+		}
+		if candle.High != 6.00 {
+			t.Errorf("expected high 6.00, got %f", candle.High)
+		}
+	}
 }

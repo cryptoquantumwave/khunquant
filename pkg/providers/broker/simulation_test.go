@@ -437,8 +437,8 @@ func TestSimulationProvider_CreateOrder_WithoutTickerFallback(t *testing.T) {
 // Used to cover the !ok error branches in SimulationProvider delegation methods.
 type bareProvider struct{}
 
-func (bareProvider) ID() string                                               { return "bare" }
-func (bareProvider) Category() broker.AssetCategory                           { return broker.CategoryCrypto }
+func (bareProvider) ID() string                     { return "bare" }
+func (bareProvider) Category() broker.AssetCategory { return broker.CategoryCrypto }
 func (bareProvider) GetMarketStatus(_ context.Context, _ string) (broker.MarketStatus, error) {
 	return broker.MarketOpen, nil
 }
@@ -483,6 +483,6 @@ func TestSimulationProvider_NoBareMarketDataSupport(t *testing.T) {
 }
 
 // Helper functions
-func strPtr(s string) *string { return &s }
+func strPtr(s string) *string       { return &s }
 func float64Ptr(f float64) *float64 { return &f }
-func int64Ptr(i int64) *int64 { return &i }
+func int64Ptr(i int64) *int64       { return &i }

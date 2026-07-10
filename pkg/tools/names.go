@@ -47,6 +47,13 @@ const (
 	NamePaperTrade         = "paper_trade"
 	NameGetOrderRateStatus = "get_order_rate_status"
 
+	// Options (Track B3)
+	NameOptionQuote       = "option_quote"
+	NameOptionCreateOrder = "option_create_order"
+	NameOptionCancelOrder = "option_cancel_order"
+	NameOptionGetOrder    = "option_get_order"
+	NameOptionOpenOrders  = "option_open_orders"
+
 	// Futures / perpetual swaps (Track B2)
 	NameFuturesSetLeverage        = "futures_set_leverage"
 	NameFuturesOpenPosition       = "futures_open_position"
@@ -130,6 +137,7 @@ const (
 	CatDCA           = "dca"
 	CatPnL           = "pnl"
 	CatDeltaNeutral  = "delta_neutral"
+	CatOptions       = "options"
 )
 
 // Catalog description constants — short, UI-facing summaries for the web tool catalog.
@@ -206,4 +214,11 @@ const (
 	// Earn tool descriptions
 	DescEarnOverview       = "View all flexible earn products available on an exchange and current earn positions held. Lists APY, minimum subscription amounts, and auto-subscription status. Provider may be 'binance', 'okx', or empty/'all' to query all supported exchanges. Positions require API keys; products may be public."
 	DescManageEarnPosition = "Subscribe to, redeem from, or configure auto-subscription on a flexible earn product. Actions: 'subscribe' (invest amount with optional auto-renewal), 'redeem' (withdraw amount or all), 'set_auto_subscribe' (enable/disable auto-renewal). Approval-mode: confirm=false shows dry-run review, confirm=true executes the transaction."
+
+	// Options tool descriptions (single-leg only)
+	DescOptionQuote       = "Fetch market data for options contracts including price, greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. Requires underlying symbol, expiry date (yyyy-MM-dd), strike price, and option type (CALL/PUT)."
+	DescOptionCreateOrder = "Place a single-leg options order. Supports LIMIT, STOP_LOSS, STOP_LOSS_LIMIT order types with DAY or GTC time-in-force (GTC rejected on SELL). Requires explicit confirm=true. Single-leg only; multi-leg spreads not supported."
+	DescOptionCancelOrder = "Cancel an open options order by client order ID."
+	DescOptionGetOrder    = "Retrieve a single options order by client order ID, including status, fill quantity, and execution details."
+	DescOptionOpenOrders  = "List all open options orders on the account with current status and fill information."
 )

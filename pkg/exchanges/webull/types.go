@@ -159,22 +159,36 @@ type Instrument struct {
 
 // --- Trading Orders ---
 
+// OrderLeg represents a single leg in an options order.
+type OrderLeg struct {
+	Side             string `json:"side"`
+	Quantity         string `json:"quantity"`
+	Symbol           string `json:"symbol"`
+	StrikePrice      string `json:"strike_price,omitempty"`
+	OptionExpireDate string `json:"option_expire_date,omitempty"` // yyyy-MM-dd
+	InstrumentType   string `json:"instrument_type,omitempty"`
+	OptionType       string `json:"option_type,omitempty"` // CALL or PUT
+	Market           string `json:"market,omitempty"`
+}
+
 // NewOrder represents a single order for placement in /openapi/trade/order/place.
 // All string fields are money/quantity values and must be formatted carefully.
 type NewOrder struct {
-	ClientOrderID         string `json:"client_order_id"`
-	ComboType             string `json:"combo_type"`
-	EntryType             string `json:"entrust_type"`
-	InstrumentType        string `json:"instrument_type"`
-	Market                string `json:"market"`
-	OrderType             string `json:"order_type"`
-	Side                  string `json:"side"`
-	Symbol                string `json:"symbol"`
-	TimeInForce           string `json:"time_in_force"`
-	Quantity              string `json:"quantity,omitempty"`
-	LimitPrice            string `json:"limit_price,omitempty"`
-	StopPrice             string `json:"stop_price,omitempty"`
-	SupportTradingSession string `json:"support_trading_session"`
+	ClientOrderID         string     `json:"client_order_id"`
+	ComboType             string     `json:"combo_type"`
+	EntryType             string     `json:"entrust_type"`
+	InstrumentType        string     `json:"instrument_type"`
+	Market                string     `json:"market"`
+	OrderType             string     `json:"order_type"`
+	Side                  string     `json:"side"`
+	Symbol                string     `json:"symbol"`
+	TimeInForce           string     `json:"time_in_force"`
+	Quantity              string     `json:"quantity,omitempty"`
+	LimitPrice            string     `json:"limit_price,omitempty"`
+	StopPrice             string     `json:"stop_price,omitempty"`
+	SupportTradingSession string     `json:"support_trading_session,omitempty"`
+	OptionStrategy        string     `json:"option_strategy,omitempty"`
+	Legs                  []OrderLeg `json:"legs,omitempty"`
 }
 
 // PlaceOrderRequest is the body for POST /openapi/trade/order/place.
@@ -239,6 +253,52 @@ func (e ErrorResponse) Error() string {
 		return "webull: " + e.Message + " (" + e.ErrorCode + ")"
 	}
 	return "webull: " + e.Message
+}
+
+// --- Options Market Data ---
+
+// OptionSnapshotDTO represents a single option snapshot from /openapi/market-data/option/snapshot.
+// All numeric values are JSON strings.
+type OptionSnapshotDTO struct {
+	Symbol        string `json:"symbol"` // Encoded OCC symbol
+	InstrumentID  string `json:"instrument_id"`
+	Price         string `json:"price"`
+	Bid           string `json:"bid"`
+	Ask           string `json:"ask"`
+	BidSize       string `json:"bid_size"`
+	AskSize       string `json:"ask_size"`
+	Open          string `json:"open"`
+	High          string `json:"high"`
+	Low           string `json:"low"`
+	Close         string `json:"close"`
+	PreClose      string `json:"pre_close"`
+	Change        string `json:"change"`
+	ChangeRatio   string `json:"change_ratio"`
+	Delta         string `json:"delta"`
+	Gamma         string `json:"gamma"`
+	Theta         string `json:"theta"`
+	Vega          string `json:"vega"`
+	Rho           string `json:"rho"`
+	ImpVol        string `json:"imp_vol"`
+	OpenInterest  string `json:"open_interest"`
+	Volume        string `json:"volume"`
+	StrikePrice   string `json:"strike_price"`
+	LastTradeTime int64  `json:"last_trade_time"` // unix milliseconds
+	QuoteTime     int64  `json:"quote_time"`      // unix milliseconds
+}
+
+// OptionBarDTO represents a single candlestick bar from /openapi/market-data/option/bars.
+// All numeric values are JSON strings.
+type OptionBarDTO struct {
+	TickerID       string `json:"tickerId"`
+	Symbol         string `json:"symbol"` // Encoded OCC symbol
+	Time           string `json:"time"`   // ISO8601, e.g. "2026-07-09T04:00:00.000+0000"
+	Open           string `json:"open"`
+	Close          string `json:"close"`
+	High           string `json:"high"`
+	Low            string `json:"low"`
+	Volume         string `json:"volume"`
+	TradingSession string `json:"trading_session,omitempty"` // PRE, RTH, ATH, OVN
 }
 
 // --- Helper Functions ---

@@ -420,13 +420,6 @@ func parseTrigger(trigMap map[string]any) (*dca.Trigger, *ToolResult) {
 	return t, nil
 }
 
-// isStockProvider checks if a provider is a stock broker that requires base-unit (share) ordering.
-// Both Settrade and Webull are stock brokers; they require amount_unit='base' and disallow 'quote'.
-// Note: Settrade requires whole-number shares, but Webull supports fractional shares.
-func isStockProvider(providerID string) bool {
-	return strings.EqualFold(providerID, "settrade") || strings.EqualFold(providerID, "webull")
-}
-
 // amountUnitLabel returns a human-readable unit description.
 func amountUnitLabel(unit, symbol string) string {
 	if unit == "base" {

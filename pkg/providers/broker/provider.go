@@ -5,6 +5,8 @@ package broker
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 )
@@ -292,6 +294,67 @@ type OptionOrderRequest struct {
 	Legs        []OptionLeg
 }
 
+// Validate checks a single-leg option order request for shape correctness:
+// strategy, order type + required prices (rejecting MARKET/TAKE_PROFIT), side,
+// time-in-force (GTC not allowed on SELL), exactly one leg, and leg side /
+// option type. It is the single source of option request-shape validation shared
+// by the option tool layer and provider adapters. It does NOT enforce policy
+// gates (permissions, risk, confirmation) — those remain in the tool layer.
+func (r OptionOrderRequest) Validate() error {
+	strategy := r.Strategy
+	if strategy == "" {
+		strategy = "SINGLE"
+	}
+	if strategy != "SINGLE" {
+		return fmt.Errorf("only single-leg options orders are supported (got strategy %q)", strategy)
+	}
+
+	orderType := strings.ToUpper(r.OrderType)
+	switch orderType {
+	case "LIMIT":
+		if r.LimitPrice == nil {
+			return fmt.Errorf("limit_price is required for LIMIT option orders")
+		}
+	case "STOP_LOSS":
+		if r.StopPrice == nil {
+			return fmt.Errorf("stop_price is required for STOP_LOSS option orders")
+		}
+	case "STOP_LOSS_LIMIT":
+		if r.LimitPrice == nil || r.StopPrice == nil {
+			return fmt.Errorf("both limit_price and stop_price are required for STOP_LOSS_LIMIT option orders")
+		}
+	case "MARKET", "TAKE_PROFIT":
+		return fmt.Errorf("order type %q is not supported for options (use LIMIT, STOP_LOSS, or STOP_LOSS_LIMIT)", orderType)
+	default:
+		return fmt.Errorf("unsupported option order type %q", r.OrderType)
+	}
+
+	side := strings.ToUpper(r.Side)
+	if side != "BUY" && side != "SELL" {
+		return fmt.Errorf("unknown option order side %q (must be BUY or SELL)", r.Side)
+	}
+
+	tif := strings.ToUpper(r.TimeInForce)
+	if tif != "DAY" && tif != "GTC" {
+		return fmt.Errorf("unsupported time_in_force %q for options (use DAY or GTC)", r.TimeInForce)
+	}
+	if side == "SELL" && tif == "GTC" {
+		return fmt.Errorf("GTC (Good-Till-Cancel) is not allowed on SELL orders (use DAY)")
+	}
+
+	if len(r.Legs) != 1 {
+		return fmt.Errorf("exactly one leg is required for single-leg orders (got %d)", len(r.Legs))
+	}
+	leg := r.Legs[0]
+	if s := strings.ToUpper(leg.Side); s != "BUY" && s != "SELL" {
+		return fmt.Errorf("invalid leg side %q", leg.Side)
+	}
+	if ot := strings.ToUpper(leg.OptionType); ot != "CALL" && ot != "PUT" {
+		return fmt.Errorf("invalid option type %q (must be CALL or PUT)", leg.OptionType)
+	}
+	return nil
+}
+
 // OptionMarketDataProvider extends Provider with options market data.
 type OptionMarketDataProvider interface {
 	Provider
@@ -305,7 +368,10 @@ type OptionMarketDataProvider interface {
 }
 
 // OptionTradingProvider extends Provider with options order management.
-// Declared here but implemented in a separate task.
+//
+// Symbol convention: every ccxt.Order returned by this interface uses the
+// OCC-encoded contract symbol (e.g. "AAPL260821C00320000") as ccxt.Order.Symbol,
+// not the bare underlying or a "BASE/USD" pair. Order.Id is the client_order_id.
 type OptionTradingProvider interface {
 	Provider
 

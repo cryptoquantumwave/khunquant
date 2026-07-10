@@ -21,14 +21,17 @@ func TestSignerKnownAnswerTest_CaseA(t *testing.T) {
 	fixedNonce := "0123456789abcdef0123456789abcdef"
 
 	signer.now = func() time.Time { return fixedTime }
-	signer.nonceFn = func() string { return fixedNonce }
+	signer.nonceFn = func() (string, error) { return fixedNonce, nil }
 
 	// Case A: GET /openapi/assets/balance with query param account_id=ACC123
 	path := "/openapi/assets/balance"
 	query := url.Values{}
 	query.Set("account_id", "ACC123")
 
-	headers := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	headers, err := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	if err != nil {
+		t.Fatalf("SignRequest failed: %v", err)
+	}
 
 	expectedSig := "WCW9WOmMywXskxQETpxb2HxiaX8="
 	if headers.XSignature != expectedSig {
@@ -60,13 +63,16 @@ func TestSignerKnownAnswerTest_CaseB(t *testing.T) {
 	fixedNonce := "0123456789abcdef0123456789abcdef"
 
 	signer.now = func() time.Time { return fixedTime }
-	signer.nonceFn = func() string { return fixedNonce }
+	signer.nonceFn = func() (string, error) { return fixedNonce, nil }
 
 	// Case B: POST /openapi/trade/order/place with body
 	path := "/openapi/trade/order/place"
 	body := []byte(`{"account_id":"ACC123","new_orders":[{"symbol":"AAPL"}]}`)
 
-	headers := signer.SignRequest(path, "POST", "api.webull.com", nil, body)
+	headers, err := signer.SignRequest(path, "POST", "api.webull.com", nil, body)
+	if err != nil {
+		t.Fatalf("SignRequest failed: %v", err)
+	}
 
 	expectedSig := "c0wjmfwNUyQmI1dZ3JBfSgsZ9ss="
 	if headers.XSignature != expectedSig {
@@ -83,7 +89,10 @@ func TestSignerKnownAnswerTest_CaseB(t *testing.T) {
 
 // TestNonceIsHex32 verifies that randomNonce generates 32 hex characters
 func TestNonceIsHex32(t *testing.T) {
-	nonce := randomNonce()
+	nonce, err := randomNonce()
+	if err != nil {
+		t.Fatalf("randomNonce failed: %v", err)
+	}
 
 	// Should be 32 characters (16 bytes → 32 hex chars)
 	if len(nonce) != 32 {
@@ -96,7 +105,7 @@ func TestNonceIsHex32(t *testing.T) {
 	}
 
 	// Verify it's different on successive calls (with overwhelming probability)
-	nonce2 := randomNonce()
+	nonce2, _ := randomNonce()
 	if nonce == nonce2 {
 		t.Errorf("successive randomNonce() calls produced identical nonces (should be crypto random)")
 	}
@@ -112,14 +121,20 @@ func TestSignatureConsistency(t *testing.T) {
 	fixedNonce := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
 
 	signer.now = func() time.Time { return fixedTime }
-	signer.nonceFn = func() string { return fixedNonce }
+	signer.nonceFn = func() (string, error) { return fixedNonce, nil }
 
 	path := "/openapi/assets/balance"
 	query := url.Values{}
 	query.Set("account_id", "ACC123")
 
-	sig1 := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
-	sig2 := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	sig1, err := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	if err != nil {
+		t.Fatalf("SignRequest failed: %v", err)
+	}
+	sig2, err := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	if err != nil {
+		t.Fatalf("SignRequest failed: %v", err)
+	}
 
 	if sig1.XSignature != sig2.XSignature {
 		t.Errorf("signatures diverged for identical requests")

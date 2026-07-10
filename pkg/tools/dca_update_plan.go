@@ -9,6 +9,7 @@ import (
 	"github.com/adhocore/gronx"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // UpdateDCAPlanTool updates a DCA plan's configuration.
@@ -207,7 +208,7 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 			return ErrorResult("amount_unit must be 'quote' or 'base'")
 		}
 		// Stock brokers (Settrade, Webull) require base-unit (share) ordering.
-		if isStockProvider(plan.Provider) && v == "quote" {
+		if broker.IsStockProvider(plan.Provider) && v == "quote" {
 			return ErrorResult("Stock brokers are ordered in share units — use amount_unit='base'")
 		}
 		plan.AmountUnit = v

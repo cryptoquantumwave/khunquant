@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -18,8 +19,8 @@ import (
 type Signer struct {
 	appKey    string
 	appSecret string
-	now       func() time.Time // injectable time source
-	nonceFn   func() string    // injectable nonce generator
+	now       func() time.Time       // injectable time source
+	nonceFn   func() (string, error) // injectable nonce generator
 }
 
 // NewSigner creates a signer with real time.Now and crypto random nonce.
@@ -39,9 +40,12 @@ func NewSigner(appKey, appSecret string) *Signer {
 // body: request body bytes (can be nil or empty). If provided, the same bytes must be sent on the wire.
 // host: the request host (e.g. "api.webull.com") — must match the actual request host for signature validity.
 // Returns the signature headers to set on the request.
-func (s *Signer) SignRequest(path, method, host string, query url.Values, body []byte) SignHeaders {
+func (s *Signer) SignRequest(path, method, host string, query url.Values, body []byte) (SignHeaders, error) {
 	timestamp := s.now().UTC().Format("2006-01-02T15:04:05Z")
-	nonce := s.nonceFn()
+	nonce, err := s.nonceFn()
+	if err != nil {
+		return SignHeaders{}, fmt.Errorf("webull: generate nonce: %w", err)
+	}
 
 	// Build str3 (path + params + optional body MD5)
 	str3 := s.canonicalString(path, query, body, timestamp, nonce, host)
@@ -63,7 +67,7 @@ func (s *Signer) SignRequest(path, method, host string, query url.Values, body [
 		XSignatureVersion:   "1.0",
 		XSignatureNonce:     nonce,
 		XVersion:            "v2",
-	}
+	}, nil
 }
 
 // canonicalString builds the signed canonical string per the verified Webull algorithm.
@@ -141,14 +145,12 @@ type SignHeaders struct {
 }
 
 // randomNonce generates a 32-character hexadecimal nonce (16 random bytes → 32 hex chars).
-func randomNonce() string {
+// A crypto/rand failure is unrecoverable — returning an error is strictly better than
+// emitting a predictable nonce, which would weaken replay protection.
+func randomNonce() (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
-		// Fallback if crypto/rand fails (should never happen in practice).
-		// Generate from timestamp modulo 256.
-		for i := range nonce {
-			nonce[i] = byte(time.Now().UnixNano()%256) ^ byte(i)
-		}
+		return "", fmt.Errorf("crypto/rand read: %w", err)
 	}
-	return hex.EncodeToString(nonce)
+	return hex.EncodeToString(nonce), nil
 }

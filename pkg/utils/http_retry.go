@@ -12,7 +12,9 @@ const maxRetries = 3
 
 var retryDelayUnit = time.Second
 
-func shouldRetry(statusCode int) bool {
+// ShouldRetry reports whether an HTTP status code represents a transient error
+// worth retrying (429 Too Many Requests or any 5xx).
+func ShouldRetry(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests ||
 		statusCode >= 500
 }
@@ -31,13 +33,13 @@ func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response,
 			if resp.StatusCode == http.StatusOK {
 				break
 			}
-			if !shouldRetry(resp.StatusCode) {
+			if !ShouldRetry(resp.StatusCode) {
 				break
 			}
 		}
 
 		if i < maxRetries-1 {
-			if err = sleepWithCtx(req.Context(), retryDelayForAttempt(resp, i)); err != nil {
+			if err = SleepWithCtx(req.Context(), RetryDelayForAttempt(resp, i)); err != nil {
 				if resp != nil {
 					resp.Body.Close()
 				}
@@ -48,7 +50,10 @@ func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response,
 	return resp, err
 }
 
-func retryDelayForAttempt(resp *http.Response, attempt int) time.Duration {
+// RetryDelayForAttempt returns the backoff delay before the given retry attempt
+// (0-indexed). For 429 responses it honors a Retry-After header (seconds or HTTP
+// date); otherwise it uses a linear backoff of retryDelayUnit*(attempt+1).
+func RetryDelayForAttempt(resp *http.Response, attempt int) time.Duration {
 	fallback := retryDelayUnit * time.Duration(attempt+1)
 	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
 		return fallback
@@ -74,7 +79,9 @@ func retryDelayForAttempt(resp *http.Response, attempt int) time.Duration {
 	return fallback
 }
 
-func sleepWithCtx(ctx context.Context, d time.Duration) error {
+// SleepWithCtx sleeps for d or until ctx is cancelled, whichever comes first,
+// returning ctx.Err() on cancellation.
+func SleepWithCtx(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 

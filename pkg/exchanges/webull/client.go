@@ -35,13 +35,27 @@ type Client struct {
 	categoryCache map[string]string // symbol -> category
 }
 
+// retryDelayFn computes the backoff before a transient (429/5xx/transport) retry.
+// It's a package var so tests can shrink the delay; production uses the shared
+// utils implementation which honors Retry-After.
+var retryDelayFn = utils.RetryDelayForAttempt
+
 // Option is a functional option for Client configuration.
 type Option func(*Client) error
 
 // WithBaseURL sets a custom base URL (useful for testing with httptest.Server).
-// When set, the signing host is derived from this URL.
+// When set, the signing host is derived from this URL, so the URL must parse and
+// carry a host — otherwise construction fails rather than silently mis-signing
+// against a fallback host later.
 func WithBaseURL(baseURL string) Option {
 	return func(c *Client) error {
+		u, err := url.Parse(baseURL)
+		if err != nil {
+			return fmt.Errorf("webull: invalid base URL %q: %w", baseURL, err)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("webull: base URL %q has no host", baseURL)
+		}
 		c.baseURL = baseURL
 		return nil
 	}
@@ -102,11 +116,13 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 	return c, nil
 }
 
-// doRequest performs a low-level HTTP request with signing, token management, and automatic retry on 401.
+// doRequest performs a low-level HTTP request with signing, token management, and automatic retries.
 // body can be nil or any value that will be JSON-marshaled.
 // out is the target type for JSON unmarshaling the response.
 // skipToken=true is used for token creation itself to avoid recursion.
-// On auth errors (401 or error_code contains TOKEN/UNAUTHORIZED), retries exactly once with a fresh token.
+// On auth errors (401 or error_code contains TOKEN/UNAUTHORIZED) it re-authenticates once with a
+// fresh token; on transient errors (429/5xx or transport failures) it backs off and retries up to
+// maxTransientRetries times, honoring Retry-After. Each attempt is re-signed with a fresh nonce.
 func (c *Client) doRequest(ctx context.Context, method, path string, query url.Values, body, out interface{}, skipToken bool) error {
 	// Marshal body once (if provided) to compute MD5 for signature
 	var bodyBytes []byte
@@ -125,7 +141,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	}
 	host := parsedURL.Host
 	if host == "" {
-		host = "api.webull.com"
+		// Should be unreachable: WithBaseURL validates the host and
+		// BaseURLForEnvironment always yields one. Surface it rather than
+		// silently sign against a fallback host.
+		return fmt.Errorf("webull: base URL %q has no host", c.baseURL)
 	}
 
 	// Build full URL
@@ -134,10 +153,22 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		u += "?" + query.Encode()
 	}
 
-	// Retry loop: attempt 0 = initial, attempt 1 = retry after token invalidation
-	for attempt := 0; attempt < 2; attempt++ {
+	// Retry loop with two independent policies:
+	//   - auth retry: on a token/401 error, re-authenticate once, immediately (no backoff);
+	//   - transient retry: on 429/5xx (or a transport error), back off and retry up to
+	//     maxTransientRetries times, honoring any Retry-After header.
+	// Signing happens inside the loop so every attempt gets a fresh timestamp/nonce
+	// (a re-signed request is required for HMAC auth), and the body reader is rebuilt
+	// each iteration.
+	const maxTransientRetries = 3
+	reAuthed := false
+	transient := 0
+	for {
 		// Sign the request (fresh timestamp/nonce for each attempt)
-		headers := c.signer.SignRequest(path, method, host, query, bodyBytes)
+		headers, err := c.signer.SignRequest(path, method, host, query, bodyBytes)
+		if err != nil {
+			return fmt.Errorf("webull: %s %s: %w", method, path, err)
+		}
 
 		// Create request with fresh body reader for each attempt
 		var bodyReader io.Reader
@@ -174,14 +205,22 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		// Send request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			// Transport error: retry with backoff up to the transient cap.
+			if transient < maxTransientRetries {
+				if serr := utils.SleepWithCtx(ctx, retryDelayFn(nil, transient)); serr != nil {
+					return fmt.Errorf("webull: %s %s: %w", method, path, serr)
+				}
+				transient++
+				continue
+			}
 			return fmt.Errorf("webull: %s %s: %w", method, path, err)
 		}
-		defer resp.Body.Close()
 
-		// Read response body
-		respBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("webull: read response body: %w", err)
+		// Read and close the body for this attempt (no deferred accumulation in a loop).
+		respBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("webull: read response body: %w", readErr)
 		}
 
 		// Check HTTP status
@@ -199,22 +238,29 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		var apiErr ErrorResponse
 		json.Unmarshal(respBytes, &apiErr) // best effort, may fail
 
-		// Check if this is an auth error and we haven't retried yet
-		if !skipToken && attempt == 0 && isAuthError(resp.StatusCode, apiErr) {
-			// Invalidate token and retry
+		// Auth error: re-authenticate once, immediately (no backoff). Subscription
+		// 401s ("insufficient permission") are excluded by isAuthError.
+		if !skipToken && !reAuthed && isAuthError(resp.StatusCode, apiErr) {
 			c.invalidateToken()
+			reAuthed = true
 			continue
 		}
 
-		// Non-auth error or second attempt: return error
+		// Transient error (429/5xx): back off and retry up to the cap.
+		if utils.ShouldRetry(resp.StatusCode) && transient < maxTransientRetries {
+			if serr := utils.SleepWithCtx(ctx, retryDelayFn(resp, transient)); serr != nil {
+				return fmt.Errorf("webull: %s %s: %w", method, path, serr)
+			}
+			transient++
+			continue
+		}
+
+		// Terminal error.
 		if apiErr.Message != "" {
 			return fmt.Errorf("webull: %s %s: [%d] %s", method, path, resp.StatusCode, apiErr.Error())
 		}
 		return fmt.Errorf("webull: %s %s: HTTP %d: %s", method, path, resp.StatusCode, string(respBytes))
 	}
-
-	// Should not reach here
-	return fmt.Errorf("webull: %s %s: exceeded retry limit", method, path)
 }
 
 // isAuthError returns true if the response indicates an authentication/authorization error
@@ -308,16 +354,26 @@ func (c *Client) resolveCategoryForSymbol(ctx context.Context, symbol string) (s
 	return "", fmt.Errorf("webull: no data for symbol %s (tried US_STOCK and US_ETF)", symbol)
 }
 
-// fetchSnapshotWithCategory is a private helper that fetches snapshots with an explicit category.
+// maxSnapshotSymbols caps how many symbols are sent in a single snapshot request
+// (the endpoint accepts up to 100). Larger sets are chunked automatically.
+const maxSnapshotSymbols = 100
+
+// fetchSnapshotWithCategory fetches snapshots with an explicit category, chunking
+// the symbol list to stay within the per-request limit.
 func (c *Client) fetchSnapshotWithCategory(ctx context.Context, symbols []string, category string) ([]Snapshot, error) {
-	query := url.Values{}
-	query.Set("category", category)
-	query.Set("symbols", strings.Join(symbols, ","))
-	var resp []Snapshot
-	if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
-		return nil, err
+	var all []Snapshot
+	for start := 0; start < len(symbols); start += maxSnapshotSymbols {
+		end := min(start+maxSnapshotSymbols, len(symbols))
+		query := url.Values{}
+		query.Set("category", category)
+		query.Set("symbols", strings.Join(symbols[start:end], ","))
+		var resp []Snapshot
+		if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
+			return nil, err
+		}
+		all = append(all, resp...)
 	}
-	return resp, nil
+	return all, nil
 }
 
 // fetchBarsWithCategory is a private helper that fetches bars with an explicit category.
@@ -419,60 +475,165 @@ func (c *Client) FetchPositions(ctx context.Context) ([]Position, error) {
 	return resp, nil
 }
 
-// FetchInstruments fetches instrument metadata by symbols.
-// If symbols is empty, fetches all tradable instruments (pagination required).
-// Supports both US_STOCK and US_ETF categories via fallback resolution.
+// FetchInstruments fetches instrument metadata. When symbols are given it does a
+// single bounded lookup (the endpoint accepts up to 100 symbols). When symbols is
+// empty it fetches the full tradable list, cursor-paginating with
+// last_instrument_id until a short/empty page (the endpoint pages at page_size,
+// default 1000).
 //
-// TODO(webull-multiasset): instrument endpoint is pinned to US_STOCK category here.
-// Webull also exposes crypto/futures/option markets; parameterize `category`
-// when those land (see docs/webull-api-spec.md).
+// The endpoint only supports category=US_STOCK per the API spec.
+// TODO(webull-multiasset): Webull also exposes crypto/futures/option markets;
+// parameterize `category` when those land (see docs/webull-api-spec.md).
 func (c *Client) FetchInstruments(ctx context.Context, symbols []string) ([]Instrument, error) {
-	query := url.Values{}
-	// Instruments endpoint only supports US_STOCK category per API spec;
-	// ETF instruments may need to be fetched separately or via category parameterization in the future.
-	query.Set("category", "US_STOCK")
+	// Symbol-scoped lookup: bounded set, single request.
 	if len(symbols) > 0 {
+		query := url.Values{}
+		query.Set("category", "US_STOCK")
 		query.Set("symbols", strings.Join(symbols, ","))
+		var resp []Instrument
+		if err := c.doRequest(ctx, http.MethodGet, endpointInstrumentStockList, query, nil, &resp, false); err != nil {
+			return nil, fmt.Errorf("webull: FetchInstruments: %w", err)
+		}
+		return resp, nil
 	}
-	var resp []Instrument
-	if err := c.doRequest(ctx, http.MethodGet, endpointInstrumentStockList, query, nil, &resp, false); err != nil {
-		return nil, fmt.Errorf("webull: FetchInstruments: %w", err)
+
+	// Full listing: cursor-paginate until a page shorter than page_size (or empty).
+	const pageSize = 1000
+	const maxPages = 100 // safety cap (≤100k instruments)
+	var all []Instrument
+	lastID := ""
+	for range maxPages {
+		query := url.Values{}
+		query.Set("category", "US_STOCK")
+		query.Set("page_size", fmt.Sprintf("%d", pageSize))
+		if lastID != "" {
+			query.Set("last_instrument_id", lastID)
+		}
+		var resp []Instrument
+		if err := c.doRequest(ctx, http.MethodGet, endpointInstrumentStockList, query, nil, &resp, false); err != nil {
+			return nil, fmt.Errorf("webull: FetchInstruments: %w", err)
+		}
+		all = append(all, resp...)
+		if len(resp) < pageSize {
+			break
+		}
+		lastID = resp[len(resp)-1].InstrumentID
+		if lastID == "" {
+			break // no cursor available; stop rather than loop forever
+		}
 	}
-	return resp, nil
+	return all, nil
 }
 
-// FetchSnapshot fetches snapshot (price) data for multiple symbols.
-// symbols: comma-separated or array of symbols (max 100)
-// Supports both US_STOCK and US_ETF categories via automatic fallback resolution.
-// The resolved category is cached per symbol for efficiency.
+// FetchSnapshot fetches snapshot (price) data for multiple symbols, resolving the
+// US_STOCK vs US_ETF category automatically and caching it per symbol.
+//
+// Uncached symbols are resolved with a batched probe: one US_STOCK request for the
+// whole set, then a single US_ETF request for whichever symbols the first response
+// omitted (2 calls for any N, versus N sequential probes previously). If the batch
+// request instead errors — which is how the endpoint behaves when it rejects a
+// category-mismatched symbol rather than omitting it (the sandbox is AAPL-only, so
+// this cannot be distinguished there) — it falls back to correct per-symbol
+// resolution. Either way the result is right; the batch path is the fast case.
 func (c *Client) FetchSnapshot(ctx context.Context, symbols []string) ([]Snapshot, error) {
 	if len(symbols) == 0 {
 		return []Snapshot{}, nil
 	}
 
-	// Group symbols by resolved category
-	categoryMap := make(map[string][]string)
+	// Partition into symbols with a cached category and uncached ones.
+	cachedByCat := make(map[string][]string)
+	var uncached []string
+	c.categoryMu.Lock()
+	for _, sym := range symbols {
+		if cat, ok := c.categoryCache[sym]; ok {
+			cachedByCat[cat] = append(cachedByCat[cat], sym)
+		} else {
+			uncached = append(uncached, sym)
+		}
+	}
+	c.categoryMu.Unlock()
+
+	var out []Snapshot
+
+	// Serve cached symbols in one batched request per category.
+	for cat, syms := range cachedByCat {
+		snaps, err := c.fetchSnapshotWithCategory(ctx, syms, cat)
+		if err != nil {
+			return nil, fmt.Errorf("webull: FetchSnapshot: %w", err)
+		}
+		out = append(out, snaps...)
+	}
+
+	if len(uncached) == 0 {
+		return out, nil
+	}
+
+	// Batch-probe uncached symbols under US_STOCK.
+	stockSnaps, err := c.fetchSnapshotWithCategory(ctx, uncached, "US_STOCK")
+	if err != nil {
+		// Endpoint rejected the whole batch (likely an ETF/invalid symbol under
+		// US_STOCK). Fall back to correct-but-slower per-symbol resolution.
+		return c.fetchSnapshotPerSymbol(ctx, out, uncached)
+	}
+
+	present := c.cacheResolvedSymbols(stockSnaps, "US_STOCK")
+	out = append(out, stockSnaps...)
+
+	// Symbols the US_STOCK response omitted are retried once as US_ETF.
+	var missing []string
+	for _, sym := range uncached {
+		if !present[strings.ToUpper(sym)] {
+			missing = append(missing, sym)
+		}
+	}
+	if len(missing) > 0 {
+		etfSnaps, err := c.fetchSnapshotWithCategory(ctx, missing, "US_ETF")
+		if err != nil {
+			return nil, fmt.Errorf("webull: FetchSnapshot: US_ETF fallback for %v: %w", missing, err)
+		}
+		c.cacheResolvedSymbols(etfSnaps, "US_ETF")
+		out = append(out, etfSnaps...)
+		// NOTE: a symbol still absent after both categories is dropped from the
+		// result here (the batch path does not error on it). This differs from the
+		// old per-symbol path, which errored on a fully-unresolved symbol. The
+		// difference is inert for current callers: single-symbol callers
+		// (FetchTicker/FetchPrice) still error via their len==0 guard, and
+		// FetchTickers re-fetches any missing symbol through FetchTicker, which
+		// surfaces a genuinely-unknown symbol as an error.
+	}
+
+	return out, nil
+}
+
+// cacheResolvedSymbols records the resolved category for every symbol present in
+// snaps and returns the set of present symbols (upper-cased) for miss detection.
+func (c *Client) cacheResolvedSymbols(snaps []Snapshot, category string) map[string]bool {
+	present := make(map[string]bool, len(snaps))
+	c.categoryMu.Lock()
+	for _, s := range snaps {
+		c.categoryCache[s.Symbol] = category
+		present[strings.ToUpper(s.Symbol)] = true
+	}
+	c.categoryMu.Unlock()
+	return present
+}
+
+// fetchSnapshotPerSymbol is the fallback path used when a batched category probe
+// errors: it resolves and fetches each symbol individually (caching as it goes),
+// appending to acc. Correct for any endpoint behavior, at N calls.
+func (c *Client) fetchSnapshotPerSymbol(ctx context.Context, acc []Snapshot, symbols []string) ([]Snapshot, error) {
 	for _, sym := range symbols {
 		cat, err := c.resolveCategoryForSymbol(ctx, sym)
 		if err != nil {
 			return nil, fmt.Errorf("webull: FetchSnapshot: resolve category for %s: %w", sym, err)
 		}
-		categoryMap[cat] = append(categoryMap[cat], sym)
-	}
-
-	// Fetch snapshots for each category
-	var allSnapshots []Snapshot
-	for category, syms := range categoryMap {
-		query := url.Values{}
-		query.Set("category", category)
-		query.Set("symbols", strings.Join(syms, ","))
-		var resp []Snapshot
-		if err := c.doRequest(ctx, http.MethodGet, endpointSnapshot, query, nil, &resp, false); err != nil {
+		snaps, err := c.fetchSnapshotWithCategory(ctx, []string{sym}, cat)
+		if err != nil {
 			return nil, fmt.Errorf("webull: FetchSnapshot: %w", err)
 		}
-		allSnapshots = append(allSnapshots, resp...)
+		acc = append(acc, snaps...)
 	}
-	return allSnapshots, nil
+	return acc, nil
 }
 
 // FetchBars fetches candlestick bars for a symbol.

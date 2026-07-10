@@ -102,46 +102,37 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		return ErrorResult("quantity must be positive")
 	}
 
-	// Validate option_type
+	// Normalize for gates and messages.
 	optionTypeUpper := strings.ToUpper(optionType)
-	if optionTypeUpper != "CALL" && optionTypeUpper != "PUT" {
-		return ErrorResult("option_type must be CALL or PUT")
-	}
-
-	// Validate side
 	sideUpper := strings.ToUpper(side)
-	if sideUpper != "BUY" && sideUpper != "SELL" {
-		return ErrorResult("side must be BUY or SELL")
-	}
-
-	// Validate order type
 	orderTypeUpper := strings.ToUpper(orderType)
-	switch orderTypeUpper {
-	case "LIMIT":
-		if limitPrice == nil {
-			return ErrorResult("limit_price is required for LIMIT orders")
-		}
-	case "STOP_LOSS":
-		if stopPrice == nil {
-			return ErrorResult("stop_price is required for STOP_LOSS orders")
-		}
-	case "STOP_LOSS_LIMIT":
-		if limitPrice == nil || stopPrice == nil {
-			return ErrorResult("both limit_price and stop_price are required for STOP_LOSS_LIMIT orders")
-		}
-	case "MARKET", "TAKE_PROFIT":
-		return ErrorResult(fmt.Sprintf("order type %q is not supported for options", orderTypeUpper))
-	default:
-		return ErrorResult(fmt.Sprintf("unsupported order type %q", orderTypeUpper))
-	}
-
-	// Validate TIF
 	tifUpper := strings.ToUpper(timeInForce)
-	if tifUpper != "DAY" && tifUpper != "GTC" {
-		return ErrorResult("time_in_force must be DAY or GTC")
+
+	// Build the order request and validate its shape once, via the single source
+	// of truth (broker.OptionOrderRequest.Validate): order type + required prices,
+	// side, TIF (GTC not on SELL), single leg, CALL/PUT. Policy gates below stay
+	// in this tool layer.
+	leg := broker.OptionLeg{
+		Side:       sideUpper,
+		Quantity:   quantity,
+		Underlying: strings.ToUpper(underlying),
+		Strike:     strike,
+		Expiry:     expiry,
+		OptionType: optionTypeUpper,
 	}
-	if sideUpper == "SELL" && tifUpper == "GTC" {
-		return ErrorResult("GTC (Good-Till-Cancel) is not allowed on SELL orders (use DAY)")
+	req := broker.OptionOrderRequest{
+		Underlying:  strings.ToUpper(underlying),
+		Strategy:    "SINGLE",
+		OrderType:   orderTypeUpper,
+		Side:        sideUpper,
+		Quantity:    quantity,
+		LimitPrice:  limitPrice,
+		StopPrice:   stopPrice,
+		TimeInForce: tifUpper,
+		Legs:        []broker.OptionLeg{leg},
+	}
+	if err := req.Validate(); err != nil {
+		return ErrorResult(err.Error())
 	}
 
 	// --- Gate 1b: permission check ---
@@ -240,28 +231,7 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		return UserResult(out)
 	}
 
-	// --- Gate 7: execute ---
-	leg := broker.OptionLeg{
-		Side:       sideUpper,
-		Quantity:   quantity,
-		Underlying: strings.ToUpper(underlying),
-		Strike:     strike,
-		Expiry:     expiry,
-		OptionType: optionTypeUpper,
-	}
-
-	req := broker.OptionOrderRequest{
-		Underlying:  strings.ToUpper(underlying),
-		Strategy:    "SINGLE",
-		OrderType:   orderTypeUpper,
-		Side:        sideUpper,
-		Quantity:    quantity,
-		LimitPrice:  limitPrice,
-		StopPrice:   stopPrice,
-		TimeInForce: tifUpper,
-		Legs:        []broker.OptionLeg{leg},
-	}
-
+	// --- Gate 7: execute --- (req was built and validated above)
 	order, err := opt.PlaceOptionOrder(ctx, req)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("PlaceOptionOrder failed: %v", err)).WithError(err)

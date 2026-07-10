@@ -79,7 +79,7 @@ func (s *appState) binanceMenu() tview.Primitive {
 		func() {
 			s.config.Exchanges.Binance.Accounts = append(
 				s.config.Exchanges.Binance.Accounts,
-				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNamesSlice(s.config.Exchanges.Binance.Accounts))},
+				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNames(s.config.Exchanges.Binance.Accounts))},
 			)
 			s.config.Exchanges.Binance.Enabled = true
 			s.dirty = true
@@ -97,7 +97,7 @@ func (s *appState) binancethMenu() tview.Primitive {
 		func() {
 			s.config.Exchanges.BinanceTH.Accounts = append(
 				s.config.Exchanges.BinanceTH.Accounts,
-				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNamesSlice(s.config.Exchanges.BinanceTH.Accounts))},
+				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNames(s.config.Exchanges.BinanceTH.Accounts))},
 			)
 			s.config.Exchanges.BinanceTH.Enabled = true
 			s.dirty = true
@@ -115,7 +115,7 @@ func (s *appState) bitkubMenu() tview.Primitive {
 		func() {
 			s.config.Exchanges.Bitkub.Accounts = append(
 				s.config.Exchanges.Bitkub.Accounts,
-				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNamesSlice(s.config.Exchanges.Bitkub.Accounts))},
+				khunquantconfig.ExchangeAccount{Name: s.nextAccountName(accountNames(s.config.Exchanges.Bitkub.Accounts))},
 			)
 			s.config.Exchanges.Bitkub.Enabled = true
 			s.dirty = true
@@ -135,7 +135,7 @@ func (s *appState) okxMenu() tview.Primitive {
 				s.config.Exchanges.OKX.Accounts,
 				khunquantconfig.OKXExchangeAccount{
 					ExchangeAccount: khunquantconfig.ExchangeAccount{
-						Name: s.nextAccountName(okxAccountNames(s.config.Exchanges.OKX.Accounts)),
+						Name: s.nextAccountName(accountNames(s.config.Exchanges.OKX.Accounts)),
 					},
 				},
 			)
@@ -157,7 +157,7 @@ func (s *appState) settradeMenu() tview.Primitive {
 				s.config.Exchanges.Settrade.Accounts,
 				khunquantconfig.SettradeExchangeAccount{
 					ExchangeAccount: khunquantconfig.ExchangeAccount{
-						Name: s.nextAccountName(settradeAccountNames(s.config.Exchanges.Settrade.Accounts)),
+						Name: s.nextAccountName(accountNames(s.config.Exchanges.Settrade.Accounts)),
 					},
 				},
 			)
@@ -179,7 +179,7 @@ func (s *appState) webullMenu() tview.Primitive {
 				s.config.Exchanges.Webull.Accounts,
 				khunquantconfig.WebullExchangeAccount{
 					ExchangeAccount: khunquantconfig.ExchangeAccount{
-						Name: s.nextAccountName(webullAccountNames(s.config.Exchanges.Webull.Accounts)),
+						Name: s.nextAccountName(accountNames(s.config.Exchanges.Webull.Accounts)),
 					},
 					Region: "us",
 				},
@@ -318,7 +318,7 @@ func (s *appState) okxAccountForm(index int) tview.Primitive {
 		s.dirty = true
 	})
 	addExchangeDeleteButton(form, s, func() {
-		s.config.Exchanges.OKX.Accounts = removeOKXAccount(s.config.Exchanges.OKX.Accounts, index)
+		s.config.Exchanges.OKX.Accounts = removeAccount(s.config.Exchanges.OKX.Accounts, index)
 		if len(s.config.Exchanges.OKX.Accounts) == 0 {
 			s.config.Exchanges.OKX.Enabled = false
 		}
@@ -355,7 +355,7 @@ func (s *appState) settradeAccountForm(index int) tview.Primitive {
 		s.dirty = true
 	})
 	addExchangeDeleteButton(form, s, func() {
-		s.config.Exchanges.Settrade.Accounts = removeSettradeAccount(s.config.Exchanges.Settrade.Accounts, index)
+		s.config.Exchanges.Settrade.Accounts = removeAccount(s.config.Exchanges.Settrade.Accounts, index)
 		if len(s.config.Exchanges.Settrade.Accounts) == 0 {
 			s.config.Exchanges.Settrade.Enabled = false
 		}
@@ -384,7 +384,7 @@ func (s *appState) webullAccountForm(index int) tview.Primitive {
 		s.dirty = true
 	})
 	addExchangeDeleteButton(form, s, func() {
-		s.config.Exchanges.Webull.Accounts = removeWebullAccount(s.config.Exchanges.Webull.Accounts, index)
+		s.config.Exchanges.Webull.Accounts = removeAccount(s.config.Exchanges.Webull.Accounts, index)
 		if len(s.config.Exchanges.Webull.Accounts) == 0 {
 			s.config.Exchanges.Webull.Enabled = false
 		}
@@ -432,62 +432,21 @@ func addExchangeDeleteButton(form *tview.Form, s *appState, doDelete func()) {
 	})
 }
 
-func removeAccount(accounts []khunquantconfig.ExchangeAccount, index int) []khunquantconfig.ExchangeAccount {
+// removeAccount returns accounts with the element at index removed, for any
+// account slice type. A no-op for an out-of-range index.
+func removeAccount[T any](accounts []T, index int) []T {
 	if index < 0 || index >= len(accounts) {
 		return accounts
 	}
 	return append(accounts[:index:index], accounts[index+1:]...)
 }
 
-func removeOKXAccount(accounts []khunquantconfig.OKXExchangeAccount, index int) []khunquantconfig.OKXExchangeAccount {
-	if index < 0 || index >= len(accounts) {
-		return accounts
-	}
-	return append(accounts[:index:index], accounts[index+1:]...)
-}
-
-func removeSettradeAccount(accounts []khunquantconfig.SettradeExchangeAccount, index int) []khunquantconfig.SettradeExchangeAccount {
-	if index < 0 || index >= len(accounts) {
-		return accounts
-	}
-	return append(accounts[:index:index], accounts[index+1:]...)
-}
-
-func removeWebullAccount(accounts []khunquantconfig.WebullExchangeAccount, index int) []khunquantconfig.WebullExchangeAccount {
-	if index < 0 || index >= len(accounts) {
-		return accounts
-	}
-	return append(accounts[:index:index], accounts[index+1:]...)
-}
-
-func accountNamesSlice(accounts []khunquantconfig.ExchangeAccount) []string {
+// accountNames returns the Name of each account, for any account type that
+// exposes GetName() (every config account embeds config.ExchangeAccount).
+func accountNames[T interface{ GetName() string }](accounts []T) []string {
 	names := make([]string, len(accounts))
 	for i, a := range accounts {
-		names[i] = a.Name
-	}
-	return names
-}
-
-func okxAccountNames(accounts []khunquantconfig.OKXExchangeAccount) []string {
-	names := make([]string, len(accounts))
-	for i, a := range accounts {
-		names[i] = a.Name
-	}
-	return names
-}
-
-func settradeAccountNames(accounts []khunquantconfig.SettradeExchangeAccount) []string {
-	names := make([]string, len(accounts))
-	for i, a := range accounts {
-		names[i] = a.Name
-	}
-	return names
-}
-
-func webullAccountNames(accounts []khunquantconfig.WebullExchangeAccount) []string {
-	names := make([]string, len(accounts))
-	for i, a := range accounts {
-		names[i] = a.Name
+		names[i] = a.GetName()
 	}
 	return names
 }

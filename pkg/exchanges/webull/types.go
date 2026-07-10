@@ -1,6 +1,7 @@
 package webull
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -219,24 +220,38 @@ type ComboOrder struct {
 
 // OrderItem represents a single order within a ComboOrder.
 type OrderItem struct {
-	ClientOrderID  string `json:"client_order_id"`
-	OrderID        string `json:"order_id"`
-	Symbol         string `json:"symbol"`
-	Side           string `json:"side"`
-	Status         string `json:"status"`
-	OrderType      string `json:"order_type"`
-	InstrumentType string `json:"instrument_type"`
-	EntryType      string `json:"entrust_type"`
-	TimeInForce    string `json:"time_in_force"`
-	TotalQuantity  string `json:"total_quantity"`
-	FilledQuantity string `json:"filled_quantity"`
-	FilledPrice    string `json:"filled_price"`
-	LimitPrice     string `json:"limit_price"`
-	StopPrice      string `json:"stop_price"`
-	PlaceTime      string `json:"place_time"`
-	PlaceTimeAt    string `json:"place_time_at"`
-	FilledTime     string `json:"filled_time"`
-	FilledTimeAt   string `json:"filled_time_at"`
+	ClientOrderID  string             `json:"client_order_id"`
+	OrderID        string             `json:"order_id"`
+	Symbol         string             `json:"symbol"`
+	Side           string             `json:"side"`
+	Status         string             `json:"status"`
+	OrderType      string             `json:"order_type"`
+	InstrumentType string             `json:"instrument_type"`
+	EntryType      string             `json:"entrust_type"`
+	TimeInForce    string             `json:"time_in_force"`
+	TotalQuantity  string             `json:"total_quantity"`
+	FilledQuantity string             `json:"filled_quantity"`
+	FilledPrice    string             `json:"filled_price"`
+	LimitPrice     string             `json:"limit_price"`
+	StopPrice      string             `json:"stop_price"`
+	PlaceTime      string             `json:"place_time"`
+	PlaceTimeAt    string             `json:"place_time_at"`
+	FilledTime     string             `json:"filled_time"`
+	FilledTimeAt   string             `json:"filled_time_at"`
+	Legs           []OrderLegResponse `json:"legs,omitempty"`
+}
+
+// OrderLegResponse is a single leg echoed in an order open/detail/history response.
+// For OPTION orders it carries the contract fields needed to rebuild the OCC symbol.
+type OrderLegResponse struct {
+	ID               string `json:"id"`
+	Symbol           string `json:"symbol"` // underlying
+	Side             string `json:"side"`
+	Quantity         string `json:"quantity"`
+	OptionType       string `json:"option_type"`     // CALL|PUT
+	OptionCategory   string `json:"option_category"` // AMERICAN|EUROPEAN
+	StrikePrice      string `json:"strike_price"`
+	OptionExpireDate string `json:"option_expire_date"` // yyyy-MM-dd
 }
 
 // --- Error Response ---
@@ -287,23 +302,17 @@ type OptionSnapshotDTO struct {
 	QuoteTime     int64  `json:"quote_time"`      // unix milliseconds
 }
 
-// OptionBarDTO represents a single candlestick bar from /openapi/market-data/option/bars.
-// All numeric values are JSON strings.
-type OptionBarDTO struct {
-	TickerID       string `json:"tickerId"`
-	Symbol         string `json:"symbol"` // Encoded OCC symbol
-	Time           string `json:"time"`   // ISO8601, e.g. "2026-07-09T04:00:00.000+0000"
-	Open           string `json:"open"`
-	Close          string `json:"close"`
-	High           string `json:"high"`
-	Low            string `json:"low"`
-	Volume         string `json:"volume"`
-	TradingSession string `json:"trading_session,omitempty"` // PRE, RTH, ATH, OVN
-}
+// OptionBarDTO is a single candlestick bar from /openapi/market-data/option/bars.
+// The option-bars payload is structurally identical to the stock Bar (its Symbol
+// is the encoded OCC symbol), so it is an alias — both share barsToOHLCV.
+type OptionBarDTO = Bar
 
 // --- Helper Functions ---
 
-// parseFloat parses a string as float64, returning 0 for empty strings.
+// parseFloat parses a string as float64, returning 0 for empty or malformed
+// strings. Use this only where a missing/zero value is legitimate (e.g. an
+// illiquid contract's bid). For fields where a malformed value must not silently
+// become 0 (e.g. a quote price), use parseFloatStrict.
 func parseFloat(s string) float64 {
 	if s == "" {
 		return 0
@@ -313,4 +322,18 @@ func parseFloat(s string) float64 {
 		return 0
 	}
 	return f
+}
+
+// parseFloatStrict parses a string as float64, returning an error for empty or
+// unparseable input. A present, well-formed "0" parses to (0, nil). Use this for
+// fields where a silent 0-on-error would corrupt downstream valuation/sizing.
+func parseFloatStrict(s string) (float64, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid float %q: %w", s, err)
+	}
+	return f, nil
 }

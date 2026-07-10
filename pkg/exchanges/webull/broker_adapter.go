@@ -35,37 +35,164 @@ func (a *webullAdapter) ID() string { return Name }
 func (a *webullAdapter) Category() broker.AssetCategory { return broker.CategoryStock }
 
 // GetMarketStatus returns whether the US equity market is currently open.
-// Regular market hours: 09:30–16:00 America/New_York, Monday–Friday.
-// TODO: no US market holiday calendar — this will incorrectly report MarketOpen
-// on holidays/half-days. Harmless while trading is deferred (webullAdapter does
-// not implement broker.TradingProvider), but must be addressed before order
-// placement gates on this check. See docs/webull-integration.md.
+// Regular market hours: 09:30–16:00 America/New_York, Monday–Friday, with a
+// 13:00 early close on half-days. Holidays are computed from NYSE rules for the
+// given year (see usMarketStatusAt), so this needs no yearly maintenance. This
+// check is consumed as a pre-trade gate (order placement and DCA execution); the
+// Webull API still rejects closed-market orders as a backstop, which also covers
+// the rare unschedulable ad-hoc closures (e.g. days of mourning) that no rule
+// can predict.
 func (a *webullAdapter) GetMarketStatus(_ context.Context, _ string) (broker.MarketStatus, error) {
 	// Load US Eastern timezone
 	eastern, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		return broker.MarketUnknown, nil
 	}
+	return usMarketStatusAt(time.Now().In(eastern)), nil
+}
 
-	now := time.Now().In(eastern)
-
-	// Check if weekend
+// usMarketStatusAt computes the NYSE session status for an instant that has
+// already been converted to America/New_York. Pure (no clock/tz access) so the
+// weekend / holiday / half-day / regular-hours logic is unit-testable. Holidays
+// are derived from NYSE rules for any year rather than a hard-coded table.
+func usMarketStatusAt(now time.Time) broker.MarketStatus {
+	// Weekend
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
-		return broker.MarketClosed, nil
+		return broker.MarketClosed
 	}
 
-	// Check regular hours: 09:30–16:00
-	h, m := now.Hour(), now.Minute()
-	totalMin := h*60 + m
+	// Full-day holiday closure
+	if isNYSEFullHoliday(now) {
+		return broker.MarketClosed
+	}
 
+	// Regular hours: 09:30 open; close at 16:00, or 13:00 on half-days
+	totalMin := now.Hour()*60 + now.Minute()
 	regularOpen := 9*60 + 30 // 09:30
 	regularClose := 16 * 60  // 16:00
-
-	if totalMin >= regularOpen && totalMin < regularClose {
-		return broker.MarketOpen, nil
+	if isNYSEHalfDay(now) {
+		regularClose = 13 * 60 // 13:00 early close
 	}
 
-	return broker.MarketClosed, nil
+	if totalMin >= regularOpen && totalMin < regularClose {
+		return broker.MarketOpen
+	}
+	return broker.MarketClosed
+}
+
+// --- NYSE holiday calendar (computed per year, no yearly maintenance) ---
+//
+// NYSE observance rules encoded below:
+//   - A holiday on Saturday is observed the preceding Friday — EXCEPT New Year's
+//     Day, which is simply not observed when Jan 1 falls on a Saturday.
+//   - A holiday on Sunday is observed the following Monday.
+//   - Floating holidays (MLK, Washington, Memorial, Labor, Thanksgiving) and Good
+//     Friday always land on a weekday, so they need no observance shift.
+// Ad-hoc closures (national mourning, weather) are unschedulable and rely on the
+// exchange rejecting closed-market orders as the backstop.
+
+// isNYSEFullHoliday reports whether d (a date in Eastern time) is an NYSE
+// full-day closure.
+func isNYSEFullHoliday(d time.Time) bool {
+	y := d.Year()
+	holidays := []time.Time{
+		observedFixedHoliday(y, time.January, 1, true),        // New Year's Day
+		observedFixedHoliday(y, time.June, 19, false),         // Juneteenth
+		observedFixedHoliday(y, time.July, 4, false),          // Independence Day
+		observedFixedHoliday(y, time.December, 25, false),     // Christmas Day
+		nthWeekdayOfMonth(y, time.January, time.Monday, 3),    // MLK Jr. Day
+		nthWeekdayOfMonth(y, time.February, time.Monday, 3),   // Washington's Birthday
+		lastWeekdayOfMonth(y, time.May, time.Monday),          // Memorial Day
+		nthWeekdayOfMonth(y, time.September, time.Monday, 1),  // Labor Day
+		nthWeekdayOfMonth(y, time.November, time.Thursday, 4), // Thanksgiving
+		goodFriday(y), // Good Friday
+	}
+	for _, h := range holidays {
+		if !h.IsZero() && sameYMD(d, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNYSEHalfDay reports whether d is an NYSE early-close day (13:00 ET). These are
+// the Friday after Thanksgiving, and July 3 / December 24 when they fall Mon–Thu
+// (a Friday July 3 or Dec 24 is instead the observed full holiday; a weekend one
+// has no session).
+func isNYSEHalfDay(d time.Time) bool {
+	dayAfterThanksgiving := nthWeekdayOfMonth(d.Year(), time.November, time.Thursday, 4).AddDate(0, 0, 1)
+	if sameYMD(d, dayAfterThanksgiving) {
+		return true
+	}
+	monToThu := d.Weekday() >= time.Monday && d.Weekday() <= time.Thursday
+	if monToThu && d.Month() == time.July && d.Day() == 3 {
+		return true
+	}
+	if monToThu && d.Month() == time.December && d.Day() == 24 {
+		return true
+	}
+	return false
+}
+
+// observedFixedHoliday returns the NYSE-observed date for a fixed-date holiday,
+// applying the Saturday→Friday / Sunday→Monday rule. For New Year's Day on a
+// Saturday there is no observance, signalled by a zero Time.
+func observedFixedHoliday(year int, month time.Month, day int, isNewYear bool) time.Time {
+	d := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	switch d.Weekday() {
+	case time.Saturday:
+		if isNewYear {
+			return time.Time{}
+		}
+		return d.AddDate(0, 0, -1)
+	case time.Sunday:
+		return d.AddDate(0, 0, 1)
+	default:
+		return d
+	}
+}
+
+// nthWeekdayOfMonth returns the date of the n-th given weekday in a month
+// (n starting at 1), e.g. the 3rd Monday of January.
+func nthWeekdayOfMonth(year int, month time.Month, wd time.Weekday, n int) time.Time {
+	first := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	offset := (int(wd) - int(first.Weekday()) + 7) % 7
+	return first.AddDate(0, 0, offset+(n-1)*7)
+}
+
+// lastWeekdayOfMonth returns the date of the last given weekday in a month,
+// e.g. the last Monday of May.
+func lastWeekdayOfMonth(year int, month time.Month, wd time.Weekday) time.Time {
+	last := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	offset := (int(last.Weekday()) - int(wd) + 7) % 7
+	return last.AddDate(0, 0, -offset)
+}
+
+// goodFriday returns the Good Friday date (2 days before Easter Sunday), using the
+// Anonymous Gregorian computus for Easter.
+func goodFriday(year int) time.Time {
+	a := year % 19
+	b := year / 100
+	c := year % 100
+	d := b / 4
+	e := b % 4
+	f := (b + 8) / 25
+	g := (b - f + 1) / 3
+	h := (19*a + b - d - g + 15) % 30
+	i := c / 4
+	k := c % 4
+	l := (32 + 2*e + 2*i - h - k) % 7
+	m := (a + 11*h + 22*l) / 451
+	month := (h + l - 7*m + 114) / 31
+	day := ((h + l - 7*m + 114) % 31) + 1
+	easter := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	return easter.AddDate(0, 0, -2)
+}
+
+// sameYMD reports whether two times fall on the same calendar year-month-day
+// (ignoring clock time and location).
+func sameYMD(a, b time.Time) bool {
+	return a.Year() == b.Year() && a.Month() == b.Month() && a.Day() == b.Day()
 }
 
 // --- broker.PortfolioProvider ---
@@ -133,34 +260,7 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 		if err != nil {
 			return nil, err
 		}
-
-		result := make([]broker.WalletBalance, 0, len(positions))
-		for _, p := range positions {
-			// Only include EQUITY positions in stock wallet
-			if p.InstrumentType != "EQUITY" {
-				continue
-			}
-			qty := parseFloat(p.Quantity)
-			if qty > 0 {
-				extra := map[string]string{
-					"avg_cost":      p.CostPrice,
-					"current_price": p.LastPrice,
-					"market_value":  p.MarketValue,
-					"unrealized_pl": p.UnrealizedProfitLoss,
-					"percent_pnl":   p.UnrealizedProfitLossRate,
-				}
-				result = append(result, broker.WalletBalance{
-					Balance: broker.Balance{
-						Asset:  p.Symbol,
-						Free:   qty,
-						Locked: 0,
-					},
-					WalletType: "stock",
-					Extra:      extra,
-				})
-			}
-		}
-		return result, nil
+		return balancesFromPositions(positions, "EQUITY", "stock"), nil
 
 	case "option":
 		// Option wallet includes OPTION positions
@@ -168,54 +268,58 @@ func (a *webullAdapter) GetWalletBalances(ctx context.Context, walletType string
 		if err != nil {
 			return nil, err
 		}
-
-		result := make([]broker.WalletBalance, 0, len(positions))
-		for _, p := range positions {
-			// Only include OPTION positions in option wallet
-			if p.InstrumentType != "OPTION" {
-				continue
-			}
-			qty := parseFloat(p.Quantity)
-			if qty > 0 {
-				extra := map[string]string{
-					"avg_cost":      p.CostPrice,
-					"current_price": p.LastPrice,
-					"market_value":  p.MarketValue,
-					"unrealized_pl": p.UnrealizedProfitLoss,
-					"percent_pnl":   p.UnrealizedProfitLossRate,
-				}
-				result = append(result, broker.WalletBalance{
-					Balance: broker.Balance{
-						Asset:  p.Symbol,
-						Free:   qty,
-						Locked: 0,
-					},
-					WalletType: "option",
-					Extra:      extra,
-				})
-			}
-		}
-		return result, nil
+		return balancesFromPositions(positions, "OPTION", "option"), nil
 
 	case "all":
-		// Aggregate cash + stock + option
+		// Aggregate cash + stock + option. Positions are fetched once and
+		// partitioned in memory (cash comes from the separate balance endpoint).
 		cash, err := a.GetWalletBalances(ctx, "cash")
 		if err != nil {
 			return nil, err
 		}
-		stocks, err := a.GetWalletBalances(ctx, "stock")
+		positions, err := a.client.FetchPositions(ctx)
 		if err != nil {
 			return nil, err
 		}
-		options, err := a.GetWalletBalances(ctx, "option")
-		if err != nil {
-			return nil, err
-		}
+		stocks := balancesFromPositions(positions, "EQUITY", "stock")
+		options := balancesFromPositions(positions, "OPTION", "option")
 		return append(append(cash, stocks...), options...), nil
 
 	default:
 		return nil, fmt.Errorf("webull: unsupported wallet type %q (use \"cash\", \"stock\", \"option\", or \"all\")", walletType)
 	}
+}
+
+// balancesFromPositions maps positions of the given instrument type (e.g.
+// "EQUITY" or "OPTION") to wallet balances tagged with walletType, carrying the
+// precomputed-PnL extras. Positions with a non-positive quantity are skipped.
+func balancesFromPositions(positions []Position, instrumentType, walletType string) []broker.WalletBalance {
+	result := make([]broker.WalletBalance, 0, len(positions))
+	for _, p := range positions {
+		if p.InstrumentType != instrumentType {
+			continue
+		}
+		qty := parseFloat(p.Quantity)
+		if qty <= 0 {
+			continue
+		}
+		result = append(result, broker.WalletBalance{
+			Balance: broker.Balance{
+				Asset:  p.Symbol,
+				Free:   qty,
+				Locked: 0,
+			},
+			WalletType: walletType,
+			Extra: map[string]string{
+				"avg_cost":      p.CostPrice,
+				"current_price": p.LastPrice,
+				"market_value":  p.MarketValue,
+				"unrealized_pl": p.UnrealizedProfitLoss,
+				"percent_pnl":   p.UnrealizedProfitLossRate,
+			},
+		})
+	}
+	return result
 }
 
 func (a *webullAdapter) FetchPrice(ctx context.Context, asset, quote string) (float64, error) {
@@ -284,13 +388,54 @@ func (a *webullAdapter) FetchTicker(ctx context.Context, symbol string) (ccxt.Ti
 
 func (a *webullAdapter) FetchTickers(ctx context.Context, symbols []string) (map[string]ccxt.Ticker, error) {
 	out := make(map[string]ccxt.Ticker, len(symbols))
+	if len(symbols) == 0 {
+		return out, nil
+	}
+
+	// Normalize once and remember the caller's key per normalized symbol so the
+	// returned map is keyed exactly as requested.
+	normToInput := make(map[string]string, len(symbols))
+	norm := make([]string, 0, len(symbols))
 	for _, sym := range symbols {
-		t, err := a.FetchTicker(ctx, sym)
+		n := toWebullSymbol(sym)
+		if _, seen := normToInput[n]; !seen {
+			normToInput[n] = sym
+			norm = append(norm, n)
+		}
+	}
+
+	// One batched snapshot request (chunked + category-resolved internally)
+	// instead of one HTTP round-trip per symbol.
+	snapshots, err := a.client.FetchSnapshot(ctx, norm)
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchTickers: %w", err)
+	}
+
+	got := make(map[string]bool, len(snapshots))
+	for i := range snapshots {
+		snap := &snapshots[i]
+		inputKey, ok := normToInput[strings.ToUpper(snap.Symbol)]
+		if !ok {
+			// Unexpected symbol in the response; skip it.
+			continue
+		}
+		out[inputKey] = snapshotToTicker(inputKey, snap)
+		got[strings.ToUpper(snap.Symbol)] = true
+	}
+
+	// Fallback: fetch any symbol missing from the batch response individually so
+	// a single gap doesn't drop the whole map.
+	for n, inputKey := range normToInput {
+		if got[n] {
+			continue
+		}
+		t, err := a.FetchTicker(ctx, inputKey)
 		if err != nil {
 			return nil, err
 		}
-		out[sym] = t
+		out[inputKey] = t
 	}
+
 	return out, nil
 }
 
@@ -311,7 +456,12 @@ func (a *webullAdapter) FetchOHLCV(ctx context.Context, symbol, timeframe string
 		return nil, fmt.Errorf("webull: FetchOHLCV %s: %w", symbol, err)
 	}
 
-	// Bars come newest-first from Webull; reverse to oldest-first for CCXT convention
+	return barsToOHLCV(bars), nil
+}
+
+// barsToOHLCV converts Webull bars (newest-first) into CCXT OHLCV candles
+// (oldest-first). Shared by the equity and option OHLCV paths.
+func barsToOHLCV(bars []Bar) []ccxt.OHLCV {
 	out := make([]ccxt.OHLCV, len(bars))
 	for i, b := range bars {
 		// Parse bar time (ISO8601 format: "2026-07-09T04:00:00.000+0000")
@@ -320,29 +470,22 @@ func (a *webullAdapter) FetchOHLCV(ctx context.Context, symbol, timeframe string
 			// If parsing fails, use a fallback (current time)
 			barTime = time.Now()
 		}
-
-		o := parseFloat(b.Open)
-		h := parseFloat(b.High)
-		l := parseFloat(b.Low)
-		c := parseFloat(b.Close)
-		v := parseFloat(b.Volume)
-
 		out[i] = ccxt.OHLCV{
 			Timestamp: barTime.UnixMilli(),
-			Open:      o,
-			High:      h,
-			Low:       l,
-			Close:     c,
-			Volume:    v,
+			Open:      parseFloat(b.Open),
+			High:      parseFloat(b.High),
+			Low:       parseFloat(b.Low),
+			Close:     parseFloat(b.Close),
+			Volume:    parseFloat(b.Volume),
 		}
 	}
 
-	// Reverse to oldest-first
+	// Reverse to oldest-first (bars come newest-first from Webull).
 	for i := 0; i < len(out)/2; i++ {
 		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
 	}
 
-	return out, nil
+	return out
 }
 
 // --- broker.OptionMarketDataProvider ---
@@ -384,10 +527,18 @@ func (a *webullAdapter) FetchOptionSnapshot(ctx context.Context, contracts []bro
 			continue
 		}
 
+		// Guard the price strictly: a malformed/absent price must not silently
+		// become $0 and make the contract look worthless. Bid/ask/greeks stay on
+		// parseFloat since a legitimate 0 (e.g. illiquid bid) is valid there.
+		price, err := parseFloatStrict(snap.Price)
+		if err != nil {
+			return nil, fmt.Errorf("webull: FetchOptionSnapshot: bad price for %s: %w", snap.Symbol, err)
+		}
+
 		oq := broker.OptionQuote{
 			Contract:     contract,
 			Symbol:       snap.Symbol,
-			Price:        parseFloat(snap.Price),
+			Price:        price,
 			Bid:          parseFloat(snap.Bid),
 			Ask:          parseFloat(snap.Ask),
 			BidSize:      parseFloat(snap.BidSize),
@@ -432,37 +583,7 @@ func (a *webullAdapter) FetchOptionOHLCV(ctx context.Context, contract broker.Op
 		return nil, fmt.Errorf("webull: FetchOptionOHLCV %s: %w", encoded, err)
 	}
 
-	// Convert bars to OHLCV, oldest-first
-	out := make([]ccxt.OHLCV, len(bars))
-	for i, b := range bars {
-		// Parse bar time (ISO8601 format: "2026-07-09T04:00:00.000+0000")
-		barTime, err := time.Parse("2006-01-02T15:04:05.000-0700", b.Time)
-		if err != nil {
-			barTime = time.Now()
-		}
-
-		o := parseFloat(b.Open)
-		h := parseFloat(b.High)
-		l := parseFloat(b.Low)
-		c := parseFloat(b.Close)
-		v := parseFloat(b.Volume)
-
-		out[i] = ccxt.OHLCV{
-			Timestamp: barTime.UnixMilli(),
-			Open:      o,
-			High:      h,
-			Low:       l,
-			Close:     c,
-			Volume:    v,
-		}
-	}
-
-	// Reverse to oldest-first (bars come newest-first from Webull)
-	for i := 0; i < len(out)/2; i++ {
-		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
-	}
-
-	return out, nil
+	return barsToOHLCV(bars), nil
 }
 
 // FetchOrderBook is not supported via Webull OpenAPI.
@@ -628,22 +749,29 @@ func (a *webullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side
 }
 
 // CancelOrder cancels an open order by ID (client_order_id).
-func (a *webullAdapter) CancelOrder(ctx context.Context, id, _ string) (ccxt.Order, error) {
+// cancelByClientOrderID cancels an order by client_order_id and returns a minimal
+// canceled ccxt.Order. Shared by the equity and option cancel paths.
+func (a *webullAdapter) cancelByClientOrderID(ctx context.Context, clientOrderID string) (ccxt.Order, error) {
 	req := CancelOrderRequest{
 		AccountID:     a.client.accountID,
-		ClientOrderID: id,
+		ClientOrderID: clientOrderID,
 	}
-	_, err := a.client.CancelOrder(ctx, req)
+	if _, err := a.client.CancelOrder(ctx, req); err != nil {
+		return ccxt.Order{}, err
+	}
+	status := "canceled"
+	return ccxt.Order{
+		Id:     &clientOrderID,
+		Status: &status,
+	}, nil
+}
+
+func (a *webullAdapter) CancelOrder(ctx context.Context, id, _ string) (ccxt.Order, error) {
+	o, err := a.cancelByClientOrderID(ctx, id)
 	if err != nil {
 		return ccxt.Order{}, fmt.Errorf("webull: CancelOrder %s: %w", id, err)
 	}
-
-	// Return basic order with Id and status=canceled
-	status := "canceled"
-	return ccxt.Order{
-		Id:     &id,
-		Status: &status,
-	}, nil
+	return o, nil
 }
 
 // FetchOrder retrieves a single order by client_order_id.
@@ -662,27 +790,38 @@ func (a *webullAdapter) FetchOrder(ctx context.Context, id, symbol string) (ccxt
 	return orderItemToCCXT(symbol, &combo.Orders[0]), nil
 }
 
-// FetchOpenOrders returns all open orders, optionally filtered by symbol.
-func (a *webullAdapter) FetchOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error) {
+// fetchOpenOrdersFiltered returns open orders kept by the predicate, mapping each
+// to a ccxt.Order tagged with ccxtSymbol. Shared by the equity and option
+// open-orders paths.
+func (a *webullAdapter) fetchOpenOrdersFiltered(ctx context.Context, ccxtSymbol string, keep func(OrderItem) bool) ([]ccxt.Order, error) {
 	combos, err := a.client.FetchOpenOrders(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
+		return nil, err
 	}
 
 	var result []ccxt.Order
-	symbolFilter := toWebullSymbol(symbol) // "" → "", "AAPL/USD" → "AAPL"
-
 	for _, combo := range combos {
-		for _, item := range combo.Orders {
-			// Filter by symbol if specified
-			if symbolFilter != "" && item.Symbol != symbolFilter {
+		for i := range combo.Orders {
+			item := combo.Orders[i]
+			if !keep(item) {
 				continue
 			}
-			result = append(result, orderItemToCCXT(symbol, &item))
+			result = append(result, orderItemToCCXT(ccxtSymbol, &item))
 		}
 	}
-
 	return result, nil
+}
+
+// FetchOpenOrders returns all open orders, optionally filtered by symbol.
+func (a *webullAdapter) FetchOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error) {
+	symbolFilter := toWebullSymbol(symbol) // "" → "", "AAPL/USD" → "AAPL"
+	orders, err := a.fetchOpenOrdersFiltered(ctx, symbol, func(item OrderItem) bool {
+		return symbolFilter == "" || item.Symbol == symbolFilter
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
+	}
+	return orders, nil
 }
 
 // FetchClosedOrders returns closed/filled orders, optionally filtered by symbol.
@@ -740,66 +879,19 @@ func (a *webullAdapter) FetchMyTrades(_ context.Context, _ string, _ *int64, _ i
 // PlaceOptionOrder submits a new single-leg options order.
 // Validates order type, side, TIF, and enforces single-leg constraint.
 func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionOrderRequest) (ccxt.Order, error) {
-	// Validate strategy (only SINGLE supported)
-	strategy := req.Strategy
-	if strategy == "" {
-		strategy = "SINGLE"
-	}
-	if strategy != "SINGLE" {
-		return ccxt.Order{}, fmt.Errorf("webull: only single-leg options orders are supported (got strategy %q)", strategy)
+	// Validate request shape (strategy, order type, side, TIF, single leg).
+	if err := req.Validate(); err != nil {
+		return ccxt.Order{}, fmt.Errorf("webull: %w", err)
 	}
 
-	// Validate order type: only limit, stop_loss, stop_loss_limit (reject market, take_profit)
+	// Normalize fields for building the API order (validation already passed).
+	const strategy = "SINGLE"
 	orderTypeUpper := strings.ToUpper(req.OrderType)
-	switch orderTypeUpper {
-	case "LIMIT":
-		if req.LimitPrice == nil {
-			return ccxt.Order{}, fmt.Errorf("webull: limit_price is required for LIMIT option orders")
-		}
-	case "STOP_LOSS":
-		if req.StopPrice == nil {
-			return ccxt.Order{}, fmt.Errorf("webull: stop_price is required for STOP_LOSS option orders")
-		}
-	case "STOP_LOSS_LIMIT":
-		if req.LimitPrice == nil || req.StopPrice == nil {
-			return ccxt.Order{}, fmt.Errorf("webull: both limit_price and stop_price are required for STOP_LOSS_LIMIT option orders")
-		}
-	case "MARKET", "TAKE_PROFIT":
-		return ccxt.Order{}, fmt.Errorf("webull: order type %q is not supported for options (use LIMIT, STOP_LOSS, or STOP_LOSS_LIMIT)", orderTypeUpper)
-	default:
-		return ccxt.Order{}, fmt.Errorf("webull: unsupported option order type %q", orderTypeUpper)
-	}
-
-	// Validate side
 	sideUpper := strings.ToUpper(req.Side)
-	if sideUpper != "BUY" && sideUpper != "SELL" {
-		return ccxt.Order{}, fmt.Errorf("webull: unknown option order side %q (must be BUY or SELL)", req.Side)
-	}
-
-	// Validate TIF: DAY or GTC (GTC rejected on SELL)
 	tifUpper := strings.ToUpper(req.TimeInForce)
-	if tifUpper != "DAY" && tifUpper != "GTC" {
-		return ccxt.Order{}, fmt.Errorf("webull: unsupported time_in_force %q for options (use DAY or GTC)", req.TimeInForce)
-	}
-	if sideUpper == "SELL" && tifUpper == "GTC" {
-		return ccxt.Order{}, fmt.Errorf("webull: GTC (Good-Till-Cancel) is not allowed on SELL orders (use DAY)")
-	}
-
-	// Validate exactly one leg
-	if len(req.Legs) != 1 {
-		return ccxt.Order{}, fmt.Errorf("webull: exactly one leg is required for single-leg orders (got %d)", len(req.Legs))
-	}
 	leg := req.Legs[0]
-
-	// Validate leg fields
 	legSideUpper := strings.ToUpper(leg.Side)
-	if legSideUpper != "BUY" && legSideUpper != "SELL" {
-		return ccxt.Order{}, fmt.Errorf("webull: invalid leg side %q", leg.Side)
-	}
 	legOptionTypeUpper := strings.ToUpper(leg.OptionType)
-	if legOptionTypeUpper != "CALL" && legOptionTypeUpper != "PUT" {
-		return ccxt.Order{}, fmt.Errorf("webull: invalid option type %q (must be CALL or PUT)", leg.OptionType)
-	}
 
 	// Generate unique client_order_id
 	clientOrderID, err := generateClientOrderID()
@@ -854,8 +946,18 @@ func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionO
 		return ccxt.Order{}, fmt.Errorf("webull: PlaceOptionOrder: %w", err)
 	}
 
-	// Return ccxt.Order with Id = client_order_id, Info contains order_id
-	underlying := strings.ToUpper(req.Underlying)
+	// Return ccxt.Order with Id = client_order_id, Info contains order_id.
+	// Symbol is the OCC-encoded contract (falling back to the bare underlying if
+	// encoding fails), matching the convention used for fetched option orders.
+	optionSymbol := OCCSymbol(broker.OptionContract{
+		Underlying: strings.ToUpper(leg.Underlying),
+		Strike:     leg.Strike,
+		Expiry:     leg.Expiry,
+		OptionType: legOptionTypeUpper,
+	})
+	if optionSymbol == "" {
+		optionSymbol = strings.ToUpper(req.Underlying)
+	}
 	side := strings.ToLower(req.Side)
 	orderType := strings.ToLower(req.OrderType)
 	status := "open"
@@ -864,7 +966,7 @@ func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionO
 
 	return ccxt.Order{
 		Id:     &resp.ClientOrderID,
-		Symbol: &underlying,
+		Symbol: &optionSymbol,
 		Side:   &side,
 		Type:   &orderType,
 		Amount: &amount,
@@ -880,21 +982,11 @@ func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionO
 
 // CancelOptionOrder cancels an open options order by client_order_id.
 func (a *webullAdapter) CancelOptionOrder(ctx context.Context, clientOrderID string) (ccxt.Order, error) {
-	req := CancelOrderRequest{
-		AccountID:     a.client.accountID,
-		ClientOrderID: clientOrderID,
-	}
-	_, err := a.client.CancelOrder(ctx, req)
+	o, err := a.cancelByClientOrderID(ctx, clientOrderID)
 	if err != nil {
 		return ccxt.Order{}, fmt.Errorf("webull: CancelOptionOrder %s: %w", clientOrderID, err)
 	}
-
-	// Return basic order with Id and status=canceled
-	status := "canceled"
-	return ccxt.Order{
-		Id:     &clientOrderID,
-		Status: &status,
-	}, nil
+	return o, nil
 }
 
 // FetchOptionOrder retrieves a single options order by client_order_id.
@@ -915,23 +1007,13 @@ func (a *webullAdapter) FetchOptionOrder(ctx context.Context, clientOrderID stri
 
 // FetchOpenOptionOrders returns all open options orders (filters by instrument_type=OPTION).
 func (a *webullAdapter) FetchOpenOptionOrders(ctx context.Context) ([]ccxt.Order, error) {
-	combos, err := a.client.FetchOpenOrders(ctx)
+	orders, err := a.fetchOpenOrdersFiltered(ctx, "", func(item OrderItem) bool {
+		return item.InstrumentType == "OPTION"
+	})
 	if err != nil {
 		return nil, fmt.Errorf("webull: FetchOpenOptionOrders: %w", err)
 	}
-
-	var result []ccxt.Order
-	for _, combo := range combos {
-		for _, item := range combo.Orders {
-			// Filter by instrument_type = OPTION
-			if item.InstrumentType != "OPTION" {
-				continue
-			}
-			result = append(result, orderItemToCCXT("", &item))
-		}
-	}
-
-	return result, nil
+	return orders, nil
 }
 
 // --- Helpers ---
@@ -947,10 +1029,40 @@ func generateClientOrderID() (string, error) {
 }
 
 // orderItemToCCXT converts a Webull OrderItem to ccxt.Order.
+// occSymbolFromOrderItem builds the OCC-encoded symbol for an OPTION order item
+// from its echoed leg data, or "" if it is not an option or lacks leg fields.
+func occSymbolFromOrderItem(item *OrderItem) string {
+	if item.InstrumentType != "OPTION" || len(item.Legs) == 0 {
+		return ""
+	}
+	leg := item.Legs[0]
+	underlying := leg.Symbol
+	if underlying == "" {
+		underlying = item.Symbol
+	}
+	return OCCSymbol(broker.OptionContract{
+		Underlying: strings.ToUpper(underlying),
+		Strike:     parseFloat(leg.StrikePrice),
+		Expiry:     leg.OptionExpireDate,
+		OptionType: strings.ToUpper(leg.OptionType),
+	})
+}
+
 func orderItemToCCXT(symbol string, item *OrderItem) ccxt.Order {
 	id := item.ClientOrderID
+
+	// Symbol convention: OPTION orders use the OCC-encoded contract symbol
+	// (e.g. AAPL260821C00320000) when leg data is present; equities use CCXT
+	// "BASE/USD". The caller-provided symbol wins for equities when already CCXT.
 	sym := symbol
-	if !strings.Contains(sym, "/") {
+	switch {
+	case item.InstrumentType == "OPTION":
+		if occ := occSymbolFromOrderItem(item); occ != "" {
+			sym = occ
+		} else if sym == "" {
+			sym = item.Symbol // bare underlying fallback (no /USD for options)
+		}
+	case !strings.Contains(sym, "/"):
 		sym = item.Symbol + "/USD"
 	}
 	side := strings.ToLower(item.Side)

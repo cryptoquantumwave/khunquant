@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,6 +153,73 @@ func TestGetMarketStatus(t *testing.T) {
 	}
 	if status != broker.MarketOpen && status != broker.MarketClosed {
 		t.Errorf("invalid market status: %s", status)
+	}
+}
+
+// TestParseFloatStrict verifies malformed/empty values error while a present
+// "0" parses cleanly (so illiquid-but-present zeros are distinguishable).
+func TestParseFloatStrict(t *testing.T) {
+	if _, err := parseFloatStrict(""); err == nil {
+		t.Error("empty string should error")
+	}
+	if _, err := parseFloatStrict("NaN-ish"); err == nil {
+		t.Error("malformed string should error")
+	}
+	if v, err := parseFloatStrict("0"); err != nil || v != 0 {
+		t.Errorf("\"0\" should parse to (0, nil), got (%v, %v)", v, err)
+	}
+	if v, err := parseFloatStrict("123.45"); err != nil || v != 123.45 {
+		t.Errorf("\"123.45\" should parse, got (%v, %v)", v, err)
+	}
+}
+
+// TestMarketStatusAt exercises the pure session-status logic across weekends,
+// full-day holidays, half-days, and regular hours using fixed Eastern instants.
+func TestMarketStatusAt(t *testing.T) {
+	eastern, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load America/New_York: %v", err)
+	}
+	at := func(y int, mo time.Month, d, h, mi int) time.Time {
+		return time.Date(y, mo, d, h, mi, 0, 0, eastern)
+	}
+
+	cases := []struct {
+		name string
+		t    time.Time
+		want broker.MarketStatus
+	}{
+		{"weekday regular open", at(2026, time.July, 9, 11, 0), broker.MarketOpen},   // Thu
+		{"weekday pre-open", at(2026, time.July, 9, 9, 0), broker.MarketClosed},      // 09:00 < 09:30
+		{"weekday after close", at(2026, time.July, 9, 16, 30), broker.MarketClosed}, // 16:30 >= 16:00
+		{"saturday", at(2026, time.July, 11, 11, 0), broker.MarketClosed},            // Sat
+		{"sunday", at(2026, time.July, 12, 11, 0), broker.MarketClosed},              // Sun
+		{"full holiday thanksgiving", at(2026, time.November, 26, 11, 0), broker.MarketClosed},
+		{"juneteenth 2026", at(2026, time.June, 19, 11, 0), broker.MarketClosed},
+		{"half-day open before 13:00", at(2026, time.November, 27, 12, 30), broker.MarketOpen},
+		{"half-day closed after 13:00", at(2026, time.November, 27, 13, 30), broker.MarketClosed},
+		{"christmas eve half-day", at(2026, time.December, 24, 14, 0), broker.MarketClosed},
+		{"2027 observed christmas", at(2027, time.December, 24, 11, 0), broker.MarketClosed},
+
+		// Future years (no static table) prove the calendar is computed:
+		{"2028 MLK day", at(2028, time.January, 17, 11, 0), broker.MarketClosed},
+		{"2028 independence day", at(2028, time.July, 4, 11, 0), broker.MarketClosed},
+		{"2028 july-3 half-day before 13:00", at(2028, time.July, 3, 12, 0), broker.MarketOpen},
+		{"2028 july-3 half-day after 13:00", at(2028, time.July, 3, 14, 0), broker.MarketClosed},
+		{"2028 thanksgiving", at(2028, time.November, 23, 11, 0), broker.MarketClosed},
+		{"2028 day-after-thanksgiving half-day", at(2028, time.November, 24, 14, 0), broker.MarketClosed},
+		{"2028 good friday (easter computus)", at(2028, time.April, 14, 11, 0), broker.MarketClosed},
+		// New Year's on Saturday is NOT observed → the following Monday still trades.
+		{"2028 new year saturday not shifted", at(2028, time.January, 3, 11, 0), broker.MarketOpen},
+		// New Year's on Sunday IS observed on the Monday (Jan 1 2023 was a Sunday).
+		{"2023 observed new year monday", at(2023, time.January, 2, 11, 0), broker.MarketClosed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := usMarketStatusAt(tc.t); got != tc.want {
+				t.Errorf("usMarketStatusAt(%s) = %s, want %s", tc.t.Format(time.RFC3339), got, tc.want)
+			}
+		})
 	}
 }
 
@@ -372,8 +441,13 @@ func TestAdapterMethods(t *testing.T) {
 // TestWalletFiltering verifies that the stock wallet only returns EQUITY positions
 // and the option wallet only returns OPTION positions.
 func TestWalletFiltering(t *testing.T) {
+	var positionsCalls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/openapi/assets/positions" {
+			atomic.AddInt32(&positionsCalls, 1)
+		}
 
 		if r.URL.Path == "/openapi/auth/token/create" {
 			w.WriteHeader(http.StatusOK)
@@ -488,7 +562,8 @@ func TestWalletFiltering(t *testing.T) {
 		t.Errorf("expected option asset AAPL260821C00320000, got %s", optionBalances[0].Balance.Asset)
 	}
 
-	// Test "all" wallet - should return both
+	// Test "all" wallet - should return both, fetching positions only once.
+	before := atomic.LoadInt32(&positionsCalls)
 	allBalances, err := adapter.GetWalletBalances(ctx, "all")
 	if err != nil {
 		t.Fatalf("GetWalletBalances(all) failed: %v", err)
@@ -497,6 +572,90 @@ func TestWalletFiltering(t *testing.T) {
 	// Should have: 1 cash + 1 stock + 1 option = 3
 	if len(allBalances) != 3 {
 		t.Errorf("expected 3 total balances (cash+stock+option), got %d", len(allBalances))
+	}
+	if delta := atomic.LoadInt32(&positionsCalls) - before; delta != 1 {
+		t.Errorf("GetWalletBalances(all) should fetch positions once, got %d calls", delta)
+	}
+}
+
+// TestOrderItemToCCXTOptionSymbol verifies option orders map to the OCC-encoded
+// symbol from leg data, while equity orders keep the CCXT BASE/USD convention.
+func TestOrderItemToCCXTOptionSymbol(t *testing.T) {
+	optItem := &OrderItem{
+		ClientOrderID:  "coid-1",
+		Symbol:         "AAPL",
+		Side:           "BUY",
+		Status:         "SUBMITTED",
+		OrderType:      "LIMIT",
+		InstrumentType: "OPTION",
+		Legs: []OrderLegResponse{{
+			Symbol: "AAPL", OptionType: "CALL", StrikePrice: "320", OptionExpireDate: "2026-08-21",
+		}},
+	}
+	got := orderItemToCCXT("", optItem)
+	if got.Symbol == nil || *got.Symbol != "AAPL260821C00320000" {
+		t.Errorf("option order symbol = %v, want AAPL260821C00320000", got.Symbol)
+	}
+
+	// Option without leg data falls back to the bare underlying (never BASE/USD).
+	noLegs := &OrderItem{ClientOrderID: "coid-2", Symbol: "TSLA", InstrumentType: "OPTION", OrderType: "LIMIT"}
+	if got := orderItemToCCXT("", noLegs); got.Symbol == nil || *got.Symbol != "TSLA" {
+		t.Errorf("legless option symbol = %v, want TSLA", got.Symbol)
+	}
+
+	// Equity order keeps BASE/USD.
+	eq := &OrderItem{ClientOrderID: "coid-3", Symbol: "MSFT", InstrumentType: "EQUITY", OrderType: "LIMIT"}
+	if got := orderItemToCCXT("", eq); got.Symbol == nil || *got.Symbol != "MSFT/USD" {
+		t.Errorf("equity order symbol = %v, want MSFT/USD", got.Symbol)
+	}
+}
+
+// TestFetchTickersBatched verifies FetchTickers issues a single batched snapshot
+// request for multiple symbols rather than one HTTP round-trip per symbol.
+func TestFetchTickersBatched(t *testing.T) {
+	var snapshotCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/openapi/auth/token/create" {
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+			return
+		}
+		if r.URL.Path == "/openapi/market-data/stock/snapshot" {
+			atomic.AddInt32(&snapshotCalls, 1)
+			var out []Snapshot
+			for _, sym := range strings.Split(r.URL.Query().Get("symbols"), ",") {
+				out = append(out, Snapshot{Symbol: sym, Price: "100.00"})
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		},
+		AccountID: "ACC123",
+	}
+	adapter := &webullAdapter{cfg: cfg}
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	adapter.client = client
+
+	tickers, err := adapter.FetchTickers(context.Background(), []string{"AAPL", "MSFT", "GOOGL"})
+	if err != nil {
+		t.Fatalf("FetchTickers failed: %v", err)
+	}
+	if len(tickers) != 3 {
+		t.Errorf("expected 3 tickers, got %d", len(tickers))
+	}
+	if got := atomic.LoadInt32(&snapshotCalls); got != 1 {
+		t.Errorf("FetchTickers should batch into 1 snapshot call, got %d", got)
 	}
 }
 

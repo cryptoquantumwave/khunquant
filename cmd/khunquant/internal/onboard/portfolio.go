@@ -110,49 +110,25 @@ func enableExchange(cfg *config.Config, id string) error {
 		cfg.Exchanges.Bitkub.Accounts = appendIfNoMain(cfg.Exchanges.Bitkub.Accounts, placeholder)
 	case "okx":
 		cfg.Exchanges.OKX.Enabled = true
-		cfg.Exchanges.OKX.Accounts = appendIfNoMainOKX(cfg.Exchanges.OKX.Accounts, config.OKXExchangeAccount{ExchangeAccount: placeholder})
+		cfg.Exchanges.OKX.Accounts = appendIfNoMain(cfg.Exchanges.OKX.Accounts, config.OKXExchangeAccount{ExchangeAccount: placeholder})
 	case "settrade":
 		cfg.Exchanges.Settrade.Enabled = true
-		cfg.Exchanges.Settrade.Accounts = appendIfNoMainSettrade(cfg.Exchanges.Settrade.Accounts, config.SettradeExchangeAccount{ExchangeAccount: placeholder})
+		cfg.Exchanges.Settrade.Accounts = appendIfNoMain(cfg.Exchanges.Settrade.Accounts, config.SettradeExchangeAccount{ExchangeAccount: placeholder})
 	case "webull":
 		cfg.Exchanges.Webull.Enabled = true
-		cfg.Exchanges.Webull.Accounts = appendIfNoMainWebull(cfg.Exchanges.Webull.Accounts, config.WebullExchangeAccount{ExchangeAccount: placeholder, Region: "us"})
+		cfg.Exchanges.Webull.Accounts = appendIfNoMain(cfg.Exchanges.Webull.Accounts, config.WebullExchangeAccount{ExchangeAccount: placeholder, Region: "us"})
 	default:
 		return fmt.Errorf("unknown exchange %q", id)
 	}
 	return nil
 }
 
-func appendIfNoMain(accounts []config.ExchangeAccount, placeholder config.ExchangeAccount) []config.ExchangeAccount {
+// appendIfNoMain appends placeholder unless the slice already has a "main" (or
+// unnamed) account, for any account type exposing GetName() (every config account
+// embeds config.ExchangeAccount).
+func appendIfNoMain[T interface{ GetName() string }](accounts []T, placeholder T) []T {
 	for _, a := range accounts {
-		if strings.EqualFold(a.Name, "main") || a.Name == "" {
-			return accounts
-		}
-	}
-	return append(accounts, placeholder)
-}
-
-func appendIfNoMainOKX(accounts []config.OKXExchangeAccount, placeholder config.OKXExchangeAccount) []config.OKXExchangeAccount {
-	for _, a := range accounts {
-		if strings.EqualFold(a.Name, "main") || a.Name == "" {
-			return accounts
-		}
-	}
-	return append(accounts, placeholder)
-}
-
-func appendIfNoMainSettrade(accounts []config.SettradeExchangeAccount, placeholder config.SettradeExchangeAccount) []config.SettradeExchangeAccount {
-	for _, a := range accounts {
-		if strings.EqualFold(a.Name, "main") || a.Name == "" {
-			return accounts
-		}
-	}
-	return append(accounts, placeholder)
-}
-
-func appendIfNoMainWebull(accounts []config.WebullExchangeAccount, placeholder config.WebullExchangeAccount) []config.WebullExchangeAccount {
-	for _, a := range accounts {
-		if strings.EqualFold(a.Name, "main") || a.Name == "" {
+		if name := a.GetName(); strings.EqualFold(name, "main") || name == "" {
 			return accounts
 		}
 	}

@@ -46,7 +46,8 @@ func (m mockTradingProvider) FetchMyTrades(context.Context, string, *int64, int)
 }
 
 // mockNonTradingProvider implements broker.Provider but not broker.TradingProvider,
-// mirroring Webull's adapter (read-only: market data + portfolio, no order execution).
+// representing a hypothetical read-only provider (market data + portfolio, no order
+// execution) used to test the "provider does not support order execution" path.
 type mockNonTradingProvider struct {
 	id string
 }

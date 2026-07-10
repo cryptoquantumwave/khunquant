@@ -152,6 +152,10 @@ type ExchangeAccount struct {
 	Proxy       string            `json:"proxy,omitempty"       yaml:"-"` // e.g. "http://vps:3128" or "socks5://127.0.0.1:1080"
 }
 
+// GetName returns the account name. It lets ExchangeAccount and every type that
+// embeds it satisfy generic helpers constrained on `interface{ GetName() string }`.
+func (a ExchangeAccount) GetName() string { return a.Name }
+
 // HasPermission returns true if the account has the requested scope.
 // An empty Permissions list grants all scopes (backward-compatible default).
 func (a ExchangeAccount) HasPermission(scope PermissionScope) bool {

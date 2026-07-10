@@ -4,6 +4,34 @@ Head of Engineering: Opus 4.8 (integrator/reviewer). Implementation fanned out t
 Scope: **read-only + market data** (Portfolio + MarketData providers; no trading yet). Minimal wiring.
 Plan: `~/.claude/plans/let-s-design-the-technical-reflective-wozniak.md`.
 
+## Wave 5 — Code-review remediation (all 15 findings) — ✅ COMPLETE
+
+Source: `docs/webull-code-review.md` (fable5 review of `feature/webull`, 10 CONFIRMED + 5 PLAUSIBLE).
+Branch is unmerged, so all tiers were done "before the PR." Every fix has test coverage; full suite
+`go test ./...` → 81 pkg ok; gofmt/vet clean on changed files; signer KAT unchanged in value.
+
+| # | Finding | Fix | Key files |
+|---|---|---|---|
+| F1 | Holiday-blind `GetMarketStatus` gating live trades | **Computed NYSE calendar** (fixed + floating holidays with Sat/Sun observance, Good Friday via Easter computus, Mon–Thu half-days) — works for any year, no yearly maintenance; pure `usMarketStatusAt` unit-tested incl. 2028+/observance edges; stale comment deleted | `broker_adapter.go`, `adapter_test.go` |
+| F2 | `parseFloat` silently zeroes malformed option prices | Added `parseFloatStrict`; **Price** guarded strictly in `FetchOptionSnapshot`; bid/ask/greeks keep 0-legal | `types.go`, `broker_adapter.go` |
+| F3 | No 429/5xx retry in `doRequest` | Dual-policy loop: auth-retry once (immediate) + transient-retry ≤3 (backoff, re-signed); exported `utils.ShouldRetry/RetryDelayForAttempt/SleepWithCtx` | `client.go`, `pkg/utils/http_retry.go` |
+| F4 | `FetchTickers` N+1 | Single batched `FetchSnapshot`, map by symbol, per-symbol fallback for misses | `broker_adapter.go` |
+| F5 | Per-symbol category probe (N+1) | Batched US_STOCK probe → single US_ETF retry for omissions; **defensive per-symbol fallback if the batch errors** (sandbox can't disambiguate: AAPL-only). Chunked at 100 | `client.go` |
+| F6 | `GetWalletBalances("all")` double `FetchPositions` | `balancesFromPositions` helper; one fetch, in-memory partition (asserted in test) | `broker_adapter.go` |
+| F7 | `FetchInstruments` claims paging, doesn't | Cursor loop on `last_instrument_id` (page_size 1000) for full listing; single call when symbol-scoped | `client.go` |
+| F8 | Two sources of truth for stock `amount_unit` | Static `broker.ProviderCategory`/`IsStockProvider` (no live client); `dca_update_plan` uses it; `isStockProvider` deleted | `pkg/providers/broker/category.go`, `dca_{update,create}_plan.go` |
+| F9 | Stale "Webull is read-only" test comment | Reworded | `dca_create_plan_test.go` |
+| F10 | Per-broker helper triplication | Generic `removeAccount[T]`, `accountNames[T]`, `appendIfNoMain[T]` via new `ExchangeAccount.GetName()` | `exchange.go`, `portfolio.go`, `config.go` |
+| F11 | Equity/option method duplication | Shared `barsToOHLCV`, `cancelByClientOrderID`, `fetchOpenOrdersFiltered`, and `broker.OptionOrderRequest.Validate()` (used by adapter **and** tool; policy gates stay in tool) | `broker_adapter.go`, `provider.go`, `option_create_order.go` |
+| F12 | Predictable nonce fallback on `crypto/rand` failure | `randomNonce`/`SignRequest` now return an error (propagated through `doRequest`); no weak fallback | `signer.go`, `client.go` |
+| F13 | Silent host fallback masks misconfig | `WithBaseURL` validates host at construction; `doRequest` errors on empty host | `client.go` |
+| F14 | Inconsistent option `Symbol` | OCC-encoded symbol for option orders (place + fetched, via parsed response legs); documented on `OptionTradingProvider` | `broker_adapter.go`, `types.go`, `provider.go` |
+| F15 | Hand-rolled `contains()` in test | Replaced with `strings.Contains` | `client_test.go` |
+
+Notable design call (F5): the plan proposed a sandbox probe to decide omit-vs-error behavior, but
+the sandbox is AAPL-only (`403 INVALID_SYMBOL` for anything else), so the probe is unresolvable —
+the implementation is written to be correct under **both** behaviors, making it a non-issue.
+
 ## Wave 4 — ETF coverage + Options (read + single-leg trading) — ✅ COMPLETE
 
 Scope correction: crypto/futures were planned but **dropped** — they are US-only Webull products

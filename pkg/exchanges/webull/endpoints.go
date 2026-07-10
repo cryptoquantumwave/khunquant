@@ -1,21 +1,52 @@
 package webull
 
 const (
-	Name        = "webull"
-	defaultHost = "https://api.webull.com"
+	Name = "webull"
 
-	// TODO: verify exact US OpenAPI host/paths against developer.webull.com
-	// The following paths are best-guesses and must be verified against live documentation.
+	// Host routing by environment
+	// Prod: api.webull.com
+	// Sandbox/UAT: us-openapi-alb.uat.webullbroker.com (not api.sandbox.webull.com — that doesn't work with shared creds)
+	prodHost = "api.webull.com"
+	uatHost  = "us-openapi-alb.uat.webullbroker.com"
 
-	// Account and positions endpoints
-	endpointAccount   = "/v2/trading/accounts/%s"
-	endpointBalances  = "/v2/trading/accounts/%s/balances"
-	endpointPositions = "/v2/trading/accounts/%s/positions"
+	// Authentication endpoints
+	endpointTokenCreate = "/openapi/auth/token/create"
+	endpointTokenCheck  = "/openapi/auth/token/check"
+
+	// Account and portfolio endpoints
+	endpointAccountList = "/openapi/account/list"
+	endpointBalance     = "/openapi/assets/balance"
+	endpointPositions   = "/openapi/assets/positions"
+
+	// Instrument endpoints
+	endpointInstrumentStockList = "/openapi/instrument/stock/list"
 
 	// Market data endpoints
-	endpointQuote = "/v2/market/quotes/%s"
-	endpointBars  = "/v2/market/bars"
+	endpointSnapshot = "/openapi/market-data/stock/snapshot"
+	endpointBars     = "/openapi/market-data/stock/bars"
 
-	// Order book endpoint (not exposed via OpenAPI, but included for completeness)
-	endpointOrderBook = "/v2/market/orderbook/%s"
+	// Trading endpoints (add as constants for future implementation)
+	endpointOrderPlace   = "/openapi/trade/order/place"
+	endpointOrderPreview = "/openapi/trade/order/preview"
+	endpointOrderCancel  = "/openapi/trade/order/cancel"
+	endpointOrderReplace = "/openapi/trade/order/replace"
+	endpointOrderOpen    = "/openapi/trade/order/open"
+	endpointOrderHistory = "/openapi/trade/order/history"
+	endpointOrderDetail  = "/openapi/trade/order/detail"
 )
+
+// HostForEnvironment returns the API host for the given environment.
+func HostForEnvironment(environment string) string {
+	switch environment {
+	case "uat", "sandbox":
+		return uatHost
+	default:
+		return prodHost
+	}
+}
+
+// BaseURLForEnvironment returns the full base URL (https://) for the given environment.
+func BaseURLForEnvironment(environment string) string {
+	host := HostForEnvironment(environment)
+	return "https://" + host
+}

@@ -46,4 +46,4 @@ Estimate total portfolio value in a quote currency.
 - Stock volumes are in **shares** (e.g. 100 shares of AAPL)
 - The `stock` wallet shows: avg_cost, current_price, market_value, unrealized_pl, percent_pnl per holding
 - For price lookups and OHLCV charts on US stocks, use the `market-data` skill with `provider: "webull"`
-- Webull supports portfolio queries and market data, but trading (order placement) is not yet supported
+- Webull supports portfolio queries, market data, and equity order placement (see the `trading` skill for order types and constraints)

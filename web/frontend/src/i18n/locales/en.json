@@ -779,6 +779,9 @@
       "account_id_placeholder": "Your Webull trading account ID",
       "region": "Region",
       "region_placeholder": "us",
+      "environment": "Environment",
+      "environment_prod": "Production",
+      "environment_uat": "Sandbox (test)",
       "doc_link": "Webull OpenAPI docs"
     }
   }

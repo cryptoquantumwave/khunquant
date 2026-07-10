@@ -748,6 +748,9 @@
       "account_id_placeholder": "ID บัญชีซื้อขาย Webull ของคุณ",
       "region": "Region",
       "region_placeholder": "us",
+      "environment": "สภาพแวดล้อม",
+      "environment_prod": "ใช้งานจริง (Production)",
+      "environment_uat": "ทดสอบ (Sandbox)",
       "doc_link": "เอกสาร Webull OpenAPI"
     }
   }

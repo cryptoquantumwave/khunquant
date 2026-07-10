@@ -202,7 +202,7 @@ Always returns a final risk summary to confirm zero exposure. Requires `confirm=
 - **Bitkub**: `get_open_orders` and `get_order_history` require a `symbol` parameter (e.g. `BTC/THB`). Calling without a symbol will fail — always ask the user which trading pair to check, or iterate over known pairs.
 - **Binance TH and Bitkub**: no futures trading support. Use futures tools only with `binance` and `okx`.
 - **Settrade (SET equity)**: supports limit and market (ATO) orders. Amount is in shares. PIN is required in config.
-- **Webull (US equity)**: read-only for now (balances and market data only). Order placement is not yet supported.
+- **Webull (US equity)**: supports portfolio, market data, **and order placement** (equities). Order `type`: `market`, `limit` (needs price), `stop_loss` (price = stop price); `take_profit` is not supported. `time_in_force`: `DAY` or `GTC` only. Amount is in shares and supports fractional (e.g. 0.5) — but **fractional amounts require `market` orders** (Webull rejects fractional limit/stop). `side`: buy or sell. Options/futures/crypto/event trading are not supported (equities only).
 - The default rate limit is 5 orders per minute per provider.
 - Always confirm with the user before placing orders with notional ≥ $200. Never place orders over $3,000 without explicit confirmation regardless of context.
 

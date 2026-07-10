@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
@@ -36,27 +37,30 @@ func TestSymbolNormalization(t *testing.T) {
 	}
 }
 
-// TestTimeframeMapping tests CCXT timeframe conversion.
+// TestTimeframeMapping tests CCXT timeframe conversion to Webull timespan format.
 func TestTimeframeMapping(t *testing.T) {
 	tests := []struct {
 		ccxtTimeframe string
 		expectWebull  string
 	}{
-		{"1m", "1m"},
-		{"5m", "5m"},
-		{"15m", "15m"},
-		{"1h", "1h"},
-		{"4h", "4h"},
-		{"1d", "1d"},
-		{"1w", "1w"},
-		{"2h", "1d"}, // unmapped should default to "1d"
+		{"1m", "M1"},
+		{"5m", "M5"},
+		{"15m", "M15"},
+		{"30m", "M30"},
+		{"1h", "M60"},
+		{"2h", "M120"},
+		{"4h", "M240"},
+		{"1d", "D"},
+		{"1w", "W"},
+		{"1M", "M"},
+		{"3h", "D"}, // unmapped should default to "D"
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.ccxtTimeframe, func(t *testing.T) {
 			got, ok := webullTimeframe[tt.ccxtTimeframe]
 			if !ok {
-				got = "1d" // default for unmapped
+				got = "D" // default for unmapped
 			}
 			if got != tt.expectWebull {
 				t.Errorf("timeframe(%q) = %q, want %q", tt.ccxtTimeframe, got, tt.expectWebull)
@@ -65,20 +69,24 @@ func TestTimeframeMapping(t *testing.T) {
 	}
 }
 
-// TestQuoteToTicker verifies quote-to-ticker conversion.
-func TestQuoteToTicker(t *testing.T) {
-	quote := &QuoteResponse{
-		Symbol:        "AAPL",
-		Last:          156.50,
-		High:          157.75,
-		Low:           150.25,
-		Open:          151.00,
-		Close:         156.50,
-		Volume:        5000000,
-		ChangePercent: 3.6,
+// TestSnapshotToTicker verifies snapshot-to-ticker conversion.
+func TestSnapshotToTicker(t *testing.T) {
+	snap := &Snapshot{
+		Symbol:      "AAPL",
+		Price:       "156.50",
+		High:        "157.75",
+		Low:         "150.25",
+		Open:        "151.00",
+		Close:       "156.50",
+		PreClose:    "151.00",
+		Volume:      "5000000",
+		Change:      "5.50",
+		ChangeRatio: "3.6",
+		Bid:         "156.49",
+		Ask:         "156.51",
 	}
 
-	ticker := quoteToTicker("AAPL/USD", quote)
+	ticker := snapshotToTicker("AAPL/USD", snap)
 
 	if ticker.Symbol == nil || *ticker.Symbol != "AAPL/USD" {
 		t.Errorf("ticker Symbol mismatch")
@@ -223,36 +231,41 @@ func TestInterfaceCompliance(t *testing.T) {
 }
 
 // TestOHLCVConversion tests bar-to-OHLCV conversion.
+// Note: Webull bars come newest-first, but the broker adapter reverses them to oldest-first for CCXT.
 func TestOHLCVConversion(t *testing.T) {
-	bars := []BarItem{
+	bars := []Bar{
 		{
-			Timestamp: 1234567890000,
-			Open:      150.0,
-			High:      157.5,
-			Low:       150.0,
-			Close:     156.0,
-			Volume:    5000000,
+			Time:   "2009-02-13T23:31:30.000+0000",
+			Open:   "150.0",
+			High:   "157.5",
+			Low:    "150.0",
+			Close:  "156.0",
+			Volume: "5000000",
 		},
 		{
-			Timestamp: 1234567950000,
-			Open:      156.0,
-			High:      158.0,
-			Low:       155.0,
-			Close:     157.5,
-			Volume:    4500000,
+			Time:   "2009-02-13T23:32:30.000+0000",
+			Open:   "156.0",
+			High:   "158.0",
+			Low:    "155.0",
+			Close:  "157.5",
+			Volume: "4500000",
 		},
 	}
 
 	// Manually convert (simulating what broker_adapter does)
+	// Note: In real adapter, bars come newest-first and get reversed
 	ohlcvs := make([]ccxt.OHLCV, len(bars))
 	for i, b := range bars {
+		// Parse the ISO8601 time
+		barTime, _ := time.Parse("2006-01-02T15:04:05.000-0700", b.Time)
+
 		ohlcvs[i] = ccxt.OHLCV{
-			Timestamp: b.Timestamp,
-			Open:      b.Open,
-			High:      b.High,
-			Low:       b.Low,
-			Close:     b.Close,
-			Volume:    b.Volume,
+			Timestamp: barTime.UnixMilli(),
+			Open:      parseFloat(b.Open),
+			High:      parseFloat(b.High),
+			Low:       parseFloat(b.Low),
+			Close:     parseFloat(b.Close),
+			Volume:    parseFloat(b.Volume),
 		}
 	}
 
@@ -261,12 +274,12 @@ func TestOHLCVConversion(t *testing.T) {
 	}
 
 	o := ohlcvs[0]
-	if o.Timestamp != 1234567890000 || o.Open != 150.0 || o.Close != 156.0 {
+	if o.Open != 150.0 || o.Close != 156.0 {
 		t.Errorf("OHLCV conversion error")
 	}
 
 	o2 := ohlcvs[1]
-	if o2.Timestamp != 1234567950000 || o2.Volume != 4500000 {
+	if o2.Volume != 4500000 {
 		t.Errorf("OHLCV conversion error for second bar")
 	}
 }

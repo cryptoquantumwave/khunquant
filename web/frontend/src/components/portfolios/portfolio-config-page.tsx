@@ -60,6 +60,7 @@ interface SettradeAccountDraft extends AccountDraft {
 interface WebullAccountDraft extends AccountDraft {
   accountId: string
   region: string
+  environment: string
 }
 
 // ── Exchange-level form ────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ function emptyWebullAccount(): WebullAccountDraft {
     ...emptyAccount(),
     accountId: "",
     region: "us",
+    environment: "prod",
   }
 }
 
@@ -188,6 +190,7 @@ function serializeWebullAccount(acc: WebullAccountDraft) {
     ...serializeAccount(acc),
     account_id: acc.accountId,
     region: acc.region,
+    environment: acc.environment,
   }
 }
 
@@ -223,6 +226,8 @@ function parseWebullAccounts(raw: unknown): WebullAccountDraft[] {
       secretEdit: "",
       accountId: typeof r.account_id === "string" ? r.account_id : "",
       region: typeof r.region === "string" && r.region !== "" ? r.region : "us",
+      environment:
+        typeof r.environment === "string" && r.environment !== "" ? r.environment : "prod",
       proxy: typeof r.proxy === "string" ? r.proxy : "",
     }
   })
@@ -548,6 +553,23 @@ function AccountCard({
                   placeholder={t("portfolios.webull.region_placeholder")}
                   onChange={(e) => onChange({ region: e.target.value })}
                 />
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-sm">{t("portfolios.webull.environment")}</p>
+              <div className="w-64">
+                <Select
+                  value={wbAcc.environment ?? "prod"}
+                  onValueChange={(v) => onChange({ environment: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="prod">{t("portfolios.webull.environment_prod")}</SelectItem>
+                    <SelectItem value="uat">{t("portfolios.webull.environment_uat")}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </>

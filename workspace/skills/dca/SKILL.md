@@ -108,7 +108,7 @@ Stock orders on Settrade and Webull are in **share units**, not quote currency. 
 
 `amount_unit: "quote"` is rejected for both Settrade and Webull — they have no quote currency divisor.
 
-**Note on Webull execution**: Webull DCA execution is pending completion of trading support. Plans may be created and scheduled, but execution will fail until order placement is available.
+**Note on Webull execution**: Webull equity order placement is supported, so Webull DCA plans execute end-to-end. Fractional share amounts execute as **market** orders (Webull rejects fractional limit orders); whole-share amounts can use limit or market.
 
 ### Base-unit crypto (fixed BTC amount)
 

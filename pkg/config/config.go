@@ -241,8 +241,9 @@ func (c *SettradeExchangeConfig) ResolveAccount(name string) (SettradeExchangeAc
 // APIKey = Webull app key; Secret = Webull app secret.
 type WebullExchangeAccount struct {
 	ExchangeAccount
-	AccountID string `json:"account_id"       yaml:"-"` // Webull trading account id
-	Region    string `json:"region,omitempty" yaml:"-"` // default "us"
+	AccountID   string `json:"account_id"       yaml:"-"`      // Webull trading account id
+	Region      string `json:"region,omitempty" yaml:"-"`      // default "us"
+	Environment string `json:"environment,omitempty" yaml:"-"` // "prod" or "uat"; default "prod"
 }
 
 // WebullExchangeConfig holds the Webull exchange credentials and settings.

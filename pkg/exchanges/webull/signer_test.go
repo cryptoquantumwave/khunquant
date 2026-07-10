@@ -1,197 +1,137 @@
 package webull
 
 import (
+	"encoding/hex"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 )
 
-// TestSignRequestDeterministic verifies that signing produces a consistent signature
-// when timestamp and nonce are pinned.
-func TestSignRequestDeterministic(t *testing.T) {
-	// Create a signer with fixed timestamp and nonce
-	signer := NewSigner("test-app-key", "test-app-secret")
-	fixedTime := time.Date(2024, 7, 15, 10, 30, 45, 0, time.UTC)
-	fixedNonce := "TestNonce1234567"
+// TestSignerKnownAnswerTest_CaseA verifies the signer against a pinned known answer.
+// Case A: path="/openapi/assets/balance", query {account_id=ACC123}, no body
+// Expected signature = "WCW9WOmMywXskxQETpxb2HxiaX8="
+// With: appKey="testappkey000000000000000000abcd", appSecret="testappsecret00000000000000000000"
+//
+//	ts="2026-01-02T03:04:05Z", nonce="0123456789abcdef0123456789abcdef"
+func TestSignerKnownAnswerTest_CaseA(t *testing.T) {
+	signer := NewSigner("testappkey000000000000000000abcd", "testappsecret00000000000000000000")
+
+	// Pin time and nonce
+	fixedTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	fixedNonce := "0123456789abcdef0123456789abcdef"
 
 	signer.now = func() time.Time { return fixedTime }
 	signer.nonceFn = func() string { return fixedNonce }
 
-	// Test 1: Simple GET request with no body, no query params
-	path1 := "/v2/trading/accounts/12345/balances"
-	headers1 := signer.SignRequest(path1, "GET", "api.webull.com", nil, nil)
-
-	if headers1.XAppKey != "test-app-key" {
-		t.Errorf("expected XAppKey=test-app-key, got %s", headers1.XAppKey)
-	}
-	if headers1.XTimestamp != "2024-07-15T10:30:45Z" {
-		t.Errorf("expected XTimestamp=2024-07-15T10:30:45Z, got %s", headers1.XTimestamp)
-	}
-	if headers1.XSignatureNonce != fixedNonce {
-		t.Errorf("expected XSignatureNonce=%s, got %s", fixedNonce, headers1.XSignatureNonce)
-	}
-	if headers1.XSignatureAlgorithm != "HMAC-SHA1" {
-		t.Errorf("expected XSignatureAlgorithm=HMAC-SHA1, got %s", headers1.XSignatureAlgorithm)
-	}
-	if headers1.XVersion != "v2" {
-		t.Errorf("expected XVersion=v2, got %s", headers1.XVersion)
-	}
-
-	// Verify signature is base64-encoded (roughly 28 chars for SHA1)
-	if len(headers1.XSignature) == 0 {
-		t.Errorf("expected non-empty XSignature")
-	}
-
-	// Test 2: Same request should produce same signature
-	headers1b := signer.SignRequest(path1, "GET", "api.webull.com", nil, nil)
-	if headers1.XSignature != headers1b.XSignature {
-		t.Errorf("signatures diverged for identical requests")
-	}
-
-	// Test 3: Different path should produce different signature
-	path2 := "/v2/trading/accounts/12345/positions"
-	headers2 := signer.SignRequest(path2, "GET", "api.webull.com", nil, nil)
-	if headers1.XSignature == headers2.XSignature {
-		t.Errorf("expected different signatures for different paths")
-	}
-
-	// Test 4: Request with body
-	body := []byte(`{"symbol":"AAPL"}`)
-	headers3 := signer.SignRequest(path1, "POST", "api.webull.com", nil, body)
-	if headers1.XSignature == headers3.XSignature {
-		t.Errorf("expected different signatures for request with body vs without")
-	}
-
-	// Test 5: Different body should produce different signature
-	body2 := []byte(`{"symbol":"GOOGL"}`)
-	headers4 := signer.SignRequest(path1, "POST", "api.webull.com", nil, body2)
-	if headers3.XSignature == headers4.XSignature {
-		t.Errorf("expected different signatures for different bodies")
-	}
-
-	// Test 6: Query parameters
+	// Case A: GET /openapi/assets/balance with query param account_id=ACC123
+	path := "/openapi/assets/balance"
 	query := url.Values{}
-	query.Set("limit", "10")
-	headers5 := signer.SignRequest(path1, "GET", "api.webull.com", query, nil)
-	if headers1.XSignature == headers5.XSignature {
-		t.Errorf("expected different signatures with query params")
+	query.Set("account_id", "ACC123")
+
+	headers := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+
+	expectedSig := "WCW9WOmMywXskxQETpxb2HxiaX8="
+	if headers.XSignature != expectedSig {
+		t.Errorf("Case A signature mismatch:\n  expected: %s\n  got:      %s", expectedSig, headers.XSignature)
 	}
 
-	t.Logf("Sample signature (GET %s): %s", path1, headers1.XSignature)
-}
-
-// TestCanonicalStringConstruction verifies the canonical string format.
-func TestCanonicalStringConstruction(t *testing.T) {
-	signer := NewSigner("app-key-123", "app-secret-456")
-	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	fixedNonce := "FixedNonce123456"
-
-	signer.now = func() time.Time { return fixedTime }
-	signer.nonceFn = func() string { return fixedNonce }
-
-	// Build a canonical string manually to verify format
-	path := "/v2/market/quotes/AAPL"
-	query := url.Values{}
-	query.Set("interval", "1d")
-	body := []byte(`{"test":"data"}`)
-
-	// The canonical string should be:
-	// path & (sorted params) & (MD5 of body)
-	// all URL-encoded
-
-	canonical := signer.canonicalString(path, query, body, "2024-01-01T12:00:00Z", fixedNonce, "api.webull.com")
-
-	// Verify it's not empty and looks reasonable
-	if canonical == "" {
-		t.Errorf("canonical string should not be empty")
+	// Verify other headers are set correctly
+	if headers.XAppKey != "testappkey000000000000000000abcd" {
+		t.Errorf("XAppKey mismatch: expected testappkey000000000000000000abcd, got %s", headers.XAppKey)
 	}
-
-	// It should be URL-encoded, so should contain %
-	if len(canonical) == 0 {
-		t.Errorf("canonical string should have content")
-	}
-
-	// Verify determinism
-	canonical2 := signer.canonicalString(path, query, body, "2024-01-01T12:00:00Z", fixedNonce, "api.webull.com")
-	if canonical != canonical2 {
-		t.Errorf("canonical string generation is not deterministic")
-	}
-
-	t.Logf("Sample canonical string: %s", canonical)
-}
-
-// TestSignatureVectorKnown tests against a known signature (for documentation).
-// This is a reference test that documents the expected signature format.
-func TestSignatureVectorKnown(t *testing.T) {
-	signer := NewSigner("AppKey_TEST", "AppSecret_TEST")
-
-	// Pin time and nonce for reproducibility
-	fixedTime := time.Date(2024, 7, 7, 15, 30, 0, 0, time.UTC)
-	fixedNonce := "NONCE1234567890X"
-
-	signer.now = func() time.Time { return fixedTime }
-	signer.nonceFn = func() string { return fixedNonce }
-
-	// Simple test case: GET request, no body, no query
-	path := "/v2/trading/accounts/ACC123/balances"
-	headers := signer.SignRequest(path, "GET", "api.webull.com", nil, nil)
-
-	// Verify the components are populated
-	if headers.XAppKey != "AppKey_TEST" {
-		t.Errorf("XAppKey mismatch")
-	}
-	if headers.XTimestamp != "2024-07-07T15:30:00Z" {
-		t.Errorf("XTimestamp mismatch: %s", headers.XTimestamp)
+	if headers.XTimestamp != "2026-01-02T03:04:05Z" {
+		t.Errorf("XTimestamp mismatch: expected 2026-01-02T03:04:05Z, got %s", headers.XTimestamp)
 	}
 	if headers.XSignatureNonce != fixedNonce {
-		t.Errorf("XSignatureNonce mismatch")
+		t.Errorf("XSignatureNonce mismatch: expected %s, got %s", fixedNonce, headers.XSignatureNonce)
 	}
-
-	// Signature should be base64-encoded
-	// SHA1 produces 20 bytes, base64-encoded is ~27 chars
-	if len(headers.XSignature) < 20 {
-		t.Errorf("XSignature too short (got %d chars, expected ~27)", len(headers.XSignature))
-	}
-
-	t.Logf("Known vector: app_key=AppKey_TEST, secret=AppSecret_TEST")
-	t.Logf("  path=%s", path)
-	t.Logf("  timestamp=%s", headers.XTimestamp)
-	t.Logf("  nonce=%s", headers.XSignatureNonce)
-	t.Logf("  signature=%s", headers.XSignature)
 }
 
-// TestRandomNonceRandomness verifies that randomNonce() produces genuinely random 16-char nonces.
-func TestRandomNonceRandomness(t *testing.T) {
-	nonce1 := randomNonce()
+// TestSignerKnownAnswerTest_CaseB verifies the signer against a pinned known answer with body.
+// Case B: path="/openapi/trade/order/place", no query, body={"account_id":"ACC123","new_orders":[{"symbol":"AAPL"}]}
+// Body MD5 upper = "234BF3AD800833DF4B37304BFA897448"
+// Expected signature = "c0wjmfwNUyQmI1dZ3JBfSgsZ9ss="
+// With same credentials and timestamp/nonce as Case A
+func TestSignerKnownAnswerTest_CaseB(t *testing.T) {
+	signer := NewSigner("testappkey000000000000000000abcd", "testappsecret00000000000000000000")
+
+	// Pin time and nonce (same as Case A)
+	fixedTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	fixedNonce := "0123456789abcdef0123456789abcdef"
+
+	signer.now = func() time.Time { return fixedTime }
+	signer.nonceFn = func() string { return fixedNonce }
+
+	// Case B: POST /openapi/trade/order/place with body
+	path := "/openapi/trade/order/place"
+	body := []byte(`{"account_id":"ACC123","new_orders":[{"symbol":"AAPL"}]}`)
+
+	headers := signer.SignRequest(path, "POST", "api.webull.com", nil, body)
+
+	expectedSig := "c0wjmfwNUyQmI1dZ3JBfSgsZ9ss="
+	if headers.XSignature != expectedSig {
+		t.Errorf("Case B signature mismatch:\n  expected: %s\n  got:      %s", expectedSig, headers.XSignature)
+	}
+
+	// Verify the body MD5 is computed correctly
+	md5Hash := signer.canonicalString(path, nil, body, "2026-01-02T03:04:05Z", fixedNonce, "api.webull.com")
+	// The canonical string should contain the MD5 hash
+	if !stringContains(md5Hash, "234BF3AD800833DF4B37304BFA897448") {
+		t.Errorf("Body MD5 not found in canonical string: %s", md5Hash)
+	}
+}
+
+// TestNonceIsHex32 verifies that randomNonce generates 32 hex characters
+func TestNonceIsHex32(t *testing.T) {
+	nonce := randomNonce()
+
+	// Should be 32 characters (16 bytes → 32 hex chars)
+	if len(nonce) != 32 {
+		t.Errorf("nonce length = %d, want 32", len(nonce))
+	}
+
+	// Should be valid hex
+	if _, err := hex.DecodeString(nonce); err != nil {
+		t.Errorf("nonce is not valid hex: %v", err)
+	}
+
+	// Verify it's different on successive calls (with overwhelming probability)
 	nonce2 := randomNonce()
-
-	// Verify both are 16 characters
-	if len(nonce1) != 16 {
-		t.Errorf("nonce1 length = %d, want 16", len(nonce1))
-	}
-	if len(nonce2) != 16 {
-		t.Errorf("nonce2 length = %d, want 16", len(nonce2))
+	if nonce == nonce2 {
+		t.Errorf("successive randomNonce() calls produced identical nonces (should be crypto random)")
 	}
 
-	// Verify they are different (with overwhelming probability for crypto/rand)
-	if nonce1 == nonce2 {
-		t.Errorf("successive randomNonce() calls produced identical nonces (cryptographic failure)")
-	}
+	t.Logf("Sample nonce: %s", nonce)
+}
 
-	// Verify characters are from the expected alphabet
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	for _, r := range nonce1 {
-		if !strings.ContainsRune(alphabet, r) {
-			t.Errorf("nonce1 contains invalid character: %c", r)
+// TestSignatureConsistency verifies that the signature is deterministic given fixed inputs
+func TestSignatureConsistency(t *testing.T) {
+	signer := NewSigner("key1", "secret1")
+
+	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedNonce := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+
+	signer.now = func() time.Time { return fixedTime }
+	signer.nonceFn = func() string { return fixedNonce }
+
+	path := "/openapi/assets/balance"
+	query := url.Values{}
+	query.Set("account_id", "ACC123")
+
+	sig1 := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+	sig2 := signer.SignRequest(path, "GET", "api.webull.com", query, nil)
+
+	if sig1.XSignature != sig2.XSignature {
+		t.Errorf("signatures diverged for identical requests")
+	}
+}
+
+// stringContains is a simple substring search helper for test validation
+func stringContains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
 		}
 	}
-	for _, r := range nonce2 {
-		if !strings.ContainsRune(alphabet, r) {
-			t.Errorf("nonce2 contains invalid character: %c", r)
-		}
-	}
-
-	t.Logf("nonce1: %s", nonce1)
-	t.Logf("nonce2: %s", nonce2)
+	return false
 }

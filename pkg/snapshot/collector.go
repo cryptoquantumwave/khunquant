@@ -240,6 +240,13 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 		if _, known := convRates[pp.nativeQuote]; known {
 			continue
 		}
+		// USD and USD stablecoins are 1:1 — this needs no exchange, so a
+		// USD-only broker (e.g. Webull) converts even when it is the sole
+		// configured account.
+		if exchanges.USDLike(pp.nativeQuote) && exchanges.USDLike(quote) {
+			convRates[pp.nativeQuote] = 1.0
+			continue
+		}
 		for _, ae := range acctExchanges {
 			pe, ok := ae.ex.(exchanges.PricedExchange)
 			if !ok {

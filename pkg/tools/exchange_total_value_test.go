@@ -469,3 +469,147 @@ func TestExchangeTotalValue_All_WalletBalancesError(t *testing.T) {
 		t.Errorf("expected wallet-balances error line, got: %s", result.ForLLM)
 	}
 }
+
+// twoAccountWebullCfg builds a config with two enabled webull accounts, for
+// tests that need a sibling exchange to serve cross-rate lookups.
+func twoAccountWebullCfg(nameA, nameB string) *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{
+			Name:   nameA,
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		}, AccountID: "ACC-A"},
+		{ExchangeAccount: config.ExchangeAccount{
+			Name:   nameB,
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		}, AccountID: "ACC-B"},
+	}
+	return cfg
+}
+
+// TestExchangeTotalValue_All_USDQuoteFallback verifies that a USD-only
+// exchange (e.g. Webull) under the default USDT quote is priced in USD and
+// converted 1:1 into the total, instead of every asset failing to price.
+func TestExchangeTotalValue_All_USDQuoteFallback(t *testing.T) {
+	const acctName = "tv-all-usd-fallback"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName == acctName {
+			return &totalValueStubExchange{
+				name:   "webull",
+				quotes: []string{"USD"}, // USDT unsupported -> priced in USD
+				balances: []exchanges.WalletBalance{
+					{Balance: exchanges.Balance{Asset: "AAPL", Free: 10}},
+				},
+				prices: map[string]float64{"AAPL": 200},
+			}, nil
+		}
+		return &totalValueStubExchange{name: "webull"}, nil
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{
+			Name:   acctName,
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		}, AccountID: "ACCUSD1"},
+	}
+
+	tool := NewExchangeTotalValueTool(cfg)
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "could not price") {
+		t.Errorf("expected assets priced via USD fallback, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "TOTAL") || !strings.Contains(result.ForLLM, "2000.00 USDT") {
+		t.Errorf("expected TOTAL of 2000.00 USDT (10×200 USD at 1:1), got: %s", result.ForLLM)
+	}
+}
+
+// TestExchangeTotalValue_All_CrossRateFromSibling verifies that a subtotal in
+// a non-usd-like native quote is converted using a rate served by a sibling
+// account's exchange.
+func TestExchangeTotalValue_All_CrossRateFromSibling(t *testing.T) {
+	const acctTHB = "tv-all-xrate-thb"
+	const acctRates = "tv-all-xrate-rates"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		switch accountName {
+		case acctTHB:
+			return &totalValueStubExchange{
+				name:   "webull",
+				quotes: []string{"THB"},
+				balances: []exchanges.WalletBalance{
+					{Balance: exchanges.Balance{Asset: "SET50", Free: 100}},
+				},
+				prices: map[string]float64{"SET50": 40}, // in THB
+			}, nil
+		case acctRates:
+			return &totalValueStubExchange{
+				name:   "webull",
+				prices: map[string]float64{"THB": 0.028}, // THB -> USDT
+			}, nil
+		}
+		return &totalValueStubExchange{name: "webull"}, nil
+	})
+
+	tool := NewExchangeTotalValueTool(twoAccountWebullCfg(acctTHB, acctRates))
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	// 100 × 40 THB × 0.028 = 112.00 USDT
+	if !strings.Contains(result.ForLLM, "112.00 USDT") {
+		t.Errorf("expected THB subtotal converted to 112.00 USDT, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "excluded from total") {
+		t.Errorf("expected no exclusion note when a rate is available, got: %s", result.ForLLM)
+	}
+}
+
+// TestExchangeTotalValue_All_NoRateExcluded verifies that a subtotal whose
+// native quote cannot be converted is shown in its native quote, flagged, and
+// excluded from the grand total.
+func TestExchangeTotalValue_All_NoRateExcluded(t *testing.T) {
+	const acctName = "tv-all-no-rate"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName == acctName {
+			return &totalValueStubExchange{
+				name:   "webull",
+				quotes: []string{"THB"},
+				balances: []exchanges.WalletBalance{
+					{Balance: exchanges.Balance{Asset: "SET50", Free: 100}},
+				},
+				prices: map[string]float64{"SET50": 40}, // no THB->USDT rate anywhere
+			}, nil
+		}
+		return &totalValueStubExchange{name: "webull"}, nil
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{
+			Name:   acctName,
+			APIKey: *config.NewSecureString("key"),
+			Secret: *config.NewSecureString("secret"),
+		}, AccountID: "ACCNORATE"},
+	}
+
+	tool := NewExchangeTotalValueTool(cfg)
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "4000.00 THB (no USDT rate; excluded from total)") {
+		t.Errorf("expected native-quote subtotal with exclusion note, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "TOTAL") || !strings.Contains(result.ForLLM, "0.00 USDT") {
+		t.Errorf("expected grand total 0.00 USDT, got: %s", result.ForLLM)
+	}
+}

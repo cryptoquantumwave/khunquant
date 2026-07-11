@@ -333,7 +333,27 @@ func (a *webullAdapter) FetchPrice(ctx context.Context, asset, quote string) (fl
 		return 0, nil
 	}
 
-	snapshots, err := a.client.FetchSnapshot(ctx, []string{strings.ToUpper(asset)})
+	symbol := strings.ToUpper(asset)
+
+	// OCC-encoded option symbols price via the option snapshot endpoint.
+	// Option positions are held in contracts, so the per-unit price is the
+	// premium × the contract multiplier.
+	if isOCCOptionSymbol(symbol) {
+		snaps, err := a.client.FetchOptionSnapshot(ctx, []string{symbol})
+		if err != nil {
+			return 0, err
+		}
+		if len(snaps) == 0 {
+			return 0, fmt.Errorf("webull: no option snapshot data for %s", asset)
+		}
+		premium := parseFloat(snaps[0].Price)
+		if premium <= 0 {
+			return 0, fmt.Errorf("webull: invalid option price for %s (got %v)", asset, premium)
+		}
+		return premium * optionContractMultiplier, nil
+	}
+
+	snapshots, err := a.client.FetchSnapshot(ctx, []string{symbol})
 	if err != nil {
 		return 0, err
 	}

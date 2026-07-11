@@ -73,3 +73,28 @@ func TestOCCSymbol(t *testing.T) {
 		})
 	}
 }
+
+func TestIsOCCOptionSymbol(t *testing.T) {
+	tests := []struct {
+		sym  string
+		want bool
+	}{
+		{"AAPL260821C00320000", true},
+		{"SPY260717C00450500", true},
+		{"QQQ261231P00012500", true},
+		{"T260115C01234560", true},     // 1-char underlying
+		{"AAPL", false},                // plain equity ticker
+		{"BRK.B", false},               // dotted ticker, too short
+		{"", false},                    // empty
+		{"AAPL260821X00320000", false}, // invalid type char
+		{"AAPL2608_1C00320000", false}, // non-digit in expiry
+		{"AAPL260821C0032000X", false}, // non-digit in strike
+		{"1APL260821C00320000", false}, // underlying must start with a letter
+	}
+
+	for _, tt := range tests {
+		if got := isOCCOptionSymbol(tt.sym); got != tt.want {
+			t.Errorf("isOCCOptionSymbol(%q) = %v, want %v", tt.sym, got, tt.want)
+		}
+	}
+}

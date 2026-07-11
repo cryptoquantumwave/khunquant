@@ -308,6 +308,60 @@ func TestFetchOpenOptionOrders_UpstreamError(t *testing.T) {
 	}
 }
 
+// TestFetchPrice_OCCOptionSymbol verifies FetchPrice routes OCC-encoded
+// option symbols to the option snapshot endpoint and returns the per-contract
+// price (premium × contract multiplier), so option positions value correctly
+// in snapshots and total-value tools.
+func TestFetchPrice_OCCOptionSymbol(t *testing.T) {
+	const occ = "AAPL260821C00320000"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointOptionSnapshot:
+			json.NewEncoder(w).Encode([]OptionSnapshotDTO{{Symbol: occ, Price: "2.50"}})
+		case endpointSnapshot:
+			t.Error("equity snapshot endpoint should not be called for an OCC option symbol")
+		}
+	}))
+	defer server.Close()
+
+	adapter := newOptionTestAdapter(t, server)
+
+	price, err := adapter.FetchPrice(context.Background(), occ, "USD")
+	if err != nil {
+		t.Fatalf("FetchPrice failed: %v", err)
+	}
+	if want := 2.50 * optionContractMultiplier; price != want {
+		t.Errorf("expected per-contract price %v, got %v", want, price)
+	}
+}
+
+// TestFetchPrice_OCCOptionSymbol_NoData verifies an empty option snapshot
+// response surfaces an error instead of a zero price (which would collide
+// with the price==0 quote-currency sentinel).
+func TestFetchPrice_OCCOptionSymbol_NoData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointOptionSnapshot:
+			json.NewEncoder(w).Encode([]OptionSnapshotDTO{})
+		}
+	}))
+	defer server.Close()
+
+	adapter := newOptionTestAdapter(t, server)
+
+	if _, err := adapter.FetchPrice(context.Background(), "AAPL260821C00320000", "USD"); err == nil {
+		t.Fatal("expected error for empty option snapshot response")
+	}
+}
+
 // newOptionTestAdapter builds a webullAdapter pointed at server with signing
 // creds, matching the newTestClient pattern in client_test.go.
 func newOptionTestAdapter(t *testing.T, server *httptest.Server) *webullAdapter {

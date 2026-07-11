@@ -546,3 +546,85 @@ func TestCollectFromExchanges_CrossRateConversion(t *testing.T) {
 		t.Errorf("expected TotalValue %.4f (cross-rate converted), got %.4f", wantTotal, result.Snapshot.TotalValue)
 	}
 }
+
+// TestCollectFromExchanges_USDQuoteParityConversion verifies that a USD-native
+// exchange (e.g. Webull) contributes to TotalValue under the default USDT
+// snapshot quote: FetchPrice returning (0, nil) for USD→USDT is the 1:1
+// usd-like signal and must register as rate 1.0, not be dropped.
+func TestCollectFromExchanges_USDQuoteParityConversion(t *testing.T) {
+	const acct = "cf-usd-parity"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &crossRateQuoteLister{
+			quotes: []string{"USD"}, // USDT unsupported -> falls back to USD
+			collectorWalletExchange: collectorWalletExchange{
+				walletTypes: []string{"all"},
+				allBalances: []exchanges.WalletBalance{
+					{Balance: exchanges.Balance{Asset: "AAPL", Free: 10}, WalletType: "stock"},
+				},
+				prices: map[string]float64{
+					"AAPL": 40, // priced in USD
+					"USD":  0,  // USD→USDT lookup returns the (0, nil) 1:1 signal
+				},
+			},
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got: %v", result.Errors)
+	}
+	if result.Snapshot.TotalValue != 400 {
+		t.Errorf("expected TotalValue 400 (USD treated 1:1 with USDT), got %v", result.Snapshot.TotalValue)
+	}
+}
+
+// TestCollectFromExchanges_MarketValueFallback verifies that a position whose
+// asset cannot be live-priced (e.g. an OCC option symbol without a market-data
+// subscription) falls back to the provider-supplied market_value in Extra
+// instead of being recorded with Value 0 and a "could not price" error.
+func TestCollectFromExchanges_MarketValueFallback(t *testing.T) {
+	const acct = "cf-market-value-fallback"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorWalletExchange{
+			walletTypes: []string{"all"},
+			allBalances: []exchanges.WalletBalance{
+				{
+					Balance:    exchanges.Balance{Asset: "AAPL260821C00320000", Free: 2},
+					WalletType: "option",
+					Extra:      map[string]string{"market_value": "500"},
+				},
+			},
+			// no price entry -> FetchPrice errors, forcing the fallback
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no could-not-price errors, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(result.Snapshot.Positions))
+	}
+	pos := result.Snapshot.Positions[0]
+	if pos.Value != 500 {
+		t.Errorf("expected Value 500 from market_value fallback, got %v", pos.Value)
+	}
+	if pos.Price != 250 {
+		t.Errorf("expected derived Price 250 (value/qty), got %v", pos.Price)
+	}
+	if result.Snapshot.TotalValue != 500 {
+		t.Errorf("expected TotalValue 500, got %v", result.Snapshot.TotalValue)
+	}
+}

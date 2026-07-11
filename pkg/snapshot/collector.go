@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -181,6 +182,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 				Quote:    eQuote,
 			}
 
+			priced := false
 			if canPrice {
 				price, err := pe.FetchPrice(ctx, b.Asset, eQuote)
 				if err == nil {
@@ -191,9 +193,21 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 					} else {
 						pos.Value = qty * price
 					}
-				} else {
-					unpriced = append(unpriced, b.Asset)
+					priced = true
 				}
+			}
+			if !priced {
+				// Fall back to the provider's own valuation (e.g. Webull
+				// positions carry market_value even when live market data is
+				// unavailable or subscription-gated).
+				if mv, err := strconv.ParseFloat(b.Extra["market_value"], 64); err == nil && mv > 0 {
+					pos.Value = mv
+					pos.Price = mv / qty
+					priced = true
+				}
+			}
+			if !priced && canPrice {
+				unpriced = append(unpriced, b.Asset)
 			}
 
 			if b.Locked > 0 {
@@ -232,7 +246,12 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 				continue
 			}
 			rate, err := pe.FetchPrice(ctx, pp.nativeQuote, quote)
-			if err == nil && rate > 0 {
+			if err == nil {
+				if rate == 0 {
+					// FetchPrice returns 0 to signal the asset IS the quote
+					// currency (or a 1:1 usd-like pair, e.g. USD→USDT).
+					rate = 1.0
+				}
 				convRates[pp.nativeQuote] = rate
 				break
 			}

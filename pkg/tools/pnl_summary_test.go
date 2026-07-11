@@ -311,6 +311,99 @@ func TestGetPnLSummaryTool_Execute_NegativeIncludeRealized(t *testing.T) {
 	}
 }
 
+// pnlSummaryStockPortfolioProvider is a broker.PortfolioProvider under
+// broker.CategoryStock, exercising the stock-adapter PnL branch in Execute
+// (parseExtraFloat/parseExtraFloatAny reading avg_cost/market_price/
+// current_price/market_value/unrealized_pl/percent_profit/percent_pnl).
+type pnlSummaryStockPortfolioProvider struct {
+	balances []broker.WalletBalance
+}
+
+func (p pnlSummaryStockPortfolioProvider) ID() string { return "pnl-summary-stock-provider" }
+
+func (p pnlSummaryStockPortfolioProvider) Category() broker.AssetCategory {
+	return broker.CategoryStock
+}
+
+func (p pnlSummaryStockPortfolioProvider) GetMarketStatus(context.Context, string) (broker.MarketStatus, error) {
+	return broker.MarketOpen, nil
+}
+
+func (p pnlSummaryStockPortfolioProvider) GetBalances(context.Context) ([]broker.Balance, error) {
+	out := make([]broker.Balance, len(p.balances))
+	for i, b := range p.balances {
+		out[i] = b.Balance
+	}
+	return out, nil
+}
+
+func (p pnlSummaryStockPortfolioProvider) GetWalletBalances(context.Context, string) ([]broker.WalletBalance, error) {
+	return p.balances, nil
+}
+
+func (p pnlSummaryStockPortfolioProvider) FetchPrice(context.Context, string, string) (float64, error) {
+	return 0, nil
+}
+
+func (p pnlSummaryStockPortfolioProvider) SupportedWalletTypes() []string {
+	return []string{"stock"}
+}
+
+func TestGetPnLSummaryTool_Execute_StockCategory_MarketPriceKey(t *testing.T) {
+	const provider = "pnl-summary-stock-provider-market-price"
+	broker.RegisterFactory(provider, func(*config.Config) (broker.Provider, error) {
+		return pnlSummaryStockPortfolioProvider{balances: []broker.WalletBalance{
+			{
+				Balance: broker.Balance{Asset: "AAPL", Free: 10},
+				Extra: map[string]string{
+					"avg_cost":       "150.00",
+					"market_price":   "160.00",
+					"market_value":   "1600.00",
+					"unrealized_pl":  "100.00",
+					"percent_profit": "6.67",
+				},
+			},
+		}}, nil
+	})
+
+	tool := newTestGetPnLSummaryTool(t)
+	result := tool.Execute(context.Background(), map[string]any{"provider": provider})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "AAPL") {
+		t.Errorf("expected AAPL in output, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "160.0000") {
+		t.Errorf("expected market_price value reflected in output, got: %s", result.ForLLM)
+	}
+}
+
+func TestGetPnLSummaryTool_Execute_StockCategory_CurrentPriceFallback(t *testing.T) {
+	const provider = "pnl-summary-stock-provider-current-price"
+	broker.RegisterFactory(provider, func(*config.Config) (broker.Provider, error) {
+		return pnlSummaryStockPortfolioProvider{balances: []broker.WalletBalance{
+			{
+				Balance: broker.Balance{Asset: "MSFT", Free: 5},
+				Extra: map[string]string{
+					"avg_cost":      "300.00",
+					"current_price": "310.00", // market_price absent -> parseExtraFloatAny falls back
+					"percent_pnl":   "3.33",
+				},
+			},
+		}}, nil
+	})
+
+	tool := newTestGetPnLSummaryTool(t)
+	result := tool.Execute(context.Background(), map[string]any{"provider": provider, "include_realized": true})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "310.0000") {
+		t.Errorf("expected current_price fallback reflected in output, got: %s", result.ForLLM)
+	}
+}
+
 func TestNativeQuoteForProvider(t *testing.T) {
 	cases := []struct{ provider, want string }{
 		{"bitkub", "THB"},

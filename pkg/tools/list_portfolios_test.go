@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
 
 func newTestListPortfoliosTool(t *testing.T) *ListPortfoliosTool {
@@ -239,6 +240,115 @@ func TestListPortfoliosTool_Execute_AllExchanges(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("Execute should return result")
+	}
+}
+
+// TestListPortfoliosTool_Execute_WebullFullCapabilities exercises the
+// capabilities-population loop's success branches (WalletExchange +
+// PricedExchange) using a fake registered under "webull" — the only
+// enum-recognised provider name reachable via broker.ListConfiguredAccounts
+// without pulling in a real, network-backed exchange adapter.
+func TestListPortfoliosTool_Execute_WebullFullCapabilities(t *testing.T) {
+	const acct = "lp-full-capabilities"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &totalValueStubExchange{name: "webull"}, nil
+		}
+		return &totalValueStubExchange{name: "webull"}, nil
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Binance.Enabled = false
+	cfg.Exchanges.BinanceTH.Enabled = false
+	cfg.Exchanges.Bitkub.Enabled = false
+	cfg.Exchanges.OKX.Enabled = false
+	cfg.Exchanges.Settrade.Enabled = false
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{Name: acct}},
+	}
+
+	tool := NewListPortfoliosTool(cfg)
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "webull") {
+		t.Errorf("expected webull row in output, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForUser, "all") {
+		t.Errorf("expected wallet types 'all' in output, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForUser, "yes") {
+		t.Errorf("expected 'yes' pricing capability in output, got: %s", result.ForUser)
+	}
+}
+
+// TestListPortfoliosTool_Execute_WebullBasicNoPricing exercises the
+// capabilities-population loop's fallback branches when the exchange instance
+// implements neither WalletExchange nor PricedExchange.
+func TestListPortfoliosTool_Execute_WebullBasicNoPricing(t *testing.T) {
+	const acct = "lp-basic-no-pricing"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &totalValueStubExchange{name: "webull"}, nil
+		}
+		return &totalValueNoPricingExchange{name: "webull"}, nil
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Binance.Enabled = false
+	cfg.Exchanges.BinanceTH.Enabled = false
+	cfg.Exchanges.Bitkub.Enabled = false
+	cfg.Exchanges.OKX.Enabled = false
+	cfg.Exchanges.Settrade.Enabled = false
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{Name: acct}},
+	}
+
+	tool := NewListPortfoliosTool(cfg)
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "spot") {
+		t.Errorf("expected fallback wallet type 'spot' in output, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForUser, "no") {
+		t.Errorf("expected 'no' pricing capability in output, got: %s", result.ForUser)
+	}
+}
+
+// TestListPortfoliosTool_Execute_WebullCreateError exercises the loop's error
+// branch (walletTypes/canPrice = "?") when exchange creation fails.
+func TestListPortfoliosTool_Execute_WebullCreateError(t *testing.T) {
+	const acct = "lp-create-error"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName == acct {
+			return nil, context.DeadlineExceeded
+		}
+		return &totalValueStubExchange{name: "webull"}, nil
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Exchanges.Binance.Enabled = false
+	cfg.Exchanges.BinanceTH.Enabled = false
+	cfg.Exchanges.Bitkub.Enabled = false
+	cfg.Exchanges.OKX.Enabled = false
+	cfg.Exchanges.Settrade.Enabled = false
+	cfg.Exchanges.Webull.Enabled = true
+	cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{
+		{ExchangeAccount: config.ExchangeAccount{Name: acct}},
+	}
+
+	tool := NewListPortfoliosTool(cfg)
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "?") {
+		t.Errorf("expected '?' placeholders for creation failure, got: %s", result.ForUser)
 	}
 }
 

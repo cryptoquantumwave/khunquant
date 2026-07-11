@@ -12,6 +12,32 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 )
 
+func TestRenderDeltaNeutralYieldChartTool_NameDescriptionParameters(t *testing.T) {
+	store, err := deltaneutral.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	tool := NewRenderDeltaNeutralYieldChartTool(store)
+	if tool.Name() != NameRenderDeltaNeutralYieldChart {
+		t.Errorf("Name() = %q, want %q", tool.Name(), NameRenderDeltaNeutralYieldChart)
+	}
+	if tool.Description() != DescRenderDeltaNeutralYieldChart {
+		t.Errorf("Description() mismatch")
+	}
+	params := tool.Parameters()
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("properties should be a map")
+	}
+	for _, prop := range []string{"plan_id", "period", "columns"} {
+		if _, ok := props[prop]; !ok {
+			t.Errorf("expected property %q not found", prop)
+		}
+	}
+}
+
 // --- yieldDigest index selection ---
 
 func makePoints(n int) []deltaneutral.SnapshotSeriesPoint {

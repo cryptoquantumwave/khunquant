@@ -1121,3 +1121,53 @@ func TestOptionSubscriptionError(t *testing.T) {
 		t.Errorf("expected token to be created once (no retry on subscription error), got %d calls", tokenCallCount)
 	}
 }
+
+// TestFetchAccountList tests successful account list retrieval.
+func TestFetchAccountList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			json.NewEncoder(w).Encode([]AccountListItem{
+				{AccountID: "ACC123", AccountType: "MARGIN", AccountLabel: "Main"},
+				{AccountID: "ACC456", AccountType: "CASH", AccountLabel: "Cash"},
+			})
+		}
+	}))
+	defer server.Close()
+
+	accounts, err := newTestClient(t, server).FetchAccountList(testContext())
+	if err != nil {
+		t.Fatalf("FetchAccountList failed: %v", err)
+	}
+	if len(accounts) != 2 || accounts[0].AccountID != "ACC123" || accounts[1].AccountID != "ACC456" {
+		t.Errorf("unexpected accounts: %+v", accounts)
+	}
+}
+
+// TestFetchAccountListError tests that upstream failures are surfaced.
+func TestFetchAccountListError(t *testing.T) {
+	old := retryDelayFn
+	retryDelayFn = func(*http.Response, int) time.Duration { return time.Millisecond }
+	t.Cleanup(func() { retryDelayFn = old })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"msg": "internal error"})
+		}
+	}))
+	defer server.Close()
+
+	if _, err := newTestClient(t, server).FetchAccountList(testContext()); err == nil {
+		t.Fatal("expected error for account list failure")
+	}
+}

@@ -1,6 +1,7 @@
 package broker_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -8,6 +9,24 @@ import (
 )
 
 func pricePtr(f float64) *float64 { return &f }
+
+func TestCheckLeverage_Disabled(t *testing.T) {
+	cfg := &config.Config{TradingRisk: config.TradingRiskConfig{AllowLeverage: false}}
+	err := broker.CheckLeverage(cfg, "set_futures_leverage")
+	if err == nil {
+		t.Fatal("expected error when allow_leverage=false")
+	}
+	if !strings.Contains(err.Error(), "set_futures_leverage") {
+		t.Errorf("expected action name in error, got: %v", err)
+	}
+}
+
+func TestCheckLeverage_Enabled(t *testing.T) {
+	cfg := &config.Config{TradingRisk: config.TradingRiskConfig{AllowLeverage: true}}
+	if err := broker.CheckLeverage(cfg, "set_futures_leverage"); err != nil {
+		t.Errorf("expected no error when allow_leverage=true, got: %v", err)
+	}
+}
 
 func TestCheckRisk_MarginBlocked(t *testing.T) {
 	cfg := &config.Config{

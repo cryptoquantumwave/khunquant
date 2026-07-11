@@ -2,6 +2,9 @@ package snapshot
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -252,5 +255,294 @@ func TestCollectFromExchanges_SourceFilterAccountMismatch(t *testing.T) {
 	_, err := CollectFromExchanges(context.Background(), cfg, CollectOptions{Source: "binance", Account: "nonexistent"})
 	if err == nil {
 		t.Error("CollectFromExchanges with unmatched account filter should return error")
+	}
+}
+
+// --- CollectFromExchanges: full success/error paths via fake exchange stubs ---
+//
+// listExchangeAccounts only recognises the fixed set of provider IDs known to
+// broker.ListConfiguredAccounts (binance, binanceth, bitkub, okx, settrade,
+// webull), so these fakes must be registered under the name "webull" via an
+// account-aware factory that dispatches on account name — each test below
+// uses a distinct account name so the dispatch stays test-local.
+
+// collectorBasicExchange implements only exchanges.Exchange (no
+// WalletExchange), exercising CollectFromExchanges' basic-exchange branch
+// (GetBalances, no pricing).
+type collectorBasicExchange struct {
+	balances []exchanges.Balance
+	err      error
+}
+
+func (s *collectorBasicExchange) Name() string { return "webull" }
+func (s *collectorBasicExchange) GetBalances(context.Context) ([]exchanges.Balance, error) {
+	return s.balances, s.err
+}
+
+// collectorWalletExchange implements exchanges.WalletExchange and
+// exchanges.PricedExchange, exercising the wallet-balance, pricing, and
+// cross-rate-conversion branches of CollectFromExchanges.
+type collectorWalletExchange struct {
+	walletTypes []string
+	allBalances []exchanges.WalletBalance
+	allErr      error
+	perType     map[string][]exchanges.WalletBalance
+	perTypeErr  map[string]error
+	prices      map[string]float64
+	priceErrs   map[string]error
+}
+
+func (s *collectorWalletExchange) Name() string { return "webull" }
+func (s *collectorWalletExchange) GetBalances(context.Context) ([]exchanges.Balance, error) {
+	return nil, nil
+}
+func (s *collectorWalletExchange) SupportedWalletTypes() []string { return s.walletTypes }
+func (s *collectorWalletExchange) GetWalletBalances(_ context.Context, walletType string) ([]exchanges.WalletBalance, error) {
+	if walletType == "all" {
+		return s.allBalances, s.allErr
+	}
+	if err, ok := s.perTypeErr[walletType]; ok {
+		return nil, err
+	}
+	return s.perType[walletType], nil
+}
+func (s *collectorWalletExchange) FetchPrice(_ context.Context, asset, _ string) (float64, error) {
+	if err, ok := s.priceErrs[asset]; ok {
+		return 0, err
+	}
+	if p, ok := s.prices[asset]; ok {
+		return p, nil
+	}
+	return 0, fmt.Errorf("no price for %s", asset)
+}
+
+// webullCfgForAccount builds a config with a single enabled webull account
+// under the given name, for use with the account-aware factory dispatch.
+func webullCfgForAccount(accountName string) *config.Config {
+	return &config.Config{
+		Exchanges: config.ExchangesConfig{
+			Webull: config.WebullExchangeConfig{
+				Enabled: true,
+				Accounts: []config.WebullExchangeAccount{
+					{ExchangeAccount: config.ExchangeAccount{Name: accountName}},
+				},
+			},
+		},
+	}
+}
+
+func TestCollectFromExchanges_BasicExchangeSuccess(t *testing.T) {
+	const acct = "cf-basic-success"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorBasicExchange{balances: []exchanges.Balance{
+			{Asset: "AAPL", Free: 10},
+			{Asset: "ZERO", Free: 0}, // qty == 0 → skipped
+			{Asset: "MSFT", Free: 0, Locked: 5},
+		}}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 2 {
+		t.Fatalf("expected 2 positions (zero-qty skipped), got %d: %+v", len(result.Snapshot.Positions), result.Snapshot.Positions)
+	}
+	for _, pos := range result.Snapshot.Positions {
+		if pos.Category != "spot" {
+			t.Errorf("expected category spot for basic exchange, got %q", pos.Category)
+		}
+		if pos.Asset == "MSFT" && pos.Meta["locked"] == "" {
+			t.Errorf("expected locked meta for MSFT position")
+		}
+	}
+}
+
+func TestCollectFromExchanges_BasicExchangeGetBalancesError(t *testing.T) {
+	const acct = "cf-basic-error"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorBasicExchange{err: errors.New("connection refused")}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "get balances") {
+		t.Fatalf("expected a 'get balances' error, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 0 {
+		t.Fatalf("expected no positions on balance fetch error, got %d", len(result.Snapshot.Positions))
+	}
+}
+
+func TestCollectFromExchanges_WalletAllSuccessWithPricing(t *testing.T) {
+	const acct = "cf-wallet-all-success"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorWalletExchange{
+			walletTypes: []string{"all"},
+			allBalances: []exchanges.WalletBalance{
+				{
+					Balance:    exchanges.Balance{Asset: "AAPL", Free: 10, Locked: 2},
+					WalletType: "stock",
+					Extra:      map[string]string{"avg_cost": "150"},
+				},
+			},
+			prices: map[string]float64{"AAPL": 200},
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(result.Snapshot.Positions))
+	}
+	pos := result.Snapshot.Positions[0]
+	if pos.Category != "stock" || pos.Quantity != 12 || pos.Price != 200 || pos.Value != 2400 {
+		t.Errorf("unexpected position: %+v", pos)
+	}
+	if pos.Meta["locked"] == "" || pos.Meta["avg_cost"] != "150" {
+		t.Errorf("expected locked and avg_cost meta, got: %+v", pos.Meta)
+	}
+	if result.Snapshot.TotalValue != 2400 {
+		t.Errorf("expected TotalValue 2400, got %v", result.Snapshot.TotalValue)
+	}
+}
+
+func TestCollectFromExchanges_WalletAllError(t *testing.T) {
+	const acct = "cf-wallet-all-error"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorWalletExchange{walletTypes: []string{"all"}, allErr: errors.New("rate limited")}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "get wallet balances") {
+		t.Fatalf("expected a 'get wallet balances' error, got: %v", result.Errors)
+	}
+}
+
+func TestCollectFromExchanges_WalletPerTypeMergeWithPartialError(t *testing.T) {
+	const acct = "cf-wallet-per-type"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorWalletExchange{
+			walletTypes: []string{"spot", "margin"},
+			perType: map[string][]exchanges.WalletBalance{
+				"spot": {{Balance: exchanges.Balance{Asset: "USDT", Free: 500}, WalletType: "spot"}},
+			},
+			perTypeErr: map[string]error{"margin": errors.New("margin wallet unavailable")},
+			prices:     map[string]float64{"USDT": 0}, // stablecoin self-price
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "margin wallet: margin wallet unavailable") {
+		t.Fatalf("expected a margin-wallet error, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 1 || result.Snapshot.Positions[0].Asset != "USDT" {
+		t.Fatalf("expected spot balances to still be merged, got: %+v", result.Snapshot.Positions)
+	}
+}
+
+func TestCollectFromExchanges_PricingPartialUnpriced(t *testing.T) {
+	const acct = "cf-unpriced"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &collectorWalletExchange{
+			walletTypes: []string{"all"},
+			allBalances: []exchanges.WalletBalance{
+				{Balance: exchanges.Balance{Asset: "AAPL", Free: 10}, WalletType: "stock"},
+				{Balance: exchanges.Balance{Asset: "ZZZ", Free: 5}, WalletType: "stock"},
+			},
+			prices:    map[string]float64{"AAPL": 200},
+			priceErrs: map[string]error{"ZZZ": errors.New("no market data")},
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "could not price: ZZZ") {
+		t.Fatalf("expected an unpriced-asset error, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 2 {
+		t.Fatalf("expected both positions present even though one is unpriced, got %d", len(result.Snapshot.Positions))
+	}
+}
+
+// crossRateQuoteLister layers exchanges.QuoteLister onto collectorWalletExchange
+// so effectiveQuote() falls back to the exchange's native quote.
+type crossRateQuoteLister struct {
+	collectorWalletExchange
+	quotes []string
+}
+
+func (s *crossRateQuoteLister) SupportedQuotes() []string { return s.quotes }
+
+func TestCollectFromExchanges_CrossRateConversion(t *testing.T) {
+	const acct = "cf-cross-rate"
+	exchanges.RegisterAccountFactory("webull", func(_ *config.Config, accountName string) (exchanges.Exchange, error) {
+		if accountName != acct {
+			return &collectorBasicExchange{}, nil
+		}
+		return &crossRateQuoteLister{
+			quotes: []string{"THB"}, // does not support the default "USDT" quote -> falls back to THB
+			collectorWalletExchange: collectorWalletExchange{
+				walletTypes: []string{"all"},
+				allBalances: []exchanges.WalletBalance{
+					{Balance: exchanges.Balance{Asset: "SET50", Free: 100}, WalletType: "stock"},
+				},
+				prices: map[string]float64{
+					"SET50": 40,    // priced in THB (the exchange's effective quote)
+					"THB":   0.028, // THB -> USDT cross-rate lookup
+				},
+			},
+		}, nil
+	})
+
+	result, err := CollectFromExchanges(context.Background(), webullCfgForAccount(acct), CollectOptions{Account: acct})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got: %v", result.Errors)
+	}
+	if len(result.Snapshot.Positions) != 1 || result.Snapshot.Positions[0].Quote != "THB" {
+		t.Fatalf("expected 1 THB-quoted position, got: %+v", result.Snapshot.Positions)
+	}
+	wantTotal := 100 * 40 * 0.028 // qty * native price * cross-rate
+	if diff := result.Snapshot.TotalValue - wantTotal; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("expected TotalValue %.4f (cross-rate converted), got %.4f", wantTotal, result.Snapshot.TotalValue)
 	}
 }

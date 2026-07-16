@@ -497,7 +497,9 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 // See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 // See: https://platform.openai.com/docs/guides/prompt-caching
 func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+	// Include the UTC offset so the LLM never guesses the timezone of a bare
+	// wall-clock time (e.g. a UTC host being reported as local time in briefs).
+	now := time.Now().Format("2006-01-02 15:04 -07:00 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder

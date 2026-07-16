@@ -76,6 +76,9 @@ func (t *GetTradeHistoryTool) Execute(ctx context.Context, args map[string]any) 
 
 	trades, err := tp.FetchMyTrades(ctx, symbol, since, limit)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchMyTrades: %v", err)).WithError(err)
 	}
 

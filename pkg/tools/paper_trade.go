@@ -80,7 +80,7 @@ func (t *PaperTradeTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	ticker, err := md.FetchTicker(ctx, symbol)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("FetchTicker %s: %v", symbol, err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("FetchTicker %s: %v", symbol, err))
 	}
 
 	if ticker.Last == nil {

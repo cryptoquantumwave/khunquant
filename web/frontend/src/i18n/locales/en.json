@@ -782,7 +782,15 @@
       "environment": "Environment",
       "environment_prod": "Production",
       "environment_uat": "Sandbox (test)",
-      "doc_link": "Webull OpenAPI docs"
+      "doc_link": "Webull OpenAPI docs",
+      "connect_title": "Connection",
+      "connect_button": "Connect Webull",
+      "reconnect_button": "Reconnect",
+      "status_pending": "Approve the login in the Webull app…",
+      "status_normal": "Connected — expires in {{days}} days",
+      "status_normal_today": "Connected — expires today",
+      "status_invalid": "Login failed — check your credentials and try again",
+      "status_expired": "Session expired — click to reconnect"
     }
   }
 }

@@ -2,11 +2,68 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// reauthMarketDataStub is a MarketDataProvider whose every market-data call
+// fails with a wrapped exchanges.ErrNeedsReauth, mimicking a Webull client
+// whose session is awaiting in-app approval.
+type reauthMarketDataStub struct{ id string }
+
+func (s reauthMarketDataStub) ID() string                     { return s.id }
+func (s reauthMarketDataStub) Category() broker.AssetCategory { return broker.CategoryStock }
+func (s reauthMarketDataStub) GetMarketStatus(context.Context, string) (broker.MarketStatus, error) {
+	return broker.MarketOpen, nil
+}
+func (s reauthMarketDataStub) FetchTicker(context.Context, string) (ccxt.Ticker, error) {
+	return ccxt.Ticker{}, fmt.Errorf("webull: FetchSnapshot: get token: %w", exchanges.ErrNeedsReauth)
+}
+func (s reauthMarketDataStub) FetchTickers(context.Context, []string) (map[string]ccxt.Ticker, error) {
+	return nil, fmt.Errorf("webull: get token: %w", exchanges.ErrNeedsReauth)
+}
+func (s reauthMarketDataStub) FetchOHLCV(context.Context, string, string, *int64, int) ([]ccxt.OHLCV, error) {
+	return nil, fmt.Errorf("webull: get token: %w", exchanges.ErrNeedsReauth)
+}
+func (s reauthMarketDataStub) FetchOrderBook(context.Context, string, int) (ccxt.OrderBook, error) {
+	return ccxt.OrderBook{}, fmt.Errorf("webull: get token: %w", exchanges.ErrNeedsReauth)
+}
+func (s reauthMarketDataStub) LoadMarkets(context.Context) (map[string]ccxt.MarketInterface, error) {
+	return nil, fmt.Errorf("webull: get token: %w", exchanges.ErrNeedsReauth)
+}
+
+// TestPaperTradeTool_Execute_SurfacesReauthHint is the regression test for
+// the live failure where "buy vrt 0.1" through paper_trade returned a raw
+// "needs re-authentication" error with no instruction to call
+// webull_reconnect, leaving the agent to flail.
+func TestPaperTradeTool_Execute_SurfacesReauthHint(t *testing.T) {
+	const provider = "paper-trade-reauth-stub"
+	broker.RegisterFactory(provider, func(*config.Config) (broker.Provider, error) {
+		return reauthMarketDataStub{id: provider}, nil
+	})
+
+	tool := newTestPaperTradeTool(t)
+	result := tool.Execute(context.Background(), map[string]any{
+		"provider": provider,
+		"symbol":   "VRT",
+		"type":     "market",
+		"side":     "buy",
+		"amount":   0.1,
+	})
+	if !result.IsError {
+		t.Fatal("expected an error result")
+	}
+	if !strings.Contains(result.ForLLM, NameWebullReconnect) {
+		t.Fatalf("expected the error to instruct calling %s, got: %s", NameWebullReconnect, result.ForLLM)
+	}
+}
 
 func newTestPaperTradeTool(t *testing.T) *PaperTradeTool {
 	t.Helper()

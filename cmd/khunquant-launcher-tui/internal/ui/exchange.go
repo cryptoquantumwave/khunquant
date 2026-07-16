@@ -1,13 +1,16 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	khunquantconfig "github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges/webull"
 )
 
 // --------------------------------------------------------------------------
@@ -383,6 +386,9 @@ func (s *appState) webullAccountForm(index int) tview.Primitive {
 		acc.Region = v
 		s.dirty = true
 	})
+	form.AddButton("Resolve Account ID", func() {
+		s.resolveWebullAccountID(index)
+	})
 	addExchangeDeleteButton(form, s, func() {
 		s.config.Exchanges.Webull.Accounts = removeAccount(s.config.Exchanges.Webull.Accounts, index)
 		if len(s.config.Exchanges.Webull.Accounts) == 0 {
@@ -390,6 +396,115 @@ func (s *appState) webullAccountForm(index int) tview.Primitive {
 		}
 	})
 	return wrapWithBack(form, s)
+}
+
+// resolveWebullAccountID looks up the Webull brokerage account(s) that the
+// entered app key/secret grant access to (via GET /openapi/account/list,
+// which — like the official Webull SDK — only needs app credentials, not an
+// account_id) and fills in Account ID. A single account is applied
+// automatically; multiple accounts are presented for the user to pick from
+// rather than guessed, since silently choosing the wrong one would read or
+// trade against the wrong brokerage account.
+func (s *appState) resolveWebullAccountID(index int) {
+	acc := s.config.Exchanges.Webull.Accounts[index]
+	if acc.APIKey.String() == "" || acc.Secret.String() == "" {
+		s.showWebullResolveModal("Enter API Key and Secret first, then Resolve Account ID.")
+		return
+	}
+
+	pageName := "webull-resolving"
+	modal := tview.NewModal().SetText("Resolving Webull account...")
+	modal.SetTitle("Please wait").SetBorder(true)
+	s.pages.AddPage(pageName, modal, true, true)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		// WithSessionPersistence: reuse an already-approved on-disk session
+		// (the account list needs an access token), and persist any login
+		// this starts so an in-app approval isn't wasted.
+		client, err := webull.NewClient(acc, webull.WithSessionPersistence())
+		var accounts []webull.AccountListItem
+		if err == nil {
+			accounts, err = client.FetchAccountList(ctx)
+		}
+
+		s.app.QueueUpdateDraw(func() {
+			s.pages.RemovePage(pageName)
+			s.handleWebullAccountListResult(index, accounts, err)
+		})
+	}()
+}
+
+// handleWebullAccountListResult applies the outcome of resolveWebullAccountID
+// on the UI thread: single match applies automatically, no match or an
+// error is reported, and multiple matches are offered as a pick-one modal.
+func (s *appState) handleWebullAccountListResult(index int, accounts []webull.AccountListItem, err error) {
+	if err != nil {
+		s.showWebullResolveModal(fmt.Sprintf("Could not resolve account_id: %v", err))
+		return
+	}
+	switch len(accounts) {
+	case 0:
+		s.showWebullResolveModal("No brokerage accounts were found for these app credentials. Verify API access has been approved for this app.")
+	case 1:
+		s.applyWebullAccountID(index, accounts[0].AccountID)
+		s.showWebullResolveModal(fmt.Sprintf("Resolved account_id: %s", accounts[0].AccountID))
+	default:
+		s.showWebullAccountPicker(index, accounts)
+	}
+}
+
+// applyWebullAccountID stores the resolved account_id and refreshes the form
+// so the "Account ID" field reflects the new value — same pop-then-push
+// refresh idiom used elsewhere in this file (e.g. webullMenu's "Add account").
+func (s *appState) applyWebullAccountID(index int, accountID string) {
+	s.config.Exchanges.Webull.Accounts[index].AccountID = accountID
+	s.dirty = true
+	pageKey := fmt.Sprintf("exchange-webull-%d", index)
+	s.pop()
+	s.push(pageKey, s.webullAccountForm(index))
+}
+
+// showWebullAccountPicker lets the user pick which brokerage account to use
+// when the app credentials map to more than one (e.g. cash + margin + IRA).
+func (s *appState) showWebullAccountPicker(index int, accounts []webull.AccountListItem) {
+	pageName := "webull-account-picker"
+	labels := make([]string, 0, len(accounts)+1)
+	for _, a := range accounts {
+		label := a.AccountLabel
+		if label == "" {
+			label = a.AccountType
+		}
+		labels = append(labels, fmt.Sprintf("%s (%s)", label, a.AccountID))
+	}
+	labels = append(labels, "Cancel")
+
+	modal := tview.NewModal().
+		SetText("Multiple brokerage accounts were found. Pick one:").
+		AddButtons(labels).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			s.pages.RemovePage(pageName)
+			if buttonIndex >= 0 && buttonIndex < len(accounts) {
+				s.applyWebullAccountID(index, accounts[buttonIndex].AccountID)
+			}
+		})
+	modal.SetTitle("Select Webull Account").SetBorder(true)
+	s.pages.AddPage(pageName, modal, true, true)
+}
+
+// showWebullResolveModal shows a dismissable status/error message.
+func (s *appState) showWebullResolveModal(text string) {
+	pageName := "webull-resolve-status"
+	modal := tview.NewModal().
+		SetText(text).
+		AddButtons([]string{"OK"}).
+		SetDoneFunc(func(_ int, _ string) {
+			s.pages.RemovePage(pageName)
+		})
+	modal.SetTitle("Webull").SetBorder(true)
+	s.pages.AddPage(pageName, modal, true, true)
 }
 
 // --------------------------------------------------------------------------

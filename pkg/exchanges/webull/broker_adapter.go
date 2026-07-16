@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
@@ -20,12 +21,59 @@ type webullAdapter struct {
 	cfg    config.WebullExchangeAccount
 }
 
+// adapterCache memoizes webullAdapter (and its underlying Client/token session)
+// per account name. Webull's login session requires periodic in-app approval and
+// is rate-limited on repeated token/create calls, so every entry point that can
+// construct a webullAdapter — the exchanges.Exchange factory (init.go) and the
+// broker.Provider factory (below), used respectively by portfolio tools and by
+// market-data/trading tools — must resolve to the exact same Client instance.
+// Without this, each market-data or order call would mint its own fresh,
+// unapproved session instead of reusing the one the user already approved.
+//
+// Each entry also stores a fingerprint of the config it was built from: when
+// the user edits the account (new api_key/secret/region/proxy) and saves —
+// which happens on the same web-UI page as the Connect button — the stale
+// adapter must be rebuilt, not returned, or logins keep failing against the
+// old credentials/host with no indication why.
+type cachedAdapter struct {
+	fingerprint string
+	adapter     *webullAdapter
+}
+
+var (
+	adapterCacheMu sync.Mutex
+	adapterCache   = map[string]cachedAdapter{}
+)
+
+// accountFingerprint captures every config field that affects the built
+// Client, so a cache hit is only valid while none of them changed.
+func accountFingerprint(cfg config.WebullExchangeAccount) string {
+	return strings.Join([]string{
+		cfg.APIKey.String(),
+		cfg.Secret.String(),
+		cfg.AccountID,
+		cfg.Region,
+		cfg.Environment,
+		cfg.Proxy,
+	}, "\x00")
+}
+
 func newBrokerAdapter(cfg config.WebullExchangeAccount) (*webullAdapter, error) {
-	client, err := NewClient(cfg)
+	adapterCacheMu.Lock()
+	defer adapterCacheMu.Unlock()
+
+	fp := accountFingerprint(cfg)
+	if c, ok := adapterCache[cfg.Name]; ok && c.fingerprint == fp {
+		return c.adapter, nil
+	}
+
+	client, err := NewClient(cfg, WithSessionPersistence())
 	if err != nil {
 		return nil, err
 	}
-	return &webullAdapter{client: client, cfg: cfg}, nil
+	a := &webullAdapter{client: client, cfg: cfg}
+	adapterCache[cfg.Name] = cachedAdapter{fingerprint: fp, adapter: a}
+	return a, nil
 }
 
 // --- broker.Provider ---
@@ -736,8 +784,12 @@ func (a *webullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side
 	}
 
 	// Execute PlaceOrder
+	accountID, err := a.client.AccountID(ctx)
+	if err != nil {
+		return ccxt.Order{}, err
+	}
 	req := PlaceOrderRequest{
-		AccountID: a.client.accountID,
+		AccountID: accountID,
 		NewOrders: []NewOrder{order},
 	}
 	resp, err := a.client.PlaceOrder(ctx, req)
@@ -772,8 +824,12 @@ func (a *webullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side
 // cancelByClientOrderID cancels an order by client_order_id and returns a minimal
 // canceled ccxt.Order. Shared by the equity and option cancel paths.
 func (a *webullAdapter) cancelByClientOrderID(ctx context.Context, clientOrderID string) (ccxt.Order, error) {
+	accountID, err := a.client.AccountID(ctx)
+	if err != nil {
+		return ccxt.Order{}, err
+	}
 	req := CancelOrderRequest{
-		AccountID:     a.client.accountID,
+		AccountID:     accountID,
 		ClientOrderID: clientOrderID,
 	}
 	if _, err := a.client.CancelOrder(ctx, req); err != nil {
@@ -957,8 +1013,12 @@ func (a *webullAdapter) PlaceOptionOrder(ctx context.Context, req broker.OptionO
 	}
 
 	// Execute PlaceOrder
+	accountID, err := a.client.AccountID(ctx)
+	if err != nil {
+		return ccxt.Order{}, err
+	}
 	placeReq := PlaceOrderRequest{
-		AccountID: a.client.accountID,
+		AccountID: accountID,
 		NewOrders: []NewOrder{order},
 	}
 	resp, err := a.client.PlaceOrder(ctx, placeReq)

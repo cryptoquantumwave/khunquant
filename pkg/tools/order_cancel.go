@@ -62,6 +62,9 @@ func (t *CancelOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 
 	order, err := tp.CancelOrder(ctx, orderID, symbol)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("CancelOrder %s: %v", orderID, err)).WithError(err)
 	}
 

@@ -79,6 +79,9 @@ func (t *TransferFundsTool) Execute(ctx context.Context, args map[string]any) *T
 
 	entry, err := tp.Transfer(ctx, asset, amount, fromAccount, toAccount)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("Transfer failed: %v", err)).WithError(err)
 	}
 

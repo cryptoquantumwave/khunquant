@@ -74,6 +74,10 @@ func (t *EmergencyStopTool) Execute(ctx context.Context, args map[string]any) *T
 
 		orders, err := tp.FetchOpenOrders(ctx, "")
 		if err != nil {
+			if msg := reauthText(err, ref.ProviderID, ref.Account); msg != "" {
+				errs = append(errs, msg)
+				continue
+			}
 			errs = append(errs, fmt.Sprintf("%s/%s: fetch open orders: %v", ref.ProviderID, ref.Account, err))
 			continue
 		}

@@ -2,6 +2,7 @@ package exchanges
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -29,10 +30,13 @@ var (
 )
 
 // RegisterFactory registers a named exchange factory. Called from subpackage init() functions.
+// Re-registering a name drops that name's cached instances (tests re-register
+// stubs under the same name and must not receive a previous stub).
 func RegisterFactory(name string, f ExchangeFactory) {
 	factoriesMu.Lock()
 	defer factoriesMu.Unlock()
 	factories[name] = f
+	dropCachedInstancesLocked(name)
 }
 
 // RegisterAccountFactory registers an account-aware exchange factory.
@@ -40,6 +44,18 @@ func RegisterAccountFactory(name string, f ExchangeAccountFactory) {
 	factoriesMu.Lock()
 	defer factoriesMu.Unlock()
 	accountFactories[name] = f
+	dropCachedInstancesLocked(name)
+}
+
+// dropCachedInstancesLocked removes every cached instance for name (all
+// accounts). Caller must hold factoriesMu.
+func dropCachedInstancesLocked(name string) {
+	prefix := name + "\x00"
+	for key := range instanceCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(instanceCache, key)
+		}
+	}
 }
 
 // CreateExchange creates an exchange by name using the registered factory.
@@ -90,4 +106,15 @@ func CreateExchangeForAccount(name, accountName string, cfg *config.Config) (Exc
 	}
 	instanceCache[cacheKey] = ex
 	return ex, nil
+}
+
+// ResetInstanceCache drops all cached exchange instances so the next
+// CreateExchangeForAccount call re-runs the factory against current config.
+// Call after persisting config changes (e.g. the web launcher's config-save
+// handlers) so edited credentials/hosts take effect without a process
+// restart.
+func ResetInstanceCache() {
+	factoriesMu.Lock()
+	defer factoriesMu.Unlock()
+	instanceCache = map[string]Exchange{}
 }

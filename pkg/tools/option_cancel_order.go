@@ -56,6 +56,9 @@ func (t *OptionCancelOrderTool) Execute(ctx context.Context, args map[string]any
 
 	order, err := opt.CancelOptionOrder(ctx, id)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("CancelOptionOrder failed: %v", err)).WithError(err)
 	}
 

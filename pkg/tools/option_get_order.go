@@ -56,6 +56,9 @@ func (t *OptionGetOrderTool) Execute(ctx context.Context, args map[string]any) *
 
 	order, err := opt.FetchOptionOrder(ctx, id)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchOptionOrder failed: %v", err)).WithError(err)
 	}
 

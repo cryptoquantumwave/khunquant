@@ -180,6 +180,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	// --- Gate 7: execute ---
 	order, err := tp.CreateOrder(ctx, symbol, orderType, side, amount, price, params)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("CreateOrder failed: %v", err)).WithError(err)
 	}
 

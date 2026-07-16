@@ -88,6 +88,9 @@ func (t *OptionQuoteTool) Execute(ctx context.Context, args map[string]any) *Too
 	// Fetch snapshot
 	quotes, err := omp.FetchOptionSnapshot(ctx, []broker.OptionContract{contract})
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		// Check for subscription error
 		if strings.Contains(err.Error(), "Insufficient permission") || strings.Contains(err.Error(), "subscription") {
 			return ErrorResult(fmt.Sprintf("option market data requires a US_OPTION subscription: %v", err))

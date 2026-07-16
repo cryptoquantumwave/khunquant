@@ -68,6 +68,9 @@ func (t *GetTickerTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	ticker, err := md.FetchTicker(ctx, symbol)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchTicker %s: %v", symbol, err))
 	}
 

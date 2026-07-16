@@ -123,6 +123,10 @@ func (t *GetPnLSummaryTool) Execute(ctx context.Context, args map[string]any) *T
 
 		balances, err := pp.GetWalletBalances(ctx, wt)
 		if err != nil {
+			if msg := reauthText(err, ref.ProviderID, ref.Account); msg != "" {
+				sb.WriteString(fmt.Sprintf("\n[!] %s\n", msg))
+				continue
+			}
 			sb.WriteString(fmt.Sprintf("\n[!] %s (%s): GetWalletBalances: %v\n", ref.ProviderID, ref.Account, err))
 			continue
 		}

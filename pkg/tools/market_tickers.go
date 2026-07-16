@@ -80,6 +80,9 @@ func (t *GetTickersTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	tickers, err := md.FetchTickers(ctx, symbols)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchTickers: %v", err))
 	}
 

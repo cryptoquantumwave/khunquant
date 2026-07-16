@@ -92,7 +92,7 @@ func (t *CalculateIndicatorsTool) Execute(ctx context.Context, args map[string]a
 
 	candles, err := md.FetchOHLCV(ctx, symbol, timeframe, nil, limit)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("FetchOHLCV: %v", err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("FetchOHLCV: %v", err))
 	}
 	if len(candles) < 20 {
 		return ErrorResult(fmt.Sprintf("not enough data: need at least 20 bars, got %d", len(candles)))

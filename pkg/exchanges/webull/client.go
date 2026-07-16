@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
@@ -23,12 +24,28 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	signer     *Signer
-	accountID  string
 
-	// Token management
+	// accountID is the resolved brokerage account_id. It may start empty (only
+	// app key/secret configured) and gets lazily resolved via AccountID().
+	accountIDMu sync.Mutex
+	accountID   string
+
+	// sessionAccountName keys this account's entry in the on-disk session
+	// cache (session_store.go) — the same normalized account name used
+	// elsewhere (config.WebullExchangeAccount.Name). sessionPersistEnabled
+	// gates whether that cache is read/written at all; see
+	// WithSessionPersistence.
+	sessionAccountName    string
+	sessionPersistEnabled bool
+
+	// Token management. tokenStatus mirrors the last observed
+	// TokenResponse.Status ("", NORMAL, PENDING, INVALID, EXPIRED) and lets
+	// getOrRefreshToken distinguish "no usable token yet, needs interactive
+	// re-auth" from "no token yet, go create one."
 	tokenMu     sync.Mutex
 	token       string
 	tokenExpiry time.Time
+	tokenStatus string
 
 	// Category cache for ETF fallback: maps symbol to resolved category (US_STOCK or US_ETF)
 	categoryMu    sync.Mutex
@@ -69,6 +86,21 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
+// WithSessionPersistence enables reading/writing the shared on-disk session
+// cache (session_store.go). Production entry points (init.go,
+// broker_adapter.go) enable this so an approved login survives process
+// restarts and is shared with other khunquant processes. It is opt-in
+// rather than default-on so the ~35 existing tests that construct a Client
+// directly never touch the real session file or leak token state between
+// test cases; tests that specifically exercise persistence enable it
+// explicitly alongside an overridden sessionFilePathFn.
+func WithSessionPersistence() Option {
+	return func(c *Client) error {
+		c.sessionPersistEnabled = true
+		return nil
+	}
+}
+
 // NewClient creates a new Webull API client.
 // Credentials are taken from acc (APIKey = app key, Secret = app secret).
 func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error) {
@@ -78,28 +110,35 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 	if acc.Secret.String() == "" {
 		return nil, fmt.Errorf("webull: secret (app secret) is required")
 	}
-	if acc.AccountID == "" {
-		return nil, fmt.Errorf("webull: account_id is required")
-	}
+	// account_id is intentionally NOT required here: like the official Webull
+	// SDK (ApiClient built from app key/secret alone, account_id supplied per
+	// call), we resolve it lazily via AccountID() on first account-scoped
+	// request. This lets a user configure only api_key/secret, matching the
+	// UX of single-credential exchanges like Bitkub.
 
 	httpClient, err := utils.CreateHTTPClient(acc.Proxy, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("webull: %w", err)
 	}
 
-	// Determine base URL from environment
+	// Determine base URL from environment + region. Reject unknown regions
+	// outright — see ValidateRegion for why a silent US fallback is worse.
+	if err := ValidateRegion(acc.Region); err != nil {
+		return nil, err
+	}
 	environment := acc.Environment
 	if environment == "" {
 		environment = "prod"
 	}
-	baseURL := BaseURLForEnvironment(environment)
+	baseURL := BaseURLForEnvironment(environment, acc.Region)
 
 	c := &Client{
-		baseURL:       baseURL,
-		httpClient:    httpClient,
-		signer:        NewSigner(acc.APIKey.String(), acc.Secret.String()),
-		accountID:     acc.AccountID,
-		categoryCache: make(map[string]string),
+		baseURL:            baseURL,
+		httpClient:         httpClient,
+		signer:             NewSigner(acc.APIKey.String(), acc.Secret.String()),
+		accountID:          acc.AccountID,
+		sessionAccountName: acc.Name,
+		categoryCache:      make(map[string]string),
 	}
 
 	// Register secrets for redaction in logs
@@ -113,7 +152,65 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 		}
 	}
 
+	// Seed from a previously persisted session (approved via this or another
+	// khunquant process) so a fresh Client doesn't force a new in-app
+	// approval when one is already valid. See session_store.go.
+	if c.sessionPersistEnabled {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok {
+			c.token = token
+			c.tokenStatus = status
+			c.tokenExpiry = expiresAt
+		}
+	}
+
 	return c, nil
+}
+
+// AccountID returns the brokerage account_id to use for account-scoped
+// requests (balance, positions, orders). If the account was configured with
+// an explicit account_id, it's returned immediately. Otherwise it is
+// resolved lazily via GET /openapi/account/list — which only requires the
+// app key/secret already held by the client — mirroring the official Webull
+// SDK's ApiClient(app_key, app_secret) + get_account_list() pattern.
+//
+// If the credentials map to more than one brokerage account (e.g. cash +
+// margin + IRA), resolution deliberately does NOT guess: it returns an
+// actionable error listing the accounts found so the caller can set
+// account_id explicitly (config or the launcher TUI) rather than risk
+// reading/trading the wrong account.
+func (c *Client) AccountID(ctx context.Context) (string, error) {
+	c.accountIDMu.Lock()
+	defer c.accountIDMu.Unlock()
+
+	if c.accountID != "" {
+		return c.accountID, nil
+	}
+
+	accounts, err := c.FetchAccountList(ctx)
+	if err != nil {
+		return "", fmt.Errorf("webull: resolve account_id: %w", err)
+	}
+
+	switch len(accounts) {
+	case 0:
+		return "", fmt.Errorf("webull: no account_id configured and no brokerage accounts were returned for these app credentials; verify API access has been approved for this app")
+	case 1:
+		c.accountID = accounts[0].AccountID
+		return c.accountID, nil
+	default:
+		var b strings.Builder
+		for i, a := range accounts {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			label := a.AccountLabel
+			if label == "" {
+				label = a.AccountType
+			}
+			fmt.Fprintf(&b, "%s (account_id=%s)", label, a.AccountID)
+		}
+		return "", fmt.Errorf("webull: no account_id configured and multiple brokerage accounts were found: %s — set account_id explicitly in config or via the launcher TUI to pick one", b.String())
+	}
 }
 
 // doRequest performs a low-level HTTP request with signing, token management, and automatic retries.
@@ -278,15 +375,61 @@ func isAuthError(statusCode int, apiErr ErrorResponse) bool {
 	return strings.Contains(upperCode, "TOKEN") || strings.Contains(upperCode, "UNAUTHORIZED")
 }
 
+// Documented Webull limits for the token/check polling flow (per Webull's
+// own SDK defaults and API docs): poll every ~5s, give up after ~5 minutes,
+// and never poll faster than every 3s (token/check is rate-limited to 10
+// requests per 30s). These are the source values; pkg/tools/webull_reconnect.go
+// has its own overridable poll-loop variables initialized from these, kept
+// separate so tests can shrink them without touching this package.
+const (
+	TokenCheckPollInterval = 5 * time.Second
+	TokenCheckMaxWait      = 5 * time.Minute
+	TokenCheckMinInterval  = 3 * time.Second
+)
+
 // getOrRefreshToken returns a cached access token, or creates/refreshes one if needed.
 // Thread-safe with mutex protection.
+//
+// If the cached (or freshly created) token's status is anything other than
+// NORMAL, this returns exchanges.ErrNeedsReauth instead of a token: Webull
+// requires the user to approve the login inside the Webull mobile app before
+// the token becomes usable, and there is no API to submit an SMS/OTP code to
+// complete that approval programmatically. Callers should surface this to the
+// caller/LLM as "call webull_reconnect", not retry blindly.
+//
+// A cached PENDING status does NOT trigger another token/create call — doing
+// so on every account-scoped request while a login is awaiting in-app
+// approval would mint a fresh pending token each time and risk tripping
+// Webull's own rate limits. The webull_reconnect tool (via CheckToken) is
+// responsible for polling until the existing pending token resolves.
 func (c *Client) getOrRefreshToken(ctx context.Context) (string, error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 
-	// If token exists and not expiring soon (60s buffer), return it
-	if c.token != "" && time.Now().Add(60*time.Second).Before(c.tokenExpiry) {
+	// If token exists, is NORMAL, and not expiring soon (60s buffer), return it.
+	if c.token != "" && c.tokenStatus == TokenStatusNormal && time.Now().Add(60*time.Second).Before(c.tokenExpiry) {
 		return c.token, nil
+	}
+
+	// Another khunquant process (the web launcher backend, a different
+	// invocation) may have approved a login since this Client last checked —
+	// re-read the shared on-disk session before deciding a fresh login is
+	// needed. Cheap: only reached once the fast path above has already
+	// missed, not on every request.
+	if c.sessionPersistEnabled {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok {
+			c.token = token
+			c.tokenStatus = status
+			c.tokenExpiry = expiresAt
+			if c.token != "" && c.tokenStatus == TokenStatusNormal && time.Now().Add(60*time.Second).Before(c.tokenExpiry) {
+				return c.token, nil
+			}
+		}
+	}
+
+	// A token is already awaiting in-app approval; don't mint another one.
+	if c.tokenStatus == TokenStatusPending {
+		return "", exchanges.ErrNeedsReauth
 	}
 
 	// Create new token
@@ -295,11 +438,81 @@ func (c *Client) getOrRefreshToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("webull: create token: %w", err)
 	}
 
-	// Store token and expiry
+	// Store token, expiry, and status.
 	c.token = resp.Token
 	c.tokenExpiry = time.UnixMilli(resp.Expires)
+	c.tokenStatus = resp.Status
+	c.persistSession()
 
+	if resp.Status != TokenStatusNormal {
+		return "", exchanges.ErrNeedsReauth
+	}
 	return c.token, nil
+}
+
+// CheckToken polls /openapi/auth/token/check to learn whether a PENDING
+// token has since been approved in the Webull mobile app, and updates the
+// cached status accordingly. It must pass skipToken=true to doRequest:
+// otherwise doRequest would call getOrRefreshToken to obtain an access token
+// for the check request itself, which would immediately return
+// exchanges.ErrNeedsReauth for the exact PENDING state being polled here —
+// a deadlock/self-defeat, not a network error.
+func (c *Client) CheckToken(ctx context.Context) (*TokenResponse, error) {
+	c.tokenMu.Lock()
+	token := c.token
+	c.tokenMu.Unlock()
+	if token == "" {
+		return nil, fmt.Errorf("webull: CheckToken: no token to check (call CreateToken first)")
+	}
+
+	body := map[string]string{"token": token}
+	resp := &TokenResponse{}
+	if err := c.doRequest(ctx, http.MethodPost, endpointTokenCheck, nil, body, resp, true); err != nil {
+		return nil, fmt.Errorf("webull: CheckToken: %w", err)
+	}
+
+	c.tokenMu.Lock()
+	c.tokenStatus = resp.Status
+	if resp.Status == TokenStatusNormal {
+		c.tokenExpiry = time.UnixMilli(resp.Expires)
+	}
+	c.persistSession()
+	c.tokenMu.Unlock()
+
+	return resp, nil
+}
+
+// persistSession writes the current in-memory token/status/expiry to the
+// shared on-disk session cache (session_store.go) so other khunquant
+// processes — and future restarts of this one — can reuse an approved
+// session instead of re-prompting for in-app approval. A no-op unless
+// WithSessionPersistence was used to construct this Client. Must be called
+// while already holding tokenMu (it reads c.token/tokenStatus/tokenExpiry
+// directly, not through a lock of its own).
+func (c *Client) persistSession() {
+	if !c.sessionPersistEnabled {
+		return
+	}
+	if err := saveSession(c.sessionAccountName, c.token, c.tokenStatus, c.tokenExpiry); err != nil {
+		logger.Warn(fmt.Sprintf("webull: failed to persist session for %q: %v", c.sessionAccountName, err))
+	}
+}
+
+// SessionInfo returns the last known session status and expiry without
+// making a network call to Webull — safe to poll frequently (e.g. from a
+// web UI status endpoint). When session persistence is enabled it re-reads
+// the shared on-disk session first so it reflects approvals made by other
+// khunquant processes, falling back to this Client's in-memory cache when
+// disk has nothing newer (or persistence is disabled entirely).
+func (c *Client) SessionInfo() (string, time.Time) {
+	if c.sessionPersistEnabled {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok && token != "" {
+			return status, expiresAt
+		}
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	return c.tokenStatus, c.tokenExpiry
 }
 
 // invalidateToken clears the cached token, forcing refresh on next request.
@@ -308,6 +521,8 @@ func (c *Client) invalidateToken() {
 	defer c.tokenMu.Unlock()
 	c.token = ""
 	c.tokenExpiry = time.Time{}
+	c.tokenStatus = ""
+	c.persistSession()
 }
 
 // --- Category Resolution (ETF Fallback) ---
@@ -440,6 +655,8 @@ func (c *Client) CreateToken(ctx context.Context) (*TokenResponse, error) {
 	c.tokenMu.Lock()
 	c.token = resp.Token
 	c.tokenExpiry = time.UnixMilli(resp.Expires)
+	c.tokenStatus = resp.Status
+	c.persistSession()
 	c.tokenMu.Unlock()
 	return &resp, nil
 }
@@ -455,8 +672,12 @@ func (c *Client) FetchAccountList(ctx context.Context) ([]AccountListItem, error
 
 // FetchBalance fetches the balance for the configured account.
 func (c *Client) FetchBalance(ctx context.Context) (*BalanceResponse, error) {
+	accountID, err := c.AccountID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{}
-	query.Set("account_id", c.accountID)
+	query.Set("account_id", accountID)
 	var resp BalanceResponse
 	if err := c.doRequest(ctx, http.MethodGet, endpointBalance, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchBalance: %w", err)
@@ -466,8 +687,12 @@ func (c *Client) FetchBalance(ctx context.Context) (*BalanceResponse, error) {
 
 // FetchPositions fetches all positions for the configured account.
 func (c *Client) FetchPositions(ctx context.Context) ([]Position, error) {
+	accountID, err := c.AccountID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{}
-	query.Set("account_id", c.accountID)
+	query.Set("account_id", accountID)
 	var resp []Position
 	if err := c.doRequest(ctx, http.MethodGet, endpointPositions, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchPositions: %w", err)
@@ -737,8 +962,12 @@ func (c *Client) CancelOrder(ctx context.Context, req CancelOrderRequest) (*Plac
 
 // FetchOpenOrders fetches all open orders for the account.
 func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
+	accountID, err := c.AccountID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{}
-	query.Set("account_id", c.accountID)
+	query.Set("account_id", accountID)
 	var resp []ComboOrder
 	if err := c.doRequest(ctx, http.MethodGet, endpointOrderOpen, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
@@ -749,8 +978,12 @@ func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 // FetchOrderHistory fetches closed orders within a date range.
 // startDate and endDate are optional yyyy-MM-dd format strings; if empty, defaults to last 7 days.
 func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate string) ([]ComboOrder, error) {
+	accountID, err := c.AccountID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{}
-	query.Set("account_id", c.accountID)
+	query.Set("account_id", accountID)
 	if startDate != "" {
 		query.Set("start_date", startDate)
 	}
@@ -766,8 +999,12 @@ func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate strin
 
 // FetchOrderDetail fetches details for a single order by client_order_id.
 func (c *Client) FetchOrderDetail(ctx context.Context, clientOrderID string) (*ComboOrder, error) {
+	accountID, err := c.AccountID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{}
-	query.Set("account_id", c.accountID)
+	query.Set("account_id", accountID)
 	query.Set("client_order_id", clientOrderID)
 	var resp ComboOrder
 	if err := c.doRequest(ctx, http.MethodGet, endpointOrderDetail, query, nil, &resp, false); err != nil {

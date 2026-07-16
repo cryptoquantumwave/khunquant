@@ -3,6 +3,7 @@ package webull
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 )
 
 // newTestClient builds a client pointed at server with signing creds; token
@@ -1169,5 +1171,458 @@ func TestFetchAccountListError(t *testing.T) {
 
 	if _, err := newTestClient(t, server).FetchAccountList(testContext()); err == nil {
 		t.Fatal("expected error for account list failure")
+	}
+}
+
+// newTestClientNoAccountID builds a client configured with app key/secret
+// only (no account_id), mirroring a user who has only entered API
+// credentials — the scenario AccountID() lazy resolution must handle.
+func newTestClientNoAccountID(t *testing.T, server *httptest.Server) *Client {
+	t.Helper()
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("test-app-key"),
+			Secret: *config.NewSecureString("test-app-secret"),
+		},
+	}
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient (no account_id) failed: %v", err)
+	}
+	return client
+}
+
+// TestNewClientAllowsEmptyAccountID verifies that construction no longer
+// hard-fails when account_id is unset — resolution is deferred to first use,
+// matching the official Webull SDK (ApiClient(app_key, app_secret) with
+// account_id supplied per call, discovered via account/list).
+func TestNewClientAllowsEmptyAccountID(t *testing.T) {
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			APIKey: *config.NewSecureString("test-app-key"),
+			Secret: *config.NewSecureString("test-app-secret"),
+		},
+	}
+	if _, err := NewClient(cfg); err != nil {
+		t.Fatalf("NewClient should succeed with only api_key/secret, got: %v", err)
+	}
+}
+
+// TestAccountIDResolvesSingleAccount verifies that with no account_id
+// configured and exactly one brokerage account returned by account/list,
+// AccountID() resolves and caches it (a second call must not hit the
+// network again).
+func TestAccountIDResolvesSingleAccount(t *testing.T) {
+	var accountListCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			atomic.AddInt32(&accountListCalls, 1)
+			json.NewEncoder(w).Encode([]AccountListItem{
+				{AccountID: "ACC999", AccountType: "MARGIN", AccountLabel: "Main"},
+			})
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClientNoAccountID(t, server)
+
+	id, err := client.AccountID(testContext())
+	if err != nil {
+		t.Fatalf("AccountID failed: %v", err)
+	}
+	if id != "ACC999" {
+		t.Errorf("expected resolved account_id ACC999, got %q", id)
+	}
+
+	// Second call must be served from cache, not the network.
+	if _, err := client.AccountID(testContext()); err != nil {
+		t.Fatalf("AccountID (cached) failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&accountListCalls); got != 1 {
+		t.Errorf("expected account/list to be called once (cached thereafter), got %d", got)
+	}
+}
+
+// TestAccountIDErrorsOnZeroAccounts verifies an actionable error (not a
+// panic or opaque failure) when app credentials map to no brokerage
+// accounts.
+func TestAccountIDErrorsOnZeroAccounts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			json.NewEncoder(w).Encode([]AccountListItem{})
+		}
+	}))
+	defer server.Close()
+
+	_, err := newTestClientNoAccountID(t, server).AccountID(testContext())
+	if err == nil {
+		t.Fatal("expected error when no brokerage accounts are found")
+	}
+	if !strings.Contains(err.Error(), "no brokerage accounts") {
+		t.Errorf("error should explain no accounts were found, got: %s", err.Error())
+	}
+}
+
+// TestAccountIDErrorsOnMultipleAccounts verifies that with more than one
+// brokerage account, resolution refuses to guess and instead returns an
+// actionable error listing every account found.
+func TestAccountIDErrorsOnMultipleAccounts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			json.NewEncoder(w).Encode([]AccountListItem{
+				{AccountID: "ACC123", AccountType: "MARGIN", AccountLabel: "Main"},
+				{AccountID: "ACC456", AccountType: "CASH", AccountLabel: "Cash"},
+			})
+		}
+	}))
+	defer server.Close()
+
+	_, err := newTestClientNoAccountID(t, server).AccountID(testContext())
+	if err == nil {
+		t.Fatal("expected error when multiple brokerage accounts are found")
+	}
+	for _, want := range []string{"ACC123", "ACC456", "multiple brokerage accounts"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %s", want, err.Error())
+		}
+	}
+}
+
+// TestFetchBalanceResolvesAccountIDLazily is the end-to-end regression test
+// for the reported bug: a user who configured only api_key/secret (no
+// account_id) must still get a real balance back, exactly like the official
+// SDK's get_account_list() -> get_account_balance(account_id) flow.
+func TestFetchBalanceResolvesAccountIDLazily(t *testing.T) {
+	var sawAccountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			json.NewEncoder(w).Encode(TokenResponse{Token: "test-token", Expires: 9999999999999, Status: "NORMAL"})
+		case endpointAccountList:
+			json.NewEncoder(w).Encode([]AccountListItem{
+				{AccountID: "ACC999", AccountType: "MARGIN", AccountLabel: "Main"},
+			})
+		case endpointBalance:
+			sawAccountID = r.URL.Query().Get("account_id")
+			json.NewEncoder(w).Encode(BalanceResponse{
+				TotalNetLiquidationValue: "1000.00",
+				AccountCurrencyAssets: []CurrencyAsset{
+					{Currency: "USD", CashBalance: "500.00"},
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	balance, err := newTestClientNoAccountID(t, server).FetchBalance(testContext())
+	if err != nil {
+		t.Fatalf("FetchBalance should succeed via lazy account_id resolution: %v", err)
+	}
+	if sawAccountID != "ACC999" {
+		t.Errorf("FetchBalance should request the resolved account_id, got %q", sawAccountID)
+	}
+	if balance.TotalNetLiquidationValue != "1000.00" {
+		t.Errorf("unexpected balance: %+v", balance)
+	}
+}
+
+// --- Token state machine / re-authentication (2FA in-app approval) ---
+
+// TestCheckTokenSkipsAuth verifies CheckToken passes skipToken=true — it
+// must NOT trigger getOrRefreshToken to obtain an access token for the
+// check request itself, since that would recurse into the exact PENDING
+// state being polled and deadlock/self-defeat rather than fail cleanly.
+func TestCheckTokenSkipsAuth(t *testing.T) {
+	var createCalls, checkCalls int32
+	var sawBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case endpointTokenCreate:
+			atomic.AddInt32(&createCalls, 1)
+			json.NewEncoder(w).Encode(TokenResponse{Token: "pending-token", Expires: 9999999999999, Status: TokenStatusPending})
+		case endpointTokenCheck:
+			atomic.AddInt32(&checkCalls, 1)
+			json.NewDecoder(r.Body).Decode(&sawBody)
+			json.NewEncoder(w).Encode(TokenResponse{Token: "pending-token", Expires: 9999999999999, Status: TokenStatusNormal})
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+
+	// Seed a pending token via CreateToken (mirrors what webull_reconnect does).
+	created, err := client.CreateToken(testContext())
+	if err != nil {
+		t.Fatalf("CreateToken failed: %v", err)
+	}
+	if created.Status != TokenStatusPending {
+		t.Fatalf("expected seeded status PENDING, got %q", created.Status)
+	}
+
+	resp, err := client.CheckToken(testContext())
+	if err != nil {
+		t.Fatalf("CheckToken failed: %v", err)
+	}
+	if resp.Status != TokenStatusNormal {
+		t.Errorf("expected CheckToken to report NORMAL, got %q", resp.Status)
+	}
+	if sawBody["token"] != "pending-token" {
+		t.Errorf("expected token/check body to carry the pending token, got %+v", sawBody)
+	}
+	// CheckToken must not have triggered a second token/create call.
+	if got := atomic.LoadInt32(&createCalls); got != 1 {
+		t.Errorf("expected exactly 1 token/create call (CheckToken must skip auth), got %d", got)
+	}
+	if got := atomic.LoadInt32(&checkCalls); got != 1 {
+		t.Errorf("expected exactly 1 token/check call, got %d", got)
+	}
+}
+
+// TestGetOrRefreshTokenStateMachine covers every branch of the rewritten
+// getOrRefreshToken: NORMAL is usable, cached PENDING short-circuits to
+// ErrNeedsReauth without minting another token, and a freshly-created
+// INVALID/EXPIRED token also surfaces ErrNeedsReauth.
+func TestGetOrRefreshTokenStateMachine(t *testing.T) {
+	t.Run("NORMAL returns the token", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if r.URL.Path == endpointTokenCreate {
+				json.NewEncoder(w).Encode(TokenResponse{Token: "good-token", Expires: 9999999999999, Status: TokenStatusNormal})
+			}
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, server)
+		token, err := client.getOrRefreshToken(testContext())
+		if err != nil {
+			t.Fatalf("expected NORMAL token to be usable, got err: %v", err)
+		}
+		if token != "good-token" {
+			t.Errorf("expected token %q, got %q", "good-token", token)
+		}
+	})
+
+	t.Run("cached PENDING short-circuits without a second create call", func(t *testing.T) {
+		var createCalls int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if r.URL.Path == endpointTokenCreate {
+				atomic.AddInt32(&createCalls, 1)
+				json.NewEncoder(w).Encode(TokenResponse{Token: "pending-token", Expires: 9999999999999, Status: TokenStatusPending})
+			}
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, server)
+
+		// First call creates the pending token and returns ErrNeedsReauth.
+		if _, err := client.getOrRefreshToken(testContext()); !errors.Is(err, exchanges.ErrNeedsReauth) {
+			t.Fatalf("expected ErrNeedsReauth on first PENDING create, got: %v", err)
+		}
+		// Second call must NOT mint another token; still ErrNeedsReauth.
+		if _, err := client.getOrRefreshToken(testContext()); !errors.Is(err, exchanges.ErrNeedsReauth) {
+			t.Fatalf("expected ErrNeedsReauth on cached PENDING, got: %v", err)
+		}
+		if got := atomic.LoadInt32(&createCalls); got != 1 {
+			t.Errorf("expected exactly 1 token/create call across both getOrRefreshToken calls, got %d", got)
+		}
+	})
+
+	for _, status := range []string{TokenStatusInvalid, TokenStatusExpired} {
+		t.Run(status+" surfaces ErrNeedsReauth", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				if r.URL.Path == endpointTokenCreate {
+					json.NewEncoder(w).Encode(TokenResponse{Token: "", Expires: 0, Status: status})
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(t, server)
+			if _, err := client.getOrRefreshToken(testContext()); !errors.Is(err, exchanges.ErrNeedsReauth) {
+				t.Fatalf("expected ErrNeedsReauth for status %s, got: %v", status, err)
+			}
+		})
+	}
+}
+
+// TestFetchBalancePendingSurfacesReauth is the end-to-end regression test:
+// a Webull session that needs in-app approval must make FetchBalance (and
+// therefore the get_assets_list/get_total_value tools) fail with
+// exchanges.ErrNeedsReauth, not an opaque error, so callers can detect it.
+func TestFetchBalancePendingSurfacesReauth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == endpointTokenCreate {
+			json.NewEncoder(w).Encode(TokenResponse{Token: "pending-token", Expires: 9999999999999, Status: TokenStatusPending})
+		}
+	}))
+	defer server.Close()
+
+	_, err := newTestClient(t, server).FetchBalance(testContext())
+	if !errors.Is(err, exchanges.ErrNeedsReauth) {
+		t.Fatalf("expected FetchBalance to surface ErrNeedsReauth for a PENDING token, got: %v", err)
+	}
+}
+
+// newPersistentTestClient is like newTestClient but opts into disk session
+// persistence (production entry points always do; most tests deliberately
+// don't, to avoid touching disk — see WithSessionPersistence's doc comment).
+// Callers must first call withTestSessionFile(t) (session_store_test.go) to
+// redirect the session cache to a temp file.
+func newPersistentTestClient(t *testing.T, server *httptest.Server, accountName string) *Client {
+	t.Helper()
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			Name:   accountName,
+			APIKey: *config.NewSecureString("test-app-key"),
+			Secret: *config.NewSecureString("test-app-secret"),
+		},
+		AccountID: "ACC123",
+	}
+	client, err := NewClient(cfg, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithSessionPersistence())
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	return client
+}
+
+func TestNewClient_SeedsFromPersistedSession(t *testing.T) {
+	withTestSessionFile(t)
+
+	// Round-tripped through UnixMilli, matching the on-disk precision.
+	expiresAt := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
+	if err := saveSession("acct1", "persisted-token", TokenStatusNormal, expiresAt); err != nil {
+		t.Fatalf("saveSession failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == endpointTokenCreate {
+			t.Error("NewClient should have seeded from disk, not called token/create")
+		}
+		json.NewEncoder(w).Encode(BalanceResponse{})
+	}))
+	defer server.Close()
+
+	client := newPersistentTestClient(t, server, "acct1")
+
+	status, gotExpiresAt := client.SessionInfo()
+	if status != TokenStatusNormal {
+		t.Errorf("status = %q, want %q", status, TokenStatusNormal)
+	}
+	if !gotExpiresAt.Equal(expiresAt) {
+		t.Errorf("expiresAt = %v, want %v", gotExpiresAt, expiresAt)
+	}
+
+	if _, err := client.FetchBalance(testContext()); err != nil {
+		t.Fatalf("FetchBalance failed: %v", err)
+	}
+}
+
+// TestGetOrRefreshToken_PicksUpExternallyWrittenSession simulates another
+// khunquant process (e.g. the web launcher backend) approving a login after
+// this Client was constructed: the disk session goes NORMAL while this
+// Client's in-memory state is still empty. getOrRefreshToken must notice on
+// its next call instead of needlessly starting a new login.
+func TestGetOrRefreshToken_PicksUpExternallyWrittenSession(t *testing.T) {
+	withTestSessionFile(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == endpointTokenCreate {
+			t.Error("expected getOrRefreshToken to adopt the externally-written session, not call token/create")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newPersistentTestClient(t, server, "acct1")
+	// Nothing persisted yet at construction time — client starts empty.
+	if status, _ := client.SessionInfo(); status != "" {
+		t.Fatalf("expected no session yet, got status %q", status)
+	}
+
+	// "Another process" approves the login.
+	expiresAt := time.Now().Add(time.Hour)
+	if err := saveSession("acct1", "externally-approved-token", TokenStatusNormal, expiresAt); err != nil {
+		t.Fatalf("saveSession failed: %v", err)
+	}
+
+	token, err := client.getOrRefreshToken(testContext())
+	if err != nil {
+		t.Fatalf("getOrRefreshToken failed: %v", err)
+	}
+	if token != "externally-approved-token" {
+		t.Errorf("token = %q, want %q", token, "externally-approved-token")
+	}
+}
+
+func TestPersistSession_WritesOnCreateToken(t *testing.T) {
+	withTestSessionFile(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(TokenResponse{Token: "new-token", Expires: 9999999999999, Status: TokenStatusPending})
+	}))
+	defer server.Close()
+
+	client := newPersistentTestClient(t, server, "acct1")
+	if _, err := client.CreateToken(testContext()); err != nil {
+		t.Fatalf("CreateToken failed: %v", err)
+	}
+
+	token, status, _, ok := loadSession("acct1")
+	if !ok {
+		t.Fatal("expected CreateToken to persist a session entry")
+	}
+	if token != "new-token" || status != TokenStatusPending {
+		t.Errorf("persisted (token, status) = (%q, %q), want (%q, %q)", token, status, "new-token", TokenStatusPending)
+	}
+}
+
+func TestInvalidateToken_ClearsPersistedSession(t *testing.T) {
+	withTestSessionFile(t)
+
+	if err := saveSession("acct1", "tok", TokenStatusNormal, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("saveSession failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newPersistentTestClient(t, server, "acct1")
+	client.invalidateToken()
+
+	if _, _, _, ok := loadSession("acct1"); ok {
+		t.Fatal("expected invalidateToken to clear the persisted session entry")
 	}
 }

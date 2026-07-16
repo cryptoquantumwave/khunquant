@@ -101,4 +101,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Developer MCP server status
 	h.registerDevMCPStatusRoutes(mux)
+
+	// Webull re-authentication (Connect button + status polling)
+	h.registerWebullRoutes(mux)
 }

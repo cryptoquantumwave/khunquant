@@ -64,12 +64,12 @@ func (t *MarketAnalysisTool) Execute(ctx context.Context, args map[string]any) *
 	// Fetch ticker and OHLCV in parallel would be ideal, but sequential is safe here.
 	ticker, err := md.FetchTicker(ctx, symbol)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("FetchTicker: %v", err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("FetchTicker: %v", err))
 	}
 
 	candles, err := md.FetchOHLCV(ctx, symbol, timeframe, nil, 200)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("FetchOHLCV: %v", err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("FetchOHLCV: %v", err))
 	}
 
 	var sb strings.Builder

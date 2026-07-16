@@ -76,6 +76,9 @@ func (t *GetOrderHistoryTool) Execute(ctx context.Context, args map[string]any) 
 
 	orders, err := tp.FetchClosedOrders(ctx, symbol, since, limit)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchClosedOrders: %v", err)).WithError(err)
 	}
 

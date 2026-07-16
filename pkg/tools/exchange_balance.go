@@ -89,6 +89,9 @@ func (t *ExchangeBalanceTool) Execute(ctx context.Context, args map[string]any) 
 
 	balances, err := we.GetWalletBalances(ctx, walletType)
 	if err != nil {
+		if hint := reauthHint(err, exchangeName, accountName); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("get_assets_list: %v", err))
 	}
 
@@ -124,6 +127,9 @@ func (t *ExchangeBalanceTool) Execute(ctx context.Context, args map[string]any) 
 func (t *ExchangeBalanceTool) fallbackGetBalances(ctx context.Context, ex exchanges.Exchange, exchangeName, accountName, assetFilter string) *ToolResult {
 	balances, err := ex.GetBalances(ctx)
 	if err != nil {
+		if hint := reauthHint(err, exchangeName, accountName); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("get_assets_list: %v", err))
 	}
 

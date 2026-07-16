@@ -111,6 +111,9 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	// Fetch current price for quote→base conversion and diagnostics.
 	ticker, err := md.FetchTicker(ctx, plan.Symbol)
 	if err != nil {
+		if hint := reauthHint(err, plan.Provider, plan.Account); hint != nil {
+			return hint
+		}
 		return t.recordFailure(ctx, plan, 0, fmt.Sprintf("failed to fetch ticker for %s: %v", plan.Symbol, err))
 	}
 	if ticker.Last == nil {
@@ -143,6 +146,9 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	order, err := tp.CreateOrder(ctx, plan.Symbol, "market", side, baseAmount, &currentPrice, nil)
 	if err != nil {
+		if hint := reauthHint(err, plan.Provider, plan.Account); hint != nil {
+			return hint
+		}
 		return t.recordFailure(ctx, plan, currentPrice, fmt.Sprintf("order placement failed: %v", err))
 	}
 
@@ -202,16 +208,16 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 func (t *ExecuteDCAOrderTool) recordFailure(ctx context.Context, plan *dca.Plan, price float64, msg string) *ToolResult {
 	now := time.Now().UTC()
 	exec := &dca.Execution{
-		PlanID:         plan.ID,
-		ExecutedAt:     now,
-		Symbol:         plan.Symbol,
-		Provider:       plan.Provider,
-		Account:        plan.Account,
-		AmountQuote:    plan.AmountPerOrder,
-		FilledPrice:    price,
-		Status:         "failed",
-		ErrorMsg:       msg,
-		CreatedAt:      now,
+		PlanID:      plan.ID,
+		ExecutedAt:  now,
+		Symbol:      plan.Symbol,
+		Provider:    plan.Provider,
+		Account:     plan.Account,
+		AmountQuote: plan.AmountPerOrder,
+		FilledPrice: price,
+		Status:      "failed",
+		ErrorMsg:    msg,
+		CreatedAt:   now,
 	}
 	_, _ = t.store.SaveExecution(ctx, exec)
 	return ErrorResult(fmt.Sprintf("DCA execution failed for plan %d (%s): %s", plan.ID, plan.Name, msg))

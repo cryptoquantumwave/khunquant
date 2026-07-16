@@ -54,6 +54,9 @@ func (t *OptionOpenOrdersTool) Execute(ctx context.Context, args map[string]any)
 
 	orders, err := opt.FetchOpenOptionOrders(ctx)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchOpenOptionOrders failed: %v", err)).WithError(err)
 	}
 

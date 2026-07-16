@@ -58,6 +58,9 @@ func (t *GetOrderTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	order, err := tp.FetchOrder(ctx, orderID, symbol)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchOrder %s: %v", orderID, err)).WithError(err)
 	}
 

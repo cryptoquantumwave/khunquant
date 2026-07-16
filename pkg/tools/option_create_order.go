@@ -234,6 +234,9 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 	// --- Gate 7: execute --- (req was built and validated above)
 	order, err := opt.PlaceOptionOrder(ctx, req)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("PlaceOptionOrder failed: %v", err)).WithError(err)
 	}
 

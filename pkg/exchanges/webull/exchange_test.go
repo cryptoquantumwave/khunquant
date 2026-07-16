@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // newTestExchange builds a WebullExchange wrapping an adapter pointed at
@@ -150,5 +151,83 @@ func TestWebullExchange_FetchPrice(t *testing.T) {
 	// exercising the delegation + error-propagation path end-to-end.
 	if _, err := ex.FetchPrice(context.Background(), "AAPL", "EUR"); err == nil {
 		t.Fatal("expected error for unsupported quote currency")
+	}
+}
+
+func TestWebullExchange_SessionInfo_Delegates(t *testing.T) {
+	ex := &WebullExchange{adapter: &webullAdapter{client: &Client{}}}
+	ex.adapter.client.token = "cached-token"
+	ex.adapter.client.tokenStatus = TokenStatusNormal
+	ex.adapter.client.tokenExpiry = time.Now().Add(time.Hour)
+
+	status, expiresAt := ex.SessionInfo()
+	if status != TokenStatusNormal {
+		t.Errorf("status = %q, want %q", status, TokenStatusNormal)
+	}
+	if !expiresAt.Equal(ex.adapter.client.tokenExpiry) {
+		t.Errorf("expiresAt = %v, want %v", expiresAt, ex.adapter.client.tokenExpiry)
+	}
+}
+
+// TestWebullExchange_Reconnect_ShortCircuitsWhenAlreadyNormal verifies that
+// Reconnect does not hit the network (and so cannot downgrade a live
+// session back to PENDING) when the cached session is already NORMAL and
+// not close to expiring.
+func TestWebullExchange_Reconnect_ShortCircuitsWhenAlreadyNormal(t *testing.T) {
+	var createCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == endpointTokenCreate {
+			createCalls++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(TokenResponse{Token: "fresh-token", Expires: 9999999999999, Status: "NORMAL"})
+	}))
+	defer server.Close()
+
+	ex := newTestExchange(t, server)
+	ex.adapter.client.token = "already-normal-token"
+	ex.adapter.client.tokenStatus = TokenStatusNormal
+	ex.adapter.client.tokenExpiry = time.Now().Add(24 * time.Hour)
+
+	status, err := ex.Reconnect(context.Background())
+	if err != nil {
+		t.Fatalf("Reconnect failed: %v", err)
+	}
+	if status != TokenStatusNormal {
+		t.Errorf("status = %q, want %q", status, TokenStatusNormal)
+	}
+	if createCalls != 0 {
+		t.Errorf("expected Reconnect to short-circuit without calling token/create, got %d calls", createCalls)
+	}
+}
+
+// TestWebullExchange_Reconnect_CallsThroughWhenNotNormal verifies Reconnect
+// still performs a real token/create when there is no live NORMAL session
+// (the common case: first connect, or after PENDING/INVALID/EXPIRED).
+func TestWebullExchange_Reconnect_CallsThroughWhenNotNormal(t *testing.T) {
+	var createCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == endpointTokenCreate {
+			createCalls++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(TokenResponse{Token: "fresh-token", Expires: 9999999999999, Status: "PENDING"})
+	}))
+	defer server.Close()
+
+	ex := newTestExchange(t, server)
+	// No cached session at all — the zero-value client state.
+
+	status, err := ex.Reconnect(context.Background())
+	if err != nil {
+		t.Fatalf("Reconnect failed: %v", err)
+	}
+	if status != "PENDING" {
+		t.Errorf("status = %q, want PENDING", status)
+	}
+	if createCalls != 1 {
+		t.Errorf("expected exactly one token/create call, got %d", createCalls)
 	}
 }

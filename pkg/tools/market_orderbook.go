@@ -83,7 +83,7 @@ func (t *GetOrderBookTool) Execute(ctx context.Context, args map[string]any) *To
 
 	ob, err := md.FetchOrderBook(ctx, symbol, depth)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("FetchOrderBook %s: %v", symbol, err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("FetchOrderBook %s: %v", symbol, err))
 	}
 
 	var sb strings.Builder

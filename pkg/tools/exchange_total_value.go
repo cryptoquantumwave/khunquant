@@ -94,8 +94,10 @@ func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quo
 	// Pass 1: create exchanges up front so every priced exchange can serve
 	// cross-rate lookups for the others.
 	type acctEx struct {
-		label string
-		pe    exchanges.PricedExchange
+		label      string
+		providerID string
+		account    string
+		pe         exchanges.PricedExchange
 	}
 	var lines []lineItem
 	var acctExchanges []acctEx
@@ -115,7 +117,7 @@ func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quo
 			lines = append(lines, lineItem{label: label, err: "pricing not supported"})
 			continue
 		}
-		acctExchanges = append(acctExchanges, acctEx{label: label, pe: pe})
+		acctExchanges = append(acctExchanges, acctEx{label: label, providerID: ref.ProviderID, account: ref.Account, pe: pe})
 	}
 
 	// Pass 2: subtotal each account in its effective quote. An exchange that
@@ -131,7 +133,11 @@ func (t *ExchangeTotalValueTool) executeAll(ctx context.Context, walletType, quo
 
 		balances, err := ae.pe.GetWalletBalances(ctx, walletType)
 		if err != nil {
-			lines = append(lines, lineItem{label: ae.label, err: trimCCXTError(err)})
+			errMsg := reauthText(err, ae.providerID, ae.account)
+			if errMsg == "" {
+				errMsg = trimCCXTError(err)
+			}
+			lines = append(lines, lineItem{label: ae.label, err: errMsg})
 			continue
 		}
 
@@ -261,6 +267,9 @@ func (t *ExchangeTotalValueTool) executeSingle(ctx context.Context, exchangeName
 	// Probe that the quote currency is supported (skip for BTC since BTC/BTC is a self-pair returning 0).
 	if quote != "BTC" {
 		if _, err := pe.FetchPrice(ctx, "BTC", quote); err != nil {
+			if hint := reauthHint(err, exchangeName, accountName); hint != nil {
+				return hint
+			}
 			clean := trimCCXTError(err)
 			if isNetworkError(clean) {
 				return ErrorResult(fmt.Sprintf("Exchange %q is unreachable (network error): %s", exchangeName, clean))
@@ -276,6 +285,9 @@ func (t *ExchangeTotalValueTool) executeSingle(ctx context.Context, exchangeName
 	// Fetch all balances for the requested wallet scope.
 	balances, err := pe.GetWalletBalances(ctx, walletType)
 	if err != nil {
+		if hint := reauthHint(err, exchangeName, accountName); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("get_total_value: fetch balances: %s", trimCCXTError(err)))
 	}
 

@@ -111,6 +111,9 @@ func (t *GetOHLCVTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	candles, err := md.FetchOHLCV(ctx, symbol, timeframe, since, limit)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchOHLCV %s/%s: %v", symbol, timeframe, err))
 	}
 

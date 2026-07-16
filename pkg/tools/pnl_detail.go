@@ -103,6 +103,9 @@ func (t *GetPnLDetailTool) Execute(ctx context.Context, args map[string]any) *To
 
 	trades, err := tp.FetchMyTrades(ctx, symbol, since, limit)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("get_pnl_detail: FetchMyTrades: %v", err)).WithError(err)
 	}
 

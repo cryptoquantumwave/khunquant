@@ -12,6 +12,7 @@ import (
 
 	configstore "github.com/cryptoquantumwave/khunquant/cmd/khunquant-launcher-tui/internal/config"
 	khunquantconfig "github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 )
 
 type appState struct {
@@ -31,6 +32,13 @@ type appState struct {
 
 func Run() error {
 	applyStyles()
+	// Install the passphrase provider (env var, falling back to the
+	// persisted ~/.khunquant/.passphrase file) before any config load, so
+	// encrypted (enc://) credentials in .security.yml can be decrypted —
+	// same as cmd/khunquant/main.go. Without this, configstore.Load() below
+	// fails outright for any exchange with encrypted secrets.
+	credential.InstallFileBackedProvider()
+
 	cfg, err := configstore.Load()
 	if err != nil {
 		return err

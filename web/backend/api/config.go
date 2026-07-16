@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // registerConfigRoutes binds configuration management endpoints to the ServeMux.
@@ -106,9 +108,19 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	invalidateExchangeInstances()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// invalidateExchangeInstances drops cached exchange/provider instances after
+// a config save so edited credentials, regions, and proxies take effect in
+// this process immediately instead of after a restart. (The gateway is a
+// separate process and follows the existing restart-required model.)
+func invalidateExchangeInstances() {
+	exchanges.ResetInstanceCache()
+	broker.ResetInstanceCache()
 }
 
 func execAllowRemoteOmitted(body []byte) bool {
@@ -202,6 +214,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	invalidateExchangeInstances()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -397,10 +410,10 @@ type testCommandPatternsRequest struct {
 }
 
 type testCommandPatternsResponse struct {
-	Allowed           bool   `json:"allowed"`
-	Blocked           bool   `json:"blocked"`
-	MatchedWhitelist  string `json:"matched_whitelist,omitempty"`
-	MatchedBlacklist  string `json:"matched_blacklist,omitempty"`
+	Allowed          bool   `json:"allowed"`
+	Blocked          bool   `json:"blocked"`
+	MatchedWhitelist string `json:"matched_whitelist,omitempty"`
+	MatchedBlacklist string `json:"matched_blacklist,omitempty"`
 }
 
 // handleTestCommandPatterns tests allow/deny regex patterns against a command without saving.

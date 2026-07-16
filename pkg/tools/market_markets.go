@@ -80,7 +80,7 @@ func (t *GetMarketsTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	markets, err := md.LoadMarkets(ctx)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("LoadMarkets: %v", err))
+		return reauthOrError(err, providerID, account, fmt.Sprintf("LoadMarkets: %v", err))
 	}
 
 	if len(markets) == 0 {

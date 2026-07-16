@@ -4,6 +4,7 @@ import {
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react"
+import { useAtomValue } from "jotai"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -12,9 +13,15 @@ import { getAppConfig, patchAppConfig } from "@/api/channels"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { useAtomValue } from "jotai"
+import { useWebullConnect } from "@/hooks/use-webull-connect"
 import { gatewayAtom } from "@/store/gateway"
 
 interface PortfolioConfigPageProps {
@@ -97,7 +104,14 @@ interface WebullForm extends ExchangeForm {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function emptyAccount(): AccountDraft {
-  return { name: "", apiKey: "", apiKeyEdit: "", secret: "", secretEdit: "", proxy: "" }
+  return {
+    name: "",
+    apiKey: "",
+    apiKeyEdit: "",
+    secret: "",
+    secretEdit: "",
+    proxy: "",
+  }
 }
 
 function emptyOKXAccount(): OKXAccountDraft {
@@ -227,7 +241,9 @@ function parseWebullAccounts(raw: unknown): WebullAccountDraft[] {
       accountId: typeof r.account_id === "string" ? r.account_id : "",
       region: typeof r.region === "string" && r.region !== "" ? r.region : "us",
       environment:
-        typeof r.environment === "string" && r.environment !== "" ? r.environment : "prod",
+        typeof r.environment === "string" && r.environment !== ""
+          ? r.environment
+          : "prod",
       proxy: typeof r.proxy === "string" ? r.proxy : "",
     }
   })
@@ -302,11 +318,17 @@ function AccountCard({
   onRemove,
 }: {
   index: number
-  account: AccountDraft | OKXAccountDraft | SettradeAccountDraft | WebullAccountDraft
+  account:
+    | AccountDraft
+    | OKXAccountDraft
+    | SettradeAccountDraft
+    | WebullAccountDraft
   hasPassphrase?: boolean
   isSettrade?: boolean
   isWebull?: boolean
-  onChange: (patch: Partial<OKXAccountDraft & SettradeAccountDraft & WebullAccountDraft>) => void
+  onChange: (
+    patch: Partial<OKXAccountDraft & SettradeAccountDraft & WebullAccountDraft>,
+  ) => void
   onRemove: () => void
 }) {
   const { t } = useTranslation()
@@ -315,26 +337,43 @@ function AccountCard({
   const stAcc = account as SettradeAccountDraft
   const wbAcc = account as WebullAccountDraft
 
+  // Mirrors the backend's account-name resolution (config.ResolveAccount):
+  // an unnamed account is addressed by its 1-based position.
+  const effectiveAccountName = account.name.trim() || String(index + 1)
+  const webullConnect = useWebullConnect(effectiveAccountName, !!isWebull)
+
   const apiKeyLabel = isSettrade
     ? t("portfolios.settrade.api_key")
     : isWebull
       ? t("portfolios.webull.api_key")
       : t("portfolios.binance.api_key")
   const apiKeyPlaceholder = isSettrade
-    ? (account.apiKey ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.api_key_placeholder"))
+    ? account.apiKey
+      ? t("portfolios.settrade.credential_set")
+      : t("portfolios.settrade.api_key_placeholder")
     : isWebull
-      ? (account.apiKey ? t("portfolios.webull.credential_set") : t("portfolios.webull.api_key_placeholder"))
-      : (account.apiKey ? t("portfolios.binance.credential_set") : t("portfolios.binance.api_key_placeholder"))
+      ? account.apiKey
+        ? t("portfolios.webull.credential_set")
+        : t("portfolios.webull.api_key_placeholder")
+      : account.apiKey
+        ? t("portfolios.binance.credential_set")
+        : t("portfolios.binance.api_key_placeholder")
   const secretLabel = isSettrade
     ? t("portfolios.settrade.secret")
     : isWebull
       ? t("portfolios.webull.secret")
       : t("portfolios.binance.secret")
   const secretPlaceholder = isSettrade
-    ? (account.secret ? t("portfolios.settrade.credential_set") : t("portfolios.settrade.secret_placeholder"))
+    ? account.secret
+      ? t("portfolios.settrade.credential_set")
+      : t("portfolios.settrade.secret_placeholder")
     : isWebull
-      ? (account.secret ? t("portfolios.webull.credential_set") : t("portfolios.webull.secret_placeholder"))
-      : (account.secret ? t("portfolios.binance.credential_set") : t("portfolios.binance.secret_placeholder"))
+      ? account.secret
+        ? t("portfolios.webull.credential_set")
+        : t("portfolios.webull.secret_placeholder")
+      : account.secret
+        ? t("portfolios.binance.credential_set")
+        : t("portfolios.binance.secret_placeholder")
 
   return (
     <div className="border-border/60 rounded-lg border">
@@ -473,7 +512,11 @@ function AccountCard({
                   onValueChange={(v) => onChange({ brokerId: v })}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={t("portfolios.settrade.broker_id_placeholder")} />
+                    <SelectValue
+                      placeholder={t(
+                        "portfolios.settrade.broker_id_placeholder",
+                      )}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {SETTRADE_BROKERS.map((b) => (
@@ -493,7 +536,11 @@ function AccountCard({
                   onValueChange={(v) => onChange({ appCode: v })}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={t("portfolios.settrade.app_code_placeholder")} />
+                    <SelectValue
+                      placeholder={t(
+                        "portfolios.settrade.app_code_placeholder",
+                      )}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {SETTRADE_APP_CODES.map((c) => (
@@ -566,11 +613,61 @@ function AccountCard({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="prod">{t("portfolios.webull.environment_prod")}</SelectItem>
-                    <SelectItem value="uat">{t("portfolios.webull.environment_uat")}</SelectItem>
+                    <SelectItem value="prod">
+                      {t("portfolios.webull.environment_prod")}
+                    </SelectItem>
+                    <SelectItem value="uat">
+                      {t("portfolios.webull.environment_uat")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <div>
+                <p className="text-sm">
+                  {t("portfolios.webull.connect_title")}
+                </p>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  {webullConnect.status === "NORMAL" &&
+                    (webullConnect.daysRemaining !== undefined
+                      ? t("portfolios.webull.status_normal", {
+                          days: Math.max(
+                            0,
+                            Math.floor(webullConnect.daysRemaining),
+                          ),
+                        })
+                      : t("portfolios.webull.status_normal_today"))}
+                  {webullConnect.status === "PENDING" &&
+                    t("portfolios.webull.status_pending")}
+                  {webullConnect.status === "INVALID" &&
+                    t("portfolios.webull.status_invalid")}
+                  {webullConnect.status === "EXPIRED" &&
+                    t("portfolios.webull.status_expired")}
+                  {webullConnect.error && (
+                    <span className="text-destructive">
+                      {webullConnect.error}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={
+                  webullConnect.connecting || webullConnect.status === "PENDING"
+                }
+                onClick={() => void webullConnect.connect()}
+              >
+                {(webullConnect.connecting ||
+                  webullConnect.status === "PENDING") && (
+                  <IconLoader2 className="mr-1.5 size-4 animate-spin" />
+                )}
+                {webullConnect.status === "NORMAL"
+                  ? t("portfolios.webull.reconnect_button")
+                  : t("portfolios.webull.connect_button")}
+              </Button>
             </div>
           </>
         )}
@@ -578,7 +675,9 @@ function AccountCard({
         <div className="flex items-center justify-between px-4 py-3">
           <div>
             <p className="text-sm">{t("portfolios.proxy")}</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">{t("portfolios.proxy_description")}</p>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              {t("portfolios.proxy_description")}
+            </p>
           </div>
           <div className="w-64">
             <Input
@@ -595,11 +694,19 @@ function AccountCard({
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-type AnyForm = BinanceForm | OKXForm | BitkubForm | BinanceTHForm | SettradeForm | WebullForm
+type AnyForm =
+  | BinanceForm
+  | OKXForm
+  | BitkubForm
+  | BinanceTHForm
+  | SettradeForm
+  | WebullForm
 
 const EMPTY_FORM: BinanceForm = { enabled: false, testnet: false, accounts: [] }
 
-export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) {
+export function PortfolioConfigPage({
+  exchangeName,
+}: PortfolioConfigPageProps) {
   const { t } = useTranslation()
   const gateway = useAtomValue(gatewayAtom)
 
@@ -612,7 +719,11 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
   const [form, setForm] = useState<AnyForm>(EMPTY_FORM)
 
   const loadData = useCallback(async () => {
-    if (!["binance", "okx", "bitkub", "binanceth", "settrade", "webull"].includes(exchangeName)) {
+    if (
+      !["binance", "okx", "bitkub", "binanceth", "settrade", "webull"].includes(
+        exchangeName,
+      )
+    ) {
       setFetchError(t("portfolios.notFound", { name: exchangeName }))
       setLoading(false)
       return
@@ -712,7 +823,13 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
       const isWebull = exchangeName === "webull"
       const accounts = [
         ...(prev as BinanceForm).accounts,
-        isOKX ? emptyOKXAccount() : isSettrade ? emptySettradeAccount() : isWebull ? emptyWebullAccount() : emptyAccount(),
+        isOKX
+          ? emptyOKXAccount()
+          : isSettrade
+            ? emptySettradeAccount()
+            : isWebull
+              ? emptyWebullAccount()
+              : emptyAccount(),
       ]
       return { ...prev, accounts }
     })
@@ -802,8 +919,7 @@ export function PortfolioConfigPage({ exchangeName }: PortfolioConfigPageProps) 
       toast.success(t("portfolios.saveSuccess"))
       await loadData()
     } catch (e) {
-      const message =
-        e instanceof Error ? e.message : t("portfolios.saveError")
+      const message = e instanceof Error ? e.message : t("portfolios.saveError")
       setServerError(message)
       toast.error(message)
     } finally {

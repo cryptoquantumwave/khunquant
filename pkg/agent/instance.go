@@ -131,6 +131,9 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("list_portfolios") {
 		toolsRegistry.Register(tools.NewListPortfoliosTool(cfg))
 	}
+	if cfg.Tools.IsToolEnabled("webull_reconnect") {
+		toolsRegistry.Register(tools.NewWebullReconnectTool(cfg))
+	}
 	if cfg.Tools.IsToolEnabled("get_pnl_summary") {
 		toolsRegistry.Register(tools.NewGetPnLSummaryTool(cfg))
 	}

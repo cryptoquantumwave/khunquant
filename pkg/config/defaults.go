@@ -10,17 +10,22 @@ import (
 	"path/filepath"
 )
 
+// HomeDir returns the KhunQuant home directory: $KHUNQUANT_HOME if set,
+// otherwise ~/.khunquant. This is the same resolution DefaultConfig uses for
+// the default config/workspace location, exported so other packages that
+// need a process-wide, config-path-independent storage location (e.g. a
+// cross-process session cache) don't duplicate the env var lookup.
+func HomeDir() string {
+	if khunquantHome := os.Getenv("KHUNQUANT_HOME"); khunquantHome != "" {
+		return khunquantHome
+	}
+	userHome, _ := os.UserHomeDir()
+	return filepath.Join(userHome, ".khunquant")
+}
+
 // DefaultConfig returns the default configuration for KhunQuant.
 func DefaultConfig() *Config {
-	// Determine the base path for the workspace.
-	// Priority: $KHUNQUANT_HOME > ~/.khunquant
-	var homePath string
-	if khunquantHome := os.Getenv("KHUNQUANT_HOME"); khunquantHome != "" {
-		homePath = khunquantHome
-	} else {
-		userHome, _ := os.UserHomeDir()
-		homePath = filepath.Join(userHome, ".khunquant")
-	}
+	homePath := HomeDir()
 	workspacePath := filepath.Join(homePath, "workspace")
 
 	return &Config{

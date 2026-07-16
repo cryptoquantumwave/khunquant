@@ -57,6 +57,9 @@ func (t *GetOpenOrdersTool) Execute(ctx context.Context, args map[string]any) *T
 
 	orders, err := tp.FetchOpenOrders(ctx, symbol)
 	if err != nil {
+		if hint := reauthHint(err, providerID, account); hint != nil {
+			return hint
+		}
 		return ErrorResult(fmt.Sprintf("FetchOpenOrders: %v", err)).WithError(err)
 	}
 

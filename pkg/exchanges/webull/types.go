@@ -7,12 +7,24 @@ import (
 
 // --- Authentication ---
 
-// TokenResponse maps the /openapi/auth/token/create endpoint response.
+// TokenResponse maps the /openapi/auth/token/create and
+// /openapi/auth/token/check endpoint responses.
 type TokenResponse struct {
 	Token   string `json:"token"`
 	Expires int64  `json:"expires"` // unix milliseconds
-	Status  string `json:"status"`  // PENDING, NORMAL, INVALID, EXPIRED
+	Status  string `json:"status"`  // TokenStatusNormal, TokenStatusPending, TokenStatusInvalid, TokenStatusExpired
 }
+
+// Token status values returned by token/create and token/check. NORMAL is
+// the only status usable for authenticated requests; PENDING means the user
+// must approve the login in the Webull mobile app (there is no API to submit
+// an SMS/OTP code — approval only happens in-app).
+const (
+	TokenStatusNormal  = "NORMAL"
+	TokenStatusPending = "PENDING"
+	TokenStatusInvalid = "INVALID"
+	TokenStatusExpired = "EXPIRED"
+)
 
 // --- Account ---
 

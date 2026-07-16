@@ -751,7 +751,15 @@
       "environment": "สภาพแวดล้อม",
       "environment_prod": "ใช้งานจริง (Production)",
       "environment_uat": "ทดสอบ (Sandbox)",
-      "doc_link": "เอกสาร Webull OpenAPI"
+      "doc_link": "เอกสาร Webull OpenAPI",
+      "connect_title": "การเชื่อมต่อ",
+      "connect_button": "เชื่อมต่อ Webull",
+      "reconnect_button": "เชื่อมต่อใหม่",
+      "status_pending": "กรุณากดอนุมัติการเข้าสู่ระบบในแอป Webull…",
+      "status_normal": "เชื่อมต่อแล้ว — หมดอายุใน {{days}} วัน",
+      "status_normal_today": "เชื่อมต่อแล้ว — หมดอายุวันนี้",
+      "status_invalid": "เข้าสู่ระบบไม่สำเร็จ — ตรวจสอบข้อมูลรับรองแล้วลองใหม่",
+      "status_expired": "เซสชันหมดอายุ — กดเพื่อเชื่อมต่อใหม่"
     }
   }
 }

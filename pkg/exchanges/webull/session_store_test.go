@@ -22,6 +22,19 @@ func withTestSessionFile(t *testing.T) string {
 	return path
 }
 
+// withTestSSHKey generates a throwaway SSH key and points
+// KHUNQUANT_SSH_KEY_PATH at it, so enc:// encryption/decryption is
+// self-contained and works in CI (which has no ~/.ssh/khunquant_ed25519.key).
+// Mirrors the setup in pkg/credential/credential_test.go.
+func withTestSSHKey(t *testing.T) {
+	t.Helper()
+	keyPath := filepath.Join(t.TempDir(), "test_key.pem")
+	if err := credential.GenerateSSHKey(keyPath); err != nil {
+		t.Fatalf("GenerateSSHKey: %v", err)
+	}
+	t.Setenv(credential.SSHKeyPathEnvVar, keyPath)
+}
+
 func TestSessionStore_SaveLoadRoundTrip(t *testing.T) {
 	withTestSessionFile(t)
 
@@ -47,6 +60,7 @@ func TestSessionStore_SaveLoadRoundTrip(t *testing.T) {
 
 func TestSessionStore_EncryptedRoundTrip(t *testing.T) {
 	path := withTestSessionFile(t)
+	withTestSSHKey(t)
 
 	old := credential.PassphraseProvider
 	credential.PassphraseProvider = func() string { return "test-passphrase-1234" }
@@ -115,6 +129,7 @@ func TestSessionStore_CorruptFileIsNotOk(t *testing.T) {
 // every other account's stored session.
 func TestSessionStore_SaveRefusesToClobberUnreadableFile(t *testing.T) {
 	path := withTestSessionFile(t)
+	withTestSSHKey(t)
 
 	// Write an encrypted entry with a passphrase installed...
 	old := credential.PassphraseProvider

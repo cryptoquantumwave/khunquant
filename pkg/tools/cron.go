@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
@@ -404,7 +405,11 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		job.Payload.NoHistory,
 	)
 	if err != nil {
-		return err.Error()
+		// Return a friendly, classified message as the job result instead of a
+		// raw error dump. We deliberately do NOT publish to the channel here —
+		// scheduled-job failures are surfaced via the job result, not pushed to
+		// the user's chat (see TestCronTool_ExecuteJobReturnsErrorWithoutPublish).
+		return providers.FriendlyError(err)
 	}
 
 	if response != "" {

@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -275,10 +276,34 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		return WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
 	}
 	return fmt.Errorf(
-		"API request failed:\n  Status: %d\n  Body:   %s",
+		"API request failed:\n  Status: %d%s\n  Body:   %s",
 		resp.StatusCode,
+		RetryAfterSuffix(resp.Header.Get("Retry-After")),
 		ResponsePreview(body, 128),
 	)
+}
+
+// RetryAfterSuffix renders a Retry-After header value as a message fragment
+// (e.g. " (retry after 30s)") so downstream error classification can surface a
+// wait hint to the user. Accepts a bare seconds count or an HTTP-date; returns
+// "" when the value is absent or unparseable.
+func RetryAfterSuffix(headerVal string) string {
+	headerVal = strings.TrimSpace(headerVal)
+	if headerVal == "" {
+		return ""
+	}
+	if secs, err := strconv.Atoi(headerVal); err == nil {
+		if secs <= 0 {
+			return ""
+		}
+		return fmt.Sprintf(" (retry after %ds)", secs)
+	}
+	if t, err := http.ParseTime(headerVal); err == nil {
+		if d := time.Until(t); d > 0 {
+			return fmt.Sprintf(" (retry after %ds)", int(d.Round(time.Second).Seconds()))
+		}
+	}
+	return ""
 }
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,

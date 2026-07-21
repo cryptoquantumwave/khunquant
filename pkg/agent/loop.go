@@ -355,7 +355,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 			response, err := al.processMessage(ctx, msg)
 			if err != nil {
-				response = fmt.Sprintf("Error processing message: %v", err)
+				response = providers.FriendlyError(err)
 			}
 
 			if response != "" {
@@ -1643,7 +1643,23 @@ func (al *AgentLoop) runLLMIteration(
 					"model":     activeModel,
 					"error":     err.Error(),
 				})
-			return "", iteration, false, fmt.Errorf("LLM call failed after retries: %w", err)
+			// Attach failover classification so the user boundary can render a
+			// friendly message even on the single-candidate path (which never
+			// passes through the fallback chain that would classify for us).
+			// Providers don't implement Name(), so take the provider from the
+			// active candidate list (matched to activeModel, else the primary).
+			providerName := ""
+			for _, c := range activeCandidates {
+				if c.Model == activeModel {
+					providerName = c.Provider
+					break
+				}
+			}
+			if providerName == "" && len(activeCandidates) > 0 {
+				providerName = activeCandidates[0].Provider
+			}
+			classified := providers.EnsureClassified(err, providerName, activeModel)
+			return "", iteration, false, fmt.Errorf("LLM call failed after retries: %w", classified)
 		}
 
 		// Save finishReason to turnState for SubTurn truncation detection

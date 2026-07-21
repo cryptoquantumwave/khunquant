@@ -3,6 +3,7 @@ package anthropicprovider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/common"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
@@ -101,10 +103,21 @@ func (p *Provider) Chat(
 
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, fmt.Errorf("claude API call: %w%s", err, retryAfterHint(err))
 	}
 
 	return parseResponse(resp), nil
+}
+
+// retryAfterHint returns a " (retry after Ns)" fragment when the API error
+// carries a Retry-After header, so downstream error classification can surface
+// a wait hint to the user. Returns "" otherwise.
+func retryAfterHint(err error) string {
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.Response != nil {
+		return common.RetryAfterSuffix(apiErr.Response.Header.Get("Retry-After"))
+	}
+	return ""
 }
 
 func (p *Provider) chatStreaming(
@@ -123,7 +136,7 @@ func (p *Provider) chatStreaming(
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, fmt.Errorf("claude API call: %w%s", err, retryAfterHint(err))
 	}
 
 	return parseResponse(&msg), nil

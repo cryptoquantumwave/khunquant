@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
@@ -65,7 +66,10 @@ type FailoverError struct {
 	Provider string
 	Model    string
 	Status   int
-	Wrapped  error
+	// RetryAfter is the provider-advertised wait before retrying (from a
+	// Retry-After header or an embedded reset hint). Zero when unknown.
+	RetryAfter time.Duration
+	Wrapped    error
 }
 
 func (e *FailoverError) Error() string {

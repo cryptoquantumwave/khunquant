@@ -161,15 +161,17 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	msg := strings.ToLower(err.Error())
+	retryAfter := parseRetryAfter(msg)
 
 	// Concrete transport errors should continue the fallback chain even when
 	// providers do not expose a structured HTTP status.
 	if reason := classifyByErrorType(err); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:     reason,
+			Provider:   provider,
+			Model:      model,
+			RetryAfter: retryAfter,
+			Wrapped:    err,
 		}
 	}
 
@@ -187,11 +189,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	if status := extractHTTPStatus(msg); status > 0 {
 		if reason := classifyByStatus(status); reason != "" {
 			return &FailoverError{
-				Reason:   reason,
-				Provider: provider,
-				Model:    model,
-				Status:   status,
-				Wrapped:  err,
+				Reason:     reason,
+				Provider:   provider,
+				Model:      model,
+				Status:     status,
+				RetryAfter: retryAfter,
+				Wrapped:    err,
 			}
 		}
 	}
@@ -199,10 +202,11 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Message pattern matching (priority order from OpenClaw).
 	if reason := classifyByMessage(msg); reason != "" {
 		return &FailoverError{
-			Reason:   reason,
-			Provider: provider,
-			Model:    model,
-			Wrapped:  err,
+			Reason:     reason,
+			Provider:   provider,
+			Model:      model,
+			RetryAfter: retryAfter,
+			Wrapped:    err,
 		}
 	}
 

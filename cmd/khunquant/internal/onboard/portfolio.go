@@ -116,7 +116,9 @@ func enableExchange(cfg *config.Config, id string) error {
 		cfg.Exchanges.Settrade.Accounts = appendIfNoMain(cfg.Exchanges.Settrade.Accounts, config.SettradeExchangeAccount{ExchangeAccount: placeholder})
 	case "webull":
 		cfg.Exchanges.Webull.Enabled = true
-		cfg.Exchanges.Webull.Accounts = appendIfNoMain(cfg.Exchanges.Webull.Accounts, config.WebullExchangeAccount{ExchangeAccount: placeholder, Region: "us"})
+		// Thailand is the only Webull region wired up today; see
+		// pkg/exchanges/webull.NormalizeRegion.
+		cfg.Exchanges.Webull.Accounts = appendIfNoMain(cfg.Exchanges.Webull.Accounts, config.WebullExchangeAccount{ExchangeAccount: placeholder, Region: "th"})
 	default:
 		return fmt.Errorf("unknown exchange %q", id)
 	}

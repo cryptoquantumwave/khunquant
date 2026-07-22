@@ -96,6 +96,11 @@ func newBrokerAdapter(cfg config.WebullExchangeAccount) (*webullAdapter, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Store the region the client actually resolved to, not the raw config
+	// value: an unset (or legacy "us") region normalizes to Thailand, and
+	// region-scoped behavior — notably the option-ordering guard below —
+	// must key off the region the requests are really going to.
+	cfg.Region = client.region
 	a := &webullAdapter{client: client, cfg: cfg}
 	adapterCache[cfg.Name] = cachedAdapter{fingerprint: fp, adapter: a}
 	return a, nil

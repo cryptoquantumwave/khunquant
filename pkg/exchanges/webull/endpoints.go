@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 const (
@@ -52,9 +54,14 @@ const (
 // api.webull.com (US), and vice versa. Table verified against the official
 // webull-openapi-python-sdk's region_mapping
 // (webull/core/data/endpoints.json).
+//
+// An empty region resolves to the Thailand host: TH is the only region this
+// integration supports today (see NormalizeRegion), so defaulting to
+// api.webull.com would send the only credentials anyone can configure to a
+// broker that always rejects them with 401.
 func prodHostForRegion(region string) string {
 	switch strings.ToLower(strings.TrimSpace(region)) {
-	case "th":
+	case "th", "":
 		return "api.webull.co.th"
 	case "hk":
 		return "api.webull.hk"
@@ -70,7 +77,7 @@ func prodHostForRegion(region string) string {
 		return "api.webull-uk.com"
 	case "eu":
 		return "api.webull.eu"
-	case "us", "br", "mx", "":
+	case "us", "br", "mx":
 		return "api.webull.com"
 	default:
 		return "api.webull.com"
@@ -80,6 +87,63 @@ func prodHostForRegion(region string) string {
 // knownRegions lists every region prodHostForRegion recognizes, for
 // validation and error messages. Keep in sync with the switch above.
 var knownRegions = []string{"us", "hk", "jp", "sg", "th", "au", "my", "uk", "eu", "br", "mx", "za"}
+
+// supportedRegions lists the regions this integration is actually verified
+// against today. The host table above covers every Webull regional broker,
+// but only Thailand has been exercised end-to-end (app registration, token
+// approval, trading), so the rest are surfaced as "not available yet"
+// instead of being silently attempted — see NormalizeRegion.
+var supportedRegions = []string{"th"}
+
+// DefaultRegion is the region assumed when none is configured. It is the
+// only supported region, not a neutral fallback — config entry points seed
+// new accounts with it so a fresh account is never written pointing at a
+// broker that cannot accept its credentials.
+const DefaultRegion = "th"
+
+// legacyDefaultRegion is the region every entry point used to default to
+// before Thailand became the default. Configs written by those versions
+// carry it without the user ever having chosen it, so NormalizeRegion
+// rewrites it rather than failing an install that was never misconfigured
+// on purpose.
+const legacyDefaultRegion = "us"
+
+// KnownRegions returns every region the host table recognizes. Callers must
+// not mutate the result.
+func KnownRegions() []string { return slices.Clone(knownRegions) }
+
+// SupportedRegions returns the regions that can actually be configured
+// today. Used by the launcher UI to build the region picker.
+func SupportedRegions() []string { return slices.Clone(supportedRegions) }
+
+// NormalizeRegion resolves a configured region to the canonical value the
+// client should use, or explains why it can't be used.
+//
+//   - empty            → "th" (the default and only supported region)
+//   - "th"             → "th"
+//   - "us"             → "th", with a warning: "us" was the default every
+//     entry point wrote before TH support landed, so a config carrying it
+//     almost certainly never had a region chosen at all. Failing here would
+//     break existing installs over a value the user never picked.
+//   - another known region (hk, jp, …) → error, not available yet
+//   - anything else    → the unknown-region error from ValidateRegion
+func NormalizeRegion(region string) (string, error) {
+	r := strings.ToLower(strings.TrimSpace(region))
+	if r == "" {
+		return DefaultRegion, nil
+	}
+	if slices.Contains(supportedRegions, r) {
+		return r, nil
+	}
+	if err := ValidateRegion(r); err != nil {
+		return "", err
+	}
+	if r == legacyDefaultRegion {
+		logger.Warn(fmt.Sprintf("webull: region %q is the pre-Thailand default and is not supported — using %q instead; set region explicitly to silence this", r, DefaultRegion))
+		return DefaultRegion, nil
+	}
+	return "", fmt.Errorf("webull: region %q is not available yet — only Thailand (%s) is supported", region, strings.Join(supportedRegions, ", "))
+}
 
 // ValidateRegion returns an error when region is a non-empty string not in
 // the known table. A silent fallback to the US host here has already cost a

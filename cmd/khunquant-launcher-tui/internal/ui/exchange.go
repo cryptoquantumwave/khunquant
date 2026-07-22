@@ -184,7 +184,9 @@ func (s *appState) webullMenu() tview.Primitive {
 					ExchangeAccount: khunquantconfig.ExchangeAccount{
 						Name: s.nextAccountName(accountNames(s.config.Exchanges.Webull.Accounts)),
 					},
-					Region: "us",
+					// Thailand is the only supported Webull region today;
+					// see pkg/exchanges/webull.NormalizeRegion.
+					Region: webull.DefaultRegion,
 				},
 			)
 			s.config.Exchanges.Webull.Enabled = true
@@ -382,10 +384,11 @@ func (s *appState) webullAccountForm(index int) tview.Primitive {
 		acc.AccountID = v
 		s.dirty = true
 	})
-	addInput(form, "Region (e.g. us)", acc.Region, func(v string) {
-		acc.Region = v
-		s.dirty = true
-	})
+	// Region is fixed: Thailand is the only Webull regional broker this
+	// integration is verified against, and an editable field here is how a
+	// mismatched region (which fails with an opaque 401) gets configured by
+	// accident. Shown read-only rather than hidden so the value is visible.
+	form.AddTextView("Region", webull.DefaultRegion+" (Thailand — only region supported)", 48, 1, true, false)
 	form.AddButton("Resolve Account ID", func() {
 		s.resolveWebullAccountID(index)
 	})

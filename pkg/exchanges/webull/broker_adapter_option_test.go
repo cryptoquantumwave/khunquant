@@ -459,3 +459,27 @@ func TestCancelOptionOrder_BlockedForTHRegion(t *testing.T) {
 		t.Fatal("expected option cancellation to be blocked for the th region")
 	}
 }
+
+// TestOptionOrderingGuardUsesNormalizedRegion pins the guard to the region
+// requests actually go to. An account with no region (or the legacy "us"
+// default) resolves to the Thailand host, so it must inherit Thailand's
+// option-ordering block rather than slipping past a raw string compare.
+func TestOptionOrderingGuardUsesNormalizedRegion(t *testing.T) {
+	for _, region := range []string{"", "us", "th"} {
+		acc := config.WebullExchangeAccount{
+			ExchangeAccount: config.ExchangeAccount{
+				Name:   "guard-" + region,
+				APIKey: *config.NewSecureString("test-app-key"),
+				Secret: *config.NewSecureString("test-app-secret"),
+			},
+			Region: region,
+		}
+		a, err := newBrokerAdapter(acc)
+		if err != nil {
+			t.Fatalf("newBrokerAdapter(region=%q) = %v", region, err)
+		}
+		if reason := a.OptionOrderingUnavailableReason(); reason == "" {
+			t.Errorf("region %q: option ordering allowed, want blocked (resolves to the TH host)", region)
+		}
+	}
+}

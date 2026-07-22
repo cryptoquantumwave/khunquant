@@ -11,6 +11,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges/webull"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -255,6 +256,25 @@ func validateConfig(cfg *config.Config) []string {
 		if acc, ok := cfg.Exchanges.Binance.ResolveAccount(""); !ok || acc.APIKey.String() == "" || acc.Secret.String() == "" {
 			errs = append(errs, "exchanges.binance: at least one account with api_key and secret is required when Binance is enabled")
 		}
+	}
+
+	// Webull: region must be one this integration actually supports.
+	// Normalizing here (rather than only at client construction) means an
+	// unusable region is reported inline on the config form instead of
+	// surfacing later as an opaque 401 from the wrong regional broker, and
+	// the stored value gets rewritten to the canonical one.
+	for i := range cfg.Exchanges.Webull.Accounts {
+		acc := &cfg.Exchanges.Webull.Accounts[i]
+		region, err := webull.NormalizeRegion(acc.Region)
+		if err != nil {
+			name := acc.Name
+			if name == "" {
+				name = fmt.Sprintf("%d", i+1)
+			}
+			errs = append(errs, fmt.Sprintf("exchanges.webull.accounts[%s]: %v", name, err))
+			continue
+		}
+		acc.Region = region
 	}
 
 	// Validate exec regex patterns only when deny patterns are enabled

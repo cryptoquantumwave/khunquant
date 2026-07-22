@@ -34,6 +34,52 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 	return client
 }
 
+// TestAuthErrorNamesHostAndRegion is the regression test for the opaque-401
+// class of bug: Webull's regional brokers all answer a foreign app key with
+// the same "unauthorized", so the error must name the host the request
+// actually went to and the region that produced it. Without that, a
+// region misconfiguration is indistinguishable from bad credentials.
+func TestAuthErrorNamesHostAndRegion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(ErrorResponse{ErrorCode: "AUTH_FAILED", Message: "Invalid credentials"})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := client.CreateToken(context.Background())
+	if err == nil {
+		t.Fatal("expected CreateToken to fail with 401")
+	}
+	msg := err.Error()
+	for _, want := range []string{"region=th", "region-scoped", server.Listener.Addr().String()} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("401 error %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// TestNonAuthErrorHasNoRegionHint keeps the region hint scoped to 401s so
+// unrelated failures don't grow a misleading credentials explanation.
+func TestNonAuthErrorHasNoRegionHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{ErrorCode: "BAD_REQUEST", Message: "malformed"})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := client.CreateToken(context.Background())
+	if err == nil {
+		t.Fatal("expected CreateToken to fail with 400")
+	}
+	if strings.Contains(err.Error(), "region-scoped") {
+		t.Errorf("400 error %q should not carry the region hint", err.Error())
+	}
+}
+
 // TestDoRequestTransientRetrySucceeds verifies that a 429 is retried with backoff
 // and the request ultimately succeeds once the server stops rate-limiting.
 func TestDoRequestTransientRetrySucceeds(t *testing.T) {

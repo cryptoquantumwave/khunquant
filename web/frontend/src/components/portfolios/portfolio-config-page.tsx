@@ -133,7 +133,7 @@ function emptyWebullAccount(): WebullAccountDraft {
   return {
     ...emptyAccount(),
     accountId: "",
-    region: "us",
+    region: WEBULL_DEFAULT_REGION,
     environment: "prod",
   }
 }
@@ -171,9 +171,16 @@ function parseOKXAccounts(raw: unknown): OKXAccountDraft[] {
 }
 
 /** Serialize an AccountDraft to the shape the backend expects */
+// Credentials are trimmed on the way out: a key or secret pasted with a
+// trailing newline signs a different HMAC than the exchange computes, and
+// every affected exchange reports that as an indistinguishable 401.
 function serializeAccount(acc: AccountDraft) {
-  const apiKey = acc.apiKeyEdit.trim() !== "" ? acc.apiKeyEdit : acc.apiKey
-  const secret = acc.secretEdit.trim() !== "" ? acc.secretEdit : acc.secret
+  const apiKey = (
+    acc.apiKeyEdit.trim() !== "" ? acc.apiKeyEdit : acc.apiKey
+  ).trim()
+  const secret = (
+    acc.secretEdit.trim() !== "" ? acc.secretEdit : acc.secret
+  ).trim()
   return {
     ...(acc.name.trim() !== "" ? { name: acc.name.trim() } : {}),
     api_key: apiKey,
@@ -183,13 +190,14 @@ function serializeAccount(acc: AccountDraft) {
 }
 
 function serializeOKXAccount(acc: OKXAccountDraft) {
-  const passphrase =
+  const passphrase = (
     acc.passphraseEdit.trim() !== "" ? acc.passphraseEdit : acc.passphrase
+  ).trim()
   return { ...serializeAccount(acc), passphrase }
 }
 
 function serializeSettradeAccount(acc: SettradeAccountDraft) {
-  const pin = acc.pinEdit.trim() !== "" ? acc.pinEdit : acc.pin
+  const pin = (acc.pinEdit.trim() !== "" ? acc.pinEdit : acc.pin).trim()
   return {
     ...serializeAccount(acc),
     broker_id: acc.brokerId,
@@ -203,9 +211,27 @@ function serializeWebullAccount(acc: WebullAccountDraft) {
   return {
     ...serializeAccount(acc),
     account_id: acc.accountId,
-    region: acc.region,
+    region: normalizeWebullRegion(acc.region),
     environment: acc.environment,
   }
+}
+
+// normalizeWebullRegion resolves a stored region to one the app can actually
+// use, mirroring webull.NormalizeRegion on the backend: unset and the legacy
+// "us" default both become Thailand. An explicitly-chosen unsupported region
+// is left alone so the backend can reject it with its own message rather
+// than having the UI silently rewrite the user's choice.
+// webullAccountIDIsAutoResolved reports whether a region can resolve its
+// brokerage account_id from the app credentials alone, making the manual
+// field unnecessary. Verified for Thailand.
+function webullAccountIDIsAutoResolved(region: unknown): boolean {
+  return normalizeWebullRegion(region) === "th"
+}
+
+function normalizeWebullRegion(raw: unknown): string {
+  const region = typeof raw === "string" ? raw.trim().toLowerCase() : ""
+  if (region === "" || region === "us") return WEBULL_DEFAULT_REGION
+  return region
 }
 
 function parseSettradeAccounts(raw: unknown): SettradeAccountDraft[] {
@@ -239,7 +265,10 @@ function parseWebullAccounts(raw: unknown): WebullAccountDraft[] {
       secret: typeof r.secret === "string" ? r.secret : "",
       secretEdit: "",
       accountId: typeof r.account_id === "string" ? r.account_id : "",
-      region: typeof r.region === "string" && r.region !== "" ? r.region : "us",
+      // "us" is what every entry point defaulted to before Thailand support
+      // landed; configs carrying it never had a region chosen, and the
+      // backend normalizes it the same way (webull.NormalizeRegion).
+      region: normalizeWebullRegion(r.region),
       environment:
         typeof r.environment === "string" && r.environment !== ""
           ? r.environment
@@ -298,6 +327,25 @@ const SETTRADE_BROKERS = [
 const SETTRADE_APP_CODES = [
   { value: "ALGO_EQ", label: "ALGO_EQ (Equity)" },
   { value: "ALGO", label: "ALGO (Derivatives)" },
+]
+
+// Webull runs entirely separate regional brokers — an app key registered on
+// Webull Thailand is rejected with an opaque 401 by every other region's
+// host. Only Thailand is wired up today (see pkg/exchanges/webull:
+// SupportedRegions / NormalizeRegion), so the rest are listed but disabled
+// rather than hidden: a user with a non-TH key should see why it's missing.
+// Keep in sync with knownRegions in pkg/exchanges/webull/endpoints.go.
+const WEBULL_DEFAULT_REGION = "th"
+const WEBULL_REGIONS = [
+  { value: "th", label: "th — Thailand", available: true },
+  { value: "us", label: "us — United States", available: false },
+  { value: "hk", label: "hk — Hong Kong", available: false },
+  { value: "jp", label: "jp — Japan", available: false },
+  { value: "sg", label: "sg — Singapore", available: false },
+  { value: "au", label: "au — Australia", available: false },
+  { value: "my", label: "my — Malaysia", available: false },
+  { value: "uk", label: "uk — United Kingdom", available: false },
+  { value: "eu", label: "eu — Europe", available: false },
 ]
 
 const SETTRADE_BROKER_LIST_URL =
@@ -582,24 +630,55 @@ function AccountCard({
 
         {isWebull && (
           <>
-            <div className="flex items-center justify-between px-4 py-3">
-              <p className="text-sm">{t("portfolios.webull.account_id")}</p>
-              <div className="w-64">
-                <Input
-                  value={wbAcc.accountId ?? ""}
-                  placeholder={t("portfolios.webull.account_id_placeholder")}
-                  onChange={(e) => onChange({ accountId: e.target.value })}
-                />
+            {/* Account ID is resolved from the credentials themselves on the
+                first account-scoped call (webull.Client.AccountID → GET
+                /openapi/account/list), which is confirmed sufficient for
+                Thailand accounts — so the field is hidden there rather than
+                asking for something the app already knows. It stays available
+                for any region where resolution is ambiguous (multiple
+                brokerage accounts under one app key), which is why this keys
+                off the region instead of being deleted outright. */}
+            {!webullAccountIDIsAutoResolved(wbAcc.region) && (
+              <div className="flex items-center justify-between px-4 py-3">
+                <p className="text-sm">{t("portfolios.webull.account_id")}</p>
+                <div className="w-64">
+                  <Input
+                    value={wbAcc.accountId ?? ""}
+                    placeholder={t("portfolios.webull.account_id_placeholder")}
+                    onChange={(e) => onChange({ accountId: e.target.value })}
+                  />
+                </div>
               </div>
-            </div>
+            )}
             <div className="flex items-center justify-between px-4 py-3">
-              <p className="text-sm">{t("portfolios.webull.region")}</p>
+              <div>
+                <p className="text-sm">{t("portfolios.webull.region")}</p>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  {t("portfolios.webull.region_hint")}
+                </p>
+              </div>
               <div className="w-64">
-                <Input
-                  value={wbAcc.region ?? "us"}
-                  placeholder={t("portfolios.webull.region_placeholder")}
-                  onChange={(e) => onChange({ region: e.target.value })}
-                />
+                <Select
+                  value={wbAcc.region ?? WEBULL_DEFAULT_REGION}
+                  onValueChange={(v) => onChange({ region: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WEBULL_REGIONS.map((r) => (
+                      <SelectItem
+                        key={r.value}
+                        value={r.value}
+                        disabled={!r.available}
+                      >
+                        {r.available
+                          ? r.label
+                          : `${r.label} — ${t("portfolios.webull.region_unavailable")}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="flex items-center justify-between px-4 py-3">
@@ -1019,6 +1098,7 @@ export function PortfolioConfigPage({
                   account={acc}
                   hasPassphrase={exchangeName === "okx"}
                   isSettrade={exchangeName === "settrade"}
+                  isWebull={exchangeName === "webull"}
                   onChange={(patch) => handleAccountChange(i, patch)}
                   onRemove={() => handleRemoveAccount(i)}
                 />

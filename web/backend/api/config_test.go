@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -378,3 +379,43 @@ func TestHandlePatchConfig_UpdatesExchangeCredential(t *testing.T) {
 	}
 }
 
+
+// TestValidateConfigWebullRegion covers the config-form side of the
+// wrong-region bug: an unusable Webull region must be reported inline here
+// rather than escaping to runtime, where the only symptom is an opaque 401
+// from the wrong regional broker.
+func TestValidateConfigWebullRegion(t *testing.T) {
+	newCfg := func(region string) *config.Config {
+		cfg := config.DefaultConfig()
+		cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{{
+			ExchangeAccount: config.ExchangeAccount{Name: "main"},
+			Region:          region,
+		}}
+		return cfg
+	}
+
+	// Supported, unset, and the legacy "us" default all normalize to "th".
+	for _, region := range []string{"th", "", "us"} {
+		cfg := newCfg(region)
+		if errs := validateConfig(cfg); len(errs) != 0 {
+			t.Errorf("validateConfig(region=%q) = %v, want no errors", region, errs)
+			continue
+		}
+		if got := cfg.Exchanges.Webull.Accounts[0].Region; got != "th" {
+			t.Errorf("validateConfig(region=%q) left region %q, want normalized to th", region, got)
+		}
+	}
+
+	// A region that exists but isn't wired up, and an outright typo, both fail.
+	for _, region := range []string{"hk", "thailand"} {
+		cfg := newCfg(region)
+		errs := validateConfig(cfg)
+		if len(errs) == 0 {
+			t.Errorf("validateConfig(region=%q) = no errors, want a rejection", region)
+			continue
+		}
+		if !strings.Contains(errs[0], "exchanges.webull.accounts[main]") {
+			t.Errorf("validateConfig(region=%q) error %q does not name the account", region, errs[0])
+		}
+	}
+}

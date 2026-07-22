@@ -25,6 +25,13 @@ type Client struct {
 	httpClient *http.Client
 	signer     *Signer
 
+	// region is the normalized region this client signs against (see
+	// NormalizeRegion). Kept only so auth failures can name it: a 401 from
+	// Webull is identical whether the credentials are wrong or merely
+	// issued by a different regional broker, and the host/region pair is
+	// what tells the two apart.
+	region string
+
 	// accountID is the resolved brokerage account_id. It may start empty (only
 	// app key/secret configured) and gets lazily resolved via AccountID().
 	accountIDMu sync.Mutex
@@ -104,10 +111,16 @@ func WithSessionPersistence() Option {
 // NewClient creates a new Webull API client.
 // Credentials are taken from acc (APIKey = app key, Secret = app secret).
 func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error) {
-	if acc.APIKey.String() == "" {
+	// Trim the credentials: a key or secret pasted with a trailing newline
+	// signs a different HMAC than the one Webull computes, and the only
+	// symptom is a 401 indistinguishable from genuinely wrong credentials.
+	// Webull keys/secrets never contain surrounding whitespace.
+	appKey := strings.TrimSpace(acc.APIKey.String())
+	appSecret := strings.TrimSpace(acc.Secret.String())
+	if appKey == "" {
 		return nil, fmt.Errorf("webull: api_key (app key) is required")
 	}
-	if acc.Secret.String() == "" {
+	if appSecret == "" {
 		return nil, fmt.Errorf("webull: secret (app secret) is required")
 	}
 	// account_id is intentionally NOT required here: like the official Webull
@@ -121,29 +134,32 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 		return nil, fmt.Errorf("webull: %w", err)
 	}
 
-	// Determine base URL from environment + region. Reject unknown regions
-	// outright — see ValidateRegion for why a silent US fallback is worse.
-	if err := ValidateRegion(acc.Region); err != nil {
+	// Determine base URL from environment + region. Unsupported and unknown
+	// regions are rejected outright — see NormalizeRegion for why a silent
+	// fallback to another region's host is worse.
+	region, err := NormalizeRegion(acc.Region)
+	if err != nil {
 		return nil, err
 	}
 	environment := acc.Environment
 	if environment == "" {
 		environment = "prod"
 	}
-	baseURL := BaseURLForEnvironment(environment, acc.Region)
+	baseURL := BaseURLForEnvironment(environment, region)
 
 	c := &Client{
 		baseURL:            baseURL,
+		region:             region,
 		httpClient:         httpClient,
-		signer:             NewSigner(acc.APIKey.String(), acc.Secret.String()),
+		signer:             NewSigner(appKey, appSecret),
 		accountID:          acc.AccountID,
 		sessionAccountName: acc.Name,
 		categoryCache:      make(map[string]string),
 	}
 
 	// Register secrets for redaction in logs
-	logger.RegisterSecret(acc.APIKey.String())
-	logger.RegisterSecret(acc.Secret.String())
+	logger.RegisterSecret(appKey)
+	logger.RegisterSecret(appSecret)
 
 	// Apply functional options
 	for _, opt := range opts {
@@ -354,10 +370,25 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 
 		// Terminal error.
 		if apiErr.Message != "" {
-			return fmt.Errorf("webull: %s %s: [%d] %s", method, path, resp.StatusCode, apiErr.Error())
+			return fmt.Errorf("webull: %s %s: [%d] %s%s", method, path, resp.StatusCode, apiErr.Error(), c.authErrorHint(resp.StatusCode, host))
 		}
-		return fmt.Errorf("webull: %s %s: HTTP %d: %s", method, path, resp.StatusCode, string(respBytes))
+		return fmt.Errorf("webull: %s %s: HTTP %d: %s%s", method, path, resp.StatusCode, string(respBytes), c.authErrorHint(resp.StatusCode, host))
 	}
+}
+
+// authErrorHint appends the host and region to a 401 so the failure is
+// self-diagnosing. Webull's regional brokers each answer with the same
+// opaque "unauthorized" for a key issued elsewhere as for a genuinely bad
+// key, and chasing that ambiguity has already cost multiple debugging
+// sessions — naming the host the request actually went to settles it.
+// Returns "" for any other status so non-auth errors read unchanged.
+func (c *Client) authErrorHint(statusCode int, host string) string {
+	if statusCode != http.StatusUnauthorized {
+		return ""
+	}
+	return fmt.Sprintf(
+		" (host=%s region=%s) — Webull app credentials are region-scoped: a key issued by a different regional Webull entity always fails with 401 against this host. Verify the account's region matches where the app key was registered.",
+		host, c.region)
 }
 
 // isAuthError returns true if the response indicates an authentication/authorization error

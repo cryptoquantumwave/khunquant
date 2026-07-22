@@ -37,6 +37,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/devices"
 	"github.com/cryptoquantumwave/khunquant/pkg/devmcp"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binance"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binanceth"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/bitkub"
@@ -389,6 +390,14 @@ func handleConfigReload(
 
 	// Update local provider reference only after successful atomic reload
 	*providerRef = newProvider
+
+	// Drop cached exchange clients so edited credentials, regions and
+	// proxies take effect with the reload instead of only after a restart:
+	// exchanges.CreateExchangeForAccount caches by (exchange, account), so
+	// a client built from the previous config would otherwise outlive it
+	// for the whole process lifetime. The web launcher does the same after
+	// its own config saves (web/backend/api/config.go).
+	exchanges.ResetInstanceCache()
 
 	// Restart all services with new config
 	logger.Info("  Restarting all services with new configuration...")

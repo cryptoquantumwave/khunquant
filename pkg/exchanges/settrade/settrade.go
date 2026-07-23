@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -389,24 +390,28 @@ func isUnauthorized(err error) bool {
 // --- SET price tier tick size ---
 
 func roundToTickSize(price float64) float64 {
-	var tick float64
+	priceSatang := int64(math.Round(price * 100))
+
+	var tickSatang int64
 	switch {
 	case price < 2.00:
-		tick = 0.01
+		tickSatang = 1
 	case price < 5.00:
-		tick = 0.02
+		tickSatang = 2
 	case price < 10.00:
-		tick = 0.05
+		tickSatang = 5
 	case price < 25.00:
-		tick = 0.10
+		tickSatang = 10
 	case price < 50.00:
-		tick = 0.25
+		tickSatang = 25
 	case price < 100.00:
-		tick = 0.50
+		tickSatang = 50
 	default:
-		tick = 1.00
+		tickSatang = 100
 	}
-	return float64(int(price/tick)) * tick
+
+	roundedSatang := (priceSatang / tickSatang) * tickSatang
+	return float64(roundedSatang) / 100
 }
 
 // --- Domain methods ---

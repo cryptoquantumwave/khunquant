@@ -72,6 +72,14 @@ func TestRoundToTickSize_ExactBoundary(t *testing.T) {
 	}
 }
 
+func TestRoundToTickSize_TierBoundary_376(t *testing.T) {
+	// Exactly at tier boundary 3.76 → tick = 0.02; 3.76 is already multiple of 0.02
+	got := roundToTickSize(3.76)
+	if got != 3.76 {
+		t.Errorf("price 3.76: want 3.76, got %v", got)
+	}
+}
+
 // --- toSetSymbol ---
 
 func TestToSetSymbol_SlashSymbol(t *testing.T) {

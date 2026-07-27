@@ -13,7 +13,7 @@
 
 **Open-source agentic framework for personal AI portfolio assistant at home — built for the Thai community.**
 
-KhunQuant(คุณควอนต์) connect Thai equity markets (SET) and global digital assets through a single AI-powered orchestrator.
+KhunQuant(คุณควอนต์) connects Thai equity markets (SET), US equities (Webull Thailand), and global digital assets through a single AI-powered orchestrator.
 All logic runs locally — your API keys and strategy parameters never leave your machine.
 
 [Report Bug](https://github.com/cryptoquantumwave/khunquant/issues) · [Request Feature](https://github.com/cryptoquantumwave/khunquant/issues) · [Documentation](https://khunquant.com/docs) · [Website](https://khunquant.com) · [Discussions](https://github.com/cryptoquantumwave/khunquant/discussions)
@@ -79,7 +79,7 @@ Ask the agent: <em>"What did I trade last week?"</em>
 
 | | |
 |---|---|
-| **Thai Market Native** | Binance, BinanceTH, Bitkub, OKX, and Settrade (SET equities) in a single agent |
+| **Thai Market Native** | Binance, BinanceTH, Bitkub, OKX, Settrade (SET equities), and Webull Thailand in a single agent |
 | **Natural Language Trading** | *"Buy ฿5,000 BTC on Bitkub every Monday if RSI < 40"* — no code required |
 | **DCA Automation** | Indicator-gated DCA plans (SMA/EMA/RSI/MACD/BB/ATR) with VWAP cost tracking and PnL reporting |
 | **60+ Built-in Tools** | Market data, order execution, technical analysis, portfolio management, web search, filesystem, IoT |
@@ -227,6 +227,9 @@ exchanges:
   settrade:
     api_key: env://SETTRADE_API_KEY
     secret: env://SETTRADE_SECRET
+  webull:
+    api_key: env://WEBULL_APP_KEY
+    secret: env://WEBULL_APP_SECRET
 ```
 
 Encrypt all credentials at rest:
@@ -246,6 +249,7 @@ khunquant auth encrypt
 | [Bitkub](https://www.bitkub.com) | Crypto — Thailand | `bitkub` |
 | [OKX](https://www.okx.com) | Crypto — Global | `okx` |
 | [Settrade](https://www.settrade.com) | Thai Equities (SET) | `settrade` |
+| [Webull Thailand](https://www.webull.co.th) | US Equities — Thailand (Webull TH) | `webull` |
 
 See [Exchange API Credentials](https://khunquant.com/docs) for step-by-step setup guides for each exchange.
 
@@ -272,7 +276,7 @@ pkg/
   channels/            Chat platform adapters — 16 platforms
   tools/               60+ tools: market data, orders, TA, DCA, filesystem, IoT
   dca/                 DCA plans, indicator-gated triggers, cron execution, PnL
-  exchanges/           BinanceTH / Bitkub / OKX / Binance / Settrade adapters
+  exchanges/           BinanceTH / Bitkub / OKX / Binance / Settrade / Webull adapters
   credential/          AES-256-GCM encryption for .security.yml
   skills/              Skills framework + ClawHub registry
   config/              Config struct, SecureString, migration

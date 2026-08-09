@@ -61,7 +61,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx","entries":"[{\"method\":\"POST\",\"path_prefix\":\"/new\",\"response\":{\"status\":200,\"body\":{}}}]"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx","method":"POST","path_prefix":"/upsert","status":200,"body":"{}"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -114,7 +114,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -155,7 +155,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestSandboxTools_WriteRefusedWhenDisabled(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -220,7 +220,7 @@ func TestSandboxTools_FixtureWriteReadRoundTrip(t *testing.T) {
 	// Verify body bytes are preserved exactly
 	if !bytes.Equal(readEntries[0].Response.Body, json.RawMessage(uglyJSON)) {
 		t.Errorf("body bytes not preserved\nexpected: %s\ngot:      %s",
-			string(uglyJSON), string(readEntries[0].Response.Body))
+			uglyJSON, string(readEntries[0].Response.Body))
 	}
 
 	// Also verify that parsing and re-marshaling would lose precision
@@ -428,7 +428,7 @@ func TestSandboxTools_DefaultConfigWorks(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx","entries":"[{\"method\":\"POST\",\"path_prefix\":\"/api/v5/trade/order\",\"response\":{\"status\":200,\"body\":{}}}]"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -453,7 +453,7 @@ func TestSandboxTools_DefaultConfigWorks(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"binance","method":"GET","path_prefix":"/api/v3/account","status":200,"body":"{\"balances\":[]}"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
@@ -478,7 +478,7 @@ func TestSandboxTools_DefaultConfigWorks(t *testing.T) {
 				Arguments: json.RawMessage(`{"venue":"okx"}`),
 			},
 		}
-		result, err := handler(ctx, (*mcp.CallToolRequest)(req))
+		result, err := handler(ctx, req)
 		if err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}

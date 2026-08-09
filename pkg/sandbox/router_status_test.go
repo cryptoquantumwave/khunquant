@@ -12,7 +12,6 @@ import (
 // the value — so it reaches http.ResponseWriter.WriteHeader, which panics on
 // codes outside 100..999.
 func TestRouterHandlesOutOfRangeFixtureStatus(t *testing.T) {
-
 	for _, status := range []int{99999, 0, -1} {
 		t.Run(http.StatusText(status)+itoa(status), func(t *testing.T) {
 			store := NewStore()

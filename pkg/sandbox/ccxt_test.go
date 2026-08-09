@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -121,14 +122,42 @@ func TestHostnamePlaceholder(t *testing.T) {
 	t.Logf("OKX hostname resolved to: %s", hostname)
 }
 
+// getFixturesDir returns the workspace/sandbox directory path.
+// It walks up from the working directory looking for go.mod and appends workspace/sandbox.
+func getFixturesDir(t *testing.T) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	// Walk up to find the repo root
+	for {
+		if _, err := os.Stat(wd + "/go.mod"); err == nil {
+			return wd + "/workspace/sandbox"
+		}
+		parent := wd[:strings.LastIndex(wd, "/")]
+		if parent == wd {
+			// Reached root; use a relative path from the test
+			return "workspace/sandbox"
+		}
+		wd = parent
+	}
+}
+
 // TestLoadMarketsWithSandbox verifies that LoadMarkets succeeds against seed fixtures
 // for both Binance and OKX, and that the returned markets have correct field values.
 func TestLoadMarketsWithSandbox(t *testing.T) {
 	// Start the sandbox server with fixtures
 	store := NewStore()
-	err := store.Load("/Users/thanawit/Desktop/work/khunquant/workspace/sandbox")
+	fixturesDir := getFixturesDir(t)
+	err := store.Load(fixturesDir)
 	if err != nil {
 		t.Fatalf("Failed to load fixtures: %v", err)
+	}
+
+	// Validate that fixtures were actually loaded
+	if len(store.Venues()) == 0 {
+		t.Fatalf("No fixtures loaded from %s", fixturesDir)
 	}
 
 	server := NewServer(store)

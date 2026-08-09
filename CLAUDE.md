@@ -80,6 +80,71 @@ make docker-run        # Run gateway in Docker
 - `.golangci.yaml` — Linter config (many rules disabled; check before enabling new ones)
 - `workspace/` — Default agent workspace and built-in configuration
 
+## CI and Code Quality
+
+`.github/workflows/pr.yml` runs three required checks on every pull request. All three must pass
+before merge:
+
+| Check | What it runs |
+|---|---|
+| **Linter** | `go generate ./...`, then `golangci-lint` **pinned to v2.10.1** |
+| **Tests** | `go generate ./...`, then `go test ./...` (no flags) |
+| **Security Check** | `govulncheck -C . -format text ./...` (govulncheck v1.1.4) |
+
+### `make check` does not run the linter
+
+`make check` is `deps fmt vet test` — note the absence of `lint`. A green `make check` therefore
+does **not** mean CI will pass. Run `make lint` separately before pushing, or you will discover
+lint failures only after CI does.
+
+### `gofmt` is not this repo's formatter
+
+`make fmt` is `golangci-lint fmt`, not `gofmt`. Plain `gofmt -l ./...` reports ~39 files that CI
+is perfectly happy with, so it is a misleading signal — a clean `gofmt` proves nothing and a dirty
+one is usually noise. Judge formatting by `golangci-lint` only.
+
+### Match CI's linter version exactly
+
+Lint findings differ between versions. If `golangci-lint` is not installed locally, run the same
+version CI does rather than guessing:
+
+```bash
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1 run
+```
+
+`.golangci.yaml` disables many rules; check it before enabling new ones. Rules that are enabled and
+commonly trip people up: `unconvert` (redundant type conversions) and `whitespace` (no blank line
+immediately after a function's opening brace — easy to leave behind when deleting a guard clause).
+
+### `go generate ./...` runs before lint and test in CI
+
+If generated output is stale or generation fails, CI fails in a way that reproduces locally only
+if you run `go generate ./...` first. The `make test` and `make vet` targets already depend on it.
+
+## Testing Conventions
+
+**Never hardcode machine-absolute paths in tests.** A test containing
+`/Users/<someone>/...` passes only on that person's machine and fails on CI and on every other
+developer's checkout. Resolve repo-relative paths by walking up to `go.mod` — see
+`getFixturesDir` in `pkg/sandbox/e2e/e2e_test.go` for the established helper.
+
+**Fail loudly when a fixture/data load comes back empty.** `sandbox.Store.Load` deliberately
+treats a missing directory as "nothing to serve" and returns `nil`. That is correct for
+production, but in a test it converts a one-line path bug into a confusing downstream error
+several layers away (`no fixture configured for GET ...`). Assert non-empty immediately after
+loading so the failure names its real cause.
+
+**Bug reproducers**: when committing a test that documents an unfixed defect, gate it behind an
+environment variable so the default suite stays green, and delete the gate in the same change that
+fixes the defect. Do not leave a permanently-red test in the tree.
+
+## Git and PR Conventions
+
+- Conventional commit subjects with a scope: `feat(xxx):`, `fix(yyy):`, `test(zzz):`.
+- Split a large change into commits by scope rather than one omnibus commit.
+- A PR body should state what the change adds, its safety-relevant properties, how it was tested,
+  and its known limitations — reviewers should not have to infer any of these from the diff.
+
 ## Exchange API Pitfalls
 
 ### Futures order `amount` is in **contracts**, not base currency

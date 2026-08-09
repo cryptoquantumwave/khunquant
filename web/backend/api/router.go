@@ -102,6 +102,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Developer MCP server status
 	h.registerDevMCPStatusRoutes(mux)
 
+	// Sandbox mode status and enable toggle
+	h.registerSandboxRoutes(mux)
+
 	// Webull re-authentication (Connect button + status polling)
 	h.registerWebullRoutes(mux)
 }

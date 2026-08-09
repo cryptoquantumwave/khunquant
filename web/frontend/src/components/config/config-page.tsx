@@ -237,11 +237,15 @@ export function ConfigPage() {
             dev_mcp: {
               enabled: form.debugDevMcpEnabled,
             },
+            sandbox: {
+              enabled: form.debugSandboxEnabled,
+            },
           },
         })
 
         setBaseline(form)
         queryClient.invalidateQueries({ queryKey: ["config"] })
+        queryClient.invalidateQueries({ queryKey: ["sandbox", "status"] })
       }
 
       if (launcherDirty) {

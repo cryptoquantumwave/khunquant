@@ -1,0 +1,93 @@
+[
+  {
+    "method": "POST",
+    "path_prefix": "/openapi/auth/token/create",
+    "response": {
+      "status": 200,
+      "body": {
+        "token": "sandbox-token-12345-67890",
+        "expires": 9999999999000,
+        "status": "NORMAL"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "path_prefix": "/openapi/auth/token/check",
+    "response": {
+      "status": 200,
+      "body": {
+        "token": "sandbox-token-12345-67890",
+        "expires": 9999999999000,
+        "status": "NORMAL"
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/openapi/account/list",
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "account_id": "123456789",
+          "account_type": "Brokerage",
+          "account_label": "Main",
+          "account_class": "Individual",
+          "account_number": "10000001",
+          "user_id": "user-sandbox"
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/openapi/assets/balance",
+    "response": {
+      "status": 200,
+      "body": {
+        "total_asset_currency": "USD",
+        "total_net_liquidation_value": "100000.00",
+        "total_market_value": "50000.00",
+        "total_cash_balance": "50000.00",
+        "total_unrealized_profit_loss": "1000.00",
+        "total_day_profit_loss": "100.00",
+        "account_currency_assets": [
+          {
+            "currency": "USD",
+            "cash_balance": "50000.00",
+            "settled_cash": "50000.00",
+            "unsettled_cash": "0.00",
+            "market_value": "50000.00",
+            "buying_power": "100000.00",
+            "unrealized_profit_loss": "1000.00",
+            "net_liquidation_value": "100000.00",
+            "day_profit_loss": "100.00"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/openapi/market-data/stock/snapshot",
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "symbol": "AAPL",
+          "instrument_id": "913000000",
+          "price": "150.25",
+          "pre_close": "149.50",
+          "open": "149.75",
+          "high": "151.00",
+          "low": "149.00",
+          "change": "0.75",
+          "change_rate": "0.5",
+          "volume": "1000000",
+          "last_trade_time": 1640000000000
+        }
+      ]
+    }
+  }
+]

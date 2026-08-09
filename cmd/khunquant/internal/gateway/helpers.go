@@ -49,6 +49,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/voice"
@@ -70,8 +71,29 @@ type gatewayServices struct {
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
-	DebugTap         *debugtap.Store     // non-nil only while dev-mcp is enabled
-	LogBuf           *debugtap.LogBuffer // persists across reloads while dev-mcp is on
+	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
+	LogBuf           *debugtap.LogBuffer             // persists across reloads while dev-mcp is on
+	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
+	SandboxToken     string                          // bearer token for sandbox API
+	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint
+}
+
+// sandboxStateReseter wraps StateManager and Store to implement the ResetState interface.
+type sandboxStateReseter struct {
+	sm    *sandbox.StateManager
+	store *sandbox.Store
+}
+
+func (s *sandboxStateReseter) ResetState() error {
+	// Reset all venues that have fixtures or state
+	venues := s.store.Venues()
+	for _, venue := range venues {
+		if err := s.sm.Reset(venue); err != nil {
+			logger.WarnCF("sandbox", fmt.Sprintf("failed to reset venue %s", venue), map[string]any{"error": err.Error()})
+			// Continue resetting other venues even if one fails
+		}
+	}
+	return nil
 }
 
 func gatewayCmd(debug bool) error {
@@ -84,6 +106,15 @@ func gatewayCmd(debug bool) error {
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("error loading config: %w", err)
+	}
+
+	// Arm sandbox state immediately after config load, before any exchange clients
+	// can be constructed. This prevents a window where enabled config but GlobalState()
+	// says disabled, allowing real orders through. With empty baseURL, transports error
+	// loudly instead of passing through.
+	if cfg.Debug.Sandbox.Enabled {
+		sandbox.SetGlobalState(true, "")
+		logger.Debugf("sandbox: state armed (enabled, baseURL empty)")
 	}
 
 	provider, modelID, err := providers.CreateProvider(cfg)
@@ -259,6 +290,11 @@ func setupAndStartServices(
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, agentLoop)
 	}
+	if cfg.Debug.Sandbox.Enabled {
+		if err := startAndRegisterSandbox(cfg, services); err != nil {
+			logger.Errorf("sandbox: failed to start: %v", err)
+		}
+	}
 
 	if err := services.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
@@ -322,6 +358,14 @@ func shutdownGateway(
 	}
 
 	stopAndCleanupServices(services, gracefulShutdownTimeout)
+
+	// Stop sandbox server after all services are stopped
+	if services.SandboxServer != nil {
+		services.SandboxServer.Stop()
+		// Explicitly clear global state on disable
+		sandbox.SetGlobalState(false, "")
+		logger.Debugf("sandbox: stopped and state cleared")
+	}
 
 	agentLoop.Stop()
 	agentLoop.Close()
@@ -398,6 +442,34 @@ func handleConfigReload(
 	// for the whole process lifetime. The web launcher does the same after
 	// its own config saves (web/backend/api/config.go).
 	exchanges.ResetInstanceCache()
+
+	// Handle sandbox enable/disable toggle
+	wasEnabled := services.SandboxServer != nil
+	isEnabled := newCfg.Debug.Sandbox.Enabled
+
+	if wasEnabled && !isEnabled {
+		// Disable: stop the server and clear state
+		logger.Info("  Disabling sandbox...")
+		services.SandboxServer.Stop()
+		sandbox.SetGlobalState(false, "")
+		services.SandboxServer = nil
+		services.SandboxToken = ""
+		logger.Debugf("sandbox: disabled and state cleared")
+	} else if !wasEnabled && isEnabled {
+		// Enable: arm state (already done by config reload watcher, but arm again)
+		// and prepare to start server in restartServices
+		logger.Info("  Enabling sandbox...")
+		sandbox.SetGlobalState(true, "")
+		logger.Debugf("sandbox: state armed for restart")
+	} else if wasEnabled && isEnabled {
+		// Sandbox stays enabled: stop the old server so a fresh one can start in restartServices
+		logger.Info("  Reloading sandbox configuration...")
+		services.SandboxServer.Stop()
+		sandbox.SetGlobalState(false, "")
+		services.SandboxServer = nil
+		services.SandboxToken = ""
+		logger.Debugf("sandbox: old server stopped, will restart with new config")
+	}
 
 	// Restart all services with new config
 	logger.Info("  Restarting all services with new configuration...")
@@ -514,6 +586,11 @@ func restartServices(
 	} else {
 		teardownDevMCP(services, al)
 	}
+	if cfg.Debug.Sandbox.Enabled {
+		if err := startAndRegisterSandbox(cfg, services); err != nil {
+			logger.Errorf("sandbox: failed to restart: %v", err)
+		}
+	}
 
 	// Use context.Background() so channel goroutines (e.g. pico WebSocket readLoops)
 	// are not cancelled when this function returns. Channels are stopped explicitly
@@ -548,6 +625,98 @@ func restartServices(
 	} else {
 		logger.InfoCF("voice", "Transcription disabled", nil)
 	}
+
+	return nil
+}
+
+// startAndRegisterSandbox initializes and starts the sandbox server, then registers
+// its API endpoints on the channel manager's mux. Must be called after the mux is
+// set up and before channels start.
+func startAndRegisterSandbox(cfg *config.Config, services *gatewayServices) error {
+	// Stop any server left over from a previous start. handleConfigReload's
+	// recovery paths call restartServices directly when the new provider or the
+	// agent loop fails to load, bypassing the enable/disable toggle that would
+	// otherwise stop the old server — without this, every failed reload strands
+	// another listener for the lifetime of the process.
+	if services.SandboxServer != nil {
+		services.SandboxServer.Stop()
+		services.SandboxServer = nil
+		services.SimulatorReseter = nil
+	}
+
+	// Resolve fixtures directory
+	fixturesDir := sandbox.ResolveFixturesDir(cfg)
+
+	// Create store and load fixtures
+	store := sandbox.NewStore()
+	if err := store.Load(fixturesDir); err != nil {
+		return fmt.Errorf("load fixtures: %w", err)
+	}
+
+	// A missing or empty fixtures directory is not an error (Store.Load treats it
+	// as "nothing to serve"), but it leaves the simulator with no markets, mark
+	// prices or balances, so every request fails at runtime. Say so up front
+	// instead of printing the "sandbox enabled" banner and failing later.
+	if len(store.Venues()) == 0 {
+		logger.WarnCF("sandbox",
+			"No fixtures found; the simulator has no markets or balances and every exchange call will fail",
+			map[string]any{"fixtures_dir": fixturesDir})
+	}
+
+	// Create and start server
+	srv := sandbox.NewServer(store)
+	if err := srv.Start(context.Background()); err != nil {
+		return fmt.Errorf("start server: %w", err)
+	}
+
+	// Create stateful simulator and wire it into the server.
+	// The simulator will be consulted before the fixture store for write endpoints.
+	stateManager := sandbox.NewStateManager()
+
+	// Seed Markets from fixtures so the simulator can handle order requests
+	// (contractSize and minAmount are needed for order validation)
+	for _, venue := range store.Venues() {
+		venueState := stateManager.GetState(venue)
+		sandbox.SeedMarketsFromFixtures(venue, store, venueState)
+
+		// Seed dev-mode default values for MarkPrices and Balances
+		// These are required for the simulator to accept orders
+		// Values are arbitrary dev defaults; easily changed
+		for symbol := range venueState.Markets {
+			venueState.MarkPrices[symbol] = 50000 // Default price for all symbols
+		}
+		venueState.Balances["USDT"] = sandbox.Balance{Free: 100000, Locked: 0}
+
+		// Capture the seeded state as the reset baseline. Without this, calling the reset
+		// tool will wipe all simulator state and leave it inert until process restart.
+		stateManager.SnapshotAsSeed(venue)
+	}
+
+	sim := sandbox.NewStatefulSimulator(stateManager)
+	srv.SetResponder(sim)
+
+	// Store references
+	services.SandboxServer = srv
+	services.SimulatorReseter = &sandboxStateReseter{sm: stateManager, store: store}
+	sandbox.SetInstance(srv)
+
+	// Generate or reuse bearer token for API access (persist in config like DevMCP)
+	if cfg.Debug.Sandbox.Token == "" {
+		cfg.Debug.Sandbox.Token = generateDevMCPToken()
+		if err := config.SaveConfig(internal.GetConfigPath(), cfg); err != nil {
+			logger.WarnCF("sandbox", "Failed to persist sandbox token to config", map[string]any{"err": err.Error()})
+		}
+	}
+	services.SandboxToken = cfg.Debug.Sandbox.Token
+
+	// Register API routes (pass store separately since Server doesn't expose it)
+	registerSandboxAPI(services.ChannelManager, store, services.SandboxToken, services.SimulatorReseter, fixturesDir)
+
+	baseURL := srv.BaseURL()
+	fmt.Printf("🏜️  Sandbox: %s\n   Token:    %s\n", baseURL, services.SandboxToken)
+	logger.WarnCF("sandbox",
+		fmt.Sprintf("Developer sandbox mode enabled at %s — disable in production", baseURL),
+		nil)
 
 	return nil
 }

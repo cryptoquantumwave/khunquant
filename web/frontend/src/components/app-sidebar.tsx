@@ -14,6 +14,7 @@ import {
   IconSettings,
   IconSparkles,
   IconTools,
+  IconFlask,
 } from "@tabler/icons-react"
 import { Link, useRouterState } from "@tanstack/react-router"
 import * as React from "react"
@@ -36,6 +37,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
+import { useSandboxStatus } from "@/hooks/use-sandbox-status"
 
 interface NavItem {
   title: string
@@ -81,8 +83,34 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     showAllChannels,
     toggleShowAllChannels,
   } = useSidebarChannels({ t })
+  const { data: sandboxStatus } = useSandboxStatus()
 
   const navGroups: NavGroup[] = React.useMemo(() => {
+    const servicesItems: NavItem[] = [
+      {
+        title: "navigation.config",
+        url: "/config",
+        icon: IconSettings,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.logs",
+        url: "/logs",
+        icon: IconListDetails,
+        translateTitle: true,
+      },
+    ]
+
+    // Add sandbox menu only if enabled
+    if (sandboxStatus?.enabled) {
+      servicesItems.push({
+        title: "navigation.sandbox",
+        url: "/sandbox",
+        icon: IconFlask,
+        translateTitle: true,
+      })
+    }
+
     return [
       {
         ...baseNavGroups[0],
@@ -203,23 +231,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       },
       {
         ...baseNavGroups[3],
-        items: [
-          {
-            title: "navigation.config",
-            url: "/config",
-            icon: IconSettings,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.logs",
-            url: "/logs",
-            icon: IconListDetails,
-            translateTitle: true,
-          },
-        ],
+        items: servicesItems,
       },
     ]
-  }, [channelItems])
+  }, [channelItems, sandboxStatus?.enabled])
 
   return (
     <Sidebar

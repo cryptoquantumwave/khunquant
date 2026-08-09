@@ -12,12 +12,14 @@ import (
 
 // withTestSessionFile redirects the session cache to a fresh temp file for
 // the duration of t, so tests never touch the developer's real
-// $KHUNQUANT_HOME/.webull-sessions.yml.
+// $KHUNQUANT_HOME/.webull-sessions.yml. Returns the path to the test session file.
 func withTestSessionFile(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "webull-sessions.yml")
 	old := sessionFilePathFn
-	sessionFilePathFn = func() string { return path }
+	// Override to return the test path, ignoring the workspace parameter
+	// since these tests are exercising the non-sandbox code path.
+	sessionFilePathFn = func(workspace string) string { return path }
 	t.Cleanup(func() { sessionFilePathFn = old })
 	return path
 }
@@ -39,11 +41,11 @@ func TestSessionStore_SaveLoadRoundTrip(t *testing.T) {
 	withTestSessionFile(t)
 
 	expiresAt := time.UnixMilli(1234567890123)
-	if err := saveSession("main", "tok-abc123", TokenStatusNormal, expiresAt); err != nil {
+	if err := saveSession("main", "tok-abc123", TokenStatusNormal, expiresAt, ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
 
-	token, status, gotExpiresAt, ok := loadSession("main")
+	token, status, gotExpiresAt, ok := loadSession("main", "")
 	if !ok {
 		t.Fatal("expected loadSession to find the saved entry")
 	}
@@ -67,7 +69,7 @@ func TestSessionStore_EncryptedRoundTrip(t *testing.T) {
 	t.Cleanup(func() { credential.PassphraseProvider = old })
 
 	expiresAt := time.UnixMilli(9999999999999)
-	if err := saveSession("main", "secret-token-value", TokenStatusNormal, expiresAt); err != nil {
+	if err := saveSession("main", "secret-token-value", TokenStatusNormal, expiresAt, ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
 
@@ -82,7 +84,7 @@ func TestSessionStore_EncryptedRoundTrip(t *testing.T) {
 		t.Fatal("plaintext token leaked into the on-disk session file")
 	}
 
-	token, _, _, ok := loadSession("main")
+	token, _, _, ok := loadSession("main", "")
 	if !ok {
 		t.Fatal("expected loadSession to find the saved entry")
 	}
@@ -94,7 +96,7 @@ func TestSessionStore_EncryptedRoundTrip(t *testing.T) {
 func TestSessionStore_MissingFileIsNotOk(t *testing.T) {
 	withTestSessionFile(t)
 
-	if _, _, _, ok := loadSession("main"); ok {
+	if _, _, _, ok := loadSession("main", ""); ok {
 		t.Fatal("expected loadSession to report no session for a missing file")
 	}
 }
@@ -102,10 +104,10 @@ func TestSessionStore_MissingFileIsNotOk(t *testing.T) {
 func TestSessionStore_MissingAccountIsNotOk(t *testing.T) {
 	withTestSessionFile(t)
 
-	if err := saveSession("other-account", "tok", TokenStatusNormal, time.Now()); err != nil {
+	if err := saveSession("other-account", "tok", TokenStatusNormal, time.Now(), ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
-	if _, _, _, ok := loadSession("main"); ok {
+	if _, _, _, ok := loadSession("main", ""); ok {
 		t.Fatal("expected loadSession to report no session for an unrelated account")
 	}
 }
@@ -117,7 +119,7 @@ func TestSessionStore_CorruptFileIsNotOk(t *testing.T) {
 		t.Fatalf("failed to write corrupt session file: %v", err)
 	}
 
-	if _, _, _, ok := loadSession("main"); ok {
+	if _, _, _, ok := loadSession("main", ""); ok {
 		t.Fatal("expected loadSession to treat a corrupt file as no session")
 	}
 }
@@ -134,7 +136,7 @@ func TestSessionStore_SaveRefusesToClobberUnreadableFile(t *testing.T) {
 	// Write an encrypted entry with a passphrase installed...
 	old := credential.PassphraseProvider
 	credential.PassphraseProvider = func() string { return "test-passphrase-1234" }
-	if err := saveSession("other-account", "precious-token", TokenStatusNormal, time.Now().Add(time.Hour)); err != nil {
+	if err := saveSession("other-account", "precious-token", TokenStatusNormal, time.Now().Add(time.Hour), ""); err != nil {
 		credential.PassphraseProvider = old
 		t.Fatalf("saveSession failed: %v", err)
 	}
@@ -143,7 +145,7 @@ func TestSessionStore_SaveRefusesToClobberUnreadableFile(t *testing.T) {
 	credential.PassphraseProvider = func() string { return "" }
 	t.Cleanup(func() { credential.PassphraseProvider = old })
 
-	err := saveSession("main", "new-token", TokenStatusPending, time.Now().Add(time.Hour))
+	err := saveSession("main", "new-token", TokenStatusPending, time.Now().Add(time.Hour), "")
 	if err == nil {
 		t.Fatal("expected saveSession to refuse writing when the existing file is unreadable without a passphrase")
 	}
@@ -167,7 +169,7 @@ func TestSessionStore_SaveRefusesToClobberCorruptFile(t *testing.T) {
 		t.Fatalf("failed to write corrupt session file: %v", err)
 	}
 
-	if err := saveSession("main", "tok", TokenStatusNormal, time.Now()); err == nil {
+	if err := saveSession("main", "tok", TokenStatusNormal, time.Now(), ""); err == nil {
 		t.Fatal("expected saveSession to refuse writing over an unreadable existing file")
 	}
 
@@ -183,17 +185,17 @@ func TestSessionStore_SaveRefusesToClobberCorruptFile(t *testing.T) {
 func TestSessionStore_EmptyTokenClearsEntry(t *testing.T) {
 	withTestSessionFile(t)
 
-	if err := saveSession("main", "tok-abc123", TokenStatusNormal, time.Now()); err != nil {
+	if err := saveSession("main", "tok-abc123", TokenStatusNormal, time.Now(), ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
-	if _, _, _, ok := loadSession("main"); !ok {
+	if _, _, _, ok := loadSession("main", ""); !ok {
 		t.Fatal("expected the entry to exist before clearing")
 	}
 
-	if err := saveSession("main", "", "", time.Time{}); err != nil {
+	if err := saveSession("main", "", "", time.Time{}, ""); err != nil {
 		t.Fatalf("saveSession (clear) failed: %v", err)
 	}
-	if _, _, _, ok := loadSession("main"); ok {
+	if _, _, _, ok := loadSession("main", ""); ok {
 		t.Fatal("expected loadSession to report no session after clearing with an empty token")
 	}
 }

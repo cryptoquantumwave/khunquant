@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SandboxRouteImport } from './routes/sandbox'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as CredentialsRouteImport } from './routes/credentials'
@@ -27,6 +28,11 @@ import { Route as AgentMemoryRouteImport } from './routes/agent/memory'
 import { Route as AgentCronRouteImport } from './routes/agent/cron'
 import { Route as AgentConfigRouteImport } from './routes/agent/config'
 
+const SandboxRoute = SandboxRouteImport.update({
+  id: '/sandbox',
+  path: '/sandbox',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ModelsRoute = ModelsRouteImport.update({
   id: '/models',
   path: '/models',
@@ -122,6 +128,7 @@ export interface FileRoutesByFullPath {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/sandbox': typeof SandboxRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/sandbox': typeof SandboxRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -161,6 +169,7 @@ export interface FileRoutesById {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/sandbox': typeof SandboxRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -182,6 +191,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/sandbox'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -201,6 +211,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/sandbox'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -220,6 +231,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/sandbox'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -240,10 +252,18 @@ export interface RootRouteChildren {
   CredentialsRoute: typeof CredentialsRoute
   LogsRoute: typeof LogsRoute
   ModelsRoute: typeof ModelsRoute
+  SandboxRoute: typeof SandboxRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sandbox': {
+      id: '/sandbox'
+      path: '/sandbox'
+      fullPath: '/sandbox'
+      preLoaderRoute: typeof SandboxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/models': {
       id: '/models'
       path: '/models'
@@ -430,6 +450,7 @@ const rootRouteChildren: RootRouteChildren = {
   CredentialsRoute: CredentialsRoute,
   LogsRoute: LogsRoute,
   ModelsRoute: ModelsRoute,
+  SandboxRoute: SandboxRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,0 +1,45 @@
+[
+  {
+    "method": "POST",
+    "path_prefix": "/api/oam/v1",
+    "response": {
+      "status": 200,
+      "body": {
+        "access_token": "sandbox-token-12345",
+        "refresh_token": "sandbox-refresh-token",
+        "expires_in": 3600,
+        "token_type": "Bearer"
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/seos/v3",
+    "response": {
+      "status": 200,
+      "body": {
+        "cashBalance": 100000.0,
+        "lineAvailable": 50000.0,
+        "creditLimit": 200000.0,
+        "canBuy": true,
+        "canSell": true
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/marketdata/v3",
+    "response": {
+      "status": 200,
+      "body": {
+        "symbol": "PTT",
+        "last": 25.5,
+        "high": 26.0,
+        "low": 25.0,
+        "change": 0.5,
+        "percentChange": 2.0,
+        "totalVolume": 1000000.0
+      }
+    }
+  }
+]

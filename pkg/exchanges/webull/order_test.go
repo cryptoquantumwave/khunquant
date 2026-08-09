@@ -775,7 +775,7 @@ func TestInterfaceCompliance_TradingProvider(t *testing.T) {
 		AccountID: "ACC123",
 	}
 
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}

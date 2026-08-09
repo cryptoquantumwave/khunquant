@@ -192,7 +192,7 @@ func NewSettradeClient(cfg config.SettradeExchangeAccount) (*SettradeClient, err
 		return nil, err
 	}
 
-	httpClient, err := utils.CreateHTTPClient(cfg.Proxy, 30*time.Second)
+	httpClient, err := utils.CreateExchangeHTTPClient("settrade", cfg.Proxy, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("settrade: %w", err)
 	}

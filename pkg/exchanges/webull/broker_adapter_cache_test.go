@@ -25,11 +25,11 @@ func TestNewBrokerAdapterCachesByAccountName(t *testing.T) {
 		},
 	}
 
-	a1, err := newBrokerAdapter(cfg)
+	a1, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter #1: %v", err)
 	}
-	a2, err := newBrokerAdapter(cfg)
+	a2, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter #2: %v", err)
 	}
@@ -55,13 +55,13 @@ func TestNewBrokerAdapterRebuildsOnConfigChange(t *testing.T) {
 		},
 	}
 
-	a1, err := newBrokerAdapter(cfg)
+	a1, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter #1: %v", err)
 	}
 
 	cfg.APIKey = *config.NewSecureString("new-key")
-	a2, err := newBrokerAdapter(cfg)
+	a2, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter #2: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestNewBrokerAdapterRebuildsOnConfigChange(t *testing.T) {
 	}
 
 	// Unchanged config after the rebuild hits the cache again.
-	a3, err := newBrokerAdapter(cfg)
+	a3, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter #3: %v", err)
 	}
@@ -97,11 +97,11 @@ func TestNewBrokerAdapterCacheIsolatesDifferentAccounts(t *testing.T) {
 		},
 	}
 
-	a, err := newBrokerAdapter(cfgA)
+	a, err := newBrokerAdapter(cfgA, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter A: %v", err)
 	}
-	b, err := newBrokerAdapter(cfgB)
+	b, err := newBrokerAdapter(cfgB, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter B: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestNewBrokerAdapterCacheConcurrentSafe(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			a, err := newBrokerAdapter(cfg)
+			a, err := newBrokerAdapter(cfg, "")
 			if err != nil {
 				t.Errorf("newBrokerAdapter: %v", err)
 				return

@@ -672,6 +672,10 @@ func DefaultConfig() *Config {
 				MaxLogEntries: 50,
 				PathPrefix:    "/dev-mcp",
 			},
+			Sandbox: SandboxConfig{
+				Enabled:     false,
+				FixturesDir: "",
+			},
 		},
 		Voice: VoiceConfig{
 			EchoTranscription: false,

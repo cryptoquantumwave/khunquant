@@ -1,0 +1,262 @@
+[
+  {
+    "method": "GET",
+    "path_prefix": "/fapi/v1/income",
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "symbol": "BTCUSDT",
+          "incomeType": "COMMISSION",
+          "income": "-0.001",
+          "asset": "USDT",
+          "time": 1640000000000
+        },
+        {
+          "symbol": "BTCUSDT",
+          "incomeType": "FUNDING_FEE",
+          "income": "0.0001",
+          "asset": "USDT",
+          "time": 1640000000000
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v3/exchangeInfo",
+    "response": {
+      "status": 200,
+      "body": {
+        "timezone": "UTC",
+        "serverTime": 1704067200000,
+        "symbols": [
+          {
+            "symbol": "BTCUSDT",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "baseAssetPrecision": 8,
+            "quoteAsset": "USDT",
+            "quotePrecision": 8,
+            "orderTypes": ["LIMIT", "MARKET"],
+            "icebergAllowed": true,
+            "filters": [
+              {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01",
+                "maxPrice": "1000000.00",
+                "tickSize": "0.01"
+              },
+              {
+                "filterType": "LOT_SIZE",
+                "minQty": "0.00001",
+                "maxQty": "10000.00000",
+                "stepSize": "0.00001"
+              }
+            ]
+          },
+          {
+            "symbol": "ETHUSDT",
+            "status": "TRADING",
+            "baseAsset": "ETH",
+            "baseAssetPrecision": 8,
+            "quoteAsset": "USDT",
+            "quotePrecision": 8,
+            "orderTypes": ["LIMIT", "MARKET"],
+            "icebergAllowed": true,
+            "filters": [
+              {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01",
+                "maxPrice": "1000000.00",
+                "tickSize": "0.01"
+              },
+              {
+                "filterType": "LOT_SIZE",
+                "minQty": "0.0001",
+                "maxQty": "10000.00000",
+                "stepSize": "0.0001"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/fapi/v1/exchangeInfo",
+    "response": {
+      "status": 200,
+      "body": {
+        "timezone": "UTC",
+        "serverTime": 1704067200000,
+        "symbols": [
+          {
+            "symbol": "BTCUSDT",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "baseAssetPrecision": 8,
+            "quoteAsset": "USDT",
+            "quotePrecision": 8,
+            "quoteAssetPrecision": 8,
+            "contractType": "PERPETUAL",
+            "contractSize": 1.0,
+            "marginAsset": "USDT",
+            "pricePrecision": 2,
+            "quantityPrecision": 3,
+            "filters": [
+              {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01",
+                "maxPrice": "1000000.00",
+                "tickSize": "0.01"
+              },
+              {
+                "filterType": "LOT_SIZE",
+                "minQty": "0.001",
+                "maxQty": "10000.00000",
+                "stepSize": "0.001"
+              }
+            ]
+          },
+          {
+            "symbol": "ETHUSDT",
+            "status": "TRADING",
+            "baseAsset": "ETH",
+            "baseAssetPrecision": 8,
+            "quoteAsset": "USDT",
+            "quotePrecision": 8,
+            "quoteAssetPrecision": 8,
+            "contractType": "PERPETUAL",
+            "contractSize": 1.0,
+            "marginAsset": "USDT",
+            "pricePrecision": 2,
+            "quantityPrecision": 4,
+            "filters": [
+              {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01",
+                "maxPrice": "1000000.00",
+                "tickSize": "0.01"
+              },
+              {
+                "filterType": "LOT_SIZE",
+                "minQty": "0.01",
+                "maxQty": "10000.00000",
+                "stepSize": "0.01"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/dapi/v1/exchangeInfo",
+    "response": {
+      "status": 200,
+      "body": {
+        "timezone": "UTC",
+        "serverTime": 1704067200000,
+        "symbols": [
+          {
+            "symbol": "BTCUSD_PERP",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "quoteAsset": "USD",
+            "contractType": "PERPETUAL",
+            "contractSize": 100.0,
+            "filters": [
+              {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "0.01",
+                "maxPrice": "1000000.00",
+                "tickSize": "0.01"
+              },
+              {
+                "filterType": "LOT_SIZE",
+                "minQty": "1",
+                "maxQty": "10000.00000",
+                "stepSize": "1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v3/time",
+    "response": {
+      "status": 200,
+      "body": {
+        "serverTime": 1704067200000
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/margin/allPairs",
+    "response": {
+      "status": 200,
+      "body": []
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/capital/config/getall",
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "coin": "USDT",
+          "depositAllEnable": true,
+          "withdrawAllEnable": true,
+          "name": "Tether",
+          "free": "10000",
+          "locked": "0",
+          "freeze": "0",
+          "ipoable": "0",
+          "ipoing": "0",
+          "isLegalMoney": true,
+          "trading": true,
+          "chainName": ""
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/margin/isolated/allPairs",
+    "response": {
+      "status": 200,
+      "body": []
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v3/account",
+    "response": {
+      "status": 200,
+      "body": {
+        "makerCommission": 10,
+        "takerCommission": 10,
+        "buyerCommission": 0,
+        "sellerCommission": 0,
+        "canTrade": true,
+        "canWithdraw": true,
+        "canDeposit": true,
+        "balances": [
+          {
+            "asset": "USDT",
+            "free": "10000",
+            "locked": "0"
+          }
+        ]
+      }
+    }
+  }
+]

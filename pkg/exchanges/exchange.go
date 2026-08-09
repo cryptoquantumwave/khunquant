@@ -20,6 +20,13 @@ type WalletBalance struct {
 	Extra      map[string]string // additional fields (e.g. "unrealized_pnl", "borrowed")
 }
 
+// WalletFailure records a wallet type that could not be fetched during an
+// aggregated ("all") balance request.
+type WalletFailure struct {
+	WalletType string
+	Err        error
+}
+
 // Exchange is the interface that all exchange adapters must implement.
 type Exchange interface {
 	Name() string
@@ -31,6 +38,16 @@ type WalletExchange interface {
 	Exchange
 	SupportedWalletTypes() []string
 	GetWalletBalances(ctx context.Context, walletType string) ([]WalletBalance, error)
+}
+
+// PartialWalletExchange is an optional extension for exchanges that aggregate
+// across several wallet types and can report which ones failed, so callers can
+// distinguish an empty wallet from an unreachable one. The GetWalletBalancesPartial
+// method is only used for aggregate ("all") requests; single-wallet requests use
+// GetWalletBalances as usual.
+type PartialWalletExchange interface {
+	WalletExchange
+	GetWalletBalancesPartial(ctx context.Context, walletType string) ([]WalletBalance, []WalletFailure, error)
 }
 
 // PricedExchange extends WalletExchange with asset price lookup.

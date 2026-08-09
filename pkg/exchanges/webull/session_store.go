@@ -13,6 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 // Webull's login session requires periodic in-app 2FA approval but, once
@@ -54,14 +55,37 @@ var sessionFileMu sync.Mutex
 // directory instead of touching the real $KHUNQUANT_HOME/.khunquant, the
 // same override-a-package-var pattern client_test.go already uses for
 // retryDelayFn.
-var sessionFilePathFn = func() string {
+//
+// When sandbox mode is enabled and a workspace directory is provided, the
+// session file path is diverted to <workspace>/sandbox/webull/.webull-sessions.yml
+// so that sandbox login fixtures do not overwrite the developer's real session
+// cache. This ensures that enabling sandbox does not destroy a 15-day approved
+// session that must be re-approved via mobile app.
+//
+// The workspace parameter must be passed by the caller (typically from
+// cfg.Agents.Defaults.Workspace or resolved via sandbox.ResolveFixturesDir).
+// This ensures the path is CWD-independent and derived from actual configuration,
+// not a hardcoded literal.
+var sessionFilePathFn = func(workspace string) string {
+	isSandboxed, _ := sandbox.GlobalState()
+	if isSandboxed {
+		// Sandbox mode: divert to fixtures directory so sandbox sessions
+		// don't touch the real session cache. Note: os.MkdirAll is called
+		// by the write path (writeSessionFile), not here, to keep this pure.
+		if workspace != "" {
+			return filepath.Join(workspace, "sandbox", "webull", ".webull-sessions.yml")
+		}
+		// Fallback for backward compatibility if workspace is empty.
+		// This path should not be used in production.
+		return filepath.Join("workspace", "sandbox", "webull", ".webull-sessions.yml")
+	}
 	return filepath.Join(config.HomeDir(), ".webull-sessions.yml")
 }
 
 // readSessionFile loads the session file. A missing file is not an error —
 // it just means no account has ever connected yet.
-func readSessionFile() (*sessionFile, error) {
-	data, err := os.ReadFile(sessionFilePathFn())
+func readSessionFile(workspace string) (*sessionFile, error) {
+	data, err := os.ReadFile(sessionFilePathFn(workspace))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &sessionFile{Accounts: map[string]sessionEntry{}}, nil
@@ -78,12 +102,24 @@ func readSessionFile() (*sessionFile, error) {
 	return &sf, nil
 }
 
-func writeSessionFile(sf *sessionFile) error {
+func writeSessionFile(sf *sessionFile, workspace string) error {
 	data, err := yaml.Marshal(sf)
 	if err != nil {
 		return err
 	}
-	return fileutil.WriteFileAtomic(sessionFilePathFn(), data, 0o600)
+	path := sessionFilePathFn(workspace)
+
+	// Ensure the directory exists before writing (only for sandbox mode writes).
+	// For non-sandbox mode, config.HomeDir() is expected to already exist.
+	isSandboxed, _ := sandbox.GlobalState()
+	if isSandboxed && workspace != "" {
+		sbxDir := filepath.Dir(path)
+		if err := os.MkdirAll(sbxDir, 0o755); err != nil {
+			return fmt.Errorf("webull: mkdir %s: %w", sbxDir, err)
+		}
+	}
+
+	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // loadSession returns the persisted session for account, if any. A missing
@@ -91,11 +127,11 @@ func writeSessionFile(sf *sessionFile) error {
 // session" (ok=false) rather than a hard error — this is a best-effort
 // cache, not a required source of truth; the normal login flow is always
 // the fallback when no cached session is found.
-func loadSession(account string) (token, status string, expiresAt time.Time, ok bool) {
+func loadSession(account, workspace string) (token, status string, expiresAt time.Time, ok bool) {
 	sessionFileMu.Lock()
 	defer sessionFileMu.Unlock()
 
-	sf, err := readSessionFile()
+	sf, err := readSessionFile(workspace)
 	if err != nil {
 		return "", "", time.Time{}, false
 	}
@@ -119,19 +155,19 @@ func loadSession(account string) (token, status string, expiresAt time.Time, ok 
 //     passphrase, saveSession refuses to write — SecureString would
 //     serialize the new token as plaintext, silently downgrading a file the
 //     user had encrypted.
-func saveSession(account, token, status string, expiresAt time.Time) error {
+func saveSession(account, token, status string, expiresAt time.Time, workspace string) error {
 	sessionFileMu.Lock()
 	defer sessionFileMu.Unlock()
 
-	sf, err := readSessionFile()
+	sf, err := readSessionFile(workspace)
 	if err != nil {
-		return fmt.Errorf("webull: session file %s exists but cannot be read (missing passphrase or corrupt file?) — refusing to overwrite it: %w", sessionFilePathFn(), err)
+		return fmt.Errorf("webull: session file %s exists but cannot be read (missing passphrase or corrupt file?) — refusing to overwrite it: %w", sessionFilePathFn(workspace), err)
 	}
 
 	if credential.PassphraseProvider() == "" {
-		if raw, readErr := os.ReadFile(sessionFilePathFn()); readErr == nil &&
+		if raw, readErr := os.ReadFile(sessionFilePathFn(workspace)); readErr == nil &&
 			strings.Contains(string(raw), credential.EncScheme) {
-			return fmt.Errorf("webull: session file %s holds encrypted entries but no passphrase is available — refusing to write a plaintext downgrade", sessionFilePathFn())
+			return fmt.Errorf("webull: session file %s holds encrypted entries but no passphrase is available — refusing to write a plaintext downgrade", sessionFilePathFn(workspace))
 		}
 	}
 
@@ -145,5 +181,5 @@ func saveSession(account, token, status string, expiresAt time.Time) error {
 			UpdatedAt: time.Now().UnixMilli(),
 		}
 	}
-	return writeSessionFile(sf)
+	return writeSessionFile(sf, workspace)
 }

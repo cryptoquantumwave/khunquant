@@ -32,7 +32,7 @@ func newBinanceFeesFetcher(creds config.ExchangeAccount) (*binanceFeesFetcher, e
 	if creds.APIKey.String() == "" || creds.Secret.String() == "" {
 		return nil, fmt.Errorf("binance fees: api_key and secret are required")
 	}
-	client, err := utils.CreateHTTPClient(creds.Proxy, 15*time.Second)
+	client, err := utils.CreateExchangeHTTPClient("binance", creds.Proxy, 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("binance fees: %w", err)
 	}

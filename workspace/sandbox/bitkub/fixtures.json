@@ -1,0 +1,62 @@
+[
+  {
+    "method": "GET",
+    "path_prefix": "/api/v3/market/ticker",
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "symbol": "THB_BTC",
+          "last": "1234567.89",
+          "lowest_ask": "1234567.90",
+          "highest_bid": "1234567.88",
+          "percent_change": "1.5",
+          "base_volume": "100.5",
+          "quote_volume": "123456789.50",
+          "high_24_hr": "1250000",
+          "low_24_hr": "1200000"
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "path_prefix": "/api/v3/market/balances",
+    "response": {
+      "status": 200,
+      "body": {
+        "error": 0,
+        "result": {
+          "BTC": {
+            "available": 0.5,
+            "reserved": 0.1
+          },
+          "THB": {
+            "available": 100000.0,
+            "reserved": 50000.0
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v3/market/symbols",
+    "response": {
+      "status": 200,
+      "body": {
+        "error": 0,
+        "result": [
+          {
+            "symbol": "THB_BTC",
+            "name": "Bitcoin",
+            "base_asset": "BTC",
+            "quote_asset": "THB",
+            "min_quote_size": 100,
+            "status": "TRADING"
+          }
+        ]
+      }
+    }
+  }
+]

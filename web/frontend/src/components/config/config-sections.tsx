@@ -556,6 +556,26 @@ export function DebugSection({ form, onFieldChange }: DebugSectionProps) {
           )}
         </div>
       )}
+
+      <SwitchCardField
+        label={t("pages.config.debug_sandbox_enabled", "Sandbox Mode (Mock Data)")}
+        hint={t(
+          "pages.config.debug_sandbox_hint",
+          "All exchange HTTP traffic is intercepted and mock data is returned. For development only.",
+        )}
+        layout="setting-row"
+        checked={form.debugSandboxEnabled}
+        onCheckedChange={(checked) => onFieldChange("debugSandboxEnabled", checked)}
+      />
+
+      {form.debugSandboxEnabled && (
+        <div className="bg-red-50 px-3 py-2 text-sm text-red-700">
+          {t(
+            "pages.config.debug_sandbox_warning",
+            "SANDBOX MODE ENABLED — All exchange responses are mock data. Prices, balances, and fills are fabricated. No real orders are placed. Disable before trading with real credentials.",
+          )}
+        </div>
+      )}
     </ConfigSectionCard>
   )
 }

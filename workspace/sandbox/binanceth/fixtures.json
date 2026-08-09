@@ -1,0 +1,71 @@
+[
+  {
+    "method": "GET",
+    "path_prefix": "/api/v1/accountV2",
+    "response": {
+      "status": 200,
+      "body": {
+        "balances": [
+          {
+            "asset": "BTC",
+            "free": "0.5",
+            "locked": "0.1"
+          },
+          {
+            "asset": "THB",
+            "free": "100000.0",
+            "locked": "50000.0"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v1/ticker/price",
+    "response": {
+      "status": 200,
+      "body": {
+        "symbol": "BTCTHB",
+        "price": "1234567.89"
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v1/depth",
+    "response": {
+      "status": 200,
+      "body": {
+        "lastUpdateId": 123456,
+        "bids": [
+          ["1234567.88", "0.5"],
+          ["1234567.00", "1.0"]
+        ],
+        "asks": [
+          ["1234567.90", "0.5"],
+          ["1234568.00", "1.0"]
+        ]
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v1/exchangeInfo",
+    "response": {
+      "status": 200,
+      "body": {
+        "symbols": [
+          {
+            "symbol": "BTCTHB",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "baseAssetPrecision": 8,
+            "quoteAsset": "THB",
+            "quotePrecision": 2
+          }
+        ]
+      }
+    }
+  }
+]

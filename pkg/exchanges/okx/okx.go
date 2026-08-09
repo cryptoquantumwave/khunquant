@@ -2,6 +2,7 @@ package okx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 // Name is the canonical identifier for this exchange.
@@ -16,10 +18,10 @@ const Name = "okx"
 
 // OKXExchange implements exchanges.WalletExchange using the CCXT Go library.
 type OKXExchange struct {
-	client     *ccxt.Okx
+	client       *ccxt.Okx
 	publicClient *ccxt.Okx // credential-free instance for public endpoints
-	isTestnet  bool
-	hasAuth    bool
+	isTestnet    bool
+	hasAuth      bool
 }
 
 // NewOKXExchange creates a new OKXExchange using resolved credentials.
@@ -56,6 +58,21 @@ func NewOKXExchange(creds config.OKXExchangeAccount, testnet bool) (*OKXExchange
 	if testnet {
 		client.SetSandboxMode(true)
 		publicClient.SetSandboxMode(true)
+	}
+
+	// If sandbox mode is enabled, rewrite all URLs to point to the sandbox server.
+	// This must happen after SetSandboxMode but before LoadMarkets.
+	isSandboxed, baseURL := sandbox.GlobalState()
+	if isSandboxed && baseURL != "" {
+		// Rewrite URLs for both exchange instances.
+		for _, ex := range []interface{}{client, publicClient} {
+			if err := sandbox.RewriteExchangeURLs(Name, ex, baseURL); err != nil {
+				return nil, fmt.Errorf("rewrite URLs for sandbox: %w", err)
+			}
+			if err := sandbox.VerifyExchangeURLsSandboxed(ex); err != nil {
+				return nil, fmt.Errorf("verify sandbox URLs: %w", err)
+			}
+		}
 	}
 
 	if hasAuth {
@@ -123,6 +140,21 @@ func (o *OKXExchange) GetWalletBalances(ctx context.Context, walletType string) 
 	}
 }
 
+// GetWalletBalancesPartial implements PartialWalletExchange for aggregate ("all") requests,
+// returning both successful balances and a list of failed wallet types. For single-wallet
+// requests, it delegates to GetWalletBalances.
+func (o *OKXExchange) GetWalletBalancesPartial(ctx context.Context, walletType string) ([]exchanges.WalletBalance, []exchanges.WalletFailure, error) {
+	if err := o.requireAuth(); err != nil {
+		return nil, nil, err
+	}
+	if walletType != "all" {
+		// For non-aggregate requests, use the standard method and return no failures.
+		balances, err := o.GetWalletBalances(ctx, walletType)
+		return balances, nil, err
+	}
+	return o.getAllBalancesPartial(ctx)
+}
+
 // usdLike is the set of stablecoins treated as 1:1 with USD/USDT for valuation.
 var usdLike = map[string]bool{
 	"USDT": true, "USDC": true, "BUSD": true, "FDUSD": true,
@@ -160,15 +192,35 @@ func (o *OKXExchange) FetchPrice(_ context.Context, asset, quote string) (float6
 
 // getAllBalances aggregates balances across trading and funding wallets.
 func (o *OKXExchange) getAllBalances(ctx context.Context) ([]exchanges.WalletBalance, error) {
+	balances, _, err := o.getAllBalancesPartial(ctx)
+	return balances, err
+}
+
+// getAllBalancesPartial is like getAllBalances but also returns failures.
+func (o *OKXExchange) getAllBalancesPartial(ctx context.Context) ([]exchanges.WalletBalance, []exchanges.WalletFailure, error) {
 	var all []exchanges.WalletBalance
+	var failures []exchanges.WalletFailure
+	var rawErrs []error // for the aggregate error message
+	successes := 0
 	for _, wt := range []string{"trading", "funding"} {
 		wb, err := o.GetWalletBalances(ctx, wt)
 		if err != nil {
+			// Store the bare, compacted message in the failure for display
+			bareMsg := bareCompactCCXTMessage(err, wt)
+			failures = append(failures, exchanges.WalletFailure{
+				WalletType: wt,
+				Err:        errors.New(bareMsg),
+			})
+			rawErrs = append(rawErrs, err) // keep raw for aggregate
 			continue
 		}
+		successes++
 		all = append(all, wb...)
 	}
-	return all, nil
+	if successes == 0 && len(failures) > 0 {
+		return nil, failures, fmt.Errorf("okx: all wallet balance fetches failed: %w", errors.Join(rawErrs...))
+	}
+	return all, failures, nil
 }
 
 // getTradingBalances fetches the OKX trading (spot) account balances.
@@ -227,4 +279,61 @@ func derefFloat(f *float64) float64 {
 		return 0
 	}
 	return *f
+}
+
+// bareCompactCCXTMessage extracts and humanizes the CCXT error message from a
+// potentially wrapped error chain. It unwraps once (if the error is a simple wrap),
+// strips the wallet-type prefix (e.g. "funding: "), and humanizes CCXT error class
+// names (e.g. "ExchangeNotAvailable" → "exchange not available").
+func bareCompactCCXTMessage(err error, walletType string) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := err.Error()
+
+	// Unwrap once to get the bare cause if this is a wrapped error
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		msg = unwrapped.Error()
+	}
+
+	// Remove wallet-type prefix if present (e.g. "funding: " or "trading: ")
+	walletPrefix := walletType + ": "
+	if strings.HasPrefix(msg, walletPrefix) {
+		msg = strings.TrimPrefix(msg, walletPrefix)
+	}
+
+	// Humanize CCXT error format: [ccxtError]::[ErrorClass]::[details...]
+	// Extract the ErrorClass and convert to human-readable form
+	if strings.Contains(msg, "::[") {
+		parts := strings.Split(msg, "::")
+		if len(parts) >= 2 {
+			// parts[0] might be [ccxtError]
+			// parts[1] is the error class like [ExchangeNotAvailable]
+			errorClass := strings.Trim(parts[1], "[]")
+			msg = humanizeErrorClass(errorClass)
+		}
+	}
+
+	return msg
+}
+
+// humanizeErrorClass converts a CamelCase error class name to human-readable form.
+// e.g. "ExchangeNotAvailable" → "exchange not available"
+func humanizeErrorClass(class string) string {
+	if class == "" {
+		return "unknown error"
+	}
+
+	// Insert spaces before capital letters (except the first one)
+	var result strings.Builder
+	for i, c := range class {
+		if i > 0 && c >= 'A' && c <= 'Z' {
+			result.WriteRune(' ')
+		}
+		result.WriteRune(c)
+	}
+
+	// Convert to lowercase
+	return strings.ToLower(result.String())
 }

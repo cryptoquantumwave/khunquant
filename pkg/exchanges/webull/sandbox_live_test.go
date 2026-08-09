@@ -40,7 +40,7 @@ func TestSandboxLive(t *testing.T) {
 		Environment: "uat",
 	}
 
-	a, err := newBrokerAdapter(acc)
+	a, err := newBrokerAdapter(acc, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter: %v", err)
 	}

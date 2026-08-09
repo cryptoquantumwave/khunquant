@@ -135,7 +135,7 @@ func TestGetMarketStatus(t *testing.T) {
 		AccountID: "ACC123",
 	}
 
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestFetchOHLCV_SinceUnsupported(t *testing.T) {
 		},
 		AccountID: "ACC123",
 	}
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestInterfaceCompliance(t *testing.T) {
 		AccountID: "ACC123",
 	}
 
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestSupportedWalletTypes(t *testing.T) {
 		AccountID: "ACC123",
 	}
 
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestAdapterMethods(t *testing.T) {
 		AccountID: "ACC123",
 	}
 
-	adapter, err := newBrokerAdapter(cfg)
+	adapter, err := newBrokerAdapter(cfg, "")
 	if err != nil {
 		t.Fatalf("newBrokerAdapter failed: %v", err)
 	}

@@ -18,8 +18,12 @@ type Deps struct {
 	Cfg      *config.Config
 }
 
-// NewMCPServer constructs an mcp.Server with the read-only tool set registered.
-// This is the ONLY place mcp.AddTool is called in this package.
+// NewMCPServer constructs an mcp.Server with read-only and sandbox write tools registered.
+// Tools are registered in two phases:
+//  1. registerReadOnlyTools (tools.go) — read-only diagnostic tools
+//  2. registerSandboxTools (sandbox_tools.go) — write-capable sandbox fixture management
+//
+// Both registrations use s.AddTool, the ONLY site where tools are added.
 func NewMCPServer(d Deps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "khunquant-dev",
@@ -27,6 +31,7 @@ func NewMCPServer(d Deps) *mcp.Server {
 	}, nil)
 
 	registerReadOnlyTools(s, d) // defined in tools.go
+	registerSandboxTools(s, d)  // defined in sandbox_tools.go
 
 	return s
 }

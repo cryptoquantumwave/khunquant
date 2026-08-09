@@ -13,7 +13,7 @@ func init() {
 		if !ok {
 			return nil, fmt.Errorf("%s: no accounts configured", Name)
 		}
-		adapter, err := newBrokerAdapter(acc)
+		adapter, err := newBrokerAdapter(acc, cfg.Agents.Defaults.Workspace)
 		if err != nil {
 			return nil, err
 		}
@@ -32,7 +32,7 @@ func init() {
 			}
 			return nil, exchanges.ErrAccountNotFound(Name, accountName, names)
 		}
-		adapter, err := newBrokerAdapter(acc)
+		adapter, err := newBrokerAdapter(acc, cfg.Agents.Defaults.Workspace)
 		if err != nil {
 			return nil, err
 		}

@@ -36,7 +36,7 @@ type BinanceTHExchange struct {
 // If credentials are empty, a public-only instance is created for market data endpoints.
 func NewBinanceTHExchange(creds config.ExchangeAccount) (*BinanceTHExchange, error) {
 	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
-	client, err := utils.CreateHTTPClient(creds.Proxy, 15*time.Second)
+	client, err := utils.CreateExchangeHTTPClient(Name, creds.Proxy, 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("binanceth: %w", err)
 	}

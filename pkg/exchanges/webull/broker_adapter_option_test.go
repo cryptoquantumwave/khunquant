@@ -474,7 +474,7 @@ func TestOptionOrderingGuardUsesNormalizedRegion(t *testing.T) {
 			},
 			Region: region,
 		}
-		a, err := newBrokerAdapter(acc)
+		a, err := newBrokerAdapter(acc, "")
 		if err != nil {
 			t.Fatalf("newBrokerAdapter(region=%q) = %v", region, err)
 		}

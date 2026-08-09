@@ -808,10 +808,20 @@ type DevMCPConfig struct {
 	PathPrefix    string `json:"path_prefix"     env:"KQ_DEV_MCP_PATH_PREFIX"`
 }
 
+// SandboxConfig controls developer sandbox mode, which intercepts all
+// exchange/broker HTTP traffic and serves mock responses. OFF by default.
+// Never enable in a deployment with real credentials that matter.
+type SandboxConfig struct {
+	Enabled     bool   `json:"enabled"      env:"KQ_SANDBOX_ENABLED"`
+	FixturesDir string `json:"fixtures_dir" env:"KQ_SANDBOX_FIXTURES_DIR"`
+	Token       string `json:"token"        env:"KQ_SANDBOX_TOKEN"`
+}
+
 // DebugConfig holds developer/contributor debug tooling configuration.
 // All features here are OFF by default.
 type DebugConfig struct {
-	DevMCP DevMCPConfig `json:"dev_mcp"`
+	DevMCP  DevMCPConfig  `json:"dev_mcp"`
+	Sandbox SandboxConfig `json:"sandbox"`
 }
 
 type ProvidersConfig struct {

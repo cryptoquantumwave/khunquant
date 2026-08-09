@@ -72,7 +72,7 @@ var (
 
 // accountFingerprint captures every config field that affects the built
 // Client, so a cache hit is only valid while none of them changed.
-func accountFingerprint(cfg config.WebullExchangeAccount) string {
+func accountFingerprint(cfg config.WebullExchangeAccount, workspace string) string {
 	return strings.Join([]string{
 		cfg.APIKey.String(),
 		cfg.Secret.String(),
@@ -80,19 +80,20 @@ func accountFingerprint(cfg config.WebullExchangeAccount) string {
 		cfg.Region,
 		cfg.Environment,
 		cfg.Proxy,
+		workspace,
 	}, "\x00")
 }
 
-func newBrokerAdapter(cfg config.WebullExchangeAccount) (*webullAdapter, error) {
+func newBrokerAdapter(cfg config.WebullExchangeAccount, workspace string) (*webullAdapter, error) {
 	adapterCacheMu.Lock()
 	defer adapterCacheMu.Unlock()
 
-	fp := accountFingerprint(cfg)
+	fp := accountFingerprint(cfg, workspace)
 	if c, ok := adapterCache[cfg.Name]; ok && c.fingerprint == fp {
 		return c.adapter, nil
 	}
 
-	client, err := NewClient(cfg, WithSessionPersistence())
+	client, err := NewClient(cfg, WithSessionPersistence(), WithSessionWorkspace(workspace))
 	if err != nil {
 		return nil, err
 	}
@@ -1304,7 +1305,7 @@ func init() {
 		if !ok {
 			return nil, fmt.Errorf("%s: no accounts configured", Name)
 		}
-		return newBrokerAdapter(acc)
+		return newBrokerAdapter(acc, cfg.Agents.Defaults.Workspace)
 	})
 	broker.RegisterAccountFactory(Name, func(cfg *config.Config, accountName string) (broker.Provider, error) {
 		acc, ok := cfg.Exchanges.Webull.ResolveAccount(accountName)
@@ -1319,6 +1320,6 @@ func init() {
 			}
 			return nil, fmt.Errorf("%s: account %q not found (available: %v)", Name, accountName, names)
 		}
-		return newBrokerAdapter(acc)
+		return newBrokerAdapter(acc, cfg.Agents.Defaults.Workspace)
 	})
 }

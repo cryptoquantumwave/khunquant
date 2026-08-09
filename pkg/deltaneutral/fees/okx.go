@@ -31,7 +31,7 @@ func newOKXFeesFetcher(creds config.OKXExchangeAccount) (*okxFeesFetcher, error)
 	if creds.APIKey.String() == "" || creds.Secret.String() == "" || creds.Passphrase.String() == "" {
 		return nil, fmt.Errorf("okx fees: api_key, secret, and passphrase are required")
 	}
-	client, err := utils.CreateHTTPClient(creds.Proxy, 15*time.Second)
+	client, err := utils.CreateExchangeHTTPClient("okx", creds.Proxy, 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("okx fees: %w", err)
 	}

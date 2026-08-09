@@ -36,7 +36,7 @@ type BitkubExchange struct {
 // If credentials are empty, a public-only instance is created for market data endpoints.
 func NewBitkubExchange(creds config.ExchangeAccount) (*BitkubExchange, error) {
 	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
-	client, err := utils.CreateHTTPClient(creds.Proxy, 15*time.Second)
+	client, err := utils.CreateExchangeHTTPClient(Name, creds.Proxy, 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("bitkub: %w", err)
 	}

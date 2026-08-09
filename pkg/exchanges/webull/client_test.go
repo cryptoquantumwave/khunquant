@@ -1562,7 +1562,7 @@ func TestNewClient_SeedsFromPersistedSession(t *testing.T) {
 
 	// Round-tripped through UnixMilli, matching the on-disk precision.
 	expiresAt := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
-	if err := saveSession("acct1", "persisted-token", TokenStatusNormal, expiresAt); err != nil {
+	if err := saveSession("acct1", "persisted-token", TokenStatusNormal, expiresAt, ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
 
@@ -1616,7 +1616,7 @@ func TestGetOrRefreshToken_PicksUpExternallyWrittenSession(t *testing.T) {
 
 	// "Another process" approves the login.
 	expiresAt := time.Now().Add(time.Hour)
-	if err := saveSession("acct1", "externally-approved-token", TokenStatusNormal, expiresAt); err != nil {
+	if err := saveSession("acct1", "externally-approved-token", TokenStatusNormal, expiresAt, ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
 
@@ -1644,7 +1644,7 @@ func TestPersistSession_WritesOnCreateToken(t *testing.T) {
 		t.Fatalf("CreateToken failed: %v", err)
 	}
 
-	token, status, _, ok := loadSession("acct1")
+	token, status, _, ok := loadSession("acct1", "")
 	if !ok {
 		t.Fatal("expected CreateToken to persist a session entry")
 	}
@@ -1656,7 +1656,7 @@ func TestPersistSession_WritesOnCreateToken(t *testing.T) {
 func TestInvalidateToken_ClearsPersistedSession(t *testing.T) {
 	withTestSessionFile(t)
 
-	if err := saveSession("acct1", "tok", TokenStatusNormal, time.Now().Add(time.Hour)); err != nil {
+	if err := saveSession("acct1", "tok", TokenStatusNormal, time.Now().Add(time.Hour), ""); err != nil {
 		t.Fatalf("saveSession failed: %v", err)
 	}
 
@@ -1668,7 +1668,7 @@ func TestInvalidateToken_ClearsPersistedSession(t *testing.T) {
 	client := newPersistentTestClient(t, server, "acct1")
 	client.invalidateToken()
 
-	if _, _, _, ok := loadSession("acct1"); ok {
+	if _, _, _, ok := loadSession("acct1", ""); ok {
 		t.Fatal("expected invalidateToken to clear the persisted session entry")
 	}
 }

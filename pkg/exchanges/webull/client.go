@@ -44,6 +44,7 @@ type Client struct {
 	// WithSessionPersistence.
 	sessionAccountName    string
 	sessionPersistEnabled bool
+	sessionWorkspace      string
 
 	// Token management. tokenStatus mirrors the last observed
 	// TokenResponse.Status ("", NORMAL, PENDING, INVALID, EXPIRED) and lets
@@ -108,6 +109,17 @@ func WithSessionPersistence() Option {
 	}
 }
 
+// WithSessionWorkspace sets the workspace directory for sandbox-mode session
+// storage. When set, sandbox sessions are stored under <workspace>/sandbox/webull/
+// instead of the default CWD-relative "workspace/sandbox/webull/". This ensures
+// the session path is CWD-independent and matches the configured workspace.
+func WithSessionWorkspace(workspace string) Option {
+	return func(c *Client) error {
+		c.sessionWorkspace = workspace
+		return nil
+	}
+}
+
 // NewClient creates a new Webull API client.
 // Credentials are taken from acc (APIKey = app key, Secret = app secret).
 func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error) {
@@ -129,7 +141,7 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 	// request. This lets a user configure only api_key/secret, matching the
 	// UX of single-credential exchanges like Bitkub.
 
-	httpClient, err := utils.CreateHTTPClient(acc.Proxy, 30*time.Second)
+	httpClient, err := utils.CreateExchangeHTTPClient("webull", acc.Proxy, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("webull: %w", err)
 	}
@@ -172,7 +184,7 @@ func NewClient(acc config.WebullExchangeAccount, opts ...Option) (*Client, error
 	// khunquant process) so a fresh Client doesn't force a new in-app
 	// approval when one is already valid. See session_store.go.
 	if c.sessionPersistEnabled {
-		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName, c.sessionWorkspace); ok {
 			c.token = token
 			c.tokenStatus = status
 			c.tokenExpiry = expiresAt
@@ -448,7 +460,7 @@ func (c *Client) getOrRefreshToken(ctx context.Context) (string, error) {
 	// needed. Cheap: only reached once the fast path above has already
 	// missed, not on every request.
 	if c.sessionPersistEnabled {
-		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName, c.sessionWorkspace); ok {
 			c.token = token
 			c.tokenStatus = status
 			c.tokenExpiry = expiresAt
@@ -524,7 +536,7 @@ func (c *Client) persistSession() {
 	if !c.sessionPersistEnabled {
 		return
 	}
-	if err := saveSession(c.sessionAccountName, c.token, c.tokenStatus, c.tokenExpiry); err != nil {
+	if err := saveSession(c.sessionAccountName, c.token, c.tokenStatus, c.tokenExpiry, c.sessionWorkspace); err != nil {
 		logger.Warn(fmt.Sprintf("webull: failed to persist session for %q: %v", c.sessionAccountName, err))
 	}
 }
@@ -537,7 +549,7 @@ func (c *Client) persistSession() {
 // disk has nothing newer (or persistence is disabled entirely).
 func (c *Client) SessionInfo() (string, time.Time) {
 	if c.sessionPersistEnabled {
-		if token, status, expiresAt, ok := loadSession(c.sessionAccountName); ok && token != "" {
+		if token, status, expiresAt, ok := loadSession(c.sessionAccountName, c.sessionWorkspace); ok && token != "" {
 			return status, expiresAt
 		}
 	}

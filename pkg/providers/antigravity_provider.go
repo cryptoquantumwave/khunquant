@@ -17,10 +17,24 @@ import (
 )
 
 const (
-	antigravityBaseURL      = "https://cloudcode-pa.googleapis.com"
-	antigravityDefaultModel = "gemini-3-flash"
-	antigravityUserAgent    = "antigravity"
-	antigravityXGoogClient  = "google-cloud-sdk vscode_cloudshelleditor/0.1"
+	// antigravityBaseURL is the legacy/generic Cloud Code Assist host. It still
+	// serves loadCodeAssist and fetchAvailableModels correctly, but as of
+	// 2026-08-13 its streamGenerateContent endpoint returns a permanent
+	// 429 RESOURCE_EXHAUSTED for Antigravity (free-tier) accounts regardless of
+	// model, requestType, or credentials used — confirmed by replaying the same
+	// OAuth token against both hosts. The real Antigravity CLI (`agy`) never
+	// calls this host for generation; see antigravityGenerateBaseURL.
+	antigravityBaseURL = "https://cloudcode-pa.googleapis.com"
+	// antigravityGenerateBaseURL is the host the real Antigravity CLI uses for
+	// streamGenerateContent (captured from its own request log). Antigravity
+	// generation requests MUST use this host — cloudcode-pa.googleapis.com
+	// silently routes them into an exhausted/legacy quota bucket instead of
+	// erroring with an invalid-host response, so the failure looks like
+	// account quota exhaustion when it is actually just the wrong endpoint.
+	antigravityGenerateBaseURL = "https://daily-cloudcode-pa.googleapis.com"
+	antigravityDefaultModel    = "gemini-3-flash"
+	antigravityUserAgent       = "antigravity"
+	antigravityXGoogClient     = "google-cloud-sdk vscode_cloudshelleditor/0.1"
 	// antigravityVersion is sent in the User-Agent (antigravity/<version>) and is
 	// the value Google's Cloud Code Assist backend uses to gate clients. When it
 	// falls below the server's minimum, the backend does NOT return an HTTP error
@@ -36,6 +50,7 @@ const (
 type AntigravityProvider struct {
 	tokenSource func() (string, string, error) // Returns (accessToken, projectID, error)
 	httpClient  *http.Client
+	baseURL     string // host used for streamGenerateContent
 }
 
 // NewAntigravityProvider creates a new Antigravity provider using stored auth credentials.
@@ -45,6 +60,7 @@ func NewAntigravityProvider() *AntigravityProvider {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
+		baseURL: antigravityGenerateBaseURL,
 	}
 }
 
@@ -55,6 +71,7 @@ func NewGeminiCodeAssistProvider() *AntigravityProvider {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
+		baseURL: antigravityBaseURL,
 	}
 }
 
@@ -107,7 +124,7 @@ func (p *AntigravityProvider) Chat(
 	}
 
 	// Build API URL — uses Cloud Code Assist v1internal streaming endpoint
-	apiURL := fmt.Sprintf("%s/v1internal:streamGenerateContent?alt=sse", antigravityBaseURL)
+	apiURL := fmt.Sprintf("%s/v1internal:streamGenerateContent?alt=sse", p.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(bodyBytes))
 	if err != nil {

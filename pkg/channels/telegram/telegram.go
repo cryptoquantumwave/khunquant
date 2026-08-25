@@ -674,7 +674,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	if message.Voice != nil {
 		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
 		if voicePath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg"))
+			mediaPaths = append(
+				mediaPaths,
+				storeMedia(voicePath, "voice.ogg"),
+			)
 
 			if content != "" {
 				content += "\n"

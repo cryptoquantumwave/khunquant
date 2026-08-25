@@ -1024,3 +1024,87 @@ func TestPathTraversalVariants(t *testing.T) {
 		}
 	}
 }
+
+// TestShellTool_RelativePathWithSlashAllowed verifies that local relative paths
+// under the workspace are not mistaken for absolute paths by the safety guard.
+func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptDir := filepath.Join(tmpDir, "skills", "calendar-query", "scripts")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create script dir: %v", err)
+	}
+	scriptPath := filepath.Join(scriptDir, "query_calendar.py")
+	if err := os.WriteFile(scriptPath, []byte("calendar ok\n"), 0o644); err != nil {
+		t.Fatalf("failed to create script: %v", err)
+	}
+
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat skills/calendar-query/scripts/query_calendar.py",
+	})
+
+	if result.IsError {
+		t.Fatalf("relative workspace script path should be allowed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "calendar ok") {
+		t.Fatalf("expected script output, got: %s", result.ForLLM)
+	}
+}
+
+func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"cat --file=/etc/passwd",
+		"cc -I/etc main.c",
+		"echo -isystem/usr/include",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("attached absolute path should be blocked: %q\n  got: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "passwd"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("failed to create outside file: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(workspace, "link")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo --config=link/passwd",
+	})
+
+	if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		t.Fatalf("option value symlink escape should be blocked, got: %s", result.ForLLM)
+	}
+}

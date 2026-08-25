@@ -112,20 +112,20 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 
 	// Configure SQLite for concurrent access
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchema(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
 

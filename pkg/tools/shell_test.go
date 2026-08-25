@@ -940,3 +940,87 @@ func TestNewExecToolWithConfig_InvalidCustomAllowPattern(t *testing.T) {
 		t.Fatal("expected error for invalid custom allow pattern")
 	}
 }
+
+// TestPowerShellEncodingBypass verifies that PowerShell encoding bypass patterns are blocked.
+func TestPowerShellEncodingBypass(t *testing.T) {
+	// Test the windowsDenyPatterns directly to ensure they're initialized correctly.
+	// Each pattern should match the corresponding encoding bypass attempt.
+	testCases := []struct {
+		name    string
+		pattern int // index into windowsDenyPatterns
+		payload string
+		should  bool // true if it should match (be blocked)
+	}{
+		// [Text.Encoding] variants
+		{name: "Text.Encoding uppercase", pattern: 0, payload: "[Text.Encoding]::UTF8.GetString([byte[]](0x72,0x6d))", should: true},
+		{name: "System.Text.Encoding", pattern: 0, payload: "[System.Text.Encoding]::UTF8.GetString([byte[]](0x72,0x6d))", should: true},
+		// -EncodedCommand forms
+		{name: "-e flag", pattern: 1, payload: "powershell -e JABFAHIAcgBvAHIA", should: true},
+		{name: "-ec flag", pattern: 1, payload: "powershell -ec JABFAHIAcgBvAHIA", should: true},
+		{name: "-enc flag", pattern: 1, payload: "powershell -enc JABFAHIAcgBvAHIA", should: true},
+		{name: "-en flag", pattern: 1, payload: "powershell -en JABFAHIAcgBvAHIA", should: true},
+		{name: "-EncodedCommand flag", pattern: 1, payload: "powershell -EncodedCommand JABFAHIAcgBvAHIA", should: true},
+		// .GetString([byte[]])
+		{name: "GetString byte array", pattern: 2, payload: ".GetString([byte[]](0x61,0x62))", should: true},
+		// FromBase64String
+		{name: "FromBase64String", pattern: 3, payload: "[System.Convert]::FromBase64String('aGVsbG8=')", should: true},
+		// $var=[byte[]]
+		{name: "var assignment to byte array", pattern: 4, payload: "$payload = [byte[]]@(0x72,0x6d)", should: true},
+		// Unicode escapes
+		{name: "unicode escape \\u0041", pattern: 5, payload: "echo \\u0041", should: true},
+		{name: "unicode escape \\u0072", pattern: 5, payload: "powershell -Command \\u0072\\u006d", should: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.pattern >= len(windowsDenyPatterns) {
+				t.Skipf("pattern index %d out of range", tc.pattern)
+			}
+			pattern := windowsDenyPatterns[tc.pattern]
+			matches := pattern.MatchString(strings.ToLower(tc.payload))
+			if matches != tc.should {
+				t.Errorf("pattern %d: expected match=%v, got %v for %q",
+					tc.pattern, tc.should, matches, tc.payload)
+			}
+		})
+	}
+}
+
+// TestPathTraversalVariants verifies that .../.../ and similar variants are blocked.
+func TestPathTraversalVariants(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	ctx := context.Background()
+
+	// Path traversal variants should be blocked
+	blockedCommands := []string{
+		"ls .../.../",
+		"ls ..../..../",
+		"cat .../.../../../etc/passwd",
+	}
+
+	for _, cmd := range blockedCommands {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path traversal") {
+			t.Errorf("path traversal variant should be blocked: %q\n  got: %s", cmd, result.ForLLM)
+		}
+	}
+
+	// Legitimate commands with ... should not be blocked by path traversal check
+	allowedCommands := []string{
+		"echo ...",
+		"ls ...",
+	}
+
+	for _, cmd := range allowedCommands {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+		// These should not be blocked by path traversal check specifically
+		if strings.Contains(result.ForLLM, "path traversal") {
+			t.Errorf("legitimate command with ... should not be blocked by traversal: %q", cmd)
+		}
+	}
+}

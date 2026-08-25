@@ -11,11 +11,11 @@ import (
 func ClassifySendError(statusCode int, rawErr error) error {
 	switch {
 	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: %v", ErrRateLimit, rawErr)
+		return fmt.Errorf("%w: %w", ErrRateLimit, rawErr)
 	case statusCode >= 500:
-		return fmt.Errorf("%w: %v", ErrTemporary, rawErr)
+		return fmt.Errorf("%w: %w", ErrTemporary, rawErr)
 	case statusCode >= 400:
-		return fmt.Errorf("%w: %v", ErrSendFailed, rawErr)
+		return fmt.Errorf("%w: %w", ErrSendFailed, rawErr)
 	default:
 		return rawErr
 	}
@@ -26,5 +26,5 @@ func ClassifyNetError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w: %v", ErrTemporary, err)
+	return fmt.Errorf("%w: %w", ErrTemporary, err)
 }

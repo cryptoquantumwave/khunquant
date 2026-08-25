@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
 type ExecTool struct {
@@ -313,6 +315,16 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 
 	done := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorCF("shell", "cmd.Wait goroutine panic recovered",
+					map[string]any{
+						"panic": fmt.Sprintf("%v", r),
+						"stack": string(debug.Stack()),
+					})
+				done <- fmt.Errorf("panic in cmd.Wait: %v", r)
+			}
+		}()
 		done <- cmd.Wait()
 	}()
 

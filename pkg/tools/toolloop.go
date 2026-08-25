@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -146,6 +147,17 @@ func RunToolLoop(
 			wg.Add(1)
 			go func(idx int, tc providers.ToolCall) {
 				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.ErrorCF("toolloop", "tool execution goroutine panic recovered",
+							map[string]any{
+								"tool":  tc.Name,
+								"panic": fmt.Sprintf("%v", r),
+								"stack": string(debug.Stack()),
+							})
+						results[idx].result = ErrorResult(fmt.Sprintf("internal panic in tool %s", tc.Name))
+					}
+				}()
 
 				argsJSON, err := json.Marshal(tc.Arguments)
 				if err != nil {

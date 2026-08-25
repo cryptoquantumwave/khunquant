@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -449,6 +450,16 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// Start shared HTTP server if configured
 	if m.httpServer != nil {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("channels", "HTTP server goroutine panic recovered",
+						map[string]any{
+							"addr":  m.httpServer.Addr,
+							"panic": fmt.Sprintf("%v", r),
+							"stack": string(debug.Stack()),
+						})
+				}
+			}()
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
 				"addr": m.httpServer.Addr,
 			})

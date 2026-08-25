@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -227,6 +228,11 @@ func (s *eventSubscription) dispatch(ctx context.Context, evt Event) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("events: subscriber %q goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
+				}
+			}()
 			s.handle(ctx, evt)
 		}()
 	case Keyed:
@@ -253,6 +259,12 @@ func (s *eventSubscription) handle(ctx context.Context, evt Event) {
 
 	done := make(chan handlerResult, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("events: subscriber %q timeout-handler goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
+				done <- handlerResult{panicked: true}
+			}
+		}()
 		done <- s.invokeHandler(ctx, evt)
 	}()
 
@@ -302,6 +314,11 @@ func (s *eventSubscription) watchContext(ctx context.Context) {
 	}
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("events: subscriber %q watchContext goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
+			}
+		}()
 		select {
 		case <-ctx.Done():
 			_ = s.Close()

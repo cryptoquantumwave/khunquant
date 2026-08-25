@@ -771,3 +771,38 @@ func TestHandleMessage_EmptyContent_Ignored(t *testing.T) {
 	default:
 	}
 }
+
+func TestHandleMessage_LocationForwardedAsText(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+	}
+
+	msg := &telego.Message{
+		MessageID: 3049,
+		Location: &telego.Location{
+			Latitude:  35.197713,
+			Longitude: 136.885705,
+		},
+		Chat: telego.Chat{
+			ID:   456,
+			Type: "private",
+		},
+		From: &telego.User{
+			ID:        789,
+			FirstName: "User",
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), msg)
+	require.NoError(t, err)
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "[User location: lat=35.197713, lng=136.885705]", inbound.Content)
+		assert.Equal(t, "3049", inbound.MessageID)
+	}
+
+}

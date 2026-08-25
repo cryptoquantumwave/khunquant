@@ -794,7 +794,9 @@ type DevicesConfig struct {
 }
 
 type VoiceConfig struct {
-	EchoTranscription bool `json:"echo_transcription" env:"KHUNQUANT_VOICE_ECHO_TRANSCRIPTION"`
+	EchoTranscription  bool   `json:"echo_transcription" env:"KHUNQUANT_VOICE_ECHO_TRANSCRIPTION"`
+	ModelName          string `json:"model_name,omitempty" env:"KHUNQUANT_VOICE_MODEL_NAME"`
+	ElevenLabsAPIKey   string `json:"elevenlabs_api_key,omitzero" env:"KHUNQUANT_VOICE_ELEVENLABS_API_KEY"`
 }
 
 // DevMCPConfig controls the read-only developer MCP debug server.

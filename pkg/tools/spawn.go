@@ -82,8 +82,14 @@ func (t *SpawnTool) execute(ctx context.Context, args map[string]any, cb AsyncCa
 		return ErrorResult("task is required and must be a non-empty string")
 	}
 
-	label, _ := args["label"].(string)
-	agentID, _ := args["agent_id"].(string)
+	label, ok := args["label"].(string)
+	if !ok {
+		label = ""
+	}
+	agentID, ok := args["agent_id"].(string)
+	if !ok {
+		agentID = ""
+	}
 
 	// Check allowlist if targeting a specific agent
 	if agentID != "" && t.allowlistCheck != nil {

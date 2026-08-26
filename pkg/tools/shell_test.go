@@ -940,3 +940,216 @@ func TestNewExecToolWithConfig_InvalidCustomAllowPattern(t *testing.T) {
 		t.Fatal("expected error for invalid custom allow pattern")
 	}
 }
+
+// TestPowerShellEncodingBypass verifies that PowerShell encoding bypass patterns are blocked.
+func TestPowerShellEncodingBypass(t *testing.T) {
+	// Test the windowsDenyPatterns directly to ensure they're initialized correctly.
+	// Each pattern should match the corresponding encoding bypass attempt.
+	testCases := []struct {
+		name    string
+		pattern int // index into windowsDenyPatterns
+		payload string
+		should  bool // true if it should match (be blocked)
+	}{
+		// [Text.Encoding] variants
+		{name: "Text.Encoding uppercase", pattern: 0, payload: "[Text.Encoding]::UTF8.GetString([byte[]](0x72,0x6d))", should: true},
+		{name: "System.Text.Encoding", pattern: 0, payload: "[System.Text.Encoding]::UTF8.GetString([byte[]](0x72,0x6d))", should: true},
+		// -EncodedCommand forms
+		{name: "-e flag", pattern: 1, payload: "powershell -e JABFAHIAcgBvAHIA", should: true},
+		{name: "-ec flag", pattern: 1, payload: "powershell -ec JABFAHIAcgBvAHIA", should: true},
+		{name: "-enc flag", pattern: 1, payload: "powershell -enc JABFAHIAcgBvAHIA", should: true},
+		{name: "-en flag", pattern: 1, payload: "powershell -en JABFAHIAcgBvAHIA", should: true},
+		{name: "-EncodedCommand flag", pattern: 1, payload: "powershell -EncodedCommand JABFAHIAcgBvAHIA", should: true},
+		// .GetString([byte[]])
+		{name: "GetString byte array", pattern: 2, payload: ".GetString([byte[]](0x61,0x62))", should: true},
+		// FromBase64String
+		{name: "FromBase64String", pattern: 3, payload: "[System.Convert]::FromBase64String('aGVsbG8=')", should: true},
+		// $var=[byte[]]
+		{name: "var assignment to byte array", pattern: 4, payload: "$payload = [byte[]]@(0x72,0x6d)", should: true},
+		// Unicode escapes
+		{name: "unicode escape \\u0041", pattern: 5, payload: "echo \\u0041", should: true},
+		{name: "unicode escape \\u0072", pattern: 5, payload: "powershell -Command \\u0072\\u006d", should: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.pattern >= len(windowsDenyPatterns) {
+				t.Skipf("pattern index %d out of range", tc.pattern)
+			}
+			pattern := windowsDenyPatterns[tc.pattern]
+			matches := pattern.MatchString(strings.ToLower(tc.payload))
+			if matches != tc.should {
+				t.Errorf("pattern %d: expected match=%v, got %v for %q",
+					tc.pattern, tc.should, matches, tc.payload)
+			}
+		})
+	}
+}
+
+// TestPathTraversalVariants verifies that .../.../ and similar variants are blocked.
+func TestPathTraversalVariants(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	ctx := context.Background()
+
+	// Path traversal variants should be blocked
+	blockedCommands := []string{
+		"ls .../.../",
+		"ls ..../..../",
+		"cat .../.../../../etc/passwd",
+	}
+
+	for _, cmd := range blockedCommands {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path traversal") {
+			t.Errorf("path traversal variant should be blocked: %q\n  got: %s", cmd, result.ForLLM)
+		}
+	}
+
+	// Legitimate commands with ... should not be blocked by path traversal check
+	allowedCommands := []string{
+		"echo ...",
+		"ls ...",
+	}
+
+	for _, cmd := range allowedCommands {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+		// These should not be blocked by path traversal check specifically
+		if strings.Contains(result.ForLLM, "path traversal") {
+			t.Errorf("legitimate command with ... should not be blocked by traversal: %q", cmd)
+		}
+	}
+}
+
+// TestShellTool_RelativePathWithSlashAllowed verifies that local relative paths
+// under the workspace are not mistaken for absolute paths by the safety guard.
+func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptDir := filepath.Join(tmpDir, "skills", "calendar-query", "scripts")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create script dir: %v", err)
+	}
+	scriptPath := filepath.Join(scriptDir, "query_calendar.py")
+	if err := os.WriteFile(scriptPath, []byte("calendar ok\n"), 0o644); err != nil {
+		t.Fatalf("failed to create script: %v", err)
+	}
+
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat skills/calendar-query/scripts/query_calendar.py",
+	})
+
+	if result.IsError {
+		t.Fatalf("relative workspace script path should be allowed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "calendar ok") {
+		t.Fatalf("expected script output, got: %s", result.ForLLM)
+	}
+}
+
+func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	commands := []string{
+		"cat --file=/etc/passwd",
+		"cc -I/etc main.c",
+		"echo -isystem/usr/include",
+	}
+
+	for _, cmd := range commands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("attached absolute path should be blocked: %q\n  got: %s", cmd, result.ForLLM)
+		}
+	}
+}
+
+func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "passwd"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("failed to create outside file: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(workspace, "link")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo --config=link/passwd",
+	})
+
+	if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		t.Fatalf("option value symlink escape should be blocked, got: %s", result.ForLLM)
+	}
+}
+
+// TestShellTool_SchemelessURLDetection verifies that the scheme-less URL
+// detection logic in guardCommand correctly identifies web URL path components
+// (e.g., "//github.com" captured by the regex after "https:") and exempts them
+// from workspace sandbox checks. It also confirms that paths NOT preceded by a
+// recognized web scheme are still blocked.
+func TestShellTool_SchemelessURLDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	// Each of the 7 recognized web schemes should have its path component
+	// exempted from workspace boundary checks.
+	allowedCommands := []string{
+		"echo https://github.com",
+		"echo http://example.com",
+		"echo ftp://ftp.example.com",
+		"echo ftps://secure.example.com",
+		"echo sftp://sftp.example.com",
+		"echo ssh://git@github.com",
+		"echo git://github.com",
+	}
+
+	for _, cmd := range allowedCommands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if result.IsError && strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("command with recognized web scheme should not be blocked: %s\n  error: %s", cmd, result.ForLLM)
+		}
+	}
+
+	// Multiple URLs with different schemes in a single command should all be exempt.
+	multiURLCommands := []string{
+		"echo https://github.com && curl http://example.com",
+		"wget ftp://a.com; curl https://b.com",
+	}
+
+	for _, cmd := range multiURLCommands {
+		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
+		if result.IsError && strings.Contains(result.ForLLM, "path outside working dir") {
+			t.Errorf("command with multiple web URLs should not be blocked: %s\n  error: %s", cmd, result.ForLLM)
+		}
+	}
+}

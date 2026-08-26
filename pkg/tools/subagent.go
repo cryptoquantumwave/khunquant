@@ -369,7 +369,10 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
 	}
 
-	label, _ := args["label"].(string)
+	label, ok := args["label"].(string)
+	if !ok {
+		label = ""
+	}
 
 	// Build system prompt for subagent
 	systemPrompt := fmt.Sprintf(`You are a subagent. Complete the given task independently and provide a clear, concise result.

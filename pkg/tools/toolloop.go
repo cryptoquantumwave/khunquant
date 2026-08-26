@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -108,7 +109,16 @@ func RunToolLoop(
 			Content: response.Content,
 		}
 		for _, tc := range normalizedToolCalls {
-			argumentsJSON, _ := json.Marshal(tc.Arguments)
+			argumentsJSON, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				logger.ErrorCF("toolloop", "json.Marshal failed for tool arguments",
+					map[string]any{
+						"tool":       tc.Name,
+						"error":      err.Error(),
+						"iteration": iteration,
+					})
+				continue
+			}
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
 				ID:        tc.ID,
 				Type:      "function",
@@ -137,8 +147,29 @@ func RunToolLoop(
 			wg.Add(1)
 			go func(idx int, tc providers.ToolCall) {
 				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.ErrorCF("toolloop", "tool execution goroutine panic recovered",
+							map[string]any{
+								"tool":  tc.Name,
+								"panic": fmt.Sprintf("%v", r),
+								"stack": string(debug.Stack()),
+							})
+						results[idx].result = ErrorResult(fmt.Sprintf("internal panic in tool %s", tc.Name))
+					}
+				}()
 
-				argsJSON, _ := json.Marshal(tc.Arguments)
+				argsJSON, err := json.Marshal(tc.Arguments)
+				if err != nil {
+					logger.ErrorCF("toolloop", "json.Marshal failed for tool arguments",
+						map[string]any{
+							"tool":       tc.Name,
+							"error":      err.Error(),
+							"iteration": iteration,
+						})
+					results[idx].result = ErrorResult(fmt.Sprintf("json.Marshal error: %v", err))
+					return
+				}
 				argsPreview := utils.Truncate(string(argsJSON), 200)
 				logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 					map[string]any{

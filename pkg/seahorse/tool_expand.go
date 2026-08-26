@@ -124,6 +124,9 @@ func (t *ExpandTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		"tokenCount": result.TokenCount,
 		"messages":   messages,
 	}
-	data, _ := json.Marshal(output)
+	data, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("failed to marshal expand result: %v", err))
+	}
 	return tools.NewToolResult(string(data))
 }

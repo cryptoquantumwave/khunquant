@@ -167,6 +167,9 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		output["hint"] = result.Hint
 	}
 
-	data, _ := json.Marshal(output)
+	data, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("failed to marshal grep result: %v", err))
+	}
 	return tools.NewToolResult(string(data))
 }

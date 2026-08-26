@@ -169,7 +169,10 @@ func (s *modelProbeCacheState) probe(cacheKey string, probeFunc func() bool) boo
 		return result, nil
 	})
 
-	result, _ := v.(bool)
+	result, ok := v.(bool)
+	if !ok {
+		return false
+	}
 	return result
 }
 

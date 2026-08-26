@@ -269,7 +269,7 @@ release-local:
 	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
 	git push origin $(RELEASE_TAG)
 	@echo "Running GoReleaser (slim build, 2 parallel jobs)..."
-	GOVERSION=$$(env -u GOROOT go version | awk '{print $$3}') env -u GOROOT goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=sign,announce
+	GOVERSION=$$(env -u GOROOT go version | awk '{print $$3}' | awk '{print $$1}') env -u GOROOT goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=sign,announce
 
 ## release: Tag and publish a release via GoReleaser (5 platforms, 2 parallel jobs). Suitable for local dev machines.
 ## Usage: make release RELEASE_TAG=v0.2.0 [REPLACE_TAGS=1]
@@ -287,7 +287,7 @@ release:
 	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
 	git push origin $(RELEASE_TAG)
 	@echo "Running GoReleaser for $(RELEASE_TAG)..."
-	GOVERSION=$$(env -u GOROOT go version | awk '{print $$3}') env -u GOROOT goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=docker,sign,announce
+	GOVERSION=$$(env -u GOROOT go version | awk '{print $$3}' | awk '{print $$1}') env -u GOROOT goreleaser release --config .goreleaser.local.yaml --clean --parallelism 2 --skip=docker,sign,announce
 
 ## clean: Remove build artifacts
 clean:

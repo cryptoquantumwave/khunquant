@@ -540,8 +540,8 @@ func TestCronTool_ListJobs_WithJobs(t *testing.T) {
 		t.Fatalf("failed to add job: %s", addResult.ForLLM)
 	}
 
-	// List jobs
-	listResult := tool.Execute(context.Background(), map[string]any{
+	// List jobs with the same context used to create them
+	listResult := tool.Execute(ctx, map[string]any{
 		"action": "list",
 	})
 
@@ -570,8 +570,8 @@ func TestCronTool_ListJobs_ShowsScheduleInfo(t *testing.T) {
 		t.Fatalf("failed to add job: %s", addResult.ForLLM)
 	}
 
-	// List jobs
-	listResult := tool.Execute(context.Background(), map[string]any{
+	// List jobs with the same context
+	listResult := tool.Execute(ctx, map[string]any{
 		"action": "list",
 	})
 
@@ -646,8 +646,8 @@ func TestCronTool_RemoveJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Remove the job
-	removeResult := tool.Execute(context.Background(), map[string]any{
+	// Remove the job with the same context
+	removeResult := tool.Execute(ctx, map[string]any{
 		"action": "remove",
 		"job_id": jobID,
 	})
@@ -718,8 +718,8 @@ func TestCronTool_EnableJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Enable the job
-	enableResult := tool.Execute(context.Background(), map[string]any{
+	// Enable the job with the same context
+	enableResult := tool.Execute(ctx, map[string]any{
 		"action": "enable",
 		"job_id": jobID,
 	})
@@ -753,8 +753,8 @@ func TestCronTool_DisableJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Disable the job
-	disableResult := tool.Execute(context.Background(), map[string]any{
+	// Disable the job with the same context
+	disableResult := tool.Execute(ctx, map[string]any{
 		"action": "disable",
 		"job_id": jobID,
 	})
@@ -999,5 +999,35 @@ func TestCronTool_CannotEnableDisableFromDifferentChannel(t *testing.T) {
 	disableResult := tool.Execute(ctx, map[string]any{"action": "disable", "job_id": job.ID})
 	if !disableResult.IsError || !strings.Contains(disableResult.ForLLM, "not accessible") {
 		t.Fatalf("expected disable to be blocked, got: %+v", disableResult)
+	}
+}
+
+// Regression test: empty context must be denied access to command jobs
+func TestCronTool_EmptyContextDeniedForCommandJob(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "command", "cli", "direct", "df -h")
+
+	// Empty context (no channel/chatID) should deny access, even though the job exists
+	emptyCtx := context.Background()
+
+	// Test get with empty context
+	getResult := tool.Execute(emptyCtx, map[string]any{"action": "get", "job_id": job.ID})
+	if !getResult.IsError || !strings.Contains(getResult.ForLLM, "not accessible") {
+		t.Fatalf("expected get with empty context to be denied for command job, got: %+v", getResult)
+	}
+
+	// Test list with empty context (should hide command job)
+	listResult := tool.Execute(emptyCtx, map[string]any{"action": "list"})
+	if listResult.IsError {
+		t.Fatalf("unexpected error on list: %s", listResult.ForLLM)
+	}
+	if strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list with empty context to hide command job, got: %s", listResult.ForLLM)
+	}
+
+	// Test remove with empty context
+	removeResult := tool.Execute(emptyCtx, map[string]any{"action": "remove", "job_id": job.ID})
+	if !removeResult.IsError || !strings.Contains(removeResult.ForLLM, "not accessible") {
+		t.Fatalf("expected remove with empty context to be denied, got: %+v", removeResult)
 	}
 }

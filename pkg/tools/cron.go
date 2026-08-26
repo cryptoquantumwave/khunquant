@@ -517,14 +517,12 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 
 func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	channel := ToolChannel(ctx)
-	chatID := ToolChatID(ctx)
-
-	// If no channel/chatID context, allow access (internal call)
-	if channel == "" && chatID == "" {
+	// Allow internal channels to bypass external access control
+	if constants.IsInternalChannel(channel) {
 		return true
 	}
-
-	// If channel/chatID are set, apply strict access control
+	chatID := ToolChatID(ctx)
+	// Deny if channel or chatID is missing (fail closed for security)
 	if channel == "" || chatID == "" {
 		return false
 	}

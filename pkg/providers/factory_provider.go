@@ -53,6 +53,16 @@ func ExtractProtocol(model string) (protocol, modelID string) {
 	return protocol, modelID
 }
 
+// ResolveAPIBase resolves the API base URL for a ModelConfig.
+// It returns the configured APIBase if set, otherwise the default for the protocol.
+func ResolveAPIBase(cfg *config.ModelConfig) string {
+	if base := strings.TrimSpace(cfg.APIBase); base != "" {
+		return base
+	}
+	protocol, _ := ExtractProtocol(cfg.Model)
+	return getDefaultAPIBase(protocol)
+}
+
 // CreateProviderFromConfig creates a provider based on the ModelConfig.
 // It uses the protocol prefix in the Model field to determine which provider to create.
 // Supported protocols: openai, litellm, anthropic, anthropic-messages, antigravity,

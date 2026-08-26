@@ -192,3 +192,77 @@ func TestDownloadFileSimple_Success(t *testing.T) {
 	}
 	defer os.Remove(path)
 }
+
+// --- AMR and OPUS audio format support (OneBot, Matrix) ---
+
+func TestIsAudioFile_AMRFormat(t *testing.T) {
+	// OneBot voice messages arrive as "voice.amr" with empty content type
+	if !utils.IsAudioFile("voice.amr", "") {
+		t.Error("IsAudioFile(\"voice.amr\", \"\"): expected true for OneBot voice")
+	}
+	// Also test with correct content type
+	if !utils.IsAudioFile("voice.amr", "audio/amr") {
+		t.Error("IsAudioFile(\"voice.amr\", \"audio/amr\"): expected true")
+	}
+}
+
+func TestIsAudioFile_OpusFormat(t *testing.T) {
+	// Matrix voice messages use .opus format
+	if !utils.IsAudioFile("audio.opus", "") {
+		t.Error("IsAudioFile(\"audio.opus\", \"\"): expected true for Matrix voice")
+	}
+	// Also test with correct content type
+	if !utils.IsAudioFile("audio.opus", "audio/opus") {
+		t.Error("IsAudioFile(\"audio.opus\", \"audio/opus\"): expected true")
+	}
+}
+
+// --- AudioFormat function ---
+
+func TestAudioFormat_SupportedFormats(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"clip.mp3", "mp3"},
+		{"audio.wav", "wav"},
+		{"voice.ogg", "ogg"},
+		{"speech.amr", "amr"},       // OneBot voice
+		{"stream.opus", "opus"},     // Matrix voice
+		{"track.m4a", "m4a"},
+		{"song.flac", "flac"},
+		{"recording.aac", "aac"},
+		{"music.wma", "wma"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got, err := utils.AudioFormat(tt.path)
+			if err != nil {
+				t.Errorf("AudioFormat(%q) error: %v", tt.path, err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("AudioFormat(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAudioFormat_UnsupportedFormat(t *testing.T) {
+	_, err := utils.AudioFormat("file.txt")
+	if err == nil {
+		t.Error("AudioFormat(\"file.txt\"): expected error for unsupported format")
+	}
+}
+
+func TestAudioFormat_CaseInsensitive(t *testing.T) {
+	got, err := utils.AudioFormat("AUDIO.MP3")
+	if err != nil {
+		t.Errorf("AudioFormat(\"AUDIO.MP3\") error: %v", err)
+		return
+	}
+	if got != "mp3" {
+		t.Errorf("AudioFormat(\"AUDIO.MP3\") = %q, want %q", got, "mp3")
+	}
+}

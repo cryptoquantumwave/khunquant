@@ -166,15 +166,53 @@ func (t *GroqTranscriber) Name() string {
 // DetectTranscriber inspects cfg and returns the appropriate Transcriber, or
 // nil if no supported transcription provider is configured.
 func DetectTranscriber(cfg *config.Config) Transcriber {
-	// Direct Groq provider config takes priority.
+	if cfg == nil {
+		return nil
+	}
+
+	// 1. Check if an explicit voice model is configured
+	if modelName := strings.TrimSpace(cfg.Voice.ModelName); modelName != "" {
+		modelCfg, err := cfg.GetModelConfig(modelName)
+		if err == nil && modelCfg != nil {
+			if tr := transcriberFromModelConfig(modelCfg); tr != nil {
+				return tr
+			}
+		}
+	}
+
+	// 2. Check if ElevenLabs API key is directly configured
+	if key := strings.TrimSpace(cfg.Voice.ElevenLabsAPIKey); key != "" {
+		return NewElevenLabsTranscriber(key, "", "")
+	}
+
+	// 3. Scan ModelList for compatible backends (fallback scanning)
+	for _, mc := range cfg.ModelList {
+		if tr := fallbackTranscriberFromModelConfig(&mc); tr != nil {
+			return tr
+		}
+	}
+
+	// 4. Legacy Groq fallback - maintains backward compatibility
 	if key := cfg.Providers.Groq.APIKey; key != "" {
 		return NewGroqTranscriber(key)
 	}
-	// Fall back to any model-list entry that uses the groq/ protocol.
+
+	// 5. Fall back to any model-list entry that uses the groq/ protocol
 	for _, mc := range cfg.ModelList {
 		if strings.HasPrefix(mc.Model, "groq/") && mc.APIKey.String() != "" {
-			return NewGroqTranscriber(mc.APIKey.String())
+			// For backward compatibility, check if the model contains "whisper".
+			// If it does, use WhisperTranscriber; otherwise use GroqTranscriber.
+			if strings.Contains(strings.ToLower(mc.Model), "whisper") {
+				tr := NewWhisperTranscriber(&mc)
+				if tr != nil {
+					return tr
+				}
+			} else {
+				// Non-whisper groq models (e.g., groq/llama-3.3-70b) use Groq transcriber
+				return NewGroqTranscriber(mc.APIKey.String())
+			}
 		}
 	}
+
 	return nil
 }

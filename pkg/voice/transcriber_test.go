@@ -158,3 +158,74 @@ func TestTranscribe(t *testing.T) {
 		}
 	})
 }
+
+// TestGroqBackwardCompat verifies that existing Groq-only configurations
+// continue to work without any config changes, proving backward compatibility.
+func TestGroqBackwardCompat(t *testing.T) {
+	tmpDir := t.TempDir()
+	audioPath := filepath.Join(tmpDir, "clip.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake-audio-data"), 0o644); err != nil {
+		t.Fatalf("failed to write fake audio file: %v", err)
+	}
+
+	// Simulate an existing user config with only Groq provider API key.
+	// This should continue to work exactly as before.
+	cfg := &config.Config{
+		Providers: config.ProvidersConfig{
+			Groq: config.ProviderConfig{APIKey: "sk-groq-test"},
+		},
+	}
+
+	// DetectTranscriber should return a Groq transcriber
+	tr := DetectTranscriber(cfg)
+	if tr == nil {
+		t.Fatal("DetectTranscriber() = nil, want Groq transcriber")
+	}
+	if got := tr.Name(); got != "groq" {
+		t.Errorf("Name() = %q, want %q", got, "groq")
+	}
+
+	// Verify the Groq transcriber makes the correct API request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify endpoint
+		if r.URL.Path != "/audio/transcriptions" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		// Verify authorization header format
+		if r.Header.Get("Authorization") != "Bearer sk-groq-test" {
+			t.Errorf("unexpected Authorization header: %s", r.Header.Get("Authorization"))
+		}
+		// Verify multipart form submission with model field
+		if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+			t.Errorf("ParseMultipartForm() error: %v", err)
+		}
+		// In the Groq transcriber, the model field is "whisper-large-v3"
+		// (This is the existing hardcoded model in the Groq implementation)
+		if model := r.FormValue("model"); model != "whisper-large-v3" {
+			t.Errorf("model field = %q, want %q", model, "whisper-large-v3")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TranscriptionResponse{
+			Text:     "backward compat verified",
+			Language: "en",
+		})
+	}))
+	defer srv.Close()
+
+	// Override the Groq transcriber's API base to use our test server
+	groqTr, ok := tr.(*GroqTranscriber)
+	if !ok {
+		t.Fatalf("expected *GroqTranscriber, got %T", tr)
+	}
+	groqTr.apiBase = srv.URL
+
+	// Perform transcription and verify it works
+	resp, err := groqTr.Transcribe(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("Transcribe() error: %v", err)
+	}
+	if resp.Text != "backward compat verified" {
+		t.Errorf("Text = %q, want %q", resp.Text, "backward compat verified")
+	}
+}

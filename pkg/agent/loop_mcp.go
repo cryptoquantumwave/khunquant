@@ -9,8 +9,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/mcp"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -68,8 +70,18 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 		return nil
 	}
 
+	mcpCfg := filterMCPConfigServers(al.cfg.Tools.MCP, al.registry.allowedMCPServers())
+	if len(mcpCfg.Servers) == 0 {
+		logger.InfoCF(
+			"agent",
+			"No MCP servers selected after applying per-agent mcpServers allowlists",
+			nil,
+		)
+		return nil
+	}
+
 	findValidServer := false
-	for _, serverCfg := range al.cfg.Tools.MCP.Servers {
+	for _, serverCfg := range mcpCfg.Servers {
 		if serverCfg.Enabled {
 			findValidServer = true
 		}
@@ -88,8 +100,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 			workspacePath = defaultAgent.Workspace
 		}
 
-		if err := mcpManager.LoadFromMCPConfig(ctx, al.cfg.Tools.MCP, workspacePath); err != nil {
-			al.mcp.setInitErr(fmt.Errorf("failed to load MCP servers: %w", err))
+		if err := mcpManager.LoadFromMCPConfig(ctx, mcpCfg, workspacePath); err != nil {
 			logger.WarnCF("agent", "Failed to load MCP servers, MCP tools will not be available",
 				map[string]any{
 					"error": err.Error(),
@@ -116,6 +127,15 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 				for _, agentID := range agentIDs {
 					agent, ok := al.registry.GetAgent(agentID)
 					if !ok {
+						continue
+					}
+					if !agent.AllowsMCPServer(serverName) {
+						logger.DebugCF("agent", "Skipped MCP tool registration by agent mcpServers allowlist",
+							map[string]any{
+								"agent_id": agentID,
+								"server":   serverName,
+								"tool":     tool.Name,
+							})
 						continue
 					}
 
@@ -198,4 +218,24 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 	})
 
 	return al.mcp.getInitErr()
+}
+
+func filterMCPConfigServers(
+	mcpCfg config.MCPConfig,
+	allowed map[string]struct{},
+) config.MCPConfig {
+	if allowed == nil {
+		return mcpCfg
+	}
+
+	filtered := mcpCfg
+	filtered.Servers = make(map[string]config.MCPServerConfig)
+	for serverName, serverCfg := range mcpCfg.Servers {
+		normalizedName := strings.ToLower(strings.TrimSpace(serverName))
+		if _, ok := allowed[normalizedName]; ok {
+			filtered.Servers[serverName] = serverCfg
+		}
+	}
+
+	return filtered
 }

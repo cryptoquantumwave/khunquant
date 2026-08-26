@@ -130,7 +130,7 @@ func TestIPAllowlist_IgnoresXForwardedForFromUntrustedPeer(t *testing.T) {
 func TestIPAllowlist_UsesXForwardedForFromTrustedPeer(t *testing.T) {
 	h, err := IPAllowlist(IPAllowlistConfig{
 		AllowedCIDRs:      []string{"192.168.1.0/24"},
-		TrustedProxyCIDRs: []string{"10.0.0.0/8"},
+		TrustedProxyCIDRs: []string{"10.0.0.0/8", "203.0.113.0/24"},
 	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

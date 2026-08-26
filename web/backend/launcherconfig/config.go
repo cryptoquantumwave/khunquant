@@ -20,16 +20,12 @@ const (
 
 // Config stores launch parameters for the web backend service.
 type Config struct {
-	Port                  int      `json:"port"`
-	Public                bool     `json:"public"`
-	AllowedCIDRs          []string `json:"allowed_cidrs,omitempty"`
-	AllowLocalhostBypass  bool     `json:"allow_localhost_bypass"`
-	TrustedProxyCIDRs     []string `json:"trusted_proxy_cidrs,omitempty"`
-	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
-	LauncherToken         string   `json:"launcher_token,omitempty"`
-	// LegacyLauncherToken is read only for one-time migration from the removed
-	// token login flow. Save always clears it so new configs do not persist it.
-	LegacyLauncherToken string `json:"-"`
+	Port                 int      `json:"port"`
+	Public               bool     `json:"public"`
+	AllowedCIDRs         []string `json:"allowed_cidrs,omitempty"`
+	AllowLocalhostBypass bool     `json:"allow_localhost_bypass"`
+	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
+	LauncherToken        string   `json:"launcher_token,omitempty"`
 }
 
 // Default returns default launcher settings.
@@ -104,9 +100,7 @@ func Load(path string, fallback Config) (Config, error) {
 	}
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
-	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
-	cfg.LegacyLauncherToken = strings.TrimSpace(cfg.LegacyLauncherToken)
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -117,9 +111,7 @@ func Load(path string, fallback Config) (Config, error) {
 func Save(path string, cfg Config) error {
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
-	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
-	cfg.LegacyLauncherToken = ""
 	if err := Validate(cfg); err != nil {
 		return err
 	}

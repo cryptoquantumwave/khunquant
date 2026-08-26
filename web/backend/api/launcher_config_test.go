@@ -52,10 +52,8 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 	if err := launcherconfig.Save(
 		path,
 		launcherconfig.Config{
-			Port:                  18800,
-			Public:                false,
-			DashboardPasswordHash: "saved-hash",
-			LegacyLauncherToken:   "legacy-token",
+			Port:   18800,
+			Public: false,
 		},
 	); err != nil {
 		t.Fatalf("launcherconfig.Save() error = %v", err)
@@ -84,12 +82,6 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 	}
 	if cfg.Port != 18080 || !cfg.Public {
 		t.Fatalf("saved config = %+v, want port=18080 public=true", cfg)
-	}
-	if cfg.DashboardPasswordHash != "saved-hash" {
-		t.Fatalf("saved dashboard_password_hash = %q, want saved-hash", cfg.DashboardPasswordHash)
-	}
-	if cfg.LegacyLauncherToken != "" {
-		t.Fatalf("saved legacy launcher_token = %q, want empty", cfg.LegacyLauncherToken)
 	}
 	if len(cfg.AllowedCIDRs) != 1 || cfg.AllowedCIDRs[0] != "192.168.1.0/24" {
 		t.Fatalf("saved config allowed_cidrs = %v, want [192.168.1.0/24]", cfg.AllowedCIDRs)

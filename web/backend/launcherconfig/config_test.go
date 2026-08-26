@@ -23,13 +23,11 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "launcher-config.json")
 	want := Config{
-		Port:                  18080,
-		Public:                true,
-		AllowedCIDRs:          []string{"192.168.1.0/24", "10.0.0.0/8"},
-		AllowLocalhostBypass:  false,
-		TrustedProxyCIDRs:     []string{"172.16.0.0/12"},
-		DashboardPasswordHash: "$2a$12$saved-dashboard-password-hash",
-		LegacyLauncherToken:   "legacy-token-should-not-persist",
+		Port:                 18080,
+		Public:               true,
+		AllowedCIDRs:         []string{"192.168.1.0/24", "10.0.0.0/8"},
+		AllowLocalhostBypass: false,
+		TrustedProxyCIDRs:    []string{"172.16.0.0/12"},
 	}
 
 	if err := Save(path, want); err != nil {
@@ -44,12 +42,6 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if got.AllowLocalhostBypass != want.AllowLocalhostBypass {
 		t.Fatalf("allow_localhost_bypass = %t, want %t", got.AllowLocalhostBypass, want.AllowLocalhostBypass)
-	}
-	if got.DashboardPasswordHash != want.DashboardPasswordHash {
-		t.Fatalf("dashboard_password_hash = %q, want %q", got.DashboardPasswordHash, want.DashboardPasswordHash)
-	}
-	if got.LegacyLauncherToken != "" {
-		t.Fatalf("legacy launcher_token = %q, want empty after Save", got.LegacyLauncherToken)
 	}
 	if len(got.AllowedCIDRs) != len(want.AllowedCIDRs) {
 		t.Fatalf("allowed_cidrs len = %d, want %d", len(got.AllowedCIDRs), len(want.AllowedCIDRs))

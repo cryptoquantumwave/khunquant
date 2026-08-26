@@ -16,6 +16,7 @@ const (
 	NameFindSkills      = "find_skills"
 	NameInstallSkill    = "install_skill"
 	NameSpawn           = "spawn"
+	NameDelegate        = "delegate"
 	NameGetAssetsList   = "get_assets_list"
 	NameGetTotalValue   = "get_total_value"
 	NameListPortfolios  = "list_portfolios"

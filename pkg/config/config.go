@@ -1024,8 +1024,9 @@ type WebToolsConfig struct {
 }
 
 type CronToolsConfig struct {
-	ToolConfig         `    envPrefix:"KHUNQUANT_TOOLS_CRON_"`
-	ExecTimeoutMinutes int `                                 env:"KHUNQUANT_TOOLS_CRON_EXEC_TIMEOUT_MINUTES" json:"exec_timeout_minutes"` // 0 means no timeout
+	ToolConfig            `    envPrefix:"KHUNQUANT_TOOLS_CRON_"`
+	ExecTimeoutMinutes    int      `                                 env:"KHUNQUANT_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"     json:"exec_timeout_minutes"` // 0 means no timeout
+	CommandAllowedRemotes []string `                                 env:"KHUNQUANT_TOOLS_CRON_COMMAND_ALLOWED_REMOTES" json:"command_allowed_remotes"`
 }
 
 type ExecConfig struct {

@@ -14,19 +14,27 @@ const (
 	FileName = "launcher-config.json"
 	// DefaultPort is the default port for the web launcher.
 	DefaultPort = 18800
+	// EnvLauncherHost overrides launcher listen host.
+	EnvLauncherHost = "PICOCLAW_LAUNCHER_HOST"
 )
 
 // Config stores launch parameters for the web backend service.
 type Config struct {
-	Port          int      `json:"port"`
-	Public        bool     `json:"public"`
-	AllowedCIDRs  []string `json:"allowed_cidrs,omitempty"`
-	LauncherToken string   `json:"launcher_token,omitempty"`
+	Port                  int      `json:"port"`
+	Public                bool     `json:"public"`
+	AllowedCIDRs          []string `json:"allowed_cidrs,omitempty"`
+	AllowLocalhostBypass  bool     `json:"allow_localhost_bypass"`
+	TrustedProxyCIDRs     []string `json:"trusted_proxy_cidrs,omitempty"`
+	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
+	LauncherToken         string   `json:"launcher_token,omitempty"`
+	// LegacyLauncherToken is read only for one-time migration from the removed
+	// token login flow. Save always clears it so new configs do not persist it.
+	LegacyLauncherToken string `json:"-"`
 }
 
 // Default returns default launcher settings.
 func Default() Config {
-	return Config{Port: DefaultPort, Public: false}
+	return Config{Port: DefaultPort, Public: false, AllowLocalhostBypass: true}
 }
 
 // Validate checks if launcher settings are valid.
@@ -37,6 +45,11 @@ func Validate(cfg Config) error {
 	for _, cidr := range cfg.AllowedCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("invalid CIDR %q", cidr)
+		}
+	}
+	for _, cidr := range cfg.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("invalid trusted proxy CIDR %q", cidr)
 		}
 	}
 	return nil
@@ -90,6 +103,10 @@ func Load(path string, fallback Config) (Config, error) {
 		return Config{}, err
 	}
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
+	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
+	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
+	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
+	cfg.LegacyLauncherToken = strings.TrimSpace(cfg.LegacyLauncherToken)
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -99,6 +116,10 @@ func Load(path string, fallback Config) (Config, error) {
 // Save writes launcher settings to disk.
 func Save(path string, cfg Config) error {
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
+	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
+	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
+	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
+	cfg.LegacyLauncherToken = ""
 	if err := Validate(cfg); err != nil {
 		return err
 	}

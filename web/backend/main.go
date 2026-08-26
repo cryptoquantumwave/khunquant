@@ -140,12 +140,17 @@ func main() {
 	// API Routes (e.g. /api/status)
 	apiHandler := api.NewHandler(absPath)
 	apiHandler.SetServerOptions(portNum, effectivePublic, explicitPublic, launcherCfg.AllowedCIDRs)
+	apiHandler.SetServerAccessOptions(launcherCfg.AllowLocalhostBypass, launcherCfg.TrustedProxyCIDRs)
 	apiHandler.RegisterRoutes(mux)
 
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
-	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, mux)
+	accessControlledMux, err := middleware.IPAllowlist(middleware.IPAllowlistConfig{
+		AllowedCIDRs:         launcherCfg.AllowedCIDRs,
+		AllowLocalhostBypass: launcherCfg.AllowLocalhostBypass,
+		TrustedProxyCIDRs:    launcherCfg.TrustedProxyCIDRs,
+	}, mux)
 	if err != nil {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}

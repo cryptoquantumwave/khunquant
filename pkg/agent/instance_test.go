@@ -474,3 +474,26 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 		t.Fatal("read_file tool should still be registered")
 	}
 }
+
+func TestAgentInstance_AllowsMCPServer(t *testing.T) {
+	t.Run("nil allowlist allows all", func(t *testing.T) {
+		agent := &AgentInstance{}
+		if !agent.AllowsMCPServer("github") {
+			t.Fatal("expected nil MCP allowlist to allow all servers")
+		}
+	})
+
+	t.Run("explicit allowlist filters servers", func(t *testing.T) {
+		agent := &AgentInstance{
+			MCPServerAllowlist: map[string]struct{}{
+				"github": {},
+			},
+		}
+		if !agent.AllowsMCPServer("GitHub") {
+			t.Fatal("expected MCP server matching to be case-insensitive")
+		}
+		if agent.AllowsMCPServer("filesystem") {
+			t.Fatal("expected filesystem to be blocked by MCP allowlist")
+		}
+	})
+}

@@ -90,7 +90,11 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
-	agentMCPServerAllowlist := resolveAgentMCPServerAllowlist(nil)
+	var mcpServers []string
+	if agentCfg != nil && agentCfg.MCPServers != nil {
+		mcpServers = agentCfg.MCPServers
+	}
+	agentMCPServerAllowlist := resolveAgentMCPServerAllowlist(mcpServers)
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace

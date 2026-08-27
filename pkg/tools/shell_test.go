@@ -831,7 +831,7 @@ func TestGuardCommand_AllowlistPermits(t *testing.T) {
 	}
 }
 
-func TestGuardCommand_CustomAllowExemptsDeny(t *testing.T) {
+func TestGuardCommand_CustomAllowWithoutDenyMatch(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.EnableDenyPatterns = true
@@ -840,10 +840,42 @@ func TestGuardCommand_CustomAllowExemptsDeny(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecToolWithConfig: %v", err)
 	}
-	// "rm" is custom-allowed, so deny pattern should not fire
+	// "rm somefile" is custom-allowed and matches no deny pattern, so it should pass.
 	msg := tool.guardCommand("rm somefile", tmp)
 	if msg != "" {
-		t.Errorf("custom-allowed command should not be blocked, got %q", msg)
+		t.Errorf("custom-allowed command matching no deny pattern should not be blocked, got %q", msg)
+	}
+}
+
+func TestShellTool_CustomAllowDoesNotBypassDenyPatterns(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^rm\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand(`rm -rf somedir`, t.TempDir())
+	if !strings.Contains(got, "dangerous pattern detected") {
+		t.Fatalf("custom allow should not bypass deny patterns, got: %q", got)
+	}
+}
+
+func TestShellTool_CustomAllowStillPermitsSafeMatch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand(`jq -n '"ok"'`, t.TempDir())
+	if got != "" {
+		t.Fatalf("safe custom-allowed command should pass guard, got: %q", got)
 	}
 }
 

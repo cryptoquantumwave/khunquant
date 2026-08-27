@@ -2,6 +2,55 @@
 
 khunquant is a fork of [picoclaw](https://github.com/sipeed/picoclaw).
 
+## Sync Status Overview
+
+Our fork point is `96fd4e05` (2026-03-15), before upstream added OS-level process isolation (`pkg/isolation`, commit `51eecde0`, 2026-04-08).
+
+### Upstream Coverage (commit-subject overlap measured against our `main`)
+
+The following table shows how many upstream non-merge commits in each range have equivalent subjects in our repository:
+
+| upstream range | non-merge commits | present in our `main` | coverage |
+|---|---|---|---|
+| merge-base `96fd4e05` .. v0.2.6 | 457 | 130 | 28% |
+| v0.2.6 .. v0.2.7 | 164 | 38 | 23% |
+| v0.2.7 .. v0.2.8 | 86 | 6 | 6% |
+| v0.2.8 .. v0.2.9 | 172 | 4 | 2% |
+| v0.2.9 .. v0.3.0 | 137 | 4 | 2% |
+| v0.3.0 .. v0.3.1 | 52 | 0 | 0% |
+
+Roughly **453 of 621** non-merge commits below v0.2.7 never landed, and that range remains **unexamined** for selective cherry-pick opportunities.
+
+### Sync Waves
+
+#### Wave 1: Foundation & Hardening (PRs #49-#52)
+
+These four PRs landed critical fixes and features from upstream's post-fork development (v0.2.7 onwards):
+
+| PR | Commit | Subject | Notes |
+|---|---|---|---|
+| #49 | `a822230b` | fix(deps): bump Go to 1.25.13 for 6 stdlib CVEs | Address multiple stdlib security issues |
+| #50 | `4e3ea97d` | fix(tools): harden exec guard against PowerShell encoding bypass | Shell-guard improvements: encoding bypass, scheme-less URLs, workspace-relative paths |
+| #51 | `ce4ca2af` | fix(channels,seahorse,web): port upstream correctness fixes from picoclaw v0.2.8-v0.3.1 | Correctness fixes across channels, seahorse, web, and build |
+| #52 | `34f03c34` | feat(voice): multi-backend voice transcription | Whisper, ElevenLabs, audio-model backends |
+
+#### Wave 2: Access Control & Infrastructure (PRs #53-#56)
+
+These four PRs add authorization and connectivity features:
+
+| PR | Commit | Subject | Notes |
+|---|---|---|---|
+| #53 | `929e3ac3` | feat(agent,config): restrict which MCP servers an agent may load | Per-agent MCP server allowlist |
+| #54 | `520dc287` | fix(tools): scope remote cron command access | Remote cron command authorization |
+| #55 | `facff706` | fix(web): harden launcher IP allowlist and trusted-proxy handling | IP allowlist and trusted-proxy hardening |
+| #56 | `3175061a` | feat(web,api): model catalog, provider model fetch, and connectivity test | Model catalog and provider connectivity API |
+
+### Tag Namespace Hazard
+
+**Our tags collide by name with upstream tags.** Specifically, our own tags `v0.3.0-rc.1`, `v0.3.1-rc.1`, `v0.3.2-rc.1`, and `v0.3.3-rc.*` (April 2026) share the same names as upstream's release versions `v0.3.0`, `v0.3.1`, `v0.3.2`, and `v0.3.3`.
+
+When comparing commits against upstream, **always use 8-character SHAs instead of tag names** to avoid ambiguity. Tag-based comparisons will pull the wrong commit.
+
 ## v0.2.6 → v0.2.7 (synced 2026-04-25)
 
 Base: picoclaw tag `v0.2.6`  

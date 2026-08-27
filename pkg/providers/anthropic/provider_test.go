@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -318,6 +319,149 @@ func TestProvider_ChatStreamingRoundTrip(t *testing.T) {
 	}
 	if resp.Usage.CompletionTokens != 5 {
 		t.Errorf("CompletionTokens = %d, want 5", resp.Usage.CompletionTokens)
+	}
+}
+
+func TestBuildParams_ToolCallMessage_FreshNameDoesNotRegress(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_1",
+					Name:      "get_weather",
+					Arguments: map[string]any{"city": "SF"},
+				},
+			},
+		},
+	}
+	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+
+	if len(params.Messages) != 2 {
+		t.Fatalf("len(Messages) = %d, want 2", len(params.Messages))
+	}
+
+	// Marshal to JSON to inspect the content blocks reliably
+	msgJSON, err := json.Marshal(params.Messages[1])
+	if err != nil {
+		t.Fatalf("failed to marshal message: %v", err)
+	}
+
+	msgStr := string(msgJSON)
+	if !strings.Contains(msgStr, "get_weather") {
+		t.Errorf("tool_use block with name 'get_weather' not found in message: %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "tool_use") {
+		t.Errorf("tool_use type not found in message: %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "call_1") {
+		t.Errorf("tool call ID not found in message: %s", msgStr)
+	}
+}
+
+func TestBuildParams_ToolCallMessage_RoundTripRecovery(t *testing.T) {
+	// This test simulates a persisted tool call where Name and Arguments
+	// were not serialized (json:"-"), but Function contains the data.
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_1",
+					Name:      "",
+					Arguments: nil,
+					Function: &FunctionCall{
+						Name:      "get_weather",
+						Arguments: `{"city":"SF"}`,
+					},
+				},
+			},
+		},
+	}
+	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+
+	if len(params.Messages) != 2 {
+		t.Fatalf("len(Messages) = %d, want 2", len(params.Messages))
+	}
+
+	// Verify the tool_use block is included despite empty Name and Arguments
+	msgJSON, err := json.Marshal(params.Messages[1])
+	if err != nil {
+		t.Fatalf("failed to marshal message: %v", err)
+	}
+
+	msgStr := string(msgJSON)
+	if !strings.Contains(msgStr, "get_weather") {
+		t.Errorf("tool_use block with name 'get_weather' not found in round-tripped message: %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "tool_use") {
+		t.Errorf("tool_use type not found in round-tripped message: %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "SF") {
+		t.Errorf("arguments with 'SF' not found in round-tripped message: %s", msgStr)
+	}
+}
+
+func TestBuildParams_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
+	// Both Name and Function.Name empty => should skip the tool call
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "Using a tool",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_empty",
+					Name:      "",
+					Arguments: map[string]any{"some": "arg"},
+					Function: &FunctionCall{
+						Name:      "",
+						Arguments: `{}`,
+					},
+				},
+				{
+					ID:        "call_valid",
+					Name:      "valid_tool",
+					Arguments: map[string]any{"arg": "value"},
+				},
+			},
+		},
+	}
+	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+
+	if len(params.Messages) != 2 {
+		t.Fatalf("len(Messages) = %d, want 2", len(params.Messages))
+	}
+
+	// Verify only the valid tool call is included
+	msgJSON, err := json.Marshal(params.Messages[1])
+	if err != nil {
+		t.Fatalf("failed to marshal message: %v", err)
+	}
+
+	msgStr := string(msgJSON)
+	if strings.Contains(msgStr, "call_empty") {
+		t.Errorf("empty-named tool call should have been skipped: %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "valid_tool") {
+		t.Errorf("valid_tool not found in message: %s", msgStr)
+	}
+	// Message content should be included
+	if !strings.Contains(msgStr, "Using a tool") {
+		t.Errorf("text content not found in message: %s", msgStr)
 	}
 }
 

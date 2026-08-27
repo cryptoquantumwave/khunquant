@@ -583,7 +583,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		}
 	}
 
-	if len(t.allowPatterns) > 0 || len(t.customAllowPatterns) > 0 {
+	if len(t.allowPatterns) > 0 {
 		if !t.commandMatchesAllowPattern(lower) {
 			return "Command blocked by safety guard (not in allowlist)"
 		}

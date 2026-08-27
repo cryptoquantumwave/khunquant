@@ -1185,3 +1185,19 @@ func TestShellTool_SchemelessURLDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand("ls", t.TempDir())
+	if got != "" {
+		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
+	}
+}

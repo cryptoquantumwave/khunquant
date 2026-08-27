@@ -193,20 +193,12 @@ func buildParams(
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
+					// Skip tool calls with empty names and no Function fallback to avoid API errors
+					name, args, ok := resolveToolCall(tc)
+					if !ok {
 						continue
 					}
-					args := tc.Arguments
-					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-							args = map[string]any{}
-						}
-					}
-					if args == nil {
-						args = map[string]any{}
-					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
@@ -346,6 +338,31 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 		result = append(result, anthropic.ToolUnionParam{OfTool: &tool})
 	}
 	return result
+}
+
+// resolveToolCall resolves a ToolCall's name and arguments, using Function
+// as a fallback for fields that don't serialize (json:"-").
+// Returns (name, args, ok). ok is false when both Name and Function.Name are empty.
+func resolveToolCall(tc ToolCall) (string, map[string]any, bool) {
+	name := tc.Name
+	if name == "" && tc.Function != nil {
+		name = tc.Function.Name
+	}
+	if name == "" {
+		return "", nil, false
+	}
+
+	args := tc.Arguments
+	if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = map[string]any{}
+		}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	return name, args, true
 }
 
 func parseResponse(resp *anthropic.Message) *LLMResponse {

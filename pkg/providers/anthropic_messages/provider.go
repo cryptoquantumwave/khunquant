@@ -227,20 +227,16 @@ func buildRequestBody(
 
 			// Add tool_use blocks
 			for _, tc := range msg.ToolCalls {
-				if strings.TrimSpace(tc.Name) == "" {
+				// Skip tool calls with empty names and no Function fallback to avoid API errors
+				name, input, ok := resolveToolCall(tc)
+				if !ok {
 					continue
-				}
-
-				// Handle nil Arguments (GLM-4 may return null input)
-				input := tc.Arguments
-				if input == nil {
-					input = map[string]any{}
 				}
 
 				toolUse := map[string]any{
 					"type":  "tool_use",
 					"id":    tc.ID,
-					"name":  tc.Name,
+					"name":  name,
 					"input": input,
 				}
 				content = append(content, toolUse)
@@ -409,6 +405,31 @@ func asFloat(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// resolveToolCall resolves a ToolCall's name and arguments, using Function
+// as a fallback for fields that don't serialize (json:"-").
+// Returns (name, args, ok). ok is false when both Name and Function.Name are empty.
+func resolveToolCall(tc ToolCall) (string, map[string]any, bool) {
+	name := tc.Name
+	if name == "" && tc.Function != nil {
+		name = tc.Function.Name
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", nil, false
+	}
+
+	args := tc.Arguments
+	if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			args = map[string]any{}
+		}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	return name, args, true
 }
 
 // Anthropic API response structures

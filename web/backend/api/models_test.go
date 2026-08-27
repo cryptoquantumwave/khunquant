@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -448,5 +449,282 @@ func TestHandleUpdateModel_UpdatesAPIKey(t *testing.T) {
 	}
 	if got := newCfg.ModelList[0].APIKey.String(); got != "new_api_key" {
 		t.Errorf("APIKey = %q, want new_api_key", got)
+	}
+}
+
+func TestFetchOpenAICompatibleModels_ResponseShapes(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  string
+		apiKey    string
+		wantLen   int
+		wantFirst struct {
+			id, ownedBy string
+		}
+		wantSecond struct {
+			id, ownedBy string
+		}
+	}{
+		{
+			name:     "envelope shape",
+			response: `{"data":[{"id":"gpt-4o","owned_by":"openai"},{"id":"gpt-4o-mini","owned_by":"openai"}]}`,
+			apiKey:   "test-key",
+			wantLen:  2,
+			wantFirst: struct {
+				id, ownedBy string
+			}{id: "gpt-4o", ownedBy: "openai"},
+			wantSecond: struct {
+				id, ownedBy string
+			}{id: "gpt-4o-mini", ownedBy: "openai"},
+		},
+		{
+			name:     "bare array shape",
+			response: `[{"id":"qwen-max","owned_by":"qwen"},{"id":"qwen-plus","owned_by":"qwen"}]`,
+			apiKey:   "",
+			wantLen:  2,
+			wantFirst: struct {
+				id, ownedBy string
+			}{id: "qwen-max", ownedBy: "qwen"},
+			wantSecond: struct {
+				id, ownedBy string
+			}{id: "qwen-plus", ownedBy: "qwen"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tt.response)
+			}))
+			defer srv.Close()
+
+			models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", tt.apiKey)
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			if len(models) != tt.wantLen {
+				t.Fatalf("len(models) = %d, want %d", len(models), tt.wantLen)
+			}
+			if models[0].ID != tt.wantFirst.id || models[0].OwnedBy != tt.wantFirst.ownedBy {
+				t.Fatalf("models[0] = %+v, want {ID:%s OwnedBy:%s}", models[0], tt.wantFirst.id, tt.wantFirst.ownedBy)
+			}
+			if models[1].ID != tt.wantSecond.id || models[1].OwnedBy != tt.wantSecond.ownedBy {
+				t.Fatalf("models[1] = %+v, want {ID:%s OwnedBy:%s}", models[1], tt.wantSecond.id, tt.wantSecond.ownedBy)
+			}
+		})
+	}
+}
+
+func TestFetchOpenAICompatibleModels_EmptyEnvelopeReturnsEmptySlice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("len(models) = %d, want 0", len(models))
+	}
+}
+
+func TestFetchOpenAICompatibleModels_EmptyBareArrayReturnsEmptySlice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[]`)
+	}))
+	defer srv.Close()
+
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("len(models) = %d, want 0", len(models))
+	}
+}
+
+func TestFetchOpenAICompatibleModels_UnrecognizedShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"models":[],"error":"unsupported"}`)
+	}))
+	defer srv.Close()
+
+	_, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	if err == nil {
+		t.Fatal("error = nil, want unrecognized shape error")
+	}
+	if !strings.Contains(err.Error(), "unrecognized shape") {
+		t.Fatalf("error = %q, want it to contain 'unrecognized shape'", err.Error())
+	}
+}
+
+func TestFetchOpenAICompatibleModels_FiltersEmptyIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[`+
+			`{"id":"gpt-4o","owned_by":"openai"},`+
+			`{"id":"","owned_by":"openai"},`+
+			`{"id":"gpt-4o-mini"}]}`)
+	}))
+	defer srv.Close()
+
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("len(models) = %d, want 2 (empty IDs should be filtered)", len(models))
+	}
+	if models[0].ID != "gpt-4o" {
+		t.Fatalf("models[0].ID = %q, want %q", models[0].ID, "gpt-4o")
+	}
+	if models[1].ID != "gpt-4o-mini" {
+		t.Fatalf("models[1].ID = %q, want %q", models[1].ID, "gpt-4o-mini")
+	}
+}
+
+func TestFetchOpenAICompatibleModels_SetsAuthorizationHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m1"}]}`)
+	}))
+	defer srv.Close()
+
+	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "my-secret-key"); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if gotAuth != "Bearer my-secret-key" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer my-secret-key")
+	}
+}
+
+func TestFetchOpenAICompatibleModels_NoAuthHeaderWhenKeyEmpty(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":"m1"}]`)
+	}))
+	defer srv.Close()
+
+	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", ""); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization = %q, want empty", gotAuth)
+	}
+}
+
+func TestHandleFetchModels_ModelIndexUsesStoredKey(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o","owned_by":"openai"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []config.ModelConfig{
+		{
+			ModelName: "my-openai",
+			Model:     "openai/gpt-4o",
+			APIBase:   srv.URL,
+			APIKey:    *config.NewSecureString("sk-stored-secret"),
+		},
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig error: %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	idx := 0
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s","model_index":%d}`, srv.URL, idx)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if gotAuth != "Bearer sk-stored-secret" {
+		t.Fatalf("Authorization = %q, want stored key to be used", gotAuth)
+	}
+
+	var resp struct {
+		Models []upstreamModel `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if len(resp.Models) != 1 || resp.Models[0].ID != "gpt-4o" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleFetchModels_ModelIndexProviderMismatchRejectsKey(t *testing.T) {
+	requestReceivedWithAuth := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			requestReceivedWithAuth = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []config.ModelConfig{
+		{
+			ModelName: "my-openai",
+			Model:     "openai/gpt-4o",
+			APIBase:   "https://api.openai.com/v1",
+			APIKey:    *config.NewSecureString("sk-openai-secret"),
+		},
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig error: %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"groq","api_base":"%s","model_index":0}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if requestReceivedWithAuth {
+		t.Fatal("stored openai key should NOT be sent to mismatched provider (groq)")
 	}
 }

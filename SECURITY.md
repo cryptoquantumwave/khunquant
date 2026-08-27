@@ -11,7 +11,7 @@ Upstream picoclaw implements OS-level process confinement for child processes vi
 - **Windows**: Restricted tokens, low-integrity level, and Job Objects limit what a child process can access or do.
 
 **khunquant does not have OS-level isolation, and never did.** Our fork point (2026-03-15) predates upstream's addition of `pkg/isolation` (2026-04-08, commit `51eecde0`). Adopting it would require:
-- 27 call sites across `exec.Command` across 17 non-test files to route through an isolation layer.
+- 27 `exec.Command` call sites across 17 non-test files to route through an isolation layer.
 - Linux deployment to require `bwrap` on the PATH — a poor fit for the $10-device / Raspberry Pi Zero target.
 - A macOS stub (`platform_other.go`) providing no isolation, leaving that platform entirely unprotected.
 
@@ -47,6 +47,8 @@ The deny-list catches common attack patterns in the command string:
 ### Access Control Model
 
 The web launcher (`web/backend`) implements **IP-address-based access control only**. There is **no password authentication**.
+
+*Status: password authentication is not implemented on `main` as of this document. Work to add it is in progress; this section must be updated in the same change that lands it.*
 
 Protection consists of:
 1. **IP allowlist**: A CIDR allowlist in `launcher-config.json` (field `allowed_cidrs`).

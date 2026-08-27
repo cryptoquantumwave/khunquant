@@ -42,21 +42,26 @@ The deny-list catches common attack patterns in the command string:
 - Using lesser-known commands not on the deny-list (e.g., `shred`, `srm`, `dd bs=` with a different argument order).
 - Exploiting parser bugs in the regex engine or shell itself (e.g., Unicode normalization, locale-specific character classes).
 
-## Launcher Dashboard — Network-Level Access Control Only
+## Launcher Dashboard — Network and Application-Level Access Control
 
 ### Access Control Model
 
-The web launcher (`web/backend`) implements **IP-address-based access control only**. There is **no password authentication**.
+The web launcher (`web/backend`) implements multi-layer access control:
 
-*Status: password authentication is not implemented on `main` as of this document. Work to add it is in progress; this section must be updated in the same change that lands it.*
+1. **IP allowlist** (optional, network-level): A CIDR allowlist in `launcher-config.json` (field `allowed_cidrs`). Requests from IPs outside this range are rejected at the network level.
+2. **Trusted-proxy X-Forwarded-For parsing**: If the launcher is behind a reverse proxy (e.g., nginx), it can extract the client IP from the `X-Forwarded-For` header, but only when the proxy's IP is in `trusted_proxy_cidrs`.
+3. **Password authentication** (optional, application-level): A bcrypt-hashed password stored in `launcher-config.json` (field `dashboard_password_hash`). Credentials are verified via HTTP Basic authentication per request. This layer is **independent of** the IP allowlist—both must pass (if configured).
 
-Protection consists of:
-1. **IP allowlist**: A CIDR allowlist in `launcher-config.json` (field `allowed_cidrs`).
-2. **Trusted-proxy X-Forwarded-For parsing**: If the launcher is behind a reverse proxy (e.g., nginx), it can extract the client IP from the `X-Forwarded-For` header if the proxy's IP is in `trusted_proxy_cidrs`.
+### Password Authentication Semantics
+
+- **Password is opt-in**: No password configured (empty `dashboard_password_hash`) means password authentication is disabled entirely. The dashboard behaves exactly as before (IP allowlist only). **This is deliberate backward compatibility.** Operators must actively set a password to enable this protection.
+- **Loopback bypass applies to IP allowlist only**: If `allow_localhost_bypass` is enabled, loopback addresses bypass the CIDR check. However, a configured password is still required from loopback callers. The two checks are independent.
+- **Credentials verified per request**: HTTP Basic authentication is checked on every request. No session cookie is minted; each request independently supplies and verifies credentials.
+- **Health checks exempt**: `/api/health` and `/api/ready` skip password authentication to allow external health monitors to function.
 
 ### Fail-Closed Guard
 
-The launcher refuses to start in public mode (listening on `0.0.0.0`) without an explicit allowlist. The guard is in `web/backend/main.go`, lines 113–119:
+The launcher refuses to start in public mode (listening on `0.0.0.0`) without an explicit IP allowlist. The guard is in `web/backend/main.go`, lines 113–119:
 
 ```go
 // Refuse to start in public mode without an explicit CIDR allowlist — the
@@ -72,16 +77,19 @@ if effectivePublic && len(launcherCfg.AllowedCIDRs) == 0 {
 
 If no allowlist is provided, the process exits with an error.
 
+**Note**: The IP allowlist guard applies regardless of whether a password is configured. Password authentication is application-level and does not replace network-level access control.
+
 ### Known Limitations
 
-- **Spoofed or missing X-Forwarded-For**: If the reverse proxy is misconfigured or omits the header, the launcher may fall back to the proxy's own IP, allowing unintended clients to access the dashboard.
-- **No per-user authentication**: Any client whose IP matches the allowlist can perform any operation (modify config, restart agents, etc.). There is no credential prompt.
-- **No audit log**: Access is not logged by user or timestamp (though the launcher does emit structured logs).
-- **HTTPS not enforced**: The launcher does not require TLS for connections. Credentials or session tokens would be transmitted in plaintext over HTTP.
+- **Spoofed or missing X-Forwarded-For**: If the reverse proxy is misconfigured or omits the `X-Forwarded-For` header, the launcher may fall back to the proxy's own IP, allowing unintended clients to bypass the IP allowlist.
+- **No per-user authentication**: Authentication is single-password (not per-user). Any client who provides the correct password can perform any operation (modify config, restart agents, etc.).
+- **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
+- **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.
+- **Password hash in config file**: The bcrypt-hashed password is stored in the plaintext `launcher-config.json` file on disk. File permissions are set to 0o600 (read/write for owner only), but the hash could be extracted and cracked if the file is compromised.
 
 ### Upstream's Deliberate Non-Port
 
-The upstream codebase includes a `POST /api/config/reset` endpoint that clears the entire configuration. **We intentionally did not port this endpoint**, because without password authentication it would be a configuration wipe protected by IP address alone — an unacceptable risk for a shared network.
+The upstream codebase includes a `POST /api/config/reset` endpoint that clears the entire configuration. **We intentionally did not port this endpoint.** While password authentication is now implemented and would provide additional protection, the `reset` endpoint's destructive nature warrants a separate, deliberate decision and review. It remains un-ported and is not on the roadmap without explicit approval.
 
 ## Reporting Security Issues
 

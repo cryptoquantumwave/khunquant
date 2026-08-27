@@ -26,6 +26,7 @@ type Config struct {
 	AllowLocalhostBypass bool     `json:"allow_localhost_bypass"`
 	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
 	LauncherToken        string   `json:"launcher_token,omitempty"`
+	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
 }
 
 // Default returns default launcher settings.
@@ -101,6 +102,7 @@ func Load(path string, fallback Config) (Config, error) {
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
+	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -112,6 +114,7 @@ func Save(path string, cfg Config) error {
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
+	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	if err := Validate(cfg); err != nil {
 		return err
 	}

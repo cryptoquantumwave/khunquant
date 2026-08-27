@@ -155,12 +155,17 @@ func main() {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
+	// Apply password auth after IP allowlist (both must pass for access).
+	passwordProtectedMux := middleware.PasswordAuth(middleware.PasswordAuthConfig{
+		PasswordHash: launcherCfg.DashboardPasswordHash,
+	}, accessControlledMux)
+
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
 			middleware.SecurityHeaders(
 				middleware.JSONContentType(
-					middleware.SessionAuth(launcherCfg.LauncherToken, accessControlledMux),
+					middleware.SessionAuth(launcherCfg.LauncherToken, passwordProtectedMux),
 				),
 			),
 		),

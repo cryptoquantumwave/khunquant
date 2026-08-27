@@ -474,3 +474,128 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 		t.Fatal("read_file tool should still be registered")
 	}
 }
+
+func TestAgentInstance_AllowsMCPServer(t *testing.T) {
+	t.Run("nil allowlist allows all", func(t *testing.T) {
+		agent := &AgentInstance{}
+		if !agent.AllowsMCPServer("github") {
+			t.Fatal("expected nil MCP allowlist to allow all servers")
+		}
+	})
+
+	t.Run("explicit allowlist filters servers", func(t *testing.T) {
+		agent := &AgentInstance{
+			MCPServerAllowlist: map[string]struct{}{
+				"github": {},
+			},
+		}
+		if !agent.AllowsMCPServer("GitHub") {
+			t.Fatal("expected MCP server matching to be case-insensitive")
+		}
+		if agent.AllowsMCPServer("filesystem") {
+			t.Fatal("expected filesystem to be blocked by MCP allowlist")
+		}
+	})
+}
+
+func TestAgentInstance_MCPServersFromConfig_Restricts(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:         "restricted",
+		Workspace:  workspace,
+		MCPServers: []string{"github", "filesystem"},
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected github to be allowed from config")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected filesystem to be allowed from config")
+	}
+	if agent.AllowsMCPServer("slack") {
+		t.Fatal("expected slack to be blocked by config allowlist")
+	}
+}
+
+func TestAgentInstance_MCPServersFromConfig_MixedCase(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:         "mixedcase",
+		Workspace:  workspace,
+		MCPServers: []string{"GitHub", "FileSystem"},
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected lowercase github to match uppercase config")
+	}
+	if !agent.AllowsMCPServer("GITHUB") {
+		t.Fatal("expected uppercase GITHUB to match mixed-case config")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected lowercase filesystem to match mixed-case config")
+	}
+}
+
+func TestAgentInstance_NoMCPServersConfig_AllowsAll(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:        "noconfig",
+		Workspace: workspace,
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected github to be allowed when no allowlist configured")
+	}
+	if !agent.AllowsMCPServer("slack") {
+		t.Fatal("expected slack to be allowed when no allowlist configured")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected filesystem to be allowed when no allowlist configured")
+	}
+}
+
+func ptr(f float64) *float64 {
+	return &f
+}

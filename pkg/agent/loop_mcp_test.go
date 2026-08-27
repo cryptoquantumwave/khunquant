@@ -88,3 +88,59 @@ func TestEnsureMCPInitialized_AllServersDisabled(t *testing.T) {
 		t.Errorf("ensureMCPInitialized with all disabled servers should succeed: %v", err)
 	}
 }
+
+func TestAgentRegistry_AllowedMCPServers(t *testing.T) {
+	t.Run("returns nil when any agent allows all servers", func(t *testing.T) {
+		registry := &AgentRegistry{
+			agents: map[string]*AgentInstance{
+				"main":     {ID: "main", MCPServerAllowlist: nil},
+				"research": {ID: "research", MCPServerAllowlist: map[string]struct{}{"github": {}}},
+			},
+		}
+
+		if allowed := registry.allowedMCPServers(); allowed != nil {
+			t.Fatalf("expected nil union when one agent allows all, got %v", allowed)
+		}
+	})
+
+	t.Run("returns union of explicit allowlists", func(t *testing.T) {
+		registry := &AgentRegistry{
+			agents: map[string]*AgentInstance{
+				"main":     {ID: "main", MCPServerAllowlist: map[string]struct{}{"github": {}}},
+				"research": {ID: "research", MCPServerAllowlist: map[string]struct{}{"filesystem": {}}},
+			},
+		}
+
+		allowed := registry.allowedMCPServers()
+		if len(allowed) != 2 {
+			t.Fatalf("len(allowed) = %d, want 2", len(allowed))
+		}
+		if _, ok := allowed["github"]; !ok {
+			t.Fatal("expected github in allowed MCP server union")
+		}
+		if _, ok := allowed["filesystem"]; !ok {
+			t.Fatal("expected filesystem in allowed MCP server union")
+		}
+	})
+}
+
+func TestFilterMCPConfigServers(t *testing.T) {
+	mcpCfg := config.MCPConfig{
+		ToolConfig: config.ToolConfig{Enabled: true},
+		Servers: map[string]config.MCPServerConfig{
+			"github":     {Enabled: true},
+			"filesystem": {Enabled: true},
+		},
+	}
+
+	filtered := filterMCPConfigServers(mcpCfg, map[string]struct{}{"github": {}})
+	if len(filtered.Servers) != 1 {
+		t.Fatalf("len(filtered.Servers) = %d, want 1", len(filtered.Servers))
+	}
+	if _, ok := filtered.Servers["github"]; !ok {
+		t.Fatal("expected github server to remain after filtering")
+	}
+	if _, ok := filtered.Servers["filesystem"]; ok {
+		t.Fatal("expected filesystem server to be removed by filtering")
+	}
+}

@@ -49,6 +49,7 @@ type AgentInstance struct {
 	Tools                     *tools.ToolRegistry
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
+	MCPServerAllowlist        map[string]struct{}
 	Candidates                []providers.FallbackCandidate
 
 	// snapshotStore is the shared snapshot database, closed when the agent shuts down.
@@ -89,6 +90,11 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
+	var mcpServers []string
+	if agentCfg != nil && agentCfg.MCPServers != nil {
+		mcpServers = agentCfg.MCPServers
+	}
+	agentMCPServerAllowlist := resolveAgentMCPServerAllowlist(mcpServers)
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
@@ -451,6 +457,7 @@ func NewAgentInstance(
 		Tools:                     toolsRegistry,
 		Subagents:                 subagents,
 		SkillsFilter:              skillsFilter,
+		MCPServerAllowlist:        agentMCPServerAllowlist,
 		Candidates:                candidates,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
@@ -524,6 +531,16 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentD
 		return agentCfg.Model.Fallbacks
 	}
 	return defaults.ModelFallbacks
+}
+
+// AllowsMCPServer checks if an MCP server is allowed by the agent's allowlist.
+// If the allowlist is nil (no explicit configuration), all servers are allowed.
+func (a *AgentInstance) AllowsMCPServer(serverName string) bool {
+	if a == nil || a.MCPServerAllowlist == nil {
+		return true
+	}
+	_, ok := a.MCPServerAllowlist[strings.ToLower(strings.TrimSpace(serverName))]
+	return ok
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {

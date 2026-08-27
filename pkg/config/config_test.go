@@ -815,3 +815,51 @@ func TestFlexibleStringSlice_UnmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+
+func TestAgentConfig_MCPServersRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		config AgentConfig
+	}{
+		{
+			name: "with mcp_servers",
+			config: AgentConfig{
+				ID:         "test",
+				MCPServers: []string{"github", "filesystem"},
+			},
+		},
+		{
+			name: "with nil mcp_servers",
+			config: AgentConfig{
+				ID:         "test",
+				MCPServers: nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.config)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+
+			var roundTrip AgentConfig
+			if err := json.Unmarshal(data, &roundTrip); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+
+			if tt.config.MCPServers == nil && roundTrip.MCPServers != nil {
+				t.Fatal("MCPServers not preserved after round-trip")
+			}
+			if len(tt.config.MCPServers) == len(roundTrip.MCPServers) {
+				for i, expected := range tt.config.MCPServers {
+					if roundTrip.MCPServers[i] != expected {
+						t.Fatalf("MCPServers[%d] = %q, want %q", i, roundTrip.MCPServers[i], expected)
+					}
+				}
+			}
+		})
+	}
+}

@@ -224,6 +224,71 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 	}
 }
 
+// TestDelegateToolRegistration verifies that the delegate tool is registered
+// and wired up correctly when spawn tool is enabled.
+func TestDelegateToolRegistration(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Tools: config.ToolsConfig{
+			Spawn: config.ToolConfig{Enabled: true},
+			Subagent: config.ToolConfig{Enabled: true},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &mockProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	// Get the default agent to check if delegate tool is registered
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("Expected default agent to be registered")
+	}
+
+	// Check that delegate tool is in the registered tools
+	info := al.GetStartupInfo()
+	toolsInfo := info["tools"].(map[string]any)
+	toolsList := toolsInfo["names"].([]string)
+
+	found := slices.Contains(toolsList, "delegate")
+	if !found {
+		t.Error("Expected delegate tool to be registered")
+	}
+
+	// Verify the delegate tool can be retrieved and is properly configured
+	delegateTool, ok := agent.Tools.Get("delegate")
+	if !ok {
+		t.Error("delegate tool not found in agent tools registry")
+	}
+
+	// Execute the delegate tool with a valid config to verify spawner is set
+	// (if spawner is not set, it returns "delegate tool not configured")
+	result := delegateTool.Execute(context.Background(), map[string]any{
+		"agent_id": "test_agent",
+		"task":     "test task",
+	})
+
+	// The tool should fail with something other than "not configured"
+	// (actual execution will fail because we don't have a real spawner,
+	// but the spawner is configured, so it won't return "not configured")
+	if result.IsError && strings.Contains(result.ForLLM, "not configured") {
+		t.Error("delegate tool appears to not be configured (spawner is nil)")
+	}
+}
+
 func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{

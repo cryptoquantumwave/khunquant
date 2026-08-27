@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -539,8 +540,8 @@ func TestCronTool_ListJobs_WithJobs(t *testing.T) {
 		t.Fatalf("failed to add job: %s", addResult.ForLLM)
 	}
 
-	// List jobs
-	listResult := tool.Execute(context.Background(), map[string]any{
+	// List jobs with the same context used to create them
+	listResult := tool.Execute(ctx, map[string]any{
 		"action": "list",
 	})
 
@@ -569,8 +570,8 @@ func TestCronTool_ListJobs_ShowsScheduleInfo(t *testing.T) {
 		t.Fatalf("failed to add job: %s", addResult.ForLLM)
 	}
 
-	// List jobs
-	listResult := tool.Execute(context.Background(), map[string]any{
+	// List jobs with the same context
+	listResult := tool.Execute(ctx, map[string]any{
 		"action": "list",
 	})
 
@@ -645,8 +646,8 @@ func TestCronTool_RemoveJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Remove the job
-	removeResult := tool.Execute(context.Background(), map[string]any{
+	// Remove the job with the same context
+	removeResult := tool.Execute(ctx, map[string]any{
 		"action": "remove",
 		"job_id": jobID,
 	})
@@ -717,8 +718,8 @@ func TestCronTool_EnableJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Enable the job
-	enableResult := tool.Execute(context.Background(), map[string]any{
+	// Enable the job with the same context
+	enableResult := tool.Execute(ctx, map[string]any{
 		"action": "enable",
 		"job_id": jobID,
 	})
@@ -752,8 +753,8 @@ func TestCronTool_DisableJob_Success(t *testing.T) {
 	}
 	jobID := jobs[0].ID
 
-	// Disable the job
-	disableResult := tool.Execute(context.Background(), map[string]any{
+	// Disable the job with the same context
+	disableResult := tool.Execute(ctx, map[string]any{
 		"action": "disable",
 		"job_id": jobID,
 	})
@@ -763,5 +764,270 @@ func TestCronTool_DisableJob_Success(t *testing.T) {
 	}
 	if !strings.Contains(disableResult.ForLLM, "disabled") {
 		t.Errorf("expected 'disabled' message, got: %s", disableResult.ForLLM)
+	}
+}
+
+// Test helper for creating cron jobs
+func addTestCronJob(t *testing.T, tool *CronTool, name, channel, chatID, command string) *cron.CronJob {
+	t.Helper()
+	everyMS := int64(60_000)
+	job, err := tool.cronService.AddJob(
+		name,
+		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		name+" message",
+		false, // deliver
+		channel,
+		chatID,
+	)
+	if err != nil {
+		t.Fatalf("AddJob() error: %v", err)
+	}
+	if command != "" {
+		job.Payload.Command = command
+		if err := tool.cronService.UpdateJob(job); err != nil {
+			t.Fatalf("UpdateJob() error: %v", err)
+		}
+	}
+	return job
+}
+
+// Helper to parse JSON result into CronJob
+func parseCronJobResult(t *testing.T, result *ToolResult) *cron.CronJob {
+	t.Helper()
+	var job *cron.CronJob
+	err := json.Unmarshal([]byte(result.ForLLM), &job)
+	if err != nil {
+		t.Fatalf("failed to parse job JSON: %v\nResult: %s", err, result.ForLLM)
+	}
+	return job
+}
+
+// Test case: allowlisted remote can access own command job
+func TestCronTool_AllowlistedRemoteCanAccessOwnCommandJob(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram:chat-1"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError || !strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list to include own command job, got: %+v", listResult)
+	}
+
+	getResult := tool.Execute(ctx, map[string]any{"action": "get", "job_id": job.ID})
+	if getResult.IsError {
+		t.Fatalf("expected get to access own command job, got: %s", getResult.ForLLM)
+	}
+	got := parseCronJobResult(t, getResult)
+	if got.ID != job.ID || got.Payload.Command != "df -h" {
+		t.Fatalf("get returned wrong command job: %+v", got)
+	}
+
+	updateResult := tool.Execute(ctx, map[string]any{
+		"action":  "update",
+		"job_id":  job.ID,
+		"message": "updated command description",
+	})
+	if updateResult.IsError {
+		t.Fatalf("expected update to access own command job, got: %s", updateResult.ForLLM)
+	}
+	updated := tool.cronService.GetJob(job.ID)
+	if updated.Payload.Message != "updated command description" || updated.Payload.Command != "df -h" {
+		t.Fatalf("update returned wrong command payload: %+v", updated.Payload)
+	}
+}
+
+// Test case: allowlisted remote cannot access other chat command job
+func TestCronTool_AllowlistedRemoteCannotAccessOtherChatCommandJob(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-2", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError || strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list to hide other chat command job, got: %+v", listResult)
+	}
+
+	for _, action := range []string{"get", "update"} {
+		args := map[string]any{"action": action, "job_id": job.ID}
+		if action == "update" {
+			args["message"] = "changed"
+		}
+		result := tool.Execute(ctx, args)
+		if !result.IsError || !strings.Contains(result.ForLLM, "not accessible") {
+			t.Fatalf("expected %s to reject other chat command job, got: %+v", action, result)
+		}
+	}
+}
+
+// Test case: non-allowlisted remote cannot access own command job
+func TestCronTool_NonAllowlistedRemoteCannotAccessOwnCommandJob(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError || strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list to hide non-allowlisted command job, got: %+v", listResult)
+	}
+
+	for _, action := range []string{"get", "update"} {
+		args := map[string]any{"action": action, "job_id": job.ID}
+		if action == "update" {
+			args["message"] = "changed"
+		}
+		result := tool.Execute(ctx, args)
+		if !result.IsError || !strings.Contains(result.ForLLM, "not accessible") {
+			t.Fatalf("expected %s to reject non-allowlisted command job, got: %+v", action, result)
+		}
+	}
+}
+
+// Test case: wildcard remote can access own command job
+func TestCronTool_WildcardRemoteCanAccessOwnCommandJob(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"*"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
+	other := addTestCronJob(t, tool, "other", "telegram", "chat-2", "uptime")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError || !strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected wildcard list to include own command job, got: %+v", listResult)
+	}
+	if strings.Contains(listResult.ForLLM, other.ID) {
+		t.Fatalf("wildcard list should still hide other chat job, got: %s", listResult.ForLLM)
+	}
+
+	getResult := tool.Execute(ctx, map[string]any{"action": "get", "job_id": job.ID})
+	if getResult.IsError {
+		t.Fatalf("expected wildcard get to access own command job, got: %s", getResult.ForLLM)
+	}
+}
+
+// Test case: internal channel can access non-command jobs
+func TestCronTool_InternalChannelCanAccessNonCommandJob(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "reminder", "cli", "direct", "")
+	ctx := WithToolContext(context.Background(), "cli", "direct")
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError || !strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list to include non-command job, got: %+v", listResult)
+	}
+
+	getResult := tool.Execute(ctx, map[string]any{"action": "get", "job_id": job.ID})
+	if getResult.IsError {
+		t.Fatalf("expected get to access non-command job, got: %s", getResult.ForLLM)
+	}
+}
+
+// Test case: remove job with access control
+func TestCronTool_RemoveJobWithAccessControl(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram:chat-1"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	removeResult := tool.Execute(ctx, map[string]any{"action": "remove", "job_id": job.ID})
+	if removeResult.IsError {
+		t.Fatalf("expected remove to succeed, got: %s", removeResult.ForLLM)
+	}
+
+	// Verify job is deleted
+	deleted := tool.cronService.GetJob(job.ID)
+	if deleted != nil {
+		t.Fatalf("expected job to be deleted")
+	}
+}
+
+// Test case: cannot remove job from different channel
+func TestCronTool_CannotRemoveJobFromDifferentChannel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram:chat-2"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-2", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	removeResult := tool.Execute(ctx, map[string]any{"action": "remove", "job_id": job.ID})
+	if !removeResult.IsError || !strings.Contains(removeResult.ForLLM, "not accessible") {
+		t.Fatalf("expected remove to be blocked, got: %+v", removeResult)
+	}
+
+	// Verify job still exists
+	stillExists := tool.cronService.GetJob(job.ID)
+	if stillExists == nil {
+		t.Fatalf("expected job to still exist")
+	}
+}
+
+// Test case: enable/disable with access control
+func TestCronTool_EnableDisableWithAccessControl(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram:chat-1"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-1", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	// Test enable
+	enableResult := tool.Execute(ctx, map[string]any{"action": "enable", "job_id": job.ID})
+	if enableResult.IsError {
+		t.Fatalf("expected enable to succeed, got: %s", enableResult.ForLLM)
+	}
+
+	// Test disable
+	disableResult := tool.Execute(ctx, map[string]any{"action": "disable", "job_id": job.ID})
+	if disableResult.IsError {
+		t.Fatalf("expected disable to succeed, got: %s", disableResult.ForLLM)
+	}
+}
+
+// Test case: cannot enable/disable job from different channel
+func TestCronTool_CannotEnableDisableFromDifferentChannel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram:chat-2"}
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "command", "telegram", "chat-2", "df -h")
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+
+	// Test disable
+	disableResult := tool.Execute(ctx, map[string]any{"action": "disable", "job_id": job.ID})
+	if !disableResult.IsError || !strings.Contains(disableResult.ForLLM, "not accessible") {
+		t.Fatalf("expected disable to be blocked, got: %+v", disableResult)
+	}
+}
+
+// Regression test: empty context must be denied access to command jobs
+func TestCronTool_EmptyContextDeniedForCommandJob(t *testing.T) {
+	tool := newTestCronTool(t)
+	job := addTestCronJob(t, tool, "command", "cli", "direct", "df -h")
+
+	// Empty context (no channel/chatID) should deny access, even though the job exists
+	emptyCtx := context.Background()
+
+	// Test get with empty context
+	getResult := tool.Execute(emptyCtx, map[string]any{"action": "get", "job_id": job.ID})
+	if !getResult.IsError || !strings.Contains(getResult.ForLLM, "not accessible") {
+		t.Fatalf("expected get with empty context to be denied for command job, got: %+v", getResult)
+	}
+
+	// Test list with empty context (should hide command job)
+	listResult := tool.Execute(emptyCtx, map[string]any{"action": "list"})
+	if listResult.IsError {
+		t.Fatalf("unexpected error on list: %s", listResult.ForLLM)
+	}
+	if strings.Contains(listResult.ForLLM, job.ID) {
+		t.Fatalf("expected list with empty context to hide command job, got: %s", listResult.ForLLM)
+	}
+
+	// Test remove with empty context
+	removeResult := tool.Execute(emptyCtx, map[string]any{"action": "remove", "job_id": job.ID})
+	if !removeResult.IsError || !strings.Contains(removeResult.ForLLM, "not accessible") {
+		t.Fatalf("expected remove with empty context to be denied, got: %+v", removeResult)
 	}
 }

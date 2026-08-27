@@ -723,6 +723,198 @@ func TestParseResponseBodyEdgeCases(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBody_ToolCallMessage_FreshNameDoesNotRegress(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_1",
+					Name:      "get_weather",
+					Arguments: map[string]any{"city": "SF"},
+				},
+			},
+		},
+	}
+	body, err := buildRequestBody(messages, nil, "test-model", map[string]any{"max_tokens": 8192})
+	if err != nil {
+		t.Fatalf("buildRequestBody() error: %v", err)
+	}
+
+	msgList, ok := body["messages"].([]any)
+	if !ok || len(msgList) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgList))
+	}
+
+	assistantMsg, ok := msgList[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected assistant message to be map, got %T", msgList[1])
+	}
+
+	content, ok := assistantMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content to be []any, got %T", assistantMsg["content"])
+	}
+
+	// Should have tool_use block with fresh Name
+	found := false
+	for _, block := range content {
+		if blockMap, ok := block.(map[string]any); ok {
+			if blockMap["type"] == "tool_use" && blockMap["name"] == "get_weather" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Errorf("tool_use block with name 'get_weather' not found in content: %v", content)
+	}
+}
+
+func TestBuildRequestBody_ToolCallMessage_RoundTripRecovery(t *testing.T) {
+	// This test simulates a persisted tool call where Name and Arguments
+	// were not serialized (json:"-"), but Function contains the data.
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_1",
+					Name:      "",
+					Arguments: nil,
+					Function: &FunctionCall{
+						Name:      "get_weather",
+						Arguments: `{"city":"SF"}`,
+					},
+				},
+			},
+		},
+	}
+	body, err := buildRequestBody(messages, nil, "test-model", map[string]any{"max_tokens": 8192})
+	if err != nil {
+		t.Fatalf("buildRequestBody() error: %v", err)
+	}
+
+	msgList, ok := body["messages"].([]any)
+	if !ok || len(msgList) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgList))
+	}
+
+	assistantMsg, ok := msgList[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected assistant message to be map, got %T", msgList[1])
+	}
+
+	content, ok := assistantMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content to be []any, got %T", assistantMsg["content"])
+	}
+
+	// Should have tool_use block recovered from Function despite empty Name and Arguments
+	found := false
+	for _, block := range content {
+		if blockMap, ok := block.(map[string]any); ok {
+			if blockMap["type"] == "tool_use" && blockMap["name"] == "get_weather" {
+				// Verify input is also recovered
+				if input, ok := blockMap["input"].(map[string]any); ok {
+					if input["city"] == "SF" {
+						found = true
+						break
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("tool_use block with name 'get_weather' and city='SF' not found in round-tripped content: %v", content)
+	}
+}
+
+func TestBuildRequestBody_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
+	// Both Name and Function.Name empty => should skip the tool call
+	messages := []Message{
+		{Role: "user", Content: "Call the tool"},
+		{
+			Role:    "assistant",
+			Content: "Using a tool",
+			ToolCalls: []ToolCall{
+				{
+					ID:        "call_empty",
+					Name:      "",
+					Arguments: map[string]any{"some": "arg"},
+					Function: &FunctionCall{
+						Name:      "",
+						Arguments: `{}`,
+					},
+				},
+				{
+					ID:        "call_valid",
+					Name:      "valid_tool",
+					Arguments: map[string]any{"arg": "value"},
+				},
+			},
+		},
+	}
+	body, err := buildRequestBody(messages, nil, "test-model", map[string]any{"max_tokens": 8192})
+	if err != nil {
+		t.Fatalf("buildRequestBody() error: %v", err)
+	}
+
+	msgList, ok := body["messages"].([]any)
+	if !ok || len(msgList) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgList))
+	}
+
+	assistantMsg, ok := msgList[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected assistant message to be map, got %T", msgList[1])
+	}
+
+	content, ok := assistantMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("expected content to be []any, got %T", assistantMsg["content"])
+	}
+
+	// First block should be text, second should be valid_tool (not call_empty)
+	if len(content) < 2 {
+		t.Fatalf("expected at least 2 content blocks, got %d", len(content))
+	}
+
+	textFound := false
+	validToolFound := false
+	emptyToolFound := false
+
+	for _, block := range content {
+		if blockMap, ok := block.(map[string]any); ok {
+			if blockMap["type"] == "text" && blockMap["text"] == "Using a tool" {
+				textFound = true
+			}
+			if blockMap["type"] == "tool_use" {
+				if blockMap["name"] == "valid_tool" {
+					validToolFound = true
+				}
+				if blockMap["id"] == "call_empty" {
+					emptyToolFound = true
+				}
+			}
+		}
+	}
+
+	if !textFound {
+		t.Error("text content 'Using a tool' not found")
+	}
+	if !validToolFound {
+		t.Error("valid_tool not found")
+	}
+	if emptyToolFound {
+		t.Error("call_empty should have been skipped")
+	}
+}
+
 // TestProviderChatErrors tests error handling in Chat.
 // Note: apiBase check removed as it's dead code - normalizeBaseURL() always provides a default.
 func TestProviderChatErrors(t *testing.T) {

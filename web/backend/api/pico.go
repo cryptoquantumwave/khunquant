@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -145,38 +146,86 @@ func (h *Handler) ensurePicoChannel(callerOrigin string) (bool, error) {
 // It implements CSRF protection by verifying that state-changing setup requests come from
 // the launcher's own origin, not from a cross-site attacker.
 //
-// The check uses two lines of defense in order of preference:
-// 1. Sec-Fetch-Site header (present in modern browsers): must be "same-origin" or "none"
-//    (not "same-site", since the launcher binds loopback with no legitimate cross-subdomain callers)
-// 2. Origin header (fallback for older browsers): compared against request host/scheme
-// 3. Both absent (non-browser clients like curl): rejected by default for defense in depth
+// The check proceeds as follows:
+// 1. Sec-Fetch-Site header (modern browsers):
+//    - "cross-site": reject (not same-origin)
+//    - "same-site": reject (launcher binds loopback; no legitimate cross-subdomain callers)
+//    - "same-origin": accept (safe)
+//    - "none" or absent: fall through to Origin/Referer check
+// 2. Origin header (fallback for older browsers): parsed and validated against request
+// 3. Referer header (optional fallback for very old browsers): parsed and validated
+// 4. All checks absent: reject for defense in depth
 //    This is the safer choice because it prevents attackers from suppressing headers,
 //    and the launcher setup is designed to be called from the UI, which will have proper headers.
 func isSameLauncherRequestOrigin(r *http.Request) bool {
-	// Check Sec-Fetch-Site first (modern browsers)
-	fetchSite := r.Header.Get("Sec-Fetch-Site")
-	if fetchSite != "" {
-		// Only "same-origin" and "none" (top-level navigation) are acceptable.
-		// Reject "same-site" and "cross-site".
-		return fetchSite == "same-origin" || fetchSite == "none"
-	}
-
-	// Fall back to Origin header comparison (older browsers)
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// Both headers absent: non-browser client. Reject for defense in depth.
-		// This may break scripted setup (e.g., curl), but the launcher setup endpoint
-		// is designed for interactive UI use; scripted setup should use the launcher CLI.
+	// Check Sec-Fetch-Site first (modern browsers), normalized to lowercase and trimmed.
+	// Explicitly reject cross-site and same-site; accept only same-origin.
+	// For "none" or absent, fall through to Origin check.
+	fetchSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+	if fetchSite == "cross-site" || fetchSite == "same-site" {
 		return false
 	}
+	if fetchSite == "same-origin" {
+		return true
+	}
+	// "none" or absent: fall through to Origin/Referer check
 
-	// Compare origin's scheme+host against request's own scheme+host
+	// Build the expected request origin for comparison
 	requestScheme := "http"
 	if r.TLS != nil {
 		requestScheme = "https"
 	}
-	requestOrigin := fmt.Sprintf("%s://%s", requestScheme, r.Host)
-	return origin == requestOrigin
+	requestHost := r.Host
+	expectedOrigin := fmt.Sprintf("%s://%s", requestScheme, requestHost)
+
+	// Check Origin header (standard CSRF defense)
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" {
+		// Reject if origin contains whitespace (malformed)
+		if strings.ContainsAny(origin, " \t\n\r") {
+			return false
+		}
+		// Parse and compare origin URL
+		if origin == "null" {
+			// "null" is sent in some sandboxed contexts; reject as unidentified
+			return false
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		// Compare parsed scheme and host
+		originURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+		if originURL == expectedOrigin {
+			return true
+		}
+		// Foreign origin: reject
+		return false
+	}
+
+	// Optional: Check Referer header (older browsers fall back to this)
+	// Referer is less reliable than Origin but still useful for older clients.
+	// Keep this optional per the task guidance: we deliberately reject headerless requests,
+	// so Referer fallback is a nice-to-have that helps older browsers but isn't essential.
+	referer := strings.TrimSpace(r.Header.Get("Referer"))
+	if referer != "" {
+		// Reject if referer contains whitespace (malformed)
+		if strings.ContainsAny(referer, " \t\n\r") {
+			return false
+		}
+		u, err := url.Parse(referer)
+		if err != nil {
+			return false
+		}
+		// Compare parsed scheme and host (ignore path, query, fragment)
+		refererOrigin := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+		if refererOrigin == expectedOrigin {
+			return true
+		}
+	}
+
+	// No identifying header: reject for defense in depth
+	return false
 }
 
 // handlePicoSetup automatically configures everything needed for the Pico Channel to work.

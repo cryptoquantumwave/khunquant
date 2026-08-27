@@ -141,10 +141,54 @@ func (h *Handler) ensurePicoChannel(callerOrigin string) (bool, error) {
 	return changed, nil
 }
 
+// isSameLauncherRequestOrigin checks if the request came from the same origin as the launcher.
+// It implements CSRF protection by verifying that state-changing setup requests come from
+// the launcher's own origin, not from a cross-site attacker.
+//
+// The check uses two lines of defense in order of preference:
+// 1. Sec-Fetch-Site header (present in modern browsers): must be "same-origin" or "none"
+//    (not "same-site", since the launcher binds loopback with no legitimate cross-subdomain callers)
+// 2. Origin header (fallback for older browsers): compared against request host/scheme
+// 3. Both absent (non-browser clients like curl): rejected by default for defense in depth
+//    This is the safer choice because it prevents attackers from suppressing headers,
+//    and the launcher setup is designed to be called from the UI, which will have proper headers.
+func isSameLauncherRequestOrigin(r *http.Request) bool {
+	// Check Sec-Fetch-Site first (modern browsers)
+	fetchSite := r.Header.Get("Sec-Fetch-Site")
+	if fetchSite != "" {
+		// Only "same-origin" and "none" (top-level navigation) are acceptable.
+		// Reject "same-site" and "cross-site".
+		return fetchSite == "same-origin" || fetchSite == "none"
+	}
+
+	// Fall back to Origin header comparison (older browsers)
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Both headers absent: non-browser client. Reject for defense in depth.
+		// This may break scripted setup (e.g., curl), but the launcher setup endpoint
+		// is designed for interactive UI use; scripted setup should use the launcher CLI.
+		return false
+	}
+
+	// Compare origin's scheme+host against request's own scheme+host
+	requestScheme := "http"
+	if r.TLS != nil {
+		requestScheme = "https"
+	}
+	requestOrigin := fmt.Sprintf("%s://%s", requestScheme, r.Host)
+	return origin == requestOrigin
+}
+
 // handlePicoSetup automatically configures everything needed for the Pico Channel to work.
 //
 //	POST /api/pico/setup
 func (h *Handler) handlePicoSetup(w http.ResponseWriter, r *http.Request) {
+	// CSRF protection: reject cross-site requests to this state-changing endpoint
+	if !isSameLauncherRequestOrigin(r) {
+		http.Error(w, "Cross-site request rejected", http.StatusForbidden)
+		return
+	}
+
 	changed, err := h.ensurePicoChannel(r.Header.Get("Origin"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

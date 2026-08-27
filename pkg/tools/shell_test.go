@@ -553,8 +553,9 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 	t.Logf("Timeout result: %s", result.ForLLM)
 }
 
-// TestShellTool_CustomAllowPatterns verifies that custom allow patterns exempt
-// commands from deny pattern checks.
+// TestShellTool_CustomAllowPatterns verifies that custom allow patterns can
+// permit a command that would otherwise fail the allowlist check, while deny
+// patterns continue to apply unconditionally.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
@@ -575,7 +576,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		"command": "git push origin main",
 	})
 	if result.IsError && strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("custom allow pattern should exempt 'git push origin main', got: %s", result.ForLLM)
+		t.Errorf("custom allow pattern should permit 'git push origin main' when allow patterns are not set, got: %s", result.ForLLM)
 	}
 
 	// "git push upstream main" should still be blocked (does not match allow pattern).

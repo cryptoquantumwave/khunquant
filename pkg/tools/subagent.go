@@ -26,6 +26,7 @@ type SubTurnConfig struct {
 	Critical        bool          // continue running after parent finishes gracefully
 	Timeout         time.Duration // 0 = use default (5 minutes)
 	MaxContextRunes int           // 0 = auto, -1 = no limit, >0 = explicit limit
+	TargetAgentID   string        // for delegate tool: target a specific named agent
 }
 
 type SubagentTask struct {

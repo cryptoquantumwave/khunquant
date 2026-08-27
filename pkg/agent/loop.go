@@ -312,6 +312,15 @@ func registerSharedTools(
 				subagentTool := tools.NewSubagentTool(subagentManager)
 				subagentTool.SetSpawner(spawner)
 				agent.Tools.Register(subagentTool)
+
+				// Also register the delegate tool for cross-agent task handoff
+				delegateTool := tools.NewDelegateTool()
+				delegateTool.SetSpawner(spawner)
+				delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
+					return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+				})
+				delegateTool.SetSelfAgentID(currentAgentID)
+				agent.Tools.Register(delegateTool)
 			}
 		}
 	}

@@ -553,8 +553,9 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 	t.Logf("Timeout result: %s", result.ForLLM)
 }
 
-// TestShellTool_CustomAllowPatterns verifies that custom allow patterns exempt
-// commands from deny pattern checks.
+// TestShellTool_CustomAllowPatterns verifies that custom allow patterns can
+// permit a command that would otherwise fail the allowlist check, while deny
+// patterns continue to apply unconditionally.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
@@ -575,7 +576,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		"command": "git push origin main",
 	})
 	if result.IsError && strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("custom allow pattern should exempt 'git push origin main', got: %s", result.ForLLM)
+		t.Errorf("custom allow pattern should permit 'git push origin main' when allow patterns are not set, got: %s", result.ForLLM)
 	}
 
 	// "git push upstream main" should still be blocked (does not match allow pattern).
@@ -831,7 +832,7 @@ func TestGuardCommand_AllowlistPermits(t *testing.T) {
 	}
 }
 
-func TestGuardCommand_CustomAllowExemptsDeny(t *testing.T) {
+func TestGuardCommand_CustomAllowWithoutDenyMatch(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.EnableDenyPatterns = true
@@ -840,10 +841,42 @@ func TestGuardCommand_CustomAllowExemptsDeny(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecToolWithConfig: %v", err)
 	}
-	// "rm" is custom-allowed, so deny pattern should not fire
+	// "rm somefile" is custom-allowed and matches no deny pattern, so it should pass.
 	msg := tool.guardCommand("rm somefile", tmp)
 	if msg != "" {
-		t.Errorf("custom-allowed command should not be blocked, got %q", msg)
+		t.Errorf("custom-allowed command matching no deny pattern should not be blocked, got %q", msg)
+	}
+}
+
+func TestShellTool_CustomAllowDoesNotBypassDenyPatterns(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^rm\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand(`rm -rf somedir`, t.TempDir())
+	if !strings.Contains(got, "dangerous pattern detected") {
+		t.Fatalf("custom allow should not bypass deny patterns, got: %q", got)
+	}
+}
+
+func TestShellTool_CustomAllowStillPermitsSafeMatch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand(`jq -n '"ok"'`, t.TempDir())
+	if got != "" {
+		t.Fatalf("safe custom-allowed command should pass guard, got: %q", got)
 	}
 }
 
@@ -1151,5 +1184,21 @@ func TestShellTool_SchemelessURLDetection(t *testing.T) {
 		if result.IsError && strings.Contains(result.ForLLM, "path outside working dir") {
 			t.Errorf("command with multiple web URLs should not be blocked: %s\n  error: %s", cmd, result.ForLLM)
 		}
+	}
+}
+
+func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomAllowPatterns = []string{`^jq\b`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig() error: %v", err)
+	}
+
+	got := tool.guardCommand("ls", t.TempDir())
+	if got != "" {
+		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
 	}
 }

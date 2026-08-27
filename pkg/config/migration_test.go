@@ -58,8 +58,30 @@ func TestConvertProvidersToModelList_Anthropic(t *testing.T) {
 	if result[0].ModelName != "anthropic" {
 		t.Errorf("ModelName = %q, want %q", result[0].ModelName, "anthropic")
 	}
-	if result[0].Model != "anthropic/claude-sonnet-4.6" {
-		t.Errorf("Model = %q, want %q", result[0].Model, "anthropic/claude-sonnet-4.6")
+	if result[0].Model != DefaultAnthropicModel {
+		t.Errorf("Model = %q, want %q", result[0].Model, DefaultAnthropicModel)
+	}
+}
+
+// TestConvertProvidersToModelList_MigrationConventionAnthropicModelName ensures
+// that the Anthropic migration follows the convention: ModelName must be the provider
+// name ("anthropic"), not the model name. This is required for model lookups to work
+// correctly when users migrate from old configs.
+func TestConvertProvidersToModelList_MigrationConventionAnthropicModelName(t *testing.T) {
+	cfg := &Config{
+		Providers: ProvidersConfig{
+			Anthropic: ProviderConfig{APIKey: "sk-ant-test"},
+		},
+	}
+
+	result := ConvertProvidersToModelList(cfg)
+
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1", len(result))
+	}
+
+	if result[0].ModelName != "anthropic" {
+		t.Errorf("Anthropic migration ModelName = %q, want %q (must be provider name for lookup compatibility)", result[0].ModelName, "anthropic")
 	}
 }
 
@@ -573,12 +595,12 @@ func TestBuildModelWithProtocol_AlreadyHasPrefix(t *testing.T) {
 }
 
 func TestBuildModelWithProtocol_DifferentPrefix(t *testing.T) {
-	result := buildModelWithProtocol("anthropic", "openrouter/claude-sonnet-4.6")
-	if result != "openrouter/claude-sonnet-4.6" {
+	result := buildModelWithProtocol("anthropic", "openrouter/claude-opus-4")
+	if result != "openrouter/claude-opus-4" {
 		t.Errorf(
-			"buildModelWithProtocol(anthropic, openrouter/claude-sonnet-4.6) = %q, want %q",
+			"buildModelWithProtocol(anthropic, openrouter/claude-opus-4) = %q, want %q",
 			result,
-			"openrouter/claude-sonnet-4.6",
+			"openrouter/claude-opus-4",
 		)
 	}
 }
@@ -751,5 +773,72 @@ func TestInheritProviderCredentials_InheritsRequestTimeout(t *testing.T) {
 	}
 	if models[0].RequestTimeout != 120 {
 		t.Errorf("RequestTimeout = %d, want 120", models[0].RequestTimeout)
+	}
+}
+
+// TestDefaultConfig_SeededModelListNoDottedIDs ensures no invalid Anthropic
+// model IDs (with dots instead of hyphens) are in the default seeded model list.
+func TestDefaultConfig_SeededModelListNoDottedIDs(t *testing.T) {
+	cfg := DefaultConfig()
+
+	for _, mc := range cfg.ModelList {
+		if strings.Contains(mc.Model, "claude-sonnet-4.6") || strings.Contains(mc.ModelName, "claude-sonnet-4.6") {
+			t.Errorf("Found invalid model ID claude-sonnet-4.6 in model list entry: ModelName=%q, Model=%q", mc.ModelName, mc.Model)
+		}
+	}
+}
+
+// TestDefaultConfig_AnthropicEntryUsesConstants ensures the Anthropic entry
+// in the default model list uses the centralized model constants.
+func TestDefaultConfig_AnthropicEntryUsesConstants(t *testing.T) {
+	cfg := DefaultConfig()
+
+	var anthropicEntry *ModelConfig
+	for i := range cfg.ModelList {
+		if cfg.ModelList[i].Model == DefaultAnthropicModel {
+			anthropicEntry = &cfg.ModelList[i]
+			break
+		}
+	}
+
+	if anthropicEntry == nil {
+		t.Fatalf("Could not find Anthropic entry with Model=%q in default model list", DefaultAnthropicModel)
+	}
+
+	if anthropicEntry.ModelName != DefaultAnthropicModelName {
+		t.Errorf("Anthropic entry ModelName = %q, want %q", anthropicEntry.ModelName, DefaultAnthropicModelName)
+	}
+	if anthropicEntry.Model != DefaultAnthropicModel {
+		t.Errorf("Anthropic entry Model = %q, want %q", anthropicEntry.Model, DefaultAnthropicModel)
+	}
+}
+
+// TestConvertProvidersToModelList_AnthropicUsesDefaultModel ensures that when
+// migrating a config with the Anthropic provider set but no user model configured,
+// the migration produces the default Anthropic model constant, not an invalid literal.
+func TestConvertProvidersToModelList_AnthropicUsesDefaultModel(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			Defaults: AgentDefaults{
+				Provider: "",  // No explicit provider
+				Model:    "",  // No explicit model
+			},
+		},
+		Providers: ProvidersConfig{
+			Anthropic: ProviderConfig{APIKey: "sk-ant-test"},
+		},
+	}
+
+	result := ConvertProvidersToModelList(cfg)
+
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1", len(result))
+	}
+
+	if result[0].Model != DefaultAnthropicModel {
+		t.Errorf("Migrated model = %q, want %q (should use default constant)", result[0].Model, DefaultAnthropicModel)
+	}
+	if result[0].ModelName != "anthropic" {
+		t.Errorf("Migrated ModelName = %q, want %q (must be provider name for lookup compatibility)", result[0].ModelName, "anthropic")
 	}
 }

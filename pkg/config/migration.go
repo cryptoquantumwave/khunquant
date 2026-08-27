@@ -79,7 +79,7 @@ func ConvertProvidersToModelList(cfg *Config) []ModelConfig {
 				}
 				return ModelConfig{
 					ModelName:      "anthropic",
-					Model:          "anthropic/claude-sonnet-4.6",
+					Model:          DefaultAnthropicModel,
 					APIKey:         *NewSecureString(p.Anthropic.APIKey),
 					APIBase:        p.Anthropic.APIBase,
 					Proxy:          p.Anthropic.Proxy,

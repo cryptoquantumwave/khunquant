@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -10,15 +11,20 @@ import (
 
 // Handler serves HTTP API requests.
 type Handler struct {
-	configPath           string
-	serverPort           int
-	serverPublic         bool
-	serverPublicExplicit bool
-	serverCIDRs          []string
-	oauthMu              sync.Mutex
-	oauthFlows           map[string]*oauthFlow
-	oauthState           map[string]string
-	updateChecker        *updateChecker
+	configPath                 string
+	serverPort                 int
+	serverPublic               bool
+	serverPublicExplicit       bool
+	serverHostInput            string
+	serverHostExplicit         bool
+	serverCIDRs                []string
+	serverAllowLocalhostBypass bool
+	serverTrustedProxyCIDRs    []string
+	debug                      bool
+	oauthMu                    sync.Mutex
+	oauthFlows                 map[string]*oauthFlow
+	oauthState                 map[string]string
+	updateChecker              *updateChecker
 }
 
 // NewHandler creates an instance of the API handler.
@@ -26,11 +32,12 @@ func NewHandler(configPath string) *Handler {
 	uc := &updateChecker{}
 	uc.start(config.GetVersion())
 	return &Handler{
-		configPath:    configPath,
-		serverPort:    launcherconfig.DefaultPort,
-		oauthFlows:    make(map[string]*oauthFlow),
-		oauthState:    make(map[string]string),
-		updateChecker: uc,
+		configPath:                 configPath,
+		serverPort:                 launcherconfig.DefaultPort,
+		serverAllowLocalhostBypass: launcherconfig.Default().AllowLocalhostBypass,
+		oauthFlows:                 make(map[string]*oauthFlow),
+		oauthState:                 make(map[string]string),
+		updateChecker:              uc,
 	}
 }
 
@@ -40,6 +47,25 @@ func (h *Handler) SetServerOptions(port int, public bool, publicExplicit bool, a
 	h.serverPublic = public
 	h.serverPublicExplicit = publicExplicit
 	h.serverCIDRs = append([]string(nil), allowedCIDRs...)
+}
+
+func (h *Handler) SetServerAccessOptions(allowLocalhostBypass bool, trustedProxyCIDRs []string) {
+	h.serverAllowLocalhostBypass = allowLocalhostBypass
+	h.serverTrustedProxyCIDRs = append([]string(nil), trustedProxyCIDRs...)
+}
+
+// SetServerBindHost stores the launcher's effective bind host.
+// When explicit is true, hostInput is the normalized -host / PICOCLAW_LAUNCHER_HOST value.
+func (h *Handler) SetServerBindHost(hostInput string, explicit bool) {
+	h.serverHostInput = strings.TrimSpace(hostInput)
+	if !explicit {
+		h.serverHostInput = ""
+	}
+	h.serverHostExplicit = explicit
+}
+
+func (h *Handler) SetDebug(debug bool) {
+	h.debug = debug
 }
 
 // RegisterRoutes binds all API endpoint handlers to the ServeMux.

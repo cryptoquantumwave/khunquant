@@ -91,6 +91,10 @@ func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
@@ -161,6 +165,10 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)

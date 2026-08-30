@@ -558,6 +558,10 @@ func (h *Handler) handleListTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateToolState(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)

@@ -121,6 +121,10 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/models
 func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -166,6 +170,10 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 //
 //	PUT /api/models/{index}
 func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	idx, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil {
 		http.Error(w, "Invalid index", http.StatusBadRequest)
@@ -229,6 +237,10 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/models/{index}
 func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	idx, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil {
 		http.Error(w, "Invalid index", http.StatusBadRequest)
@@ -271,6 +283,10 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/models/default
 func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)

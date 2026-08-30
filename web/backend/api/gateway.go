@@ -410,6 +410,10 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 //
 //	POST /api/gateway/start
 func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 
@@ -464,6 +468,10 @@ func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/gateway/stop
 func (h *Handler) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 
@@ -503,6 +511,10 @@ func (h *Handler) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/gateway/restart
 func (h *Handler) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	ready, reason, err := h.gatewayStartReady()
 	if err != nil {
 		http.Error(
@@ -575,6 +587,10 @@ func (h *Handler) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 //
 //	POST /api/gateway/logs/clear
 func (h *Handler) handleGatewayClearLogs(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	gateway.logs.Clear()
 
 	w.Header().Set("Content-Type", "application/json")

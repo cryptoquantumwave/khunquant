@@ -98,12 +98,16 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 - **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
 - **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.
 - **Password hash in config file**: The bcrypt-hashed password is stored in the plaintext `launcher-config.json` file on disk. File permissions are set to 0o600 (read/write for owner only), but the hash could be extracted and cracked if the file is compromised.
-- **CSRF protection currently covers `/api/pico/setup` only**: Other state-changing launcher endpoints have not been audited for CSRF vulnerabilities. A reader who learns that CSRF protection exists may assume it is global. It is not. Any new state-changing endpoint must be reviewed and protected separately.
+- **CSRF protection covers all state-changing launcher endpoints**: Configuration updates (`PUT/PATCH /api/config`, `POST /api/config/reset`), Pico setup and token regen (`POST /api/pico/setup`, `POST /api/pico/token`), gateway lifecycle (`POST /api/gateway/{start,stop,restart,logs/clear}`), model management, OAuth operations, skills import/delete, tool state updates, and other state-changing operations. Read-only endpoints (GET requests) are not protected, as CSRF applies only to state-changing operations.
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
-### Upstream's Deliberate Non-Port
+### CSRF Protection Special Cases
 
-The upstream codebase includes a `POST /api/config/reset` endpoint that clears the entire configuration. **We intentionally did not port this endpoint.** While password authentication is now implemented and would provide additional protection, the `reset` endpoint's destructive nature warrants a separate, deliberate decision and review. It remains un-ported and is not on the roadmap without explicit approval.
+The following endpoints are **not** protected by CSRF checks, for documented reasons:
+
+- **`GET /oauth/callback`**: This is a top-level cross-site navigation initiated by the OAuth provider (e.g., Google, Anthropic) as part of the authorization flow. The request naturally has `Sec-Fetch-Site: cross-site`. Defense is state validation via the `state` parameter (checked against `h.oauthState` in the handler), not CSRF headers. This design is correct and intentional.
+- **Read-only endpoints (GET, HEAD)**: Endpoints that only read state and do not mutate configuration or process state are not protected. CSRF protection adds failure modes for no benefit on idempotent requests.
+- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns`, `POST /api/models/fetch`, and similar test/validation endpoints that do not persist changes are not protected.
 
 ## Reporting Security Issues
 

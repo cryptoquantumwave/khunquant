@@ -31,6 +31,10 @@ func (h *Handler) registerConfigRoutes(mux *http.ServeMux) {
 //
 //	POST /api/config/reset
 func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	if err := config.ResetToDefaults(h.configPath); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to reset config: %v", err), http.StatusInternalServerError)
 		return
@@ -60,6 +64,10 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 //
 //	PUT /api/config
 func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -143,6 +151,10 @@ func execAllowRemoteOmitted(body []byte) bool {
 //
 //	PATCH /api/config
 func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	patchBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)

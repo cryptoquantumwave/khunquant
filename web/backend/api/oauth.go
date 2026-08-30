@@ -206,6 +206,10 @@ func (h *Handler) handleListOAuthProviders(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -380,6 +384,10 @@ func (h *Handler) handleGetOAuthFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePollOAuthFlow(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	flowID := strings.TrimSpace(r.PathValue("id"))
 	if flowID == "" {
 		http.Error(w, "missing flow id", http.StatusBadRequest)
@@ -497,6 +505,10 @@ func (h *Handler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleOAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -960,6 +972,10 @@ func modelNameFromPreset(provider, modelID string) string {
 }
 
 func (h *Handler) handleSelectProviderModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	rawProvider := r.PathValue("provider")
 	provider, err := normalizeOAuthProvider(rawProvider)
 	if err != nil {

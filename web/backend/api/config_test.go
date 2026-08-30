@@ -35,6 +35,7 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -74,6 +75,7 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -106,6 +108,7 @@ func TestHandlePatchConfig_RejectsInvalidExecRegexPatterns(t *testing.T) {
 		}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -136,6 +139,7 @@ func TestHandlePatchConfig_AllowsInvalidDenyRegexPatternsWhenDenyPatternsDisable
 		}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

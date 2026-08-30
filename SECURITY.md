@@ -98,16 +98,22 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 - **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
 - **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.
 - **Password hash in config file**: The bcrypt-hashed password is stored in the plaintext `launcher-config.json` file on disk. File permissions are set to 0o600 (read/write for owner only), but the hash could be extracted and cracked if the file is compromised.
-- **CSRF protection covers all state-changing launcher endpoints**: Configuration updates (`PUT/PATCH /api/config`, `POST /api/config/reset`), Pico setup and token regen (`POST /api/pico/setup`, `POST /api/pico/token`), gateway lifecycle (`POST /api/gateway/{start,stop,restart,logs/clear}`), model management, OAuth operations, skills import/delete, tool state updates, and other state-changing operations. Read-only endpoints (GET requests) are not protected, as CSRF applies only to state-changing operations.
+- **CSRF protection covers state-changing launcher endpoints**: Configuration updates (`PUT /api/config`, `PATCH /api/config`, `POST /api/config/reset`), Pico channel management (`POST /api/pico/setup`, `POST /api/pico/token`), gateway lifecycle (`POST /api/gateway/start`, `POST /api/gateway/stop`, `POST /api/gateway/restart`, `POST /api/gateway/logs/clear`), model management (`POST /api/models`, `PUT /api/models/{index}`, `DELETE /api/models/{index}`, `POST /api/models/default`), OAuth operations (`POST /api/oauth/login`, `POST /api/oauth/logout`, `POST /api/oauth/flows/{id}/poll`, `POST /api/oauth/providers/{provider}/select-model`), session management (`DELETE /api/sessions/{id}`), skills (`POST /api/skills/import`, `DELETE /api/skills/{name}`), tool state (`PUT /api/tools/{name}/state`), system configuration (`PUT /api/system/launcher-config`), and binary updates (`POST /api/update/apply`). Read-only endpoints (GET requests) are not protected. State-changing agent operations (config/memory files, snapshots, cron, pairing, delta-neutral, sandbox, system autostart, Webull) are not yet protected and should be reviewed in a follow-up.
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
-### CSRF Protection Special Cases
+### CSRF Protection Coverage & Special Cases
 
-The following endpoints are **not** protected by CSRF checks, for documented reasons:
+**Endpoints deliberately NOT protected (with reasons):**
 
-- **`GET /oauth/callback`**: This is a top-level cross-site navigation initiated by the OAuth provider (e.g., Google, Anthropic) as part of the authorization flow. The request naturally has `Sec-Fetch-Site: cross-site`. Defense is state validation via the `state` parameter (checked against `h.oauthState` in the handler), not CSRF headers. This design is correct and intentional.
-- **Read-only endpoints (GET, HEAD)**: Endpoints that only read state and do not mutate configuration or process state are not protected. CSRF protection adds failure modes for no benefit on idempotent requests.
-- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns`, `POST /api/models/fetch`, and similar test/validation endpoints that do not persist changes are not protected.
+- **`GET /oauth/callback`**: Top-level cross-site navigation from OAuth provider (Google, Anthropic). Naturally carries `Sec-Fetch-Site: cross-site`. Defense is state validation (checking `state` parameter against stored flows), not CSRF headers. This is correct and intentional.
+- **Read-only endpoints (GET, HEAD)**: Do not mutate state. CSRF protection adds failure modes with no security benefit.
+- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns`, `POST /api/models/fetch` — validation only, no state changes.
+
+**Endpoints not yet protected (noted for follow-up):**
+
+Agent operations (not yet in this change): `/api/agent/config/files/*`, `/api/agent/memory/files/*`, `/api/agent/snapshots/*`, `/api/agent/delta-neutral/*`, `/api/cron/jobs/*`, `/api/pairing/*`, `/api/sandbox/*`, `/api/system/autostart`, `/api/exchanges/webull/*/connect`.
+
+**Historical note:** `POST /api/config/reset` was ported from upstream picoclaw in commit `d3ee1e8e` and has been in the tree since initial import. It resets to factory defaults while preserving API keys and channel secrets. It was unprotected until this change.
 
 ## Reporting Security Issues
 

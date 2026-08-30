@@ -98,7 +98,19 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 - **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
 - **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.
 - **Password hash in config file**: The bcrypt-hashed password is stored in the plaintext `launcher-config.json` file on disk. File permissions are set to 0o600 (read/write for owner only), but the hash could be extracted and cracked if the file is compromised.
-- **CSRF protection covers state-changing launcher endpoints**: Configuration updates (`PUT /api/config`, `PATCH /api/config`, `POST /api/config/reset`), Pico channel management (`POST /api/pico/setup`, `POST /api/pico/token`), gateway lifecycle (`POST /api/gateway/start`, `POST /api/gateway/stop`, `POST /api/gateway/restart`, `POST /api/gateway/logs/clear`), model management (`POST /api/models`, `PUT /api/models/{index}`, `DELETE /api/models/{index}`, `POST /api/models/default`), OAuth operations (`POST /api/oauth/login`, `POST /api/oauth/logout`, `POST /api/oauth/flows/{id}/poll`, `POST /api/oauth/providers/{provider}/select-model`), session management (`DELETE /api/sessions/{id}`), skills (`POST /api/skills/import`, `DELETE /api/skills/{name}`), tool state (`PUT /api/tools/{name}/state`), system configuration (`PUT /api/system/launcher-config`), and binary updates (`POST /api/update/apply`). Read-only endpoints (GET requests) are not protected. State-changing agent operations (config/memory files, snapshots, cron, pairing, delta-neutral, sandbox, system autostart, Webull) are not yet protected and should be reviewed in a follow-up.
+- **CSRF protection**: Protects the following 13 launcher setup operations with `Sec-Fetch-Site: same-origin` validation (modern browsers) and Origin/Referer fallback (older browsers):
+  1. **Configuration** (`PUT /api/config`, `PATCH /api/config`, `POST /api/config/reset`)
+  2. **Pico channel** (`POST /api/pico/setup`, `POST /api/pico/token`)
+  3. **Gateway lifecycle** (`POST /api/gateway/start`, `POST /api/gateway/stop`, `POST /api/gateway/restart`, `POST /api/gateway/logs/clear`)
+  4. **Model management** (`POST /api/models`, `PUT /api/models/{index}`, `DELETE /api/models/{index}`, `POST /api/models/default`)
+  5. **OAuth** (`POST /api/oauth/login`, `POST /api/oauth/logout`, `POST /api/oauth/flows/{id}/poll`, `POST /api/oauth/providers/{provider}/select-model`)
+  6. **Session** (`DELETE /api/sessions/{id}`)
+  7. **Skills** (`POST /api/skills/import`, `DELETE /api/skills/{name}`)
+  8. **Tools** (`PUT /api/tools/{name}/state`)
+  9. **System** (`PUT /api/system/launcher-config`)
+  10. **Updates** (`POST /api/update/apply`)
+  
+  Read-only endpoints (GET requests) are not protected. Certain operations deliberately excluded (see below).
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
 ### CSRF Protection Coverage & Special Cases
@@ -109,11 +121,20 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 - **Read-only endpoints (GET, HEAD)**: Do not mutate state. CSRF protection adds failure modes with no security benefit.
 - **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns`, `POST /api/models/fetch` — validation only, no state changes.
 
-**Endpoints not yet protected (noted for follow-up):**
+**Endpoints NOT yet protected (out of scope for this change):**
 
-Agent operations (not yet in this change): `/api/agent/config/files/*`, `/api/agent/memory/files/*`, `/api/agent/snapshots/*`, `/api/agent/delta-neutral/*`, `/api/cron/jobs/*`, `/api/pairing/*`, `/api/sandbox/*`, `/api/system/autostart`, `/api/exchanges/webull/*/connect`.
+Agent operations are not yet CSRF-protected:
+- `/api/agent/config/files/*` (agent-specific configuration file operations)
+- `/api/agent/memory/files/*` (agent memory snapshots and queries)
+- `/api/agent/snapshots/*` (agent state snapshots)
+- `/api/agent/delta-neutral/*` (delta-neutral position management)
+- `/api/cron/jobs/*` (cron job scheduling)
+- `/api/pairing/*` (device pairing operations)
+- `/api/sandbox/*` (isolated code execution environment)
+- `/api/system/autostart` (system autostart configuration)
+- `/api/exchanges/webull/*/connect` (Webull broker reconnection)
 
-**Historical note:** `POST /api/config/reset` was ported from upstream picoclaw in commit `d3ee1e8e` and has been in the tree since initial import. It resets to factory defaults while preserving API keys and channel secrets. It was unprotected until this change.
+These are **deliberately out of scope** for this CSRF sweep, which focuses on launcher setup operations. Agent-specific operations should be reviewed and protected in a separate task.
 
 ## Reporting Security Issues
 

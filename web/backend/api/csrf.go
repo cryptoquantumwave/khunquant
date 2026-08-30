@@ -44,12 +44,14 @@ func isSameLauncherRequestOrigin(r *http.Request) bool {
 	expectedOrigin := fmt.Sprintf("%s://%s", requestScheme, requestHost)
 
 	// Check Origin header (standard CSRF defense)
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin != "" {
-		// Reject if origin contains whitespace (malformed)
-		if strings.ContainsAny(origin, " \t\n\r") {
+	rawOrigin := r.Header.Get("Origin")
+	if rawOrigin != "" {
+		// Reject if raw origin contains whitespace (malformed) — check before trimming
+		if strings.ContainsAny(rawOrigin, " \t\n\r") {
 			return false
 		}
+		// Now trim for parsing
+		origin := strings.TrimSpace(rawOrigin)
 		// Parse and compare origin URL
 		if origin == "null" {
 			// "null" is sent in some sandboxed contexts; reject as unidentified
@@ -72,12 +74,14 @@ func isSameLauncherRequestOrigin(r *http.Request) bool {
 	// Referer is less reliable than Origin but still useful for older clients.
 	// Keep this optional per the task guidance: we deliberately reject headerless requests,
 	// so Referer fallback is a nice-to-have that helps older browsers but isn't essential.
-	referer := strings.TrimSpace(r.Header.Get("Referer"))
-	if referer != "" {
-		// Reject if referer contains whitespace (malformed)
-		if strings.ContainsAny(referer, " \t\n\r") {
+	rawReferer := r.Header.Get("Referer")
+	if rawReferer != "" {
+		// Reject if raw referer contains whitespace (malformed) — check before trimming
+		if strings.ContainsAny(rawReferer, " \t\n\r") {
 			return false
 		}
+		// Now trim for parsing
+		referer := strings.TrimSpace(rawReferer)
 		u, err := url.Parse(referer)
 		if err != nil {
 			return false

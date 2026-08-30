@@ -121,6 +121,7 @@ func TestSelectProviderModelBadProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/providers/noexist/select-model",
 		strings.NewReader(`{"model_id":"openai/gpt-5.5"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -141,6 +142,7 @@ func TestSelectProviderModelEmptyModelID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/providers/openai/select-model",
 		strings.NewReader(`{"model_id":""}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -162,6 +164,7 @@ func TestSelectProviderModelWrongProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/providers/openai/select-model",
 		strings.NewReader(`{"model_id":"anthropic/claude-sonnet-4.6"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -199,6 +202,7 @@ func TestSelectProviderModelUpdatesExistingEntry(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/providers/openai/select-model",
 		strings.NewReader(`{"model_id":"openai/gpt-5.4"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -272,6 +276,7 @@ func TestSelectProviderModelAppendsNewEntry(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/providers/openai/select-model",
 		strings.NewReader(`{"model_id":"openai/gpt-5.5"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

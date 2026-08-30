@@ -355,6 +355,7 @@ func TestHandlePatchConfig_UpdatesExchangeCredential(t *testing.T) {
 	body := `{"exchanges":{"bitkub":{"enabled":true,"accounts":[{"name":"main","api_key":"new_api_key","secret":"[NOT_HERE]","proxy":""}]}}}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

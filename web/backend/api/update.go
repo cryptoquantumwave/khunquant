@@ -184,6 +184,10 @@ func (h *Handler) launcherRestart(launcherPath string) error {
 //
 //	POST /api/update/apply
 func (h *Handler) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	if runtime.GOOS == "windows" {
 		http.Error(w, "automatic update is not supported on Windows — please download manually", http.StatusNotImplemented)
 		return

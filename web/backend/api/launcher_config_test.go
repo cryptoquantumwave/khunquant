@@ -70,6 +70,7 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 		strings.NewReader(`{"port":18080,"public":true,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":false,"trusted_proxy_cidrs":["10.0.0.0/8"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -108,6 +109,7 @@ func TestPutLauncherConfigUsesDirectAccessFields(t *testing.T) {
 		strings.NewReader(`{"port":18080,"public":false,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":true,"trusted_proxy_cidrs":["10.0.0.0/8"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -153,6 +155,7 @@ func TestPutLauncherConfigKeepsLocalhostBypassWhenOmitted(t *testing.T) {
 		strings.NewReader(`{"port":18080,"public":true,"allowed_cidrs":["192.168.1.0/24"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -182,6 +185,7 @@ func TestPutLauncherConfigRejectsInvalidPort(t *testing.T) {
 		strings.NewReader(`{"port":70000,"public":false}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -203,6 +207,7 @@ func TestPutLauncherConfigRejectsInvalidCIDR(t *testing.T) {
 		strings.NewReader(`{"port":18080,"public":false,"allowed_cidrs":["bad-cidr"]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {

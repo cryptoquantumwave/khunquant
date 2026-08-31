@@ -642,6 +642,10 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/sessions/{id}
 func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	sessionID := r.PathValue("id")
 	if sessionID == "" {
 		http.Error(w, "missing session id", http.StatusBadRequest)

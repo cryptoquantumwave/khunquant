@@ -246,6 +246,7 @@ func TestHandleImportSkill(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/skills/import", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -315,6 +316,7 @@ func TestHandleDeleteSkill(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/skills/delete-me", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

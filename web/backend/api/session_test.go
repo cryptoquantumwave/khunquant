@@ -812,6 +812,7 @@ func TestHandleDeleteSession_JSONLStorage(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/delete-jsonl", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {

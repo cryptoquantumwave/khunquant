@@ -30,6 +30,7 @@ func TestOAuthLoginRejectsUnsupportedMethod(t *testing.T) {
 		strings.NewReader(`{"provider":"anthropic","method":"browser"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -62,6 +63,7 @@ func TestOAuthBrowserFlowCreatedAndQueried(t *testing.T) {
 	)
 	req.Host = "localhost:18800"
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -189,6 +191,7 @@ func TestOAuthLogoutClearsCredentialAndConfig(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/logout", bytes.NewBufferString(`{"provider":"openai"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

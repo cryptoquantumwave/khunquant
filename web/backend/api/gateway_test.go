@@ -584,6 +584,7 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/restart", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -641,6 +642,7 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/restart", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
@@ -683,6 +685,7 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/restart", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
@@ -793,6 +796,7 @@ func TestGatewayClearLogsResetsBufferedHistory(t *testing.T) {
 
 	clearRec := httptest.NewRecorder()
 	clearReq := httptest.NewRequest(http.MethodPost, "/api/gateway/logs/clear", nil)
+	clearReq.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(clearRec, clearReq)
 
 	if clearRec.Code != http.StatusOK {

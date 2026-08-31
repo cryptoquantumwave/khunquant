@@ -427,6 +427,7 @@ func TestHandleUpdateModel_UpdatesAPIKey(t *testing.T) {
 	body := `{"model_name":"gpt-4","model":"openai/gpt-4o","api_key":"new_api_key"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

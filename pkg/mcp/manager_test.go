@@ -668,6 +668,26 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 	}
 
 	switch req.Method {
+	case "server/discover":
+		// go-sdk v1.7.0 (protocol 2026-07-28, SEP-2575) probes server/discover
+		// before falling back to legacy initialize. This scripted server only
+		// speaks the legacy handshake, so answer with a JSON-RPC MethodNotFound
+		// response — the same signal a real pre-2026-07-28 server sends — which
+		// triggers the client's fallback. Returning a Go error here instead would
+		// tear down the transport and fail the handshake outright.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case t.incoming <- &jsonrpc.Response{
+			ID: req.ID,
+			Error: &jsonrpc.Error{
+				Code:    jsonrpc.CodeMethodNotFound,
+				Message: `method not found: "server/discover"`,
+			},
+		}:
+			return nil
+		}
+
 	case "initialize":
 		payload, err := json.Marshal(&sdkmcp.InitializeResult{
 			ProtocolVersion: "2025-11-25",

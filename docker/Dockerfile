@@ -1,7 +1,9 @@
 # ============================================================
 # Stage 1: Build the khunquant binary
 # ============================================================
-FROM golang:1.26-alpine AS builder
+# Go version pinned to match go.mod (1.25.13) for reproducible builds.
+# This ensures the builder uses exactly what CI tests.
+FROM golang:1.25.13-alpine AS builder
 
 RUN apk add --no-cache git make
 

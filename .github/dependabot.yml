@@ -47,6 +47,11 @@ updates:
       docker-images:
         patterns:
           - "*"
+    ignore:
+      # The builder image is pinned to the exact toolchain in go.mod (see PR #64),
+      # so an automatic bump silently un-aligns the two. Update both together by
+      # hand when the Go version moves.
+      - dependency-name: "golang"
 
   - package-ecosystem: "docker-compose"
     directory: "/docker"

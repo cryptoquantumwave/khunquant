@@ -4,12 +4,12 @@ go 1.25.13
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/adhocore/gronx v1.20.0
-	github.com/anthropics/anthropic-sdk-go v1.61.0
+	github.com/adhocore/gronx v1.20.3
+	github.com/anthropics/anthropic-sdk-go v1.68.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/ccxt/ccxt/go/v4 v4.5.68
-	github.com/ergochat/irc-go v0.6.0
+	github.com/ccxt/ccxt/go/v4 v4.5.76
+	github.com/ergochat/irc-go v0.7.0
 	github.com/ergochat/readline v0.1.3
 	github.com/expr-lang/expr v1.17.8
 	github.com/gdamore/tcell/v2 v2.13.10
@@ -17,27 +17,27 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3
-	github.com/larksuite/oapi-sdk-go/v3 v3.9.9
+	github.com/larksuite/oapi-sdk-go/v3 v3.10.0
 	github.com/mdp/qrterminal/v3 v3.2.1
-	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/mymmrac/telego v1.11.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/mymmrac/telego v1.11.2
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
-	github.com/openai/openai-go/v3 v3.46.0
+	github.com/openai/openai-go/v3 v3.54.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
-	github.com/slack-go/slack v0.27.0
+	github.com/slack-go/slack v0.29.0
 	github.com/spf13/cobra v1.10.2
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/tencent-connect/botgo v0.2.1
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.45.0
 	golang.org/x/time v0.15.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
-	maunium.net/go/mautrix v0.29.0
-	modernc.org/sqlite v1.54.0
+	maunium.net/go/mautrix v0.30.0
+	modernc.org/sqlite v1.57.0
 )
 
 require (
@@ -53,7 +53,6 @@ require (
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -73,12 +72,11 @@ require (
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/petermattis/goid v0.0.0-20260713124913-97594f28f5ca // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/petermattis/goid v0.0.0-20260816044145-ed329add6b1b // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
@@ -91,33 +89,34 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
-	go.mau.fi/util v0.9.11 // indirect
+	go.mau.fi/util v0.10.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
+	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/image v0.41.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
-	modernc.org/libc v1.74.1 // indirect
+	golang.org/x/text v0.41.0 // indirect
+	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.1 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/github/copilot-sdk/go v1.0.8
+	github.com/github/copilot-sdk/go v1.0.11
 	github.com/go-resty/resty/v2 v2.17.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/grbit/go-json v0.11.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -125,12 +124,12 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasthttp v1.72.0 // indirect
+	github.com/valyala/fasthttp v1.73.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/arch v0.24.0 // indirect
-	golang.org/x/crypto v0.54.0
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/crypto v0.55.0
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 )

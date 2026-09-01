@@ -261,7 +261,7 @@ func buildCodexParams(
 			if msg.ToolCallID != "" {
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-						CallID: msg.ToolCallID,
+						CallID: openai.Opt(msg.ToolCallID),
 						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 							OfString: openai.Opt(msg.Content),
 						},
@@ -312,7 +312,7 @@ func buildCodexParams(
 		case "tool":
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-					CallID: msg.ToolCallID,
+					CallID: openai.Opt(msg.ToolCallID),
 					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.Opt(msg.Content),
 					},

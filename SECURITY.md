@@ -111,6 +111,10 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
   10. **Updates** (`POST /api/update/apply`)
   
   Read-only endpoints (GET requests) are not protected. Certain operations deliberately excluded (see below).
+- **Pico WebSocket token is never sent to the browser**: The Pico channel authenticates its WebSocket handshake with a `token.<value>` subprotocol. The launcher proxies `/pico/ws` and attaches that token server-side from config, so no API response carries it and no browser holds it. `GET /api/pico/info` returns only `ws_url` and `enabled`; `POST /api/pico/token` rotates the token and returns the same token-free payload. The proxy also discards any subprotocol the caller supplied, so a client cannot present a token of its own choosing to the gateway, and strips the gateway's echoed subprotocol from the handshake response.
+
+  **Limitation:** this confines the token to the server; it is not itself an authentication boundary. `/pico/ws` is gated by the launcher session/password middleware (`apiRequiresAuth` in `web/backend/middleware/auth.go`), and that gate — not token confinement — is what stops an unauthenticated client from reaching the gateway. Anyone who can read `config.json` still has the token.
+
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
 ### CSRF Protection Coverage & Special Cases

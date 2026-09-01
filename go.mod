@@ -1,6 +1,6 @@
 module github.com/cryptoquantumwave/khunquant
 
-go 1.25.13
+go 1.26.7
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
@@ -17,10 +17,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3
-	github.com/larksuite/oapi-sdk-go/v3 v3.10.0
+	github.com/larksuite/oapi-sdk-go/v3 v3.11.0
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/mymmrac/telego v1.11.2
+	github.com/mymmrac/telego v1.12.1
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/openai/openai-go/v3 v3.54.0
 	github.com/rivo/tview v0.42.0
@@ -108,8 +108,8 @@ require (
 require (
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic v1.15.2 // indirect
-	github.com/bytedance/sonic/loader v0.5.1 // indirect
+	github.com/bytedance/sonic v1.15.3 // indirect
+	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/github/copilot-sdk/go v1.0.11
 	github.com/go-resty/resty/v2 v2.17.1 // indirect

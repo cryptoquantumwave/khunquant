@@ -225,7 +225,7 @@ func TestPicoTokenRegenerationMutationIsPrevented(t *testing.T) {
 	h := NewHandler(configPath)
 
 	// Set up initial token
-	if _, err := h.ensurePicoChannel("http://localhost:8080"); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 

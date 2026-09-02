@@ -157,11 +157,16 @@ func (h *Handler) handleRegenPicoToken(w http.ResponseWriter, r *http.Request) {
 // ensurePicoChannel enables the Pico channel with sane defaults if it isn't
 // already configured. Returns true when the config was modified.
 //
-// callerOrigin is the Origin header from the setup request. If non-empty and
-// no origins are configured yet, it's written as the allowed origin so the
-// WebSocket handshake works for whatever host the caller is on (LAN, custom
-// port, etc.). Pass "" when there's no request context.
-func (h *Handler) ensurePicoChannel(callerOrigin string) (bool, error) {
+// AllowOrigins is deliberately left empty. It used to be seeded with the
+// Origin of whichever request happened to trigger setup, which pinned the
+// channel to that one host: a launcher set up from localhost then rejected the
+// same user reaching it over the LAN or on a different port.
+//
+// Empty is not "allow anything". The channel falls back to a same-origin check
+// (isSameOriginRequest in pkg/channels/pico/pico.go), which is what actually
+// protects a browser — the pin added nothing on top of it. An operator who
+// wants specific origins can still set allow_origins explicitly.
+func (h *Handler) ensurePicoChannel() (bool, error) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to load config: %w", err)
@@ -176,12 +181,6 @@ func (h *Handler) ensurePicoChannel(callerOrigin string) (bool, error) {
 
 	if cfg.Channels.Pico.Token.String() == "" {
 		cfg.Channels.Pico.Token.Set(generateSecureToken())
-		changed = true
-	}
-
-	// Seed origins from the request instead of hardcoding ports.
-	if len(cfg.Channels.Pico.AllowOrigins) == 0 && callerOrigin != "" {
-		cfg.Channels.Pico.AllowOrigins = []string{callerOrigin}
 		changed = true
 	}
 
@@ -202,7 +201,7 @@ func (h *Handler) handlePicoSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	changed, err := h.ensurePicoChannel(r.Header.Get("Origin"))
+	changed, err := h.ensurePicoChannel()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -18,7 +18,7 @@ func TestEnsurePicoChannel_FreshConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	changed, err := h.ensurePicoChannel("")
+	changed, err := h.ensurePicoChannel()
 	if err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestEnsurePicoChannel_DoesNotEnableTokenQuery(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	if _, err := h.ensurePicoChannel(""); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestEnsurePicoChannel_DoesNotSetWildcardOrigins(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	if _, err := h.ensurePicoChannel("http://localhost:18800"); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 
@@ -77,11 +77,11 @@ func TestEnsurePicoChannel_DoesNotSetWildcardOrigins(t *testing.T) {
 	}
 }
 
-func TestEnsurePicoChannel_NoOriginWithoutCaller(t *testing.T) {
+func TestEnsurePicoChannel_LeavesAllowOriginsEmpty(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	if _, err := h.ensurePicoChannel(""); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 
@@ -90,19 +90,20 @@ func TestEnsurePicoChannel_NoOriginWithoutCaller(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	// Without a caller origin, allow_origins stays empty (CheckOrigin
-	// allows all when the list is empty, so the channel still works).
+	// Empty is the intended state. It does NOT mean "allow any origin": the
+	// channel falls back to a same-origin check (isSameOriginRequest in
+	// pkg/channels/pico/pico.go). The previous comment here claimed empty
+	// allowed all, which was wrong and made the pin look load-bearing.
 	if len(cfg.Channels.Pico.AllowOrigins) != 0 {
-		t.Errorf("allow_origins = %v, want empty when no caller origin", cfg.Channels.Pico.AllowOrigins)
+		t.Errorf("allow_origins = %v, want empty", cfg.Channels.Pico.AllowOrigins)
 	}
 }
 
-func TestEnsurePicoChannel_SetsCallerOrigin(t *testing.T) {
+func TestEnsurePicoChannel_DoesNotPinAnyOrigin(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	lanOrigin := "http://192.168.1.9:18800"
-	if _, err := h.ensurePicoChannel(lanOrigin); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 
@@ -111,8 +112,11 @@ func TestEnsurePicoChannel_SetsCallerOrigin(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if len(cfg.Channels.Pico.AllowOrigins) != 1 || cfg.Channels.Pico.AllowOrigins[0] != lanOrigin {
-		t.Errorf("allow_origins = %v, want [%s]", cfg.Channels.Pico.AllowOrigins, lanOrigin)
+	// Setup used to persist the caller's Origin here, which pinned the channel
+	// to whichever host happened to run setup — a launcher configured from
+	// localhost then refused the same user over the LAN.
+	if len(cfg.Channels.Pico.AllowOrigins) != 0 {
+		t.Errorf("setup pinned allow_origins to %v; it must stay empty", cfg.Channels.Pico.AllowOrigins)
 	}
 }
 
@@ -131,7 +135,7 @@ func TestEnsurePicoChannel_PreservesUserSettings(t *testing.T) {
 
 	h := NewHandler(configPath)
 
-	changed, err := h.ensurePicoChannel("")
+	changed, err := h.ensurePicoChannel()
 	if err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
@@ -159,10 +163,8 @@ func TestEnsurePicoChannel_Idempotent(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
-	origin := "http://localhost:18800"
-
 	// First call sets things up
-	if _, err := h.ensurePicoChannel(origin); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("first ensurePicoChannel() error = %v", err)
 	}
 
@@ -170,7 +172,7 @@ func TestEnsurePicoChannel_Idempotent(t *testing.T) {
 	token1 := cfg1.Channels.Pico.Token
 
 	// Second call should be a no-op
-	changed, err := h.ensurePicoChannel(origin)
+	changed, err := h.ensurePicoChannel()
 	if err != nil {
 		t.Fatalf("second ensurePicoChannel() error = %v", err)
 	}
@@ -184,12 +186,12 @@ func TestEnsurePicoChannel_Idempotent(t *testing.T) {
 	}
 }
 
-func TestHandlePicoSetup_IncludesRequestOrigin(t *testing.T) {
+func TestHandlePicoSetup_DoesNotPersistRequestOrigin(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
 
 	req := httptest.NewRequest("POST", "/api/pico/setup", nil)
-	// Set host to match the origin so this is a same-origin request
+	// Same-origin so the CSRF gate admits the request.
 	req.Host = "10.0.0.5:3000"
 	req.Header.Set("Origin", "http://10.0.0.5:3000")
 	rec := httptest.NewRecorder()
@@ -205,8 +207,18 @@ func TestHandlePicoSetup_IncludesRequestOrigin(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if len(cfg.Channels.Pico.AllowOrigins) != 1 || cfg.Channels.Pico.AllowOrigins[0] != "http://10.0.0.5:3000" {
-		t.Errorf("allow_origins = %v, want [http://10.0.0.5:3000]", cfg.Channels.Pico.AllowOrigins)
+	// The request's Origin must not be written to config: doing so locked the
+	// channel to the host that ran setup.
+	if len(cfg.Channels.Pico.AllowOrigins) != 0 {
+		t.Errorf("setup persisted allow_origins = %v; it must stay empty",
+			cfg.Channels.Pico.AllowOrigins)
+	}
+	// Setup must still have done its actual job.
+	if !cfg.Channels.Pico.Enabled {
+		t.Error("setup did not enable the Pico channel")
+	}
+	if cfg.Channels.Pico.Token.String() == "" {
+		t.Error("setup did not generate a token")
 	}
 }
 
@@ -449,9 +461,8 @@ func TestHandlePicoSetup_AcceptsMatchingOrigin(t *testing.T) {
 	if cfg.Channels.Pico.Token.String() == "" {
 		t.Error("same-origin request must generate a token")
 	}
-	if len(cfg.Channels.Pico.AllowOrigins) != 1 || cfg.Channels.Pico.AllowOrigins[0] != "http://localhost:8080" {
-		t.Errorf("same-origin request must plant the origin; got %v", cfg.Channels.Pico.AllowOrigins)
-	}
+	// Origin is no longer persisted — see TestHandlePicoSetup_DoesNotPersistRequestOrigin.
+	// Enabled + a generated token are what prove the accepted request ran the handler.
 }
 
 func TestHandlePicoSetup_RejectsBothHeadersAbsent(t *testing.T) {
@@ -525,7 +536,7 @@ func picoConfigWithToken(t *testing.T) (string, string) {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
-	if _, err := h.ensurePicoChannel(""); err != nil {
+	if _, err := h.ensurePicoChannel(); err != nil {
 		t.Fatalf("ensurePicoChannel() error = %v", err)
 	}
 	cfg, err := config.LoadConfig(configPath)

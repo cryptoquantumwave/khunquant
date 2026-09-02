@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,12 +80,19 @@ func (m *charScriptedProvider) GetDefaultModel() string { return "char-model" }
 // charRecordingTool records the args it was invoked with and returns a marker
 // the model is expected to see on the next turn.
 type charRecordingTool struct {
-	name      string
+	name string
+	// mu guards gotArgs: the agent loop runs the tool calls of one LLM
+	// response concurrently, so Execute can be entered from several
+	// goroutines at once. Without the lock, two appends race and one is
+	// lost — which surfaced as TestCharacterization_MultipleToolCalls
+	// intermittently reporting "tool invoked 1 times, want 2" under full
+	// -suite load, while passing in isolation.
+	mu        sync.Mutex
 	gotArgs   []map[string]any
 	llmOutput string
 }
 
-func (t *charRecordingTool) Name() string       { return t.name }
+func (t *charRecordingTool) Name() string        { return t.name }
 func (t *charRecordingTool) Description() string { return "characterization recording tool" }
 func (t *charRecordingTool) Parameters() map[string]any {
 	return map[string]any{
@@ -96,8 +104,18 @@ func (t *charRecordingTool) Parameters() map[string]any {
 }
 
 func (t *charRecordingTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	t.mu.Lock()
 	t.gotArgs = append(t.gotArgs, args)
+	t.mu.Unlock()
 	return tools.SilentResult(t.llmOutput)
+}
+
+// calls returns a snapshot of the recorded invocations. Reads must hold the
+// same lock as Execute: the loop may still have a tool goroutine in flight.
+func (t *charRecordingTool) calls() []map[string]any {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]map[string]any(nil), t.gotArgs...)
 }
 
 func anyMessageContains(msgs []providers.Message, substr string) bool {
@@ -158,10 +176,11 @@ func TestCharacterization_ToolExecutionLoop(t *testing.T) {
 	}
 
 	// (a) tool invoked exactly once, with the model's args
-	if len(tool.gotArgs) != 1 {
-		t.Fatalf("tool invoked %d times, want 1", len(tool.gotArgs))
+	calls := tool.calls()
+	if len(calls) != 1 {
+		t.Fatalf("tool invoked %d times, want 1", len(calls))
 	}
-	if v, _ := tool.gotArgs[0]["value"].(string); v != "ping" {
+	if v, _ := calls[0]["value"].(string); v != "ping" {
 		t.Fatalf("tool arg value = %q, want %q", v, "ping")
 	}
 	// (b) the model saw the tool output on a subsequent call
@@ -255,8 +274,8 @@ func TestCharacterization_ToolIterationCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessDirect: %v", err)
 	}
-	if len(tool.gotArgs) > 3 {
-		t.Fatalf("tool invoked %d times, want <= cap 3", len(tool.gotArgs))
+	if n := len(tool.calls()); n > 3 {
+		t.Fatalf("tool invoked %d times, want <= cap 3", n)
 	}
 	if got != toolLimitResponse {
 		t.Fatalf("response = %q, want toolLimitResponse", got)
@@ -303,8 +322,8 @@ func TestCharacterization_MultipleToolCalls(t *testing.T) {
 	if _, err := al.ProcessDirect(context.Background(), "do both", "sess-multi"); err != nil {
 		t.Fatalf("ProcessDirect: %v", err)
 	}
-	if len(tool.gotArgs) != 2 {
-		t.Fatalf("tool invoked %d times, want 2 (one per tool call)", len(tool.gotArgs))
+	if n := len(tool.calls()); n != 2 {
+		t.Fatalf("tool invoked %d times, want 2 (one per tool call)", n)
 	}
 }
 
@@ -337,7 +356,7 @@ func TestCharacterization_ToolErrorPropagation(t *testing.T) {
 type charErrorTool struct{}
 
 func (t *charErrorTool) Name() string               { return "boom_tool" }
-func (t *charErrorTool) Description() string         { return "always errors" }
+func (t *charErrorTool) Description() string        { return "always errors" }
 func (t *charErrorTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *charErrorTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return tools.ErrorResult("BOOM_ERR")

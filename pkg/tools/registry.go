@@ -206,6 +206,17 @@ func (r *ToolRegistry) ExecuteWithContext(
 		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
 	}
 
+	// Validate arguments against the tool's declared schema before running it.
+	// A model can emit a wrong type or omit a required field; without this the
+	// tool sees the malformed args and fails somewhere less legible, or worse,
+	// coerces them silently.
+	if err := validateToolArgs(tool.Parameters(), args); err != nil {
+		logger.WarnCF("tool", "Tool argument validation failed",
+			map[string]any{"tool": name, "error": err.Error()})
+		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+			WithError(fmt.Errorf("argument validation failed: %w", err))
+	}
+
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).
 	// Always inject — tools validate what they require.
 	ctx = WithToolContext(ctx, channel, chatID)

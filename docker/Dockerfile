@@ -32,7 +32,11 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 COPY --from=builder /src/build/khunquant /usr/local/bin/khunquant
 
 # Run onboard to create initial directories and config
-RUN /usr/local/bin/khunquant onboard
+# --yes is required, not a convenience: onboard prompts for terms acceptance
+# and a credential-encryption passphrase, and a docker build has no TTY, so
+# the bare command dies with "reading passphrase: inappropriate ioctl for
+# device". The flag accepts the terms and skips encryption setup.
+RUN /usr/local/bin/khunquant onboard --yes
 
 ENTRYPOINT ["khunquant"]
 CMD ["gateway"]

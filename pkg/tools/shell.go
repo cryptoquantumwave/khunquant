@@ -214,6 +214,13 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 		},
 		"required": []string{"command"},
+		// Opt in to strict argument checking. The schema-validation default in
+		// this tree is permissive about unnamed properties (see
+		// allowsAdditional in validate.go), because models routinely add
+		// harmless extras and rejecting them would break working calls across
+		// every tool. exec is the one tool where an unexpected argument is
+		// worth refusing outright rather than ignoring.
+		"additionalProperties": false,
 	}
 }
 

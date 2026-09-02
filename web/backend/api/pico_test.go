@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -506,5 +509,146 @@ func TestHandlePicoSetup_RejectsSecFetchSiteNoneWithForeignOrigin(t *testing.T) 
 		if len(cfg.Channels.Pico.AllowOrigins) > 0 {
 			t.Errorf("Sec-Fetch-Site: none with foreign Origin must not plant origin; got %v", cfg.Channels.Pico.AllowOrigins)
 		}
+	}
+}
+
+// --- Token confinement -------------------------------------------------------
+//
+// The Pico token authenticates the WebSocket handshake. It must never reach a
+// browser: the launcher proxies /pico/ws and attaches the token server-side.
+// The tests below assert the token is absent from every response body and that
+// the proxy neither trusts a client-supplied token nor echoes the server's own.
+
+// picoConfigWithToken writes a config with the Pico channel enabled and a known
+// token, returning the config path and the token value.
+func picoConfigWithToken(t *testing.T) (string, string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	h := NewHandler(configPath)
+	if _, err := h.ensurePicoChannel(""); err != nil {
+		t.Fatalf("ensurePicoChannel() error = %v", err)
+	}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	token := cfg.Channels.Pico.Token.String()
+	if token == "" {
+		t.Fatal("setup produced an empty token; the test would pass vacuously")
+	}
+	return configPath, token
+}
+
+func TestHandleGetPicoInfo_OmitsToken(t *testing.T) {
+	configPath, token := picoConfigWithToken(t)
+	h := NewHandler(configPath)
+
+	req := httptest.NewRequest("GET", "http://launcher.local/api/pico/info", nil)
+	rec := httptest.NewRecorder()
+	h.handleGetPicoInfo(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, token) {
+		t.Errorf("GET /api/pico/info leaked the Pico token in its body: %s", body)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("response is not JSON: %v", err)
+	}
+	if _, present := payload["token"]; present {
+		t.Error(`response carries a "token" field; it must not exist at all`)
+	}
+	// Guard against the endpoint becoming useless rather than merely safe.
+	if payload["ws_url"] == "" || payload["ws_url"] == nil {
+		t.Error("response omitted ws_url, so the client cannot connect")
+	}
+	if enabled, ok := payload["enabled"].(bool); !ok || !enabled {
+		t.Error("response omitted enabled=true for an enabled channel")
+	}
+}
+
+func TestHandleRegenPicoToken_OmitsToken(t *testing.T) {
+	configPath, oldToken := picoConfigWithToken(t)
+	h := NewHandler(configPath)
+
+	req := httptest.NewRequest("POST", "http://launcher.local/api/pico/token", nil)
+	req.Header.Set("Origin", "http://launcher.local")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	h.handleRegenPicoToken(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	newToken := cfg.Channels.Pico.Token.String()
+	if newToken == oldToken {
+		t.Fatal("regen did not rotate the token; the leak assertion below would be vacuous")
+	}
+	if strings.Contains(rec.Body.String(), newToken) {
+		t.Errorf("POST /api/pico/token leaked the new token: %s", rec.Body.String())
+	}
+}
+
+// TestWsProxy_AttachesServerTokenAndDiscardsClientSupplied asserts the two
+// halves of the proxy contract: the gateway receives the token from config, and
+// a token the caller tried to supply is dropped rather than forwarded.
+func TestWsProxy_AttachesServerTokenAndDiscardsClientSupplied(t *testing.T) {
+	configPath, token := picoConfigWithToken(t)
+
+	var gotProtocol string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProtocol = r.Header.Get(picoProtocolHeader)
+		// Echo it back the way the real Pico channel does, so ModifyResponse
+		// has something to strip.
+		w.Header().Set(picoProtocolHeader, gotProtocol)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	gatewayURL, err := url.Parse(gateway.URL)
+	if err != nil {
+		t.Fatalf("parse gateway URL: %v", err)
+	}
+	port, err := strconv.Atoi(gatewayURL.Port())
+	if err != nil {
+		t.Fatalf("parse gateway port: %v", err)
+	}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.Gateway.Port = port
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	proxy := h.createWsProxy()
+
+	req := httptest.NewRequest("GET", "http://launcher.local/pico/ws", nil)
+	req.Header.Set(picoProtocolHeader, "token.attacker-supplied-value")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if gotProtocol != picoTokenSubprotocol+token {
+		t.Errorf("gateway saw subprotocol %q, want %q", gotProtocol, picoTokenSubprotocol+token)
+	}
+	if strings.Contains(gotProtocol, "attacker-supplied-value") {
+		t.Error("proxy forwarded a client-supplied token to the gateway")
+	}
+	if got := rec.Header().Get(picoProtocolHeader); got != "" {
+		t.Errorf("proxy echoed subprotocol %q to the client; it must be stripped", got)
+	}
+	if strings.Contains(rec.Body.String(), token) {
+		t.Error("proxy response body leaked the token")
 	}
 }

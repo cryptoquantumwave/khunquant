@@ -13,9 +13,18 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
+const (
+	// picoProtocolHeader carries the WebSocket subprotocol used by the Pico
+	// channel to authenticate a handshake.
+	picoProtocolHeader = "Sec-WebSocket-Protocol"
+	// picoTokenSubprotocol is the prefix the Pico channel strips to recover the
+	// token (see matchedSubprotocol in pkg/channels/pico/pico.go).
+	picoTokenSubprotocol = "token."
+)
+
 // registerPicoRoutes binds Pico Channel management endpoints to the ServeMux.
 func (h *Handler) registerPicoRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/pico/token", h.handleGetPicoToken)
+	mux.HandleFunc("GET /api/pico/info", h.handleGetPicoInfo)
 	mux.HandleFunc("POST /api/pico/token", h.handleRegenPicoToken)
 	mux.HandleFunc("POST /api/pico/setup", h.handlePicoSetup)
 
@@ -23,6 +32,7 @@ func (h *Handler) registerPicoRoutes(mux *http.ServeMux) {
 	// This allows the frontend to connect via the same port as the web UI,
 	// avoiding the need to expose extra ports for WebSocket communication.
 	// SessionAuth middleware gates this path with launcher token (see middleware/auth.go apiRequiresAuth).
+	// The proxy injects the Pico token server-side, so the browser never holds it.
 	wsProxy := h.createWsProxy()
 	mux.HandleFunc("GET /pico/ws", h.handleWebSocketProxy(wsProxy))
 }
@@ -37,10 +47,45 @@ func (h *Handler) createWsProxy() *httputil.ReverseProxy {
 	}
 	gatewayURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", gatewayPort))
 	wsProxy := httputil.NewSingleHostReverseProxy(gatewayURL)
+
+	baseDirector := wsProxy.Director
+	wsProxy.Director = func(r *http.Request) {
+		baseDirector(r)
+		// The Pico channel authenticates the WebSocket handshake with a
+		// "token.<value>" subprotocol. Read that token from config here and
+		// attach it on the way out, so the browser never receives it. Any
+		// subprotocol the client supplied is discarded rather than forwarded:
+		// a caller must not be able to present its own token to the gateway.
+		r.Header.Del(picoProtocolHeader)
+		if token := h.picoToken(); token != "" {
+			r.Header.Set(picoProtocolHeader, picoTokenSubprotocol+token)
+		}
+	}
+	wsProxy.ModifyResponse = func(resp *http.Response) error {
+		// The gateway echoes the accepted subprotocol, which is the token
+		// itself — strip it so the handshake response cannot leak it either.
+		// Removed rather than rewritten: RFC 6455 requires the server's chosen
+		// subprotocol to be one the client offered, and the client now offers
+		// none, so any value here would fail the browser's handshake check.
+		resp.Header.Del(picoProtocolHeader)
+		return nil
+	}
 	wsProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "Gateway unavailable: "+err.Error(), http.StatusBadGateway)
 	}
 	return wsProxy
+}
+
+// picoToken reads the current Pico channel token from config, or "" when it is
+// unset or the config cannot be read. Read per request rather than captured at
+// startup so a token regenerated via POST /api/pico/token takes effect without
+// a launcher restart.
+func (h *Handler) picoToken() string {
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		return ""
+	}
+	return cfg.Channels.Pico.Token.String()
 }
 
 // handleWebSocketProxy wraps a reverse proxy to handle WebSocket connections.
@@ -54,23 +99,29 @@ func (h *Handler) handleWebSocketProxy(proxy *httputil.ReverseProxy) http.Handle
 	}
 }
 
-// handleGetPicoToken returns the current WS token and URL for the frontend.
+// handleGetPicoInfo returns non-secret Pico connection info for the launcher UI.
+// The token is deliberately omitted: the WebSocket proxy attaches it server-side
+// (see createWsProxy), so no client ever needs to hold it.
 //
-//	GET /api/pico/token
-func (h *Handler) handleGetPicoToken(w http.ResponseWriter, r *http.Request) {
+//	GET /api/pico/info
+func (h *Handler) handleGetPicoInfo(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	wsURL := h.buildWsURL(r)
+	h.writePicoInfoResponse(w, r, cfg.Channels.Pico.Enabled)
+}
 
+// writePicoInfoResponse writes the shared Pico info payload. It exists so that
+// every response shape on this surface is produced in one place — adding the
+// token back would require editing this function, not one of several handlers.
+func (h *Handler) writePicoInfoResponse(w http.ResponseWriter, r *http.Request, enabled bool) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"token":   cfg.Channels.Pico.Token.String(),
-		"ws_url":  wsURL,
-		"enabled": cfg.Channels.Pico.Enabled,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ws_url":  h.buildWsURL(r),
+		"enabled": enabled,
 	})
 }
 
@@ -96,13 +147,11 @@ func (h *Handler) handleRegenPicoToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wsURL := h.buildWsURL(r)
+	// Deliberately not returned to the caller: the proxy reads the new token
+	// from config on the next handshake.
+	_ = token
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"token":  token,
-		"ws_url": wsURL,
-	})
+	h.writePicoInfoResponse(w, r, cfg.Channels.Pico.Enabled)
 }
 
 // ensurePicoChannel enables the Pico channel with sane defaults if it isn't

@@ -1,7 +1,7 @@
 import { getDefaultStore } from "jotai"
 import { toast } from "sonner"
 
-import { getPicoToken } from "@/api/pico"
+import { getPicoInfo } from "@/api/pico"
 import {
   loadSessionMessages,
   mergeHistoryMessages,
@@ -130,7 +130,7 @@ export async function connectChat() {
   updateChatStore({ connectionState: "connecting" })
 
   try {
-    const { token } = await getPicoToken()
+    const { enabled } = await getPicoInfo()
     const sessionId = activeSessionIdRef
 
     if (generation !== connectionGeneration) {
@@ -138,18 +138,20 @@ export async function connectChat() {
       return
     }
 
-    if (!token) {
-      console.error("No pico token available")
+    if (!enabled) {
+      console.error("Pico channel is not enabled")
       updateChatStore({ connectionState: "error" })
       isConnecting = false
       scheduleReconnect(generation, sessionId)
       return
     }
 
+    // No subprotocol is offered: the launcher proxy attaches the Pico token
+    // server-side, so the browser never holds or sends it.
     const wsScheme = window.location.protocol === "https:" ? "wss:" : "ws:"
     const wsUrl = `${wsScheme}//${window.location.host}/pico/ws`
     const url = `${wsUrl}?session_id=${encodeURIComponent(sessionId)}`
-    const socket = new WebSocket(url, [`token.${token}`])
+    const socket = new WebSocket(url)
 
     if (generation !== connectionGeneration) {
       isConnecting = false

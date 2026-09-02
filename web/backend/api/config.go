@@ -54,8 +54,23 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Marshal, then redact: credentials in the Providers, Tools, and Debug
+	// subtrees are plain strings (those trees are yaml:"-", so they cannot be
+	// SecureString) and would otherwise be served verbatim.
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+	redactSecrets(tree)
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+	if err := json.NewEncoder(w).Encode(tree); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -83,6 +98,14 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if err = normalizeChannelArrayFields(raw); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
 		return
+	}
+	// The dashboard reads config, edits one field, and PUTs the whole document
+	// back, so untouched credentials arrive as the redaction sentinel. Put the
+	// real values back before decoding, or this save blanks them.
+	// SecureString handles itself on unmarshal and SecurityCopyFrom covers
+	// .security.yml; this covers the yaml:"-" subtrees that neither reaches.
+	if onDisk, diskErr := h.configAsTree(); diskErr == nil {
+		restoreRedactedSecrets(raw, onDisk)
 	}
 	normalizedBody, err := json.Marshal(raw)
 	if err != nil {
@@ -187,6 +210,11 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse current config", http.StatusInternalServerError)
 		return
 	}
+
+	// A patch may echo back the redaction sentinel for a credential the caller
+	// never edited; restore those from the on-disk values before merging, so
+	// the merge cannot overwrite a real secret with the placeholder.
+	restoreRedactedSecrets(patch, base)
 
 	// Recursively merge patch into base
 	mergeMap(base, patch)

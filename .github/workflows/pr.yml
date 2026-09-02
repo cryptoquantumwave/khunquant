@@ -61,3 +61,61 @@ jobs:
 
       - name: Run go test
         run: go test ./...
+
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Pinned to the major that produced the lockfile (v9 format, pnpm 10.x)
+      # rather than @latest. This job exists to catch lockfile problems, so a
+      # floating package manager that might reject or silently rewrite the
+      # lockfile would undermine the check.
+      - name: Setup pnpm
+        run: corepack enable && corepack prepare pnpm@10 --activate
+
+      # --frozen-lockfile is the point: it fails when the lockfile disagrees
+      # with package.json. A Dependabot PR that regenerated the lockfile without
+      # the pnpm.overrides block passed every existing check while making clean
+      # installs impossible and silently dropping two security pins.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # "pnpm build" is "tsc -b && vite build" — the same command that produces
+      # the dashboard embedded in the Go binary.
+      - name: Typecheck and build
+        run: pnpm build
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Builds only; nothing is pushed. docker-build.yml publishes images and
+      # runs on workflow_call at release time, so before this job no PR ever
+      # built an image. That is how a go.mod directive bump to a version newer
+      # than the builder image reached main with three green checks: CI resolves
+      # its toolchain from go.mod, so only an image build sees the mismatch.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

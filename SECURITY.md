@@ -128,6 +128,12 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 
   **Reachability:** `GET /api/config` sits behind the launcher session/password middleware and the IP allowlist, so this was never remote-unauthenticated. The exposure was that any dashboard-authenticated session — and anything that records its responses, such as browser devtools, extensions, or a HAR export — could read provider and tool API keys in full. Anyone who can read `config.json` on disk still has them.
 
+- **Exec sessions guard their input, not just their first command**: `exec` supports background and PTY sessions (`action: run` with `background`/`pty`, then `poll`/`read`/`write`/`send-keys`/`kill`). A session is a running shell, so anything written into it afterwards is executed too. `guardSessionInput` therefore applies the exec deny patterns to `write` data and to the literal (non-control-key) portion of `send-keys`.
+
+  **This is a deliberate divergence from upstream picoclaw**, where only the starting command reaches the guard. Under upstream's design, starting a session with a permitted interpreter (`sh`, `bash`, `python`) and then writing into it bypasses every deny pattern — the PowerShell encoding guards, the `rm -rf` forms, and the deny-patterns-always-apply fix — all of which would then apply only to the first line.
+
+  **Limitation:** the session guard checks deny patterns only, not the allowlist. Session input is a fragment (a bare `y`, a filename, a continuation line), and matching fragments against whole-command allow patterns would reject ordinary interactive use without adding safety. A command assembled across several `write` calls, each individually innocuous, is not detected — the guard inspects each write in isolation, not the reconstructed line.
+
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
 ### CSRF Protection Coverage & Special Cases

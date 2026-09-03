@@ -9,48 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SandboxRouteImport } from './routes/sandbox'
-import { Route as ModelsRouteImport } from './routes/models'
-import { Route as LogsRouteImport } from './routes/logs'
-import { Route as CredentialsRouteImport } from './routes/credentials'
-import { Route as ConfigRouteImport } from './routes/config'
-import { Route as AgentRouteImport } from './routes/agent'
-import { Route as PortfoliosRouteRouteImport } from './routes/portfolios/route'
-import { Route as ChannelsRouteRouteImport } from './routes/channels/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as PortfoliosNameRouteImport } from './routes/portfolios/$name'
-import { Route as ConfigRawRouteImport } from './routes/config.raw'
-import { Route as ChannelsNameRouteImport } from './routes/channels/$name'
-import { Route as AgentToolsRouteImport } from './routes/agent/tools'
-import { Route as AgentSkillsRouteImport } from './routes/agent/skills'
-import { Route as AgentPairingRouteImport } from './routes/agent/pairing'
-import { Route as AgentMemoryRouteImport } from './routes/agent/memory'
-import { Route as AgentCronRouteImport } from './routes/agent/cron'
+import { Route as AgentRouteImport } from './routes/agent'
+import { Route as ChannelsRouteRouteImport } from './routes/channels/route'
+import { Route as ConfigRouteImport } from './routes/config'
+import { Route as CredentialsRouteImport } from './routes/credentials'
+import { Route as LogsRouteImport } from './routes/logs'
+import { Route as ModelsRouteImport } from './routes/models'
+import { Route as PortfoliosRouteRouteImport } from './routes/portfolios/route'
+import { Route as SandboxRouteImport } from './routes/sandbox'
 import { Route as AgentConfigRouteImport } from './routes/agent/config'
+import { Route as AgentCronRouteImport } from './routes/agent/cron'
+import { Route as AgentMemoryRouteImport } from './routes/agent/memory'
+import { Route as AgentPairingRouteImport } from './routes/agent/pairing'
+import { Route as AgentSkillsRouteImport } from './routes/agent/skills'
+import { Route as AgentToolsRouteImport } from './routes/agent/tools'
+import { Route as ChannelsNameRouteImport } from './routes/channels/$name'
+import { Route as ConfigRawRouteImport } from './routes/config.raw'
+import { Route as PortfoliosNameRouteImport } from './routes/portfolios/$name'
 
-const SandboxRoute = SandboxRouteImport.update({
-  id: '/sandbox',
-  path: '/sandbox',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ModelsRoute = ModelsRouteImport.update({
-  id: '/models',
-  path: '/models',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LogsRoute = LogsRouteImport.update({
-  id: '/logs',
-  path: '/logs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CredentialsRoute = CredentialsRouteImport.update({
-  id: '/credentials',
-  path: '/credentials',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConfigRoute = ConfigRouteImport.update({
-  id: '/config',
-  path: '/config',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentRoute = AgentRouteImport.update({
@@ -58,54 +38,44 @@ const AgentRoute = AgentRouteImport.update({
   path: '/agent',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PortfoliosRouteRoute = PortfoliosRouteRouteImport.update({
-  id: '/portfolios',
-  path: '/portfolios',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChannelsRouteRoute = ChannelsRouteRouteImport.update({
   id: '/channels',
   path: '/channels',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ConfigRoute = ConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PortfoliosNameRoute = PortfoliosNameRouteImport.update({
-  id: '/$name',
-  path: '/$name',
-  getParentRoute: () => PortfoliosRouteRoute,
+const CredentialsRoute = CredentialsRouteImport.update({
+  id: '/credentials',
+  path: '/credentials',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ConfigRawRoute = ConfigRawRouteImport.update({
-  id: '/raw',
-  path: '/raw',
-  getParentRoute: () => ConfigRoute,
+const LogsRoute = LogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ChannelsNameRoute = ChannelsNameRouteImport.update({
-  id: '/$name',
-  path: '/$name',
-  getParentRoute: () => ChannelsRouteRoute,
+const ModelsRoute = ModelsRouteImport.update({
+  id: '/models',
+  path: '/models',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AgentToolsRoute = AgentToolsRouteImport.update({
-  id: '/tools',
-  path: '/tools',
-  getParentRoute: () => AgentRoute,
+const PortfoliosRouteRoute = PortfoliosRouteRouteImport.update({
+  id: '/portfolios',
+  path: '/portfolios',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AgentSkillsRoute = AgentSkillsRouteImport.update({
-  id: '/skills',
-  path: '/skills',
-  getParentRoute: () => AgentRoute,
+const SandboxRoute = SandboxRouteImport.update({
+  id: '/sandbox',
+  path: '/sandbox',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AgentPairingRoute = AgentPairingRouteImport.update({
-  id: '/pairing',
-  path: '/pairing',
-  getParentRoute: () => AgentRoute,
-} as any)
-const AgentMemoryRoute = AgentMemoryRouteImport.update({
-  id: '/memory',
-  path: '/memory',
+const AgentConfigRoute = AgentConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
   getParentRoute: () => AgentRoute,
 } as any)
 const AgentCronRoute = AgentCronRouteImport.update({
@@ -113,10 +83,40 @@ const AgentCronRoute = AgentCronRouteImport.update({
   path: '/cron',
   getParentRoute: () => AgentRoute,
 } as any)
-const AgentConfigRoute = AgentConfigRouteImport.update({
-  id: '/config',
-  path: '/config',
+const AgentMemoryRoute = AgentMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
   getParentRoute: () => AgentRoute,
+} as any)
+const AgentPairingRoute = AgentPairingRouteImport.update({
+  id: '/pairing',
+  path: '/pairing',
+  getParentRoute: () => AgentRoute,
+} as any)
+const AgentSkillsRoute = AgentSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => AgentRoute,
+} as any)
+const AgentToolsRoute = AgentToolsRouteImport.update({
+  id: '/tools',
+  path: '/tools',
+  getParentRoute: () => AgentRoute,
+} as any)
+const ChannelsNameRoute = ChannelsNameRouteImport.update({
+  id: '/$name',
+  path: '/$name',
+  getParentRoute: () => ChannelsRouteRoute,
+} as any)
+const ConfigRawRoute = ConfigRawRouteImport.update({
+  id: '/raw',
+  path: '/raw',
+  getParentRoute: () => ConfigRoute,
+} as any)
+const PortfoliosNameRoute = PortfoliosNameRouteImport.update({
+  id: '/$name',
+  path: '/$name',
+  getParentRoute: () => PortfoliosRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -257,39 +257,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/sandbox': {
-      id: '/sandbox'
-      path: '/sandbox'
-      fullPath: '/sandbox'
-      preLoaderRoute: typeof SandboxRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/models': {
-      id: '/models'
-      path: '/models'
-      fullPath: '/models'
-      preLoaderRoute: typeof ModelsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/logs': {
-      id: '/logs'
-      path: '/logs'
-      fullPath: '/logs'
-      preLoaderRoute: typeof LogsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/credentials': {
-      id: '/credentials'
-      path: '/credentials'
-      fullPath: '/credentials'
-      preLoaderRoute: typeof CredentialsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/config': {
-      id: '/config'
-      path: '/config'
-      fullPath: '/config'
-      preLoaderRoute: typeof ConfigRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agent': {
@@ -299,13 +271,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgentRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/portfolios': {
-      id: '/portfolios'
-      path: '/portfolios'
-      fullPath: '/portfolios'
-      preLoaderRoute: typeof PortfoliosRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/channels': {
       id: '/channels'
       path: '/channels'
@@ -313,60 +278,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChannelsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/config': {
+      id: '/config'
+      path: '/config'
+      fullPath: '/config'
+      preLoaderRoute: typeof ConfigRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/portfolios/$name': {
-      id: '/portfolios/$name'
-      path: '/$name'
-      fullPath: '/portfolios/$name'
-      preLoaderRoute: typeof PortfoliosNameRouteImport
-      parentRoute: typeof PortfoliosRouteRoute
+    '/credentials': {
+      id: '/credentials'
+      path: '/credentials'
+      fullPath: '/credentials'
+      preLoaderRoute: typeof CredentialsRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/config/raw': {
-      id: '/config/raw'
-      path: '/raw'
-      fullPath: '/config/raw'
-      preLoaderRoute: typeof ConfigRawRouteImport
-      parentRoute: typeof ConfigRoute
+    '/logs': {
+      id: '/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof LogsRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/channels/$name': {
-      id: '/channels/$name'
-      path: '/$name'
-      fullPath: '/channels/$name'
-      preLoaderRoute: typeof ChannelsNameRouteImport
-      parentRoute: typeof ChannelsRouteRoute
+    '/models': {
+      id: '/models'
+      path: '/models'
+      fullPath: '/models'
+      preLoaderRoute: typeof ModelsRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/agent/tools': {
-      id: '/agent/tools'
-      path: '/tools'
-      fullPath: '/agent/tools'
-      preLoaderRoute: typeof AgentToolsRouteImport
-      parentRoute: typeof AgentRoute
+    '/portfolios': {
+      id: '/portfolios'
+      path: '/portfolios'
+      fullPath: '/portfolios'
+      preLoaderRoute: typeof PortfoliosRouteRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/agent/skills': {
-      id: '/agent/skills'
-      path: '/skills'
-      fullPath: '/agent/skills'
-      preLoaderRoute: typeof AgentSkillsRouteImport
-      parentRoute: typeof AgentRoute
+    '/sandbox': {
+      id: '/sandbox'
+      path: '/sandbox'
+      fullPath: '/sandbox'
+      preLoaderRoute: typeof SandboxRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/agent/pairing': {
-      id: '/agent/pairing'
-      path: '/pairing'
-      fullPath: '/agent/pairing'
-      preLoaderRoute: typeof AgentPairingRouteImport
-      parentRoute: typeof AgentRoute
-    }
-    '/agent/memory': {
-      id: '/agent/memory'
-      path: '/memory'
-      fullPath: '/agent/memory'
-      preLoaderRoute: typeof AgentMemoryRouteImport
+    '/agent/config': {
+      id: '/agent/config'
+      path: '/config'
+      fullPath: '/agent/config'
+      preLoaderRoute: typeof AgentConfigRouteImport
       parentRoute: typeof AgentRoute
     }
     '/agent/cron': {
@@ -376,12 +334,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgentCronRouteImport
       parentRoute: typeof AgentRoute
     }
-    '/agent/config': {
-      id: '/agent/config'
-      path: '/config'
-      fullPath: '/agent/config'
-      preLoaderRoute: typeof AgentConfigRouteImport
+    '/agent/memory': {
+      id: '/agent/memory'
+      path: '/memory'
+      fullPath: '/agent/memory'
+      preLoaderRoute: typeof AgentMemoryRouteImport
       parentRoute: typeof AgentRoute
+    }
+    '/agent/pairing': {
+      id: '/agent/pairing'
+      path: '/pairing'
+      fullPath: '/agent/pairing'
+      preLoaderRoute: typeof AgentPairingRouteImport
+      parentRoute: typeof AgentRoute
+    }
+    '/agent/skills': {
+      id: '/agent/skills'
+      path: '/skills'
+      fullPath: '/agent/skills'
+      preLoaderRoute: typeof AgentSkillsRouteImport
+      parentRoute: typeof AgentRoute
+    }
+    '/agent/tools': {
+      id: '/agent/tools'
+      path: '/tools'
+      fullPath: '/agent/tools'
+      preLoaderRoute: typeof AgentToolsRouteImport
+      parentRoute: typeof AgentRoute
+    }
+    '/channels/$name': {
+      id: '/channels/$name'
+      path: '/$name'
+      fullPath: '/channels/$name'
+      preLoaderRoute: typeof ChannelsNameRouteImport
+      parentRoute: typeof ChannelsRouteRoute
+    }
+    '/config/raw': {
+      id: '/config/raw'
+      path: '/raw'
+      fullPath: '/config/raw'
+      preLoaderRoute: typeof ConfigRawRouteImport
+      parentRoute: typeof ConfigRoute
+    }
+    '/portfolios/$name': {
+      id: '/portfolios/$name'
+      path: '/$name'
+      fullPath: '/portfolios/$name'
+      preLoaderRoute: typeof PortfoliosNameRouteImport
+      parentRoute: typeof PortfoliosRouteRoute
     }
   }
 }

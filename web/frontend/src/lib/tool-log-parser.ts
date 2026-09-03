@@ -1,3 +1,7 @@
+// Matches ANSI SGR colour escapes so they can be stripped from tool output.
+// no-control-regex is disabled deliberately: \u001B is the escape character
+// this pattern exists to find, so the rule has nothing useful to say here.
+// eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = /\u001B\[([0-9;]*)m/g
 
 export type ToolCallEntry = {

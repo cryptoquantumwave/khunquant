@@ -21,21 +21,21 @@ const LauncherTokenQueryParam = "launcher_token"
 //
 // SameSite=Strict on the issued cookie blocks CSRF from cross-origin pages: a page
 // from evil.com cannot carry the cookie when reaching back to localhost.
-func SessionAuth(secret string, next http.Handler) http.Handler {
+func SessionAuth(secret string, store *SessionStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hasValidSession(r, secret) {
+		if hasValidSession(r, store) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		if isTrustedLoopbackCaller(r) {
-			issueSessionCookie(w, r, secret)
+			issueSessionCookie(w, r, store)
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		if checkRequestToken(r, secret) {
-			issueSessionCookie(w, r, secret)
+			issueSessionCookie(w, r, store)
 			if shouldRedirectAfterQueryToken(r) {
 				http.Redirect(w, r, sanitizedTokenURL(r), http.StatusFound)
 				return
@@ -67,12 +67,32 @@ func apiRequiresAuth(r *http.Request) bool {
 	return r.URL.Path != "/api/health" && r.URL.Path != "/api/ready"
 }
 
-func hasValidSession(r *http.Request, secret string) bool {
-	if secret == "" {
+// hasValidSession consults the session store rather than comparing the cookie
+// to the launcher secret.
+//
+// The previous implementation set the cookie value *to* the secret, so the
+// cookie was a bearer copy of it: one leaked cookie disclosed the secret, and
+// every session was byte-identical and therefore could not be revoked
+// individually. Session IDs are now unguessable and independent of the secret.
+func hasValidSession(r *http.Request, store *SessionStore) bool {
+	if store == nil {
 		return false
 	}
 	c, err := r.Cookie(SessionCookieName)
-	return err == nil && c.Value == secret
+	if err != nil {
+		return false
+	}
+	return store.Valid(c.Value)
+}
+
+// SessionIDFromRequest returns the session ID carried by the request, if any.
+// Used by the logout handler to revoke exactly the caller's own session.
+func SessionIDFromRequest(r *http.Request) string {
+	c, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
 }
 
 // isTrustedLoopbackCaller returns true when the IP is loopback and the Origin
@@ -118,15 +138,61 @@ func sanitizedTokenURL(r *http.Request) string {
 	return u.String()
 }
 
-func issueSessionCookie(w http.ResponseWriter, r *http.Request, secret string) {
+// issueSessionCookie mints a fresh session and sets it on the response. The
+// cookie carries a random session ID, never the launcher secret.
+func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionStore) {
+	if store == nil {
+		return
+	}
+	id, err := store.Create()
+	if err != nil {
+		return
+	}
 	secure := r.TLS != nil
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
-		Value:    secret,
+		Value:    id,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
 	})
+}
+
+// Paths for the dashboard session endpoints. They live here because both the
+// middleware (which must let the login request through unauthenticated) and the
+// API handler (which serves them) need to agree on the values.
+const (
+	LoginPath  = "/api/auth/login"
+	LogoutPath = "/api/auth/logout"
+)
+
+// ClearSessionCookie expires the session cookie on the client. Pairs with
+// SessionStore.Destroy: the server forgets the session, and the browser stops
+// presenting it.
+func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+}
+
+// IssueSessionFor mints a session and sets the cookie. Exported for the login
+// handler, which authenticates by password rather than by the trust rules in
+// SessionAuth.
+func IssueSessionFor(w http.ResponseWriter, r *http.Request, store *SessionStore) {
+	issueSessionCookie(w, r, store)
+}
+
+// VerifyDashboardPassword reports whether plain matches the configured hash.
+// Exported so the login handler can authenticate without duplicating the bcrypt
+// comparison or its fail-closed behaviour.
+func VerifyDashboardPassword(hash, plain string) bool {
+	return verifyPassword(hash, plain)
 }

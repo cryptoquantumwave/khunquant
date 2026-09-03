@@ -155,8 +155,15 @@ func main() {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
+	// One store shared by the session middleware (which validates and issues),
+	// the password middleware (which defers to an established session), and the
+	// API handler (which mints on login and revokes on logout).
+	sessionStore := middleware.NewSessionStore(0)
+	apiHandler.SetSessionAuth(sessionStore, launcherCfg.DashboardPasswordHash)
+
 	// Apply password auth after IP allowlist (both must pass for access).
 	passwordProtectedMux := middleware.PasswordAuth(middleware.PasswordAuthConfig{
+		Sessions:     sessionStore,
 		PasswordHash: launcherCfg.DashboardPasswordHash,
 	}, accessControlledMux)
 
@@ -165,7 +172,7 @@ func main() {
 		middleware.Logger(
 			middleware.SecurityHeaders(
 				middleware.JSONContentType(
-					middleware.SessionAuth(launcherCfg.LauncherToken, passwordProtectedMux),
+					middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, passwordProtectedMux),
 				),
 			),
 		),

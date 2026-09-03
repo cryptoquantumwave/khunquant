@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
@@ -26,6 +27,7 @@ type ContextBuilder struct {
 	memory             *MemoryStore
 	toolDiscoveryBM25  bool
 	toolDiscoveryRegex bool
+	splitOnMarker      bool
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -51,6 +53,14 @@ type ContextBuilder struct {
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
 	cb.toolDiscoveryBM25 = useBM25
 	cb.toolDiscoveryRegex = useRegex
+	return cb
+}
+
+// WithSplitOnMarker tells the model it may mark message boundaries. Without
+// this the marker is never emitted and the manager-side split is inert, so the
+// two halves of the feature have to be enabled together.
+func (cb *ContextBuilder) WithSplitOnMarker(enabled bool) *ContextBuilder {
+	cb.splitOnMarker = enabled
 	return cb
 }
 
@@ -159,6 +169,21 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 	memoryContext := cb.memory.GetMemoryContext()
 	if memoryContext != "" {
 		parts = append(parts, "# Memory\n\n"+memoryContext)
+	}
+
+	// Multi-message output, when enabled.
+	//
+	// Phrased as a capability rather than an instruction. Upstream's wording
+	// ("You MUST frequently... NEVER output a single long wall of text") pushes
+	// the model to fragment answers that are better whole; a marker is useful
+	// when the content genuinely divides, and harmful when it does not.
+	if cb.splitOnMarker {
+		parts = append(parts, "# Multi-Message Output\n\n"+
+			"You may insert "+channels.MessageSplitMarker+" where a response divides "+
+			"naturally into separate messages — for example distinct steps, or a "+
+			"summary followed by detail. Each part is delivered as its own message.\n\n"+
+			"Use it where the split helps the reader. A single coherent answer should "+
+			"stay a single message.")
 	}
 
 	// Join with "---" separator

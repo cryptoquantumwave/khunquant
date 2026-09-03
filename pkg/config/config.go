@@ -519,6 +519,12 @@ type AgentDefaults struct {
 	MaxContextAssets           int                `json:"max_context_assets"              env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_ASSETS"`
 	MaxContextDCAPlans         int                `json:"max_context_dca_plans"           env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_DCA_PLANS"`
 	MaxContextDNPlans          int                `json:"max_context_dn_plans"            env:"KHUNQUANT_AGENTS_DEFAULTS_MAX_CONTEXT_DN_PLANS"`
+	// SplitOnMarker lets the model emit <|[SPLIT]|> to mark a boundary between
+	// separate outbound messages, rather than everything arriving as one block.
+	// Off by default: a model that has not been told about the marker will never
+	// emit it, but a message that happens to contain the literal string would
+	// otherwise be split unexpectedly.
+	SplitOnMarker bool `json:"split_on_marker" env:"KHUNQUANT_AGENTS_DEFAULTS_SPLIT_ON_MARKER"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -801,9 +807,9 @@ type DevicesConfig struct {
 }
 
 type VoiceConfig struct {
-	EchoTranscription  bool   `json:"echo_transcription" env:"KHUNQUANT_VOICE_ECHO_TRANSCRIPTION"`
-	ModelName          string `json:"model_name,omitempty" env:"KHUNQUANT_VOICE_MODEL_NAME"`
-	ElevenLabsAPIKey   string `json:"elevenlabs_api_key,omitzero" env:"KHUNQUANT_VOICE_ELEVENLABS_API_KEY"`
+	EchoTranscription bool   `json:"echo_transcription" env:"KHUNQUANT_VOICE_ECHO_TRANSCRIPTION"`
+	ModelName         string `json:"model_name,omitempty" env:"KHUNQUANT_VOICE_MODEL_NAME"`
+	ElevenLabsAPIKey  string `json:"elevenlabs_api_key,omitzero" env:"KHUNQUANT_VOICE_ELEVENLABS_API_KEY"`
 }
 
 // DevMCPConfig controls the read-only developer MCP debug server.

@@ -616,6 +616,12 @@ type FeishuConfig struct {
 	Placeholder         PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
 	ReasoningChannelID  string              `json:"reasoning_channel_id"    yaml:"-" env:"KHUNQUANT_CHANNELS_FEISHU_REASONING_CHANNEL_ID"`
 	RandomReactionEmoji FlexibleStringSlice `json:"random_reaction_emoji"   yaml:"-" env:"KHUNQUANT_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
+	// IsLark selects Lark (open.larksuite.com) instead of Feishu
+	// (open.feishu.cn). Same product, separate deployments with separate
+	// hosts — an app registered on one is not reachable on the other, so
+	// pointing at the wrong domain fails authentication rather than
+	// degrading gracefully.
+	IsLark bool `json:"is_lark" yaml:"-" env:"KHUNQUANT_CHANNELS_FEISHU_IS_LARK"`
 }
 
 type DiscordConfig struct {

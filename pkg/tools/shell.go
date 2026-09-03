@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -19,7 +20,22 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
+var (
+	globalSessionManager = NewSessionManager()
+	sessionManagerMu     sync.RWMutex
+)
+
+// getSessionManager returns the process-wide session registry. Sessions
+// deliberately outlive a single ExecTool instance so that a background job
+// started in one turn is still pollable in the next.
+func getSessionManager() *SessionManager {
+	sessionManagerMu.RLock()
+	defer sessionManagerMu.RUnlock()
+	return globalSessionManager
+}
+
 type ExecTool struct {
+	sessionManager      *SessionManager
 	workingDir          string
 	timeout             time.Duration
 	denyPatterns        []*regexp.Regexp
@@ -187,6 +203,7 @@ func NewExecToolWithConfig(
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
 		allowedPathPatterns: allowedPathPatterns,
+		sessionManager:      getSessionManager(),
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
 	}, nil
@@ -224,7 +241,37 @@ func (t *ExecTool) Parameters() map[string]any {
 	}
 }
 
+// Execute dispatches by action. "run" is the default so that every existing
+// caller - which passes only "command" - keeps working unchanged; upstream made
+// action mandatory, which would have broken all of them.
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	action, _ := args["action"].(string)
+	switch strings.TrimSpace(action) {
+	case "", "run":
+		return t.executeRun(ctx, args)
+	case "list":
+		return t.executeList()
+	case "poll":
+		return t.executePoll(args)
+	case "read":
+		return t.executeRead(args)
+	case "write":
+		return t.executeWrite(args)
+	case "kill":
+		return t.executeKill(args)
+	case "send-keys":
+		return t.executeSendKeys(args)
+	default:
+		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
+	}
+}
+
+// executeRun runs a command, synchronously by default or in a background
+// session when "background" or "pty" is set. Everything before the branch -
+// the remote-channel restriction, working-directory validation, guardCommand,
+// and the symlink re-resolution that shrinks the TOCTOU window - applies to
+// both paths.
+func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
 	command, ok := args["command"].(string)
 	if !ok {
 		return ErrorResult("command is required")
@@ -288,6 +335,24 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 			}
 			cwd = resolved
 		}
+	}
+
+	getBoolArg := func(key string) bool {
+		switch v := args[key].(type) {
+		case bool:
+			return v
+		case string:
+			return v == "true"
+		}
+		return false
+	}
+	isPty := getBoolArg("pty")
+	if isPty && runtime.GOOS == "windows" {
+		return ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
+	}
+	if getBoolArg("background") || isPty {
+		// Reached only after guardCommand and the workspace checks above.
+		return t.runBackground(ctx, command, cwd, isPty)
 	}
 
 	// timeout == 0 means no timeout

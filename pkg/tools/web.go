@@ -89,7 +89,10 @@ func (it *APIKeyIterator) Next() (string, bool) {
 }
 
 type SearchProvider interface {
-	Search(ctx context.Context, query string, count int) (string, error)
+	// rangeCode is one of "", "d", "w", "m", "y" (see normalizeSearchRange).
+	// Empty means no recency filter. A provider that cannot express a given
+	// range ignores it and searches unfiltered rather than failing.
+	Search(ctx context.Context, query string, count int, rangeCode string) (string, error)
 }
 
 type BraveSearchProvider struct {
@@ -98,13 +101,16 @@ type BraveSearchProvider struct {
 	client  *http.Client
 }
 
-func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
 		return "", errors.New("no API key provided")
 	}
 
 	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		url.QueryEscape(query), count)
+	if freshness := mapBraveFreshness(rangeCode); freshness != "" {
+		searchURL += "&freshness=" + url.QueryEscape(freshness)
+	}
 
 	var lastErr error
 	iter := p.keyPool.NewIterator()
@@ -193,7 +199,7 @@ type TavilySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
 		return "", errors.New("no API key provided")
 	}
@@ -220,6 +226,9 @@ func (p *TavilySearchProvider) Search(ctx context.Context, query string, count i
 			"include_images":      false,
 			"include_raw_content": false,
 			"max_results":         count,
+		}
+		if timeRange := mapTavilyTimeRange(rangeCode); timeRange != "" {
+			payload["time_range"] = timeRange
 		}
 
 		bodyBytes, err := json.Marshal(payload)
@@ -300,8 +309,11 @@ type DuckDuckGoSearchProvider struct {
 	client *http.Client
 }
 
-func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
+	if dateFilter := mapDuckDuckGoDateFilter(rangeCode); dateFilter != "" {
+		searchURL += "&df=" + url.QueryEscape(dateFilter)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -392,7 +404,7 @@ type PerplexitySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
 		return "", errors.New("no API key provided")
 	}
@@ -421,6 +433,9 @@ func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, cou
 				},
 			},
 			"max_tokens": 1000,
+		}
+		if recencyFilter := mapPerplexityRecencyFilter(rangeCode); recencyFilter != "" {
+			payload["search_recency_filter"] = recencyFilter
 		}
 
 		payloadBytes, err := json.Marshal(payload)
@@ -490,7 +505,7 @@ type SearXNGSearchProvider struct {
 	client  *http.Client
 }
 
-func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	if p.baseURL == "" {
 		return "", errors.New("no SearXNG URL provided")
 	}
@@ -498,6 +513,9 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
 		strings.TrimSuffix(p.baseURL, "/"),
 		url.QueryEscape(query))
+	if timeRange := mapSearXNGTimeRange(rangeCode); timeRange != "" {
+		searchURL += "&time_range=" + url.QueryEscape(timeRange)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
@@ -563,7 +581,7 @@ type GLMSearchProvider struct {
 	client       *http.Client
 }
 
-func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
@@ -575,6 +593,9 @@ func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int)
 		"search_intent": false,
 		"count":         count,
 		"content_size":  "medium",
+	}
+	if recencyFilter := mapGLMRecencyFilter(rangeCode); recencyFilter != "" {
+		payload["search_recency_filter"] = recencyFilter
 	}
 
 	bodyBytes, err := json.Marshal(payload)
@@ -775,6 +796,13 @@ func (t *WebSearchTool) Parameters() map[string]any {
 				"minimum":     1.0,
 				"maximum":     10.0,
 			},
+			"range": map[string]any{
+				"type": "string",
+				"description": "Restrict results by recency: d (day), w (week), " +
+					"m (month), y (year). Omit for no restriction. " +
+					"Providers that cannot express the range search unfiltered.",
+				"enum": []string{"d", "w", "m", "y"},
+			},
 		},
 		"required": []string{"query"},
 	}
@@ -793,7 +821,19 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		}
 	}
 
-	result, err := t.provider.Search(ctx, query, count)
+	rangeCode := ""
+	if raw, ok := args["range"].(string); ok {
+		normalized, rangeErr := normalizeSearchRange(raw)
+		if rangeErr != nil {
+			// Refuse rather than silently searching unfiltered: a model that
+			// asked for recent results and got all-time ones would treat stale
+			// hits as current.
+			return ErrorResult(rangeErr.Error())
+		}
+		rangeCode = normalized
+	}
+
+	result, err := t.provider.Search(ctx, query, count, rangeCode)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}

@@ -1319,7 +1319,7 @@ func TestSearXNGSearchProvider_Search_Success(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "test", 5)
+	result, err := p.Search(context.Background(), "test", 5, "")
 	if err != nil {
 		t.Fatalf("SearXNG Search: %v", err)
 	}
@@ -1339,7 +1339,7 @@ func TestSearXNGSearchProvider_Search_NoResults(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "noresults", 5)
+	result, err := p.Search(context.Background(), "noresults", 5, "")
 	if err != nil {
 		t.Fatalf("SearXNG Search no results: %v", err)
 	}
@@ -1358,7 +1358,7 @@ func TestSearXNGSearchProvider_Search_ErrorStatus(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	_, err := p.Search(context.Background(), "test", 5)
+	_, err := p.Search(context.Background(), "test", 5, "")
 	if err == nil {
 		t.Error("SearXNG Search with 500 should return error")
 	}
@@ -1376,7 +1376,7 @@ func TestTavilySearchProvider_Search_Success(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "test query", 5)
+	result, err := p.Search(context.Background(), "test query", 5, "")
 	if err != nil {
 		t.Fatalf("Tavily Search: %v", err)
 	}
@@ -1397,7 +1397,7 @@ func TestTavilySearchProvider_Search_NoResults(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "noresults", 3)
+	result, err := p.Search(context.Background(), "noresults", 3, "")
 	if err != nil {
 		t.Fatalf("Tavily Search no results: %v", err)
 	}
@@ -1418,7 +1418,7 @@ func TestTavilySearchProvider_Search_ErrorStatus(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Tavily Search with 400 should return error")
 	}
@@ -1430,7 +1430,7 @@ func TestTavilySearchProvider_Search_NoKeys(t *testing.T) {
 		baseURL: "http://unused",
 		client:  &http.Client{},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Tavily Search with no keys should return error")
 	}
@@ -1441,7 +1441,7 @@ func TestBraveSearchProvider_Search_NoKeys(t *testing.T) {
 		keyPool: NewAPIKeyPool([]string{}),
 		client:  &http.Client{},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Brave Search with no keys should return error")
 	}
@@ -1468,7 +1468,7 @@ func TestDuckDuckGoSearchProvider_Search_Success(t *testing.T) {
 		})},
 	}
 
-	result, err := p.Search(context.Background(), "example", 5)
+	result, err := p.Search(context.Background(), "example", 5, "")
 	if err != nil {
 		t.Fatalf("DuckDuckGo Search: %v", err)
 	}
@@ -1484,7 +1484,7 @@ func TestDuckDuckGoSearchProvider_Search_RequestError(t *testing.T) {
 		})},
 	}
 
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("DuckDuckGo Search request error should return error")
 	}
@@ -1495,7 +1495,7 @@ func TestPerplexitySearchProvider_Search_NoKeys(t *testing.T) {
 		keyPool: NewAPIKeyPool([]string{}),
 		client:  &http.Client{},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Perplexity Search with no keys should return error")
 	}
@@ -1513,7 +1513,7 @@ func TestPerplexitySearchProvider_Search_Success(t *testing.T) {
 			}, nil
 		})},
 	}
-	result, err := p.Search(context.Background(), "test", 3)
+	result, err := p.Search(context.Background(), "test", 3, "")
 	if err != nil {
 		t.Fatalf("Perplexity Search success: %v", err)
 	}
@@ -1529,7 +1529,7 @@ func TestPerplexitySearchProvider_Search_RequestError(t *testing.T) {
 			return nil, fmt.Errorf("network failure")
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	// All keys exhaust → last error returned
 	if err == nil {
 		t.Error("Perplexity Search request error should return error")
@@ -1547,7 +1547,7 @@ func TestPerplexitySearchProvider_Search_ErrorStatus(t *testing.T) {
 			}, nil
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Perplexity Search 401 should return error")
 	}
@@ -1565,7 +1565,7 @@ func TestBraveSearchProvider_Search_Success(t *testing.T) {
 			}, nil
 		})},
 	}
-	result, err := p.Search(context.Background(), "brave test", 3)
+	result, err := p.Search(context.Background(), "brave test", 3, "")
 	if err != nil {
 		t.Fatalf("BraveSearchProvider.Search unexpected error: %v", err)
 	}
@@ -1589,7 +1589,7 @@ func TestBraveSearchProvider_Search_NoResults(t *testing.T) {
 			}, nil
 		})},
 	}
-	result, err := p.Search(context.Background(), "nothing", 3)
+	result, err := p.Search(context.Background(), "nothing", 3, "")
 	if err != nil {
 		t.Fatalf("BraveSearch no results unexpected error: %v", err)
 	}
@@ -1605,7 +1605,7 @@ func TestBraveSearchProvider_Search_RequestError(t *testing.T) {
 			return nil, fmt.Errorf("connection refused")
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("BraveSearch network error should return error")
 	}
@@ -1632,7 +1632,7 @@ func TestBraveSearchProvider_Search_RateLimited_ThenSuccess(t *testing.T) {
 			}, nil
 		})},
 	}
-	result, err := p.Search(context.Background(), "test", 3)
+	result, err := p.Search(context.Background(), "test", 3, "")
 	if err != nil {
 		t.Fatalf("BraveSearch rate-limit-then-success: %v", err)
 	}
@@ -1652,7 +1652,7 @@ func TestBraveSearchProvider_Search_NonRetryableError(t *testing.T) {
 			}, nil
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("BraveSearch 400 (non-retryable) should return error immediately")
 	}
@@ -1931,7 +1931,7 @@ func TestGLMSearchProvider_Search_NoResults(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "nothing", 3)
+	result, err := p.Search(context.Background(), "nothing", 3, "")
 	if err != nil {
 		t.Fatalf("GLMSearch no results: unexpected error: %v", err)
 	}
@@ -1960,7 +1960,7 @@ func TestGLMSearchProvider_Search_TruncatesResults(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "query", 2)
+	result, err := p.Search(context.Background(), "query", 2, "")
 	if err != nil {
 		t.Fatalf("GLMSearch truncation: unexpected error: %v", err)
 	}
@@ -1987,7 +1987,7 @@ func TestSearXNGSearchProvider_Search_NilClient(t *testing.T) {
 		baseURL: ts.URL,
 		client:  nil, // triggers the nil-client branch → uses default http.Client
 	}
-	result, err := p.Search(context.Background(), "test", 5)
+	result, err := p.Search(context.Background(), "test", 5, "")
 	// The default http.Client will attempt the request; it may succeed or fail depending on
 	// whether the httptest server accepts connections from the default transport.
 	// Both outcomes are fine — we only need the branch executed.
@@ -2013,7 +2013,7 @@ func TestSearXNGSearchProvider_Search_TruncatesResults(t *testing.T) {
 		baseURL: ts.URL,
 		client:  ts.Client(),
 	}
-	result, err := p.Search(context.Background(), "query", 2)
+	result, err := p.Search(context.Background(), "query", 2, "")
 	if err != nil {
 		t.Fatalf("SearXNG truncation: unexpected error: %v", err)
 	}
@@ -2039,7 +2039,7 @@ func TestPerplexitySearchProvider_Search_RetryableError_Exhausts(t *testing.T) {
 			}, nil
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Perplexity 429 with single key should exhaust and return error")
 	}
@@ -2060,7 +2060,7 @@ func TestPerplexitySearchProvider_Search_EmptyChoices(t *testing.T) {
 			}, nil
 		})},
 	}
-	result, err := p.Search(context.Background(), "empty", 3)
+	result, err := p.Search(context.Background(), "empty", 3, "")
 	if err != nil {
 		t.Fatalf("Perplexity empty choices: unexpected error: %v", err)
 	}
@@ -2081,7 +2081,7 @@ func TestPerplexitySearchProvider_Search_NonRetryableError(t *testing.T) {
 			}, nil
 		})},
 	}
-	_, err := p.Search(context.Background(), "test", 3)
+	_, err := p.Search(context.Background(), "test", 3, "")
 	if err == nil {
 		t.Error("Perplexity 404 (non-retryable) should return error immediately")
 	}

@@ -134,6 +134,10 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 
   **Limitation:** the session guard checks deny patterns only, not the allowlist. Session input is a fragment (a bare `y`, a filename, a continuation line), and matching fragments against whole-command allow patterns would reject ordinary interactive use without adding safety. A command assembled across several `write` calls, each individually innocuous, is not detected — the guard inspects each write in isolation, not the reconstructed line.
 
+- **web_fetch identifies itself when challenged**: outbound web requests present a browser User-Agent by default. When a WAF answers with `403` plus `Cf-Mitigated: challenge`, the request is retried **once** with `khunquant/<version> (+<repo>; AI assistant bot)` — a truthful identifier with a contact URL, which some operators allow-list. A challenge is a request to say who is calling, and the response is to answer it rather than to escalate the disguise.
+
+  Deliberately narrow: only that exact status-and-header pair retries, so an ordinary `403` costs one request rather than two. The browser default itself is unchanged and remains a pre-existing posture choice, not something this behaviour introduces.
+
 - **Non-browser clients can spoof CSRF headers**: A client that is not a web browser (e.g., a custom HTTP client or an attacker's tool) can arbitrarily set `Sec-Fetch-Site`, `Origin`, and `Referer` headers. CSRF protection assumes these headers are set by the browser and cannot be forged; this assumption breaks for non-browser clients. CSRF protection is part of the application-level defense but is **not a substitute for IP allowlist and password authentication**, which govern non-browser access.
 
 ### CSRF Protection Coverage & Special Cases

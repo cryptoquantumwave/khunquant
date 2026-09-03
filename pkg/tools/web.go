@@ -15,11 +15,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 const (
 	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+	// userAgentHonestFormat identifies this agent for its own sake. Used only as
+	// a retry after a WAF challenge: a site that asks who is calling gets a
+	// truthful answer with a contact URL, which some operators allow-list.
+	userAgentHonestFormat = "khunquant/%s (+https://github.com/cryptoquantumwave/khunquant; AI assistant bot)"
 
 	// HTTP client timeouts for web tool providers.
 	searchTimeout     = 10 * time.Second // Brave, Tavily, DuckDuckGo
@@ -915,29 +922,62 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create request: %v", err))
+	doFetch := func(ua string) (*http.Response, []byte, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+		if reqErr != nil {
+			return nil, nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+		allowConfiguredProxyFirstHop(req, t.client.Transport)
+		req.Header.Set("User-Agent", ua)
+
+		resp, doErr := t.client.Do(req)
+		if doErr != nil {
+			return nil, nil, fmt.Errorf("request failed: %w", doErr)
+		}
+		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
+
+		b, readErr := io.ReadAll(resp.Body)
+		return resp, b, readErr
 	}
-	allowConfiguredProxyFirstHop(req, t.client.Transport)
 
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("request failed: %v", err))
+	resp, body, err := doFetch(userAgent)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
 	}
-
-	resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
-
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			return ErrorResult(fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes))
 		}
-		return ErrorResult(fmt.Sprintf("failed to read response: %v", err))
+		return ErrorResult(err.Error())
+	}
+
+	// Cloudflare and similar WAFs signal a bot challenge with 403 plus
+	// "Cf-Mitigated: challenge". Retry once identifying honestly as this agent
+	// rather than as a browser: some operators allow-list AI assistants that say
+	// what they are, and escalating the disguise would be the wrong response to
+	// being asked to identify.
+	//
+	// Narrow on purpose — only that exact status-and-header pair retries, so an
+	// ordinary 403 costs one request, not two.
+	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
+		logger.DebugCF("tool", "Cloudflare challenge detected, retrying with an honest User-Agent",
+			map[string]any{"url": urlStr})
+
+		resp2, body2, err2 := doFetch(honestUserAgent())
+		if resp2 != nil && resp2.Body != nil {
+			defer resp2.Body.Close()
+		}
+		if err2 != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err2, &maxBytesErr) {
+				return ErrorResult(
+					fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes),
+				)
+			}
+			return ErrorResult(err2.Error())
+		}
+		resp, body = resp2, body2
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -1240,4 +1280,10 @@ func isPrivateOrRestrictedIP(ip net.IP) bool {
 	}
 
 	return false
+}
+
+// honestUserAgent returns the self-identifying User-Agent used when retrying a
+// WAF challenge.
+func honestUserAgent() string {
+	return fmt.Sprintf(userAgentHonestFormat, config.GetVersion())
 }

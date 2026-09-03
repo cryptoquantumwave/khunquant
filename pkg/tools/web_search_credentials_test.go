@@ -24,29 +24,29 @@ func TestSearchProviders_ReportMissingCredentialPlainly(t *testing.T) {
 	}{
 		{
 			name:    "brave with nil pool",
-			search:  func() (string, error) { return (&BraveSearchProvider{}).Search(ctx, "q", 3) },
+			search:  func() (string, error) { return (&BraveSearchProvider{}).Search(ctx, "q", 3, "") },
 			wantErr: "no API key provided",
 		},
 		{
 			name: "brave with empty pool",
 			search: func() (string, error) {
-				return (&BraveSearchProvider{keyPool: NewAPIKeyPool(nil)}).Search(ctx, "q", 3)
+				return (&BraveSearchProvider{keyPool: NewAPIKeyPool(nil)}).Search(ctx, "q", 3, "")
 			},
 			wantErr: "no API key provided",
 		},
 		{
 			name:    "tavily with nil pool",
-			search:  func() (string, error) { return (&TavilySearchProvider{}).Search(ctx, "q", 3) },
+			search:  func() (string, error) { return (&TavilySearchProvider{}).Search(ctx, "q", 3, "") },
 			wantErr: "no API key provided",
 		},
 		{
 			name:    "perplexity with nil pool",
-			search:  func() (string, error) { return (&PerplexitySearchProvider{}).Search(ctx, "q", 3) },
+			search:  func() (string, error) { return (&PerplexitySearchProvider{}).Search(ctx, "q", 3, "") },
 			wantErr: "no API key provided",
 		},
 		{
 			name:    "searxng with no base URL",
-			search:  func() (string, error) { return (&SearXNGSearchProvider{}).Search(ctx, "q", 3) },
+			search:  func() (string, error) { return (&SearXNGSearchProvider{}).Search(ctx, "q", 3, "") },
 			wantErr: "no SearXNG URL provided",
 		},
 	}

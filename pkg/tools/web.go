@@ -849,6 +849,33 @@ type WebFetchTool struct {
 	proxy           string
 	client          *http.Client
 	fetchLimitBytes int64
+	// format is the default HTML rendering: "plaintext" (tags stripped) or
+	// "markdown" (structure preserved). Empty means plaintext, so existing
+	// callers that never set it keep the behaviour they had.
+	format string
+}
+
+// SetFormat sets the default HTML rendering. Provided as a setter rather than a
+// constructor parameter so the two existing constructors, and their thirty-odd
+// call sites, are unaffected by an opt-in feature.
+func (t *WebFetchTool) SetFormat(format string) {
+	t.format = format
+}
+
+// resolveFetchFormat picks the rendering for one call: an explicit per-call
+// argument wins over the configured default, and anything unrecognised falls
+// back to plaintext rather than erroring — a fetch that returns readable text
+// is more useful than one that refuses over a formatting preference.
+func (t *WebFetchTool) resolveFetchFormat(args map[string]any) string {
+	if raw, ok := args["format"].(string); ok {
+		if f := strings.ToLower(strings.TrimSpace(raw)); f == "markdown" || f == "plaintext" {
+			return f
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(t.format), "markdown") {
+		return "markdown"
+	}
+	return "plaintext"
 }
 
 type privateHostWhitelist struct {
@@ -918,6 +945,12 @@ func (t *WebFetchTool) Parameters() map[string]any {
 			"url": map[string]any{
 				"type":        "string",
 				"description": "URL to fetch",
+			},
+			"format": map[string]any{
+				"type": "string",
+				"description": "How to render HTML: plaintext (default, tags stripped) " +
+					"or markdown (headings, lists, links and code blocks preserved).",
+				"enum": []string{"plaintext", "markdown"},
 			},
 			"maxChars": map[string]any{
 				"type":        "integer",
@@ -1036,8 +1069,24 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		}
 	} else if strings.Contains(contentType, "text/html") || len(body) > 0 &&
 		(strings.HasPrefix(string(body), "<!DOCTYPE") || strings.HasPrefix(strings.ToLower(string(body)), "<html")) {
-		text = t.extractText(string(body))
-		extractor = "text"
+		if t.resolveFetchFormat(args) == "markdown" {
+			// Preserves headings, lists, links and code blocks, which plaintext
+			// extraction flattens away — a model reading a docs page loses the
+			// structure that says what is a heading and what is body text.
+			md, mdErr := utils.HtmlToMarkdown(string(body))
+			if mdErr != nil {
+				// Fall back rather than fail: a page that will not convert is
+				// still worth reading as text.
+				text = t.extractText(string(body))
+				extractor = "text"
+			} else {
+				text = md
+				extractor = "markdown"
+			}
+		} else {
+			text = t.extractText(string(body))
+			extractor = "text"
+		}
 	} else {
 		text = string(body)
 		extractor = "raw"

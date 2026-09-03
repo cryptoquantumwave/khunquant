@@ -92,6 +92,10 @@ type BraveSearchProvider struct {
 }
 
 func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
+		return "", errors.New("no API key provided")
+	}
+
 	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		url.QueryEscape(query), count)
 
@@ -183,6 +187,10 @@ type TavilySearchProvider struct {
 }
 
 func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
+		return "", errors.New("no API key provided")
+	}
+
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://api.tavily.com/search"
@@ -378,6 +386,10 @@ type PerplexitySearchProvider struct {
 }
 
 func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	if p.keyPool == nil || len(p.keyPool.keys) == 0 {
+		return "", errors.New("no API key provided")
+	}
+
 	searchURL := "https://api.perplexity.ai/chat/completions"
 
 	var lastErr error
@@ -472,6 +484,10 @@ type SearXNGSearchProvider struct {
 }
 
 func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	if p.baseURL == "" {
+		return "", errors.New("no SearXNG URL provided")
+	}
+
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
 		strings.TrimSuffix(p.baseURL, "/"),
 		url.QueryEscape(query))
@@ -1153,7 +1169,6 @@ func normalizeWhitelistIP(ip net.IP) net.IP {
 func shouldBlockPrivateIP(ip net.IP, whitelist *privateHostWhitelist) bool {
 	return isPrivateOrRestrictedIP(ip) && !whitelist.Contains(ip)
 }
-
 
 // isObviousPrivateHost performs a lightweight, no-DNS check for obviously private hosts.
 // It catches localhost, literal private IPs, and empty hosts. It does NOT resolve DNS —

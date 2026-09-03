@@ -96,6 +96,18 @@ jobs:
       - name: Typecheck and build
         run: pnpm build
 
+      # The build regenerates routeTree.gen.ts. Generation is deterministic, so
+      # a diff here means the committed file is stale — which is how a
+      # router-plugin bump silently left it 151 lines out of date.
+      - name: Check generated route tree is current
+        run: git diff --exit-code -- src/routeTree.gen.ts
+
+      # Runs last: it is the least severe failure, and a broken build or a
+      # stale generated file should surface first. This also covers the class
+      # of break where a TypeScript upgrade outruns typescript-eslint.
+      - name: Lint
+        run: pnpm lint
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest

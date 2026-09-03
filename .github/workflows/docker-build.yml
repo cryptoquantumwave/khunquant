@@ -65,6 +65,9 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          # Required: there is no Dockerfile at the repo root, so the default
+          # of "{context}/Dockerfile" resolves to a path that does not exist.
+          file: docker/Dockerfile
           push: true
           tags: |
             ${{ steps.tags.outputs.ghcr_tag }}

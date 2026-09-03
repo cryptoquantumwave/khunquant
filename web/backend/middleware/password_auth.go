@@ -9,6 +9,12 @@ import (
 
 // PasswordAuthConfig holds configuration for dashboard password authentication.
 type PasswordAuthConfig struct {
+	// Sessions, when set, lets an authenticated session skip the Basic
+	// challenge. Without it a browser would have to resend credentials on
+	// every request even after logging in, and /api/auth/login could never
+	// be reached to establish a session in the first place.
+	Sessions *SessionStore
+
 	// PasswordHash is the bcrypt hash of the dashboard password.
 	// If empty, password authentication is disabled.
 	PasswordHash string
@@ -29,6 +35,21 @@ func PasswordAuth(cfg PasswordAuthConfig, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for health checks and ready checks.
 		if r.URL.Path == "/api/health" || r.URL.Path == "/api/ready" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// The login endpoint authenticates by password in its own body; it
+		// cannot itself require an existing session or a Basic header.
+		if r.URL.Path == LoginPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// An established session stands in for the Basic challenge. Revoking
+		// that session (logout) therefore revokes access, which is the whole
+		// point of having sessions at all.
+		if hasValidSession(r, cfg.Sessions) {
 			next.ServeHTTP(w, r)
 			return
 		}

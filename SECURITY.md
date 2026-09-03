@@ -94,6 +94,12 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 ### Known Limitations
 
 - **Spoofed or missing X-Forwarded-For**: If the reverse proxy is misconfigured or omits the `X-Forwarded-For` header, the launcher may fall back to the proxy's own IP, allowing unintended clients to bypass the IP allowlist.
+- **Dashboard sessions can be revoked**: `POST /api/auth/login` exchanges the dashboard password for a session; `POST /api/auth/logout` revokes it. Session IDs are 32 bytes of `crypto/rand`, held server-side, and independent of the launcher secret.
+
+  This replaces a scheme in which the `kq_session` cookie's value **was** the launcher secret. Under that design a captured cookie disclosed the secret itself, and every session was byte-identical — so there was nothing to revoke short of rotating the secret for everyone. An existing test asserted that equality, which is how it stayed in place.
+
+  **Limitations:** sessions live in memory only, so a launcher restart logs everyone out — a deliberate trade for a single local process, not persistence we intended and lost. Sessions expire after 12 hours. HTTP Basic still works as an alternative credential for non-browser clients, so this adds a revocable path rather than removing the unrevocable one; a leaked *password* still requires a hash rotation, and `SessionStore.DestroyAll` exists for that.
+
 - **No per-user authentication**: Authentication is single-password (not per-user). Any client who provides the correct password can perform any operation (modify config, restart agents, etc.).
 - **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
 - **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.

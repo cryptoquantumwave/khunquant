@@ -564,6 +564,28 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 
 // runWorker processes outbound messages for a single channel, splitting
 // messages that exceed the channel's maximum message length.
+// splitOutbound returns the messages to actually send for one outbound
+// message. Always returns at least one element.
+func (m *Manager) splitOutbound(content string, maxLen int) []string {
+	splitByLength := func(s string) []string {
+		if maxLen > 0 && len([]rune(s)) > maxLen {
+			return SplitMessage(s, maxLen)
+		}
+		return []string{s}
+	}
+
+	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
+		if parts := SplitByMarker(content); len(parts) > 1 {
+			out := make([]string, 0, len(parts))
+			for _, part := range parts {
+				out = append(out, splitByLength(part)...)
+			}
+			return out
+		}
+	}
+	return splitByLength(content)
+}
+
 func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
 	defer close(w.done)
 	for {
@@ -576,15 +598,17 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if mlp, ok := w.ch.(MessageLengthProvider); ok {
 				maxLen = mlp.MaxMessageLength()
 			}
-			if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
-				chunks := SplitMessage(msg.Content, maxLen)
-				for _, chunk := range chunks {
-					chunkMsg := msg
-					chunkMsg.Content = chunk
-					m.sendWithRetry(ctx, name, w, chunkMsg)
-				}
-			} else {
-				m.sendWithRetry(ctx, name, w, msg)
+			// Two independent splits, applied in order:
+			//  1. the marker, which is the model saying "these are separate
+			//     messages" — a semantic boundary;
+			//  2. the channel's length limit, which is a transport constraint.
+			// Length splitting runs on each marker part, so a long part is still
+			// chunked; doing it the other way round would let a length split
+			// cut across a marker and merge two intended messages.
+			for _, part := range m.splitOutbound(msg.Content, maxLen) {
+				partMsg := msg
+				partMsg.Content = part
+				m.sendWithRetry(ctx, name, w, partMsg)
 			}
 		case <-ctx.Done():
 			return

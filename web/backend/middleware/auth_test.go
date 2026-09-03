@@ -7,7 +7,7 @@ import (
 )
 
 func TestSessionAuth_NonLoopbackAPIRequiresToken(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -22,7 +22,7 @@ func TestSessionAuth_NonLoopbackAPIRequiresToken(t *testing.T) {
 }
 
 func TestSessionAuth_QueryTokenIssuesCookieAndRedirects(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -38,13 +38,20 @@ func TestSessionAuth_QueryTokenIssuesCookieAndRedirects(t *testing.T) {
 		t.Fatalf("Location = %q, want %q", got, "/?tab=chat")
 	}
 	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != SessionCookieName || cookies[0].Value != "secret-token" {
-		t.Fatalf("cookies = %#v, want %s=secret-token", cookies, SessionCookieName)
+	// The cookie must NOT be the secret. This assertion previously required the
+	// opposite, pinning the defect in place: the session cookie carried the
+	// launcher secret verbatim, so capturing one disclosed the secret and every
+	// session was byte-identical and individually unrevocable.
+	if len(cookies) != 1 || cookies[0].Name != SessionCookieName {
+		t.Fatalf("cookies = %#v, want a single %s cookie", cookies, SessionCookieName)
+	}
+	if cookies[0].Value == "secret-token" {
+		t.Fatalf("session cookie carries the launcher secret verbatim")
 	}
 }
 
 func TestSessionAuth_QueryTokenAllowsAPI(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -59,7 +66,7 @@ func TestSessionAuth_QueryTokenAllowsAPI(t *testing.T) {
 }
 
 func TestSessionAuth_LoopbackSameOriginStillAutoAuths(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -76,7 +83,7 @@ func TestSessionAuth_LoopbackSameOriginStillAutoAuths(t *testing.T) {
 }
 
 func TestSessionAuth_PicoWebSocketRequiresToken(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -91,7 +98,7 @@ func TestSessionAuth_PicoWebSocketRequiresToken(t *testing.T) {
 }
 
 func TestSessionAuth_PicoWebSocketWithTokenAllows(t *testing.T) {
-	h := SessionAuth("secret-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

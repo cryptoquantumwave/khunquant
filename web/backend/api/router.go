@@ -7,6 +7,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
+	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
 )
 
 // Handler serves HTTP API requests.
@@ -25,6 +26,8 @@ type Handler struct {
 	oauthFlows                 map[string]*oauthFlow
 	oauthState                 map[string]string
 	updateChecker              *updateChecker
+	sessions                   *middleware.SessionStore
+	dashboardPasswordHash      string
 }
 
 // NewHandler creates an instance of the API handler.
@@ -72,6 +75,9 @@ func (h *Handler) SetDebug(debug bool) {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Config CRUD
 	h.registerConfigRoutes(mux)
+
+	// Dashboard session endpoints (login / logout)
+	h.registerAuthRoutes(mux)
 
 	// Pico Channel (WebSocket chat)
 	h.registerPicoRoutes(mux)

@@ -48,6 +48,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/pid"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
@@ -149,6 +150,18 @@ func gatewayCmd(debug bool) error {
 			"skills_total":     skillsInfo["total"],
 			"skills_available": skillsInfo["available"],
 		})
+
+	// Claim the PID file before starting services. WritePidFile records
+	// os.Getpid(), so it has to run here in the gateway process rather than in
+	// the launcher that spawned it, and it refuses to write when a live gateway
+	// already holds the file. That refusal is the point: without it a launcher
+	// restart forgets the running gateway (it is tracked only by an in-memory
+	// *exec.Cmd) and happily starts a second one on the same port.
+	home := config.HomeDir()
+	if _, err := pid.WritePidFile(home, cfg.Gateway.Host, cfg.Gateway.Port); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+	defer pid.RemovePidFileIfPID(home, os.Getpid())
 
 	// Setup and start all services
 	services, err := setupAndStartServices(cfg, agentLoop, msgBus)

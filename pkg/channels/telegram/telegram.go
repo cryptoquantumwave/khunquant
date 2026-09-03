@@ -708,6 +708,26 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		}
 	}
 
+	// Prepend the quoted message before the empty check: a bare "yes" replying
+	// to something is meaningful, and would otherwise be dropped here as empty.
+	if message.ReplyToMessage != nil {
+		quotedMedia := quotedTelegramMediaRefs(
+			message.ReplyToMessage,
+			func(fileID, ext, filename string) string {
+				localPath := c.downloadFile(ctx, fileID, ext)
+				if localPath == "" {
+					return ""
+				}
+				return storeMedia(localPath, filename)
+			},
+		)
+		if len(quotedMedia) > 0 {
+			// Quoted media leads: it is the thing being referred to.
+			mediaPaths = append(quotedMedia, mediaPaths...)
+		}
+		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+	}
+
 	if content == "" && len(mediaPaths) == 0 {
 		return nil
 	}
@@ -761,6 +781,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"username":   user.Username,
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+
+	if message.ReplyToMessage != nil {
+		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
 	}
 
 	// Set parent_peer metadata for per-topic agent binding.
@@ -1192,4 +1216,128 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 	re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(botUsername))
 	content = re.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
+}
+
+// --- Quoted replies -------------------------------------------------------
+//
+// A Telegram reply carries the message it answers, but without this the agent
+// saw only the new text. "yes, do that" with no idea what "that" was is not a
+// prompt anything can act on. The quoted message is prepended as labelled
+// context, and any audio it carried is attached so the agent can hear what is
+// being referred to rather than only being told it exists.
+
+func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message) string {
+	quoted := strings.TrimSpace(telegramQuotedContent(reply))
+	if quoted == "" {
+		return content
+	}
+
+	author := telegramQuotedAuthor(reply)
+	role := c.telegramQuotedRole(reply)
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("[quoted %s message from %s]: %s", role, author, quoted)
+	}
+	return fmt.Sprintf("[quoted %s message from %s]: %s\n\n%s", role, author, quoted, content)
+}
+
+func (c *TelegramChannel) telegramQuotedRole(message *telego.Message) string {
+	if message == nil {
+		return "unknown"
+	}
+
+	if message.From != nil {
+		if !message.From.IsBot {
+			return "user"
+		}
+		if c.isOwnBotUser(message.From) {
+			return "assistant"
+		}
+		return "bot"
+	}
+
+	if message.SenderChat != nil {
+		return "chat"
+	}
+
+	return "unknown"
+}
+
+func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
+	if c == nil || c.bot == nil || user == nil || !user.IsBot {
+		return false
+	}
+
+	if botID := c.bot.ID(); botID != 0 && user.ID == botID {
+		return true
+	}
+
+	botUsername := strings.TrimPrefix(strings.TrimSpace(c.bot.Username()), "@")
+	if botUsername == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(user.Username), "@"), botUsername)
+}
+
+func telegramQuotedAuthor(message *telego.Message) string {
+	if message == nil || message.From == nil {
+		return "unknown"
+	}
+	if username := strings.TrimSpace(message.From.Username); username != "" {
+		return username
+	}
+	if firstName := strings.TrimSpace(message.From.FirstName); firstName != "" {
+		return firstName
+	}
+	return "unknown"
+}
+
+func telegramQuotedContent(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+
+	var parts []string
+	if text := strings.TrimSpace(message.Text); text != "" {
+		parts = append(parts, text)
+	}
+	if caption := strings.TrimSpace(message.Caption); caption != "" {
+		parts = append(parts, caption)
+	}
+	switch {
+	case len(message.Photo) > 0:
+		parts = append(parts, "[image: photo]")
+	}
+	switch {
+	case message.Voice != nil:
+		parts = append(parts, "[voice]")
+	case message.Audio != nil:
+		parts = append(parts, "[audio]")
+	}
+	if message.Document != nil {
+		parts = append(parts, "[file]")
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func quotedTelegramMediaRefs(
+	message *telego.Message,
+	resolve func(fileID, ext, filename string) string,
+) []string {
+	if message == nil || resolve == nil {
+		return nil
+	}
+
+	var refs []string
+	if message.Voice != nil {
+		if ref := resolve(message.Voice.FileID, ".ogg", "voice.ogg"); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	if message.Audio != nil {
+		if ref := resolve(message.Audio.FileID, ".mp3", "audio.mp3"); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }

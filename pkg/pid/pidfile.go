@@ -15,13 +15,17 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
-const pidFileName = ".picoclaw.pid"
+// pidFileName is the gateway's PID file, written inside config.HomeDir().
+const pidFileName = ".khunquant.pid"
 
 var errInvalidPidFile = errors.New("invalid pid file")
 
 // PidFileData is the JSON structure stored in the PID file.
 type PidFileData struct {
 	PID     int    `json:"pid"`
+	// Token is generated on write but read by nothing today. It exists for a
+	// future launcher↔gateway handshake; until something consumes it, treat it
+	// as reserved rather than as a credential in use.
 	Token   string `json:"token"`
 	Version string `json:"version"`
 	Port    int    `json:"port"`

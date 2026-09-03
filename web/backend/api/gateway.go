@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/pid"
 	"github.com/cryptoquantumwave/khunquant/web/backend/utils"
 )
 
@@ -137,7 +138,29 @@ func lookupModelConfig(cfg *config.Config, modelName string) *config.ModelConfig
 }
 
 func isGatewayProcessAliveLocked() bool {
-	return isCmdProcessAliveLocked(gateway.cmd)
+	if isCmdProcessAliveLocked(gateway.cmd) {
+		return true
+	}
+	// No child of ours is alive — but a gateway started by a previous launcher
+	// process may still be running. The launcher tracks the gateway only via an
+	// in-memory *exec.Cmd, so without this the launcher would report "not
+	// running" after its own restart and start a second gateway on the same
+	// port. ReadPidFileWithCheck returns nil for a missing, malformed, or dead
+	// entry and removes the file in the latter two cases.
+	return pid.ReadPidFileWithCheck(config.HomeDir()) != nil
+}
+
+// adoptedGatewayPID returns the PID of a running gateway this launcher did not
+// spawn, or 0. Reported so the dashboard can show a real PID rather than a
+// process it has no handle on.
+func adoptedGatewayPID() int {
+	if isCmdProcessAliveLocked(gateway.cmd) {
+		return 0
+	}
+	if data := pid.ReadPidFileWithCheck(config.HomeDir()); data != nil {
+		return data.PID
+	}
+	return 0
 }
 
 func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {

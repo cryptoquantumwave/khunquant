@@ -104,6 +104,12 @@ func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
 }
 
 type Config struct {
+	// Version records the schema this config was written against. Absent means
+	// 0 — a config predating the field — which is treated as the current shape,
+	// since version 1 introduced no changes. yaml:"-" keeps it out of
+	// .security.yml, which holds credentials rather than schema metadata.
+	Version int `json:"version,omitempty" yaml:"-"`
+
 	Agents      AgentsConfig      `json:"agents"                yaml:"-"`
 	Bindings    []AgentBinding    `json:"bindings,omitempty"    yaml:"-"`
 	Session     SessionConfig     `json:"session,omitempty"     yaml:"-"`
@@ -1304,6 +1310,12 @@ func LoadConfig(path string) (*Config, error) {
 	// file:// and enc:// references relative to the config directory.
 	updateResolver(path)
 
+	// Take the version from the file itself. Unmarshalling onto DefaultConfig
+	// leaves the default's version in place when the key is absent, which would
+	// make a config predating the field indistinguishable from a current one —
+	// the exact distinction this field exists to record.
+	cfg.Version = onDiskConfigVersion(data)
+
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
@@ -1319,7 +1331,17 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Migrate legacy channel config fields to new unified structures
+	// Refuse a config written by a newer build before touching anything else.
+	// Loading it would silently drop fields this build does not know, and the
+	// next save would write that loss back to disk.
+	if err := checkConfigVersion(cfg.Version); err != nil {
+		return nil, err
+	}
+
+	// Migrate legacy channel config fields to new unified structures.
+	// Still unconditional: these are idempotent and predate versioning, and
+	// gating them on version carries user-data risk for no gain until there is
+	// a second version to gate against.
 	cfg.migrateChannelConfigs()
 
 	// Auto-migrate: if only legacy providers config exists, convert to model_list
@@ -1368,6 +1390,12 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 
 	updateResolver(path)
 
+	// Take the version from the file itself. Unmarshalling onto DefaultConfig
+	// leaves the default's version in place when the key is absent, which would
+	// make a config predating the field indistinguishable from a current one —
+	// the exact distinction this field exists to record.
+	cfg.Version = onDiskConfigVersion(data)
+
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
@@ -1412,6 +1440,9 @@ func SaveConfig(path string, cfg *Config) error {
 	if err := saveSecurityConfig(securityPath(path), cfg); err != nil {
 		return err
 	}
+
+	// Record the schema this file was written against.
+	applyConfigVersion(cfg)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

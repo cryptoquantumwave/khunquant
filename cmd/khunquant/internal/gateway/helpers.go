@@ -26,6 +26,7 @@ import (
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/pico"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/qq"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/slack"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/teams_webhook"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/telegram"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/wecom"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/whatsapp"

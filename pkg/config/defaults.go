@@ -29,6 +29,8 @@ func DefaultConfig() *Config {
 	workspacePath := filepath.Join(homePath, "workspace")
 
 	return &Config{
+		// A fresh install is current, so it never looks like a legacy config.
+		Version: CurrentConfigVersion,
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
 				Workspace:                  workspacePath,

@@ -46,6 +46,7 @@ require (
 	github.com/NethermindEth/juno v0.14.0 // indirect
 	github.com/NethermindEth/starknet.go v0.14.0 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
+	github.com/atc0005/go-teams-notify/v2 v2.14.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/bits-and-blooms/bitset v1.21.0 // indirect

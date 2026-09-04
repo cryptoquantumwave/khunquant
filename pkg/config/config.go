@@ -554,22 +554,23 @@ func (d *AgentDefaults) GetModelName() string {
 }
 
 type ChannelsConfig struct {
-	WhatsApp   WhatsAppConfig   `json:"whatsapp"    yaml:"-"`
-	Telegram   TelegramConfig   `json:"telegram"    yaml:"telegram,omitempty"`
-	Feishu     FeishuConfig     `json:"feishu"      yaml:"feishu,omitempty"`
-	Discord    DiscordConfig    `json:"discord"     yaml:"discord,omitempty"`
-	MaixCam    MaixCamConfig    `json:"maixcam"     yaml:"-"`
-	QQ         QQConfig         `json:"qq"          yaml:"qq,omitempty"`
-	DingTalk   DingTalkConfig   `json:"dingtalk"    yaml:"dingtalk,omitempty"`
-	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
-	Matrix     MatrixConfig     `json:"matrix"      yaml:"matrix,omitempty"`
-	LINE       LINEConfig       `json:"line"        yaml:"line,omitempty"`
-	OneBot     OneBotConfig     `json:"onebot"      yaml:"onebot,omitempty"`
-	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"`
-	WeComApp   WeComAppConfig   `json:"wecom_app"   yaml:"wecom_app,omitempty"`
-	WeComAIBot WeComAIBotConfig `json:"wecom_aibot" yaml:"wecom_aibot,omitempty"`
-	Pico       PicoConfig       `json:"pico"        yaml:"pico,omitempty"`
-	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
+	WhatsApp     WhatsAppConfig     `json:"whatsapp"    yaml:"-"`
+	Telegram     TelegramConfig     `json:"telegram"    yaml:"telegram,omitempty"`
+	Feishu       FeishuConfig       `json:"feishu"      yaml:"feishu,omitempty"`
+	Discord      DiscordConfig      `json:"discord"     yaml:"discord,omitempty"`
+	MaixCam      MaixCamConfig      `json:"maixcam"     yaml:"-"`
+	QQ           QQConfig           `json:"qq"          yaml:"qq,omitempty"`
+	DingTalk     DingTalkConfig     `json:"dingtalk"    yaml:"dingtalk,omitempty"`
+	Slack        SlackConfig        `json:"slack"       yaml:"slack,omitempty"`
+	Matrix       MatrixConfig       `json:"matrix"      yaml:"matrix,omitempty"`
+	LINE         LINEConfig         `json:"line"        yaml:"line,omitempty"`
+	OneBot       OneBotConfig       `json:"onebot"      yaml:"onebot,omitempty"`
+	WeCom        WeComConfig        `json:"wecom"       yaml:"wecom,omitempty"`
+	WeComApp     WeComAppConfig     `json:"wecom_app"   yaml:"wecom_app,omitempty"`
+	WeComAIBot   WeComAIBotConfig   `json:"wecom_aibot" yaml:"wecom_aibot,omitempty"`
+	Pico         PicoConfig         `json:"pico"        yaml:"pico,omitempty"`
+	IRC          IRCConfig          `json:"irc"         yaml:"irc,omitempty"`
+	TeamsWebhook TeamsWebhookConfig `json:"teams_webhook" yaml:"teams_webhook,omitempty"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -794,6 +795,25 @@ type IRCConfig struct {
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"      yaml:"-"`
 	Typing             TypingConfig        `json:"typing,omitempty"             yaml:"-"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"         yaml:"-" env:"KHUNQUANT_CHANNELS_IRC_REASONING_CHANNEL_ID"`
+}
+
+// TeamsWebhookConfig configures the output-only Microsoft Teams webhook
+// channel. Output-only: Teams incoming webhooks deliver to a channel but carry
+// no inbound path, so this can notify but never receive.
+//
+// Several targets can be configured and chosen by ChatID at send time, which is
+// how one agent posts to different Teams channels.
+type TeamsWebhookConfig struct {
+	Enabled  bool                          `json:"enabled"  yaml:"-"                  env:"KHUNQUANT_CHANNELS_TEAMS_WEBHOOK_ENABLED"`
+	Webhooks map[string]TeamsWebhookTarget `json:"webhooks" yaml:"webhooks,omitempty"`
+}
+
+// TeamsWebhookTarget is a single Teams webhook destination. WebhookURL is a
+// SecureString: the URL is itself the credential - anyone holding it can post
+// to the channel - so it must not be serialised into config.json.
+type TeamsWebhookTarget struct {
+	WebhookURL SecureString `json:"webhook_url,omitzero" yaml:"webhook_url,omitempty"`
+	Title      string       `json:"title,omitempty"      yaml:"-"`
 }
 
 type HeartbeatConfig struct {

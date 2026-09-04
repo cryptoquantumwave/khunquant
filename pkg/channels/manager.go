@@ -322,6 +322,12 @@ func (m *Manager) initChannels() error {
 		m.initChannel("irc", "IRC")
 	}
 
+	// Requires at least one webhook target: an enabled channel with none
+	// configured could accept messages and deliver them nowhere.
+	if m.config.Channels.TeamsWebhook.Enabled && len(m.config.Channels.TeamsWebhook.Webhooks) > 0 {
+		m.initChannel("teams_webhook", "Teams Webhook")
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})

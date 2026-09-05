@@ -50,15 +50,17 @@ The web launcher (`web/backend`) implements multi-layer access control:
 
 1. **IP allowlist** (optional, network-level): A CIDR allowlist in `launcher-config.json` (field `allowed_cidrs`). Requests from IPs outside this range are rejected at the network level.
 2. **Trusted-proxy X-Forwarded-For parsing**: If the launcher is behind a reverse proxy (e.g., nginx), it can extract the client IP from the `X-Forwarded-For` header, but only when the proxy's IP is in `trusted_proxy_cidrs`.
-3. **Password authentication** (optional, application-level): A bcrypt-hashed password stored in `launcher-config.json` (field `dashboard_password_hash`). Credentials are verified via HTTP Basic authentication per request. This layer is **independent of** the IP allowlist—both must pass (if configured).
+3. **Password authentication** (optional, application-level): A bcrypt-hashed password stored in `launcher-config.json` (field `dashboard_password_hash`). Verified via HTTP Basic authentication, a `POST /api/auth/login` session cookie, or the launcher token — see "Password Authentication Semantics" below. This layer is **independent of** the IP allowlist—both must pass (if configured).
 4. **CSRF protection on state-changing endpoints** (application-level): State-changing launcher setup endpoints (e.g., `POST /api/pico/setup`) verify that requests originate from the launcher's own origin, not from an attacker's page. The check uses the `Sec-Fetch-Site` header when present (modern browsers), falls back to comparing parsed `Origin` and then `Referer` headers against the request's own scheme and host, and rejects requests that cannot be identified.
 
 ### Password Authentication Semantics
 
-- **Password is opt-in**: No password configured (empty `dashboard_password_hash`) means password authentication is disabled entirely. The dashboard behaves exactly as before (IP allowlist only). **This is deliberate backward compatibility.** Operators must actively set a password to enable this protection.
-- **Loopback bypass applies to IP allowlist only**: If `allow_localhost_bypass` is enabled, loopback addresses bypass the CIDR check. However, a configured password is still required from loopback callers. The two checks are independent.
-- **Credentials verified per request**: HTTP Basic authentication is checked on every request. No session cookie is minted; each request independently supplies and verifies credentials.
-- **Health checks exempt**: `/api/health` and `/api/ready` skip password authentication to allow external health monitors to function.
+- **Password is opt-in**: No password configured (empty `dashboard_password_hash`) means password authentication is disabled entirely. The dashboard behaves exactly as before (IP allowlist only, plus the loopback/launcher-token session rules described below). **This is deliberate backward compatibility.** Operators must actively set a password to enable this protection.
+- **Middleware order enforces the gate**: the launcher's HTTP handler wraps, outer to inner, `IPAllowlist → PasswordAuth → SessionAuth → mux`. `PasswordAuth` therefore always runs, and rejects, before `SessionAuth` gets a chance to do anything — this is what makes the next bullet true rather than aspirational.
+- **Loopback bypass applies to IP allowlist only**: If `allow_localhost_bypass` is enabled, loopback addresses bypass the CIDR check. A configured password is still required from loopback callers: `SessionAuth`'s auto-issue-a-session-for-loopback-callers rule is disabled outright whenever a password is configured, so a loopback caller with no session, no Basic credentials, and no launcher token gets a 401 with **no** `Set-Cookie` header — the same as any other caller. The two checks (IP allowlist and password) remain independent of each other.
+- **Credentials accepted**: on each request, in order — (1) a valid `kq_session` cookie from a prior login, (2) HTTP Basic authentication checked against the bcrypt hash, or (3) the launcher token (`Authorization: Bearer`, `X-Launcher-Token`, or `launcher_token` query parameter) — the launcher token is treated as an alternative launcher credential, since it is at least as privileged a secret as the dashboard password.
+- **Sessions are opt-in, not automatic**: `POST /api/auth/login` exchanges the dashboard password for a session cookie; `POST /api/auth/logout` revokes it. Basic-authenticated and launcher-token-authenticated requests are **not** automatically upgraded into a session — each such request is checked again on its own. In particular, presenting the launcher token authorizes that one request but does not mint a persistent session; only a successful password login does.
+- **Health checks exempt**: `/api/health` and `/api/ready` skip password authentication (and session/loopback checks) to allow external health monitors to function.
 
 ### Fail-Closed Guard
 
@@ -146,7 +148,7 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 
 - **`GET /oauth/callback`**: Top-level cross-site navigation from OAuth provider (Google, Anthropic). Naturally carries `Sec-Fetch-Site: cross-site`. Defense is state validation (checking `state` parameter against stored flows), not CSRF headers. This is correct and intentional.
 - **Read-only endpoints (GET, HEAD)**: Do not mutate state. CSRF protection adds failure modes with no security benefit.
-- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns`, `POST /api/models/fetch` — validation only, no state changes.
+- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns` — validation only, no state changes. (`POST /api/models/fetch` is no longer in this category: it persists fetched results to `model_catalogs.json` and is CSRF-protected like the other mutating model endpoints — see `handleFetchModels`'s SSRF/CSRF policy comment in `web/backend/api/models.go`.)
 
 **Endpoints NOT yet protected (out of scope for this change):**
 

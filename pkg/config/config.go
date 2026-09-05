@@ -733,7 +733,9 @@ type WeComConfig struct {
 	Enabled            bool                `json:"enabled"                     yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_ENABLED"`
 	Token              SecureString        `json:"token,omitzero"              yaml:"token,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_TOKEN"`
 	EncodingAESKey     SecureString        `json:"encoding_aes_key,omitzero"   yaml:"encoding_aes_key,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_ENCODING_AES_KEY"`
-	WebhookURL         string              `json:"webhook_url"                 yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_URL"`
+	// WebhookURL is a SecureString: the URL carries the bot secret in its
+	// ?key= query parameter, so it must not be serialised into config.json.
+	WebhookURL         SecureString        `json:"webhook_url,omitzero"        yaml:"webhook_url,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_URL"`
 	WebhookHost        string              `json:"webhook_host"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_HOST"`
 	WebhookPort        int                 `json:"webhook_port"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PORT"`
 	WebhookPath        string              `json:"webhook_path"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PATH"`

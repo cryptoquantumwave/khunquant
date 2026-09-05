@@ -49,6 +49,11 @@ func TestSearchProviders_ReportMissingCredentialPlainly(t *testing.T) {
 			search:  func() (string, error) { return (&SearXNGSearchProvider{}).Search(ctx, "q", 3, "") },
 			wantErr: "no SearXNG URL provided",
 		},
+		{
+			name:    "glm with no api key",
+			search:  func() (string, error) { return (&GLMSearchProvider{}).Search(ctx, "q", 3, "") },
+			wantErr: "no API key provided",
+		},
 	}
 
 	for _, tc := range tests {

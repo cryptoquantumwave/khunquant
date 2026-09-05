@@ -580,6 +580,15 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store and snapshot store.
 func (a *AgentInstance) Close() error {
+	// Background/PTY exec sessions belong to this instance's ExecTool; kill
+	// them so an agent teardown never leaves orphaned shells behind.
+	if a.Tools != nil {
+		if t, ok := a.Tools.Get("exec"); ok {
+			if s, ok := t.(interface{ Shutdown() }); ok {
+				s.Shutdown()
+			}
+		}
+	}
 	if a.snapshotStore != nil {
 		a.snapshotStore.Close()
 	}

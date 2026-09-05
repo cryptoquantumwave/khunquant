@@ -136,7 +136,6 @@ func DefaultConfig() *Config {
 			},
 			WeCom: WeComConfig{
 				Enabled:      false,
-				WebhookURL:   "",
 				WebhookHost:  "0.0.0.0",
 				WebhookPort:  18793,
 				WebhookPath:  "/webhook/wecom",

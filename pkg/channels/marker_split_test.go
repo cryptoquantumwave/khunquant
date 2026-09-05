@@ -37,6 +37,73 @@ func TestSplitByMarker(t *testing.T) {
 	}
 }
 
+// A runaway generation (or an adversarial output) that emits far more markers
+// than intended must not turn into hundreds of sequential sends.
+func TestSplitByMarker_CapsSegments(t *testing.T) {
+	t.Run("500 markers collapse to the cap, remainder in the last segment", func(t *testing.T) {
+		// 500 markers produce 501 parts (N markers split content into N+1 parts).
+		const markerCount = 500
+		parts := make([]string, markerCount+1)
+		for i := range parts {
+			parts[i] = "part" + string(rune('A'+i%26))
+		}
+		content := strings.Join(parts, MessageSplitMarker)
+		if strings.Count(content, MessageSplitMarker) != markerCount {
+			t.Fatalf("test setup error: content has %d markers, want %d", strings.Count(content, MessageSplitMarker), markerCount)
+		}
+
+		got := SplitByMarker(content)
+		if len(got) != MaxMarkerSegments {
+			t.Fatalf("got %d segments, want %d", len(got), MaxMarkerSegments)
+		}
+		for i := 0; i < MaxMarkerSegments-1; i++ {
+			if got[i] != parts[i] {
+				t.Errorf("segment %d = %q, want %q", i, got[i], parts[i])
+			}
+		}
+		last := got[MaxMarkerSegments-1]
+		wantSuffix := parts[len(parts)-1]
+		if !strings.HasSuffix(last, wantSuffix) {
+			t.Errorf("last segment %q does not end with the final part %q", last, wantSuffix)
+		}
+		if !strings.Contains(last, parts[MaxMarkerSegments-1]) {
+			t.Errorf("last segment %q does not contain the first merged remainder part %q", last, parts[MaxMarkerSegments-1])
+		}
+	})
+
+	t.Run("empty segments are dropped even under the cap", func(t *testing.T) {
+		content := strings.Repeat(MessageSplitMarker+"   ", 3) + "real content"
+		got := SplitByMarker(content)
+		if len(got) != 1 || got[0] != "real content" {
+			t.Fatalf("got %q, want [%q]", got, "real content")
+		}
+	})
+
+	t.Run("zero markers produce one segment", func(t *testing.T) {
+		got := SplitByMarker("no marker here")
+		if len(got) != 1 || got[0] != "no marker here" {
+			t.Fatalf("got %q, want [%q]", got, "no marker here")
+		}
+	})
+
+	t.Run("exactly at the cap is not merged", func(t *testing.T) {
+		parts := make([]string, MaxMarkerSegments)
+		for i := range parts {
+			parts[i] = "seg" + string(rune('a'+i))
+		}
+		content := strings.Join(parts, MessageSplitMarker)
+		got := SplitByMarker(content)
+		if len(got) != MaxMarkerSegments {
+			t.Fatalf("got %d segments, want %d", len(got), MaxMarkerSegments)
+		}
+		for i := range parts {
+			if got[i] != parts[i] {
+				t.Errorf("segment %d = %q, want %q", i, got[i], parts[i])
+			}
+		}
+	})
+}
+
 // splitOutbound is where the two splits meet. The order matters: the marker is
 // the model saying "separate messages", the length limit is a transport
 // constraint, and applying length first could cut across a marker.

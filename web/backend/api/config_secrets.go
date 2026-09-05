@@ -41,6 +41,7 @@ var secretFieldNames = map[string]bool{
 	"verification_token":   true,
 	"encoding_aes_key":     true,
 	"webhook_secret":       true,
+	"webhook_url":          true,
 	"private_key":          true,
 	"signing_secret":       true,
 }

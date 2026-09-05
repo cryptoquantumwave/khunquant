@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -20,19 +19,18 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
-var (
-	globalSessionManager = NewSessionManager()
-	sessionManagerMu     sync.RWMutex
-)
-
-// getSessionManager returns the process-wide session registry. Sessions
-// deliberately outlive a single ExecTool instance so that a background job
-// started in one turn is still pollable in the next.
-func getSessionManager() *SessionManager {
-	sessionManagerMu.RLock()
-	defer sessionManagerMu.RUnlock()
-	return globalSessionManager
-}
+// T1-1: session managers used to be process-wide (a single package-level
+// globalSessionManager shared by every ExecTool), so any agent's list/poll/
+// read/write/send-keys/kill could reach any other agent's live session by
+// guessing or observing its session ID. Each ExecTool now owns its own
+// SessionManager (constructed in NewExecToolWithConfig below), which makes
+// isolation structural: a session is only ever visible through the manager
+// that created it. Sessions still outlive a single call — the manager, like
+// the ExecTool, lives for the lifetime of the owning AgentInstance/CronTool,
+// so a background job started in one turn is still pollable in the next.
+// A parent and a subagent it spawns intentionally still share one manager:
+// ToolRegistry.Clone() (see registry.go) copies the same *ExecTool pointer
+// rather than constructing a new one, so they remain the same trust boundary.
 
 type ExecTool struct {
 	sessionManager      *SessionManager
@@ -95,8 +93,11 @@ var (
 		regexp.MustCompile(`\bssh\b.*@`),
 		regexp.MustCompile(`\beval\b`),
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
-		regexp.MustCompile(`\bfind\s+/(?:\s|$)`),  // find / - traverse entire filesystem
+		regexp.MustCompile(`\bfind\s+/(?:\s|$)`), // find / - traverse entire filesystem
 		regexp.MustCompile(`\bls\s+/(?:\s|$)`),   // ls / - list root directory
+		// T1-4: find ... -delete removes matched files without ever calling rm,
+		// so it slips past every rm-shaped deny pattern above.
+		regexp.MustCompile(`\bfind\b.*\s-delete\b`),
 	}
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
@@ -121,6 +122,41 @@ var (
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
 	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/(?:[^\s\"']*)?`)
+
+	// pathTraversalPattern (T1-3) blocks ".." wherever it functions as a real
+	// path-traversal segment. It is two alternatives:
+	//
+	//  1. `\.\.[\\/]` - ".." immediately followed by a path separator, wherever
+	//     it appears: "../x", chained "../../x", or mid-path "foo/../bar". This
+	//     is the form the original regex handled (it required a trailing
+	//     separator), so this half is unchanged in effect.
+	//
+	//  2. A standalone ".." token with no trailing separator at all - "cd ..",
+	//     "cd .. && x" - which the original regex missed entirely because it
+	//     required that trailing separator. This half only fires when the
+	//     ".." is a token by itself: preceded by start-of-string, whitespace,
+	//     a quote, '=', ';', '&', or '|', AND followed by end-of-string,
+	//     whitespace, a quote, ';', '&', or '|'.
+	//
+	// Requiring a boundary character (not "/") on the preceding side is what
+	// keeps this from matching "echo a..b" (preceded by 'a') or
+	// "go build ./..." (preceded by '.'), and keeps a git-style range like
+	// "HEAD..main" or "..HEAD" alone (whichever side sits next to a letter is
+	// never a boundary), without needing a file-extension or command
+	// allowlist to carve those cases back out.
+	pathTraversalPattern = regexp.MustCompile(
+		`\.\.[\\/]` + `|` + `(^|[\s"'=;&|])\.\.($|[\s"';&|])`,
+	)
+
+	// denyLineContinuation, denyEmptyQuotePair and denyIFS (T1-4) undo the
+	// cheapest shell-level splicing tricks before a command or session-input
+	// fragment is matched against denyPatterns. They are never applied to the
+	// text that is actually executed - only to the copy used for matching -
+	// so normalising too aggressively can only make the guard stricter, never
+	// change behavior.
+	denyLineContinuation = regexp.MustCompile(`\\\r?\n`)
+	denyEmptyQuotePair   = regexp.MustCompile(`""|''`)
+	denyIFS              = regexp.MustCompile(`\$\{IFS\}|\$IFS`)
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -203,10 +239,21 @@ func NewExecToolWithConfig(
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
 		allowedPathPatterns: allowedPathPatterns,
-		sessionManager:      getSessionManager(),
+		sessionManager:      NewSessionManager(),
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
 	}, nil
+}
+
+// Shutdown stops this ExecTool's session manager, killing every session it
+// owns (background and PTY alike). It does not affect other ExecTool
+// instances, each of which owns an independent SessionManager (T1-1).
+//
+// Nothing in this package calls Shutdown automatically: the caller that owns
+// the ExecTool's lifetime (an AgentInstance or a CronTool) is responsible for
+// calling it when that owner is torn down. See T1-6 in SECURITY.md.
+func (t *ExecTool) Shutdown() {
+	t.sessionManager.Shutdown()
 }
 
 func (t *ExecTool) Name() string {
@@ -642,15 +689,31 @@ func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
 	return false
 }
 
+// normalizeForDenyMatching undoes the cheapest shell-level obfuscation
+// (T1-4: backslash-newline line continuation, empty-quote splicing that
+// glues adjacent shell words back together, and $IFS/${IFS} used in place of
+// a literal space) before a command or session-input fragment is matched
+// against denyPatterns, and collapses whitespace so the surviving deny
+// patterns' \s+ still line up. The result is used only for deny-pattern
+// matching; the text that is actually executed, and the text used for the
+// workspace path checks below, is never touched by this function.
+func normalizeForDenyMatching(cmd string) string {
+	cmd = denyLineContinuation.ReplaceAllString(cmd, "")
+	cmd = denyEmptyQuotePair.ReplaceAllString(cmd, "")
+	cmd = denyIFS.ReplaceAllString(cmd, " ")
+	return strings.Join(strings.Fields(cmd), " ")
+}
+
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
+	denyLower := strings.ToLower(normalizeForDenyMatching(cmd))
 
 	// Deny patterns always apply, even when a command matches a custom allow rule.
 	// Custom allow rules can permit a command, but must not disable secret-safety
 	// deny rules such as jq env access checks.
 	for _, pattern := range t.denyPatterns {
-		if pattern.MatchString(lower) {
+		if pattern.MatchString(denyLower) {
 			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
@@ -662,119 +725,143 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	if t.restrictToWorkspace {
-		// Block path traversal patterns including .../.../ variants
-		if regexp.MustCompile(`\.\.(?:[\\/]\.\.)*[\\/]`).MatchString(cmd) {
-			return "Command blocked by safety guard (path traversal detected)"
+		if reason := t.checkWorkspaceViolation(cmd, cwd); reason != "" {
+			return "Command blocked by safety guard (" + reason + ")"
+		}
+	}
+
+	return ""
+}
+
+// checkWorkspaceViolation applies the workspace path checks - standalone/
+// trailing ".." path traversal, then every absolute-looking path token
+// resolved and compared against cwd - to text that is either about to run as
+// a command (guardCommand) or about to be written into an already-running
+// session (guardSessionInput, T1-2). Returns "" when nothing is wrong, or a
+// short reason fragment (e.g. "path traversal detected") describing the
+// violation, which the caller wraps with its own "blocked by safety guard"
+// prefix.
+//
+// This is the one place either guard performs these checks: previously
+// guardCommand had its own inline copy that guardSessionInput did not share,
+// so workspace restriction did not apply to input written into a running
+// session at all.
+func (t *ExecTool) checkWorkspaceViolation(command, cwd string) string {
+	cmd := command
+
+	// Block path traversal, including the standalone-token form ("cd ..")
+	// that the original single-alternative regex missed. See pathTraversalPattern.
+	if pathTraversalPattern.MatchString(cmd) {
+		return "path traversal detected"
+	}
+
+	cwdPath, err := filepath.Abs(cwd)
+	if err != nil {
+		return ""
+	}
+
+	// Resolve symlinks on the workspace path to enable proper comparison
+	if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
+		cwdPath = resolved
+	}
+
+	// On Windows, expand ~ and PowerShell environment variables ($env:VAR) before path checking
+	if runtime.GOOS == "windows" {
+		// Expand PowerShell environment variables ($env:VAR and ${env:VAR})
+		cmd = expandPowerShellEnvVars(cmd)
+		// Also expand ~ for completeness
+		if home, err := os.UserHomeDir(); err == nil {
+			cmd = strings.ReplaceAll(cmd, "~", filepath.FromSlash(home))
+		}
+	}
+
+	// Web URL schemes whose path components (starting with //) should be exempt
+	// from workspace sandbox checks. file: is intentionally excluded so that
+	// file:// URIs are still validated against the workspace boundary.
+	webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
+
+	matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+
+	for _, loc := range matchIndices {
+		raw := cmd[loc[0]:loc[1]]
+
+		// Skip URL path components that look like they're from web URLs.
+		// When a URL like "https://github.com" is parsed, the regex captures
+		// "//github.com" as a match (the path portion after "https:").
+		// Use the exact match position (loc[0]) so that duplicate //path substrings
+		// in the same command are each evaluated at their own position.
+		if strings.HasPrefix(raw, "//") && loc[0] > 0 {
+			before := cmd[:loc[0]]
+			isWebURL := false
+
+			for _, scheme := range webSchemes {
+				if strings.HasSuffix(before, scheme) {
+					isWebURL = true
+					break
+				}
+			}
+
+			if isWebURL {
+				continue
+			}
 		}
 
-		cwdPath, err := filepath.Abs(cwd)
+		// Skip scheme-less URL paths like "wttr.in/Beijing".
+		// When a /path is immediately preceded by a token that looks
+		// like a domain name and that token does NOT exist as a local
+		// filesystem entry, treat the path as part of a URL and skip
+		// workspace sandbox validation.
+		//
+		// The local-path-exists guard prevents symlink bypass: if
+		// "foo.bar" exists as a local symlink or directory, the path
+		// still undergoes full workspace validation (see #2965).
+		if loc[0] > 0 && raw[0] == '/' {
+			// Find the token immediately before the "/".
+			j := loc[0] - 1
+			for j >= 0 && !isShellTokenBoundary(cmd[j]) {
+				j--
+			}
+			token := cmd[j+1 : loc[0]]
+			if looksLikeDomain(token) && !localPathExists(cwd, token) {
+				continue
+			}
+		}
+
+		p, err := commandPathAbs(commandPathTextFromMatch(cmd, loc[0], loc[1]), cwdPath)
 		if err != nil {
-			return ""
+			continue
 		}
 
-		// Resolve symlinks on the workspace path to enable proper comparison
-		if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
-			cwdPath = resolved
-		}
-
-		// On Windows, expand ~ and PowerShell environment variables ($env:VAR) before path checking
+		// Windows-specific: normalize paths to block ADS and extended-length paths
 		if runtime.GOOS == "windows" {
-			// Expand PowerShell environment variables ($env:VAR and ${env:VAR})
-			cmd = expandPowerShellEnvVars(cmd)
-			// Also expand ~ for completeness
-			if home, err := os.UserHomeDir(); err == nil {
-				cmd = strings.ReplaceAll(cmd, "~", filepath.FromSlash(home))
+			// Strip \\?\ prefix (extended-length path)
+			p = strings.TrimPrefix(p, `\\?\`)
+			// Strip NTFS alternate data streams (only if colon is not at position 1 = drive letter)
+			if idx := strings.Index(p, ":"); idx > 1 {
+				p = p[:idx]
 			}
 		}
 
-		// Web URL schemes whose path components (starting with //) should be exempt
-		// from workspace sandbox checks. file: is intentionally excluded so that
-		// file:// URIs are still validated against the workspace boundary.
-		webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
+		// Check symlinks and junctions
+		resolved, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			p = resolved
+		}
 
-		matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+		if safePaths[p] {
+			continue
+		}
+		if isAllowedPath(p, t.allowedPathPatterns) {
+			continue
+		}
 
-		for _, loc := range matchIndices {
-			raw := cmd[loc[0]:loc[1]]
+		rel, err := filepath.Rel(cwdPath, p)
+		if err != nil {
+			continue
+		}
 
-			// Skip URL path components that look like they're from web URLs.
-			// When a URL like "https://github.com" is parsed, the regex captures
-			// "//github.com" as a match (the path portion after "https:").
-			// Use the exact match position (loc[0]) so that duplicate //path substrings
-			// in the same command are each evaluated at their own position.
-			if strings.HasPrefix(raw, "//") && loc[0] > 0 {
-				before := cmd[:loc[0]]
-				isWebURL := false
-
-				for _, scheme := range webSchemes {
-					if strings.HasSuffix(before, scheme) {
-						isWebURL = true
-						break
-					}
-				}
-
-				if isWebURL {
-					continue
-				}
-			}
-
-			// Skip scheme-less URL paths like "wttr.in/Beijing".
-			// When a /path is immediately preceded by a token that looks
-			// like a domain name and that token does NOT exist as a local
-			// filesystem entry, treat the path as part of a URL and skip
-			// workspace sandbox validation.
-			//
-			// The local-path-exists guard prevents symlink bypass: if
-			// "foo.bar" exists as a local symlink or directory, the path
-			// still undergoes full workspace validation (see #2965).
-			if loc[0] > 0 && raw[0] == '/' {
-				// Find the token immediately before the "/".
-				j := loc[0] - 1
-				for j >= 0 && !isShellTokenBoundary(cmd[j]) {
-					j--
-				}
-				token := cmd[j+1 : loc[0]]
-				if looksLikeDomain(token) && !localPathExists(cwd, token) {
-					continue
-				}
-			}
-
-			p, err := commandPathAbs(commandPathTextFromMatch(cmd, loc[0], loc[1]), cwdPath)
-			if err != nil {
-				continue
-			}
-
-			// Windows-specific: normalize paths to block ADS and extended-length paths
-			if runtime.GOOS == "windows" {
-				// Strip \\?\ prefix (extended-length path)
-				p = strings.TrimPrefix(p, `\\?\`)
-				// Strip NTFS alternate data streams (only if colon is not at position 1 = drive letter)
-				if idx := strings.Index(p, ":"); idx > 1 {
-					p = p[:idx]
-				}
-			}
-
-			// Check symlinks and junctions
-			resolved, err := filepath.EvalSymlinks(p)
-			if err == nil {
-				p = resolved
-			}
-
-			if safePaths[p] {
-				continue
-			}
-			if isAllowedPath(p, t.allowedPathPatterns) {
-				continue
-			}
-
-			rel, err := filepath.Rel(cwdPath, p)
-			if err != nil {
-				continue
-			}
-
-			if strings.HasPrefix(rel, "..") {
-				return "Command blocked by safety guard (path outside working dir)"
-			}
+		if strings.HasPrefix(rel, "..") {
+			return "path outside working dir"
 		}
 	}
 

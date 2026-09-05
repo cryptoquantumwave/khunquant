@@ -24,14 +24,23 @@ import (
 
 func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
 	sessionID := generateSessionID()
+	now := time.Now()
 	session := &ProcessSession{
 		ID:         sessionID,
 		Command:    command,
 		PTY:        ptyEnabled,
 		Background: true,
-		StartTime:  time.Now().Unix(),
+		StartTime:  now.Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
+		// T1-5: outputBuffer must be non-nil before the session is added to
+		// the manager (below) and becomes reachable from another goroutine's
+		// Get/Read/poll. It used to be set after Add(), which raced an
+		// unsynchronized nil read/write of this field against session.Read()
+		// and could nil-pointer-panic (recovered only by the registry's
+		// top-level panic guard) if a read landed in that window.
+		outputBuffer: &bytes.Buffer{},
+		lastActivity: now,
 	}
 
 	var cmd *exec.Cmd
@@ -93,8 +102,6 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	session.PID = cmd.Process.Pid
 	t.sessionManager.Add(session)
 
-	session.outputBuffer = &bytes.Buffer{}
-
 	// PTY mode: read from ptyMaster and wait for process
 	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
@@ -105,7 +112,12 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			if cmd.ProcessState != nil {
 				session.ExitCode = cmd.ProcessState.ExitCode()
 			}
-			session.Status = "done"
+			// Only a session that exited on its own becomes "done" here. If the
+			// SessionManager already killed it (idle timeout / Shutdown) the
+			// status is "exited" with a reason, and must not be clobbered.
+			if session.Status == "running" {
+				session.Status = "done"
+			}
 			session.mu.Unlock()
 		}()
 
@@ -192,7 +204,12 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 			if cmd.ProcessState != nil {
 				session.ExitCode = cmd.ProcessState.ExitCode()
 			}
-			session.Status = "done"
+			// Only a session that exited on its own becomes "done" here. If the
+			// SessionManager already killed it (idle timeout / Shutdown) the
+			// status is "exited" with a reason, and must not be clobbered.
+			if session.Status == "running" {
+				session.Status = "done"
+			}
 			session.mu.Unlock()
 		}()
 	}
@@ -235,11 +252,13 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 		}
 		return ErrorResult(err.Error())
 	}
+	session.Touch() // T1-6: counts as activity against the idle timeout.
 
 	resp := ExecResponse{
 		SessionID: sessionID,
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
+		Error:     session.GetExitReason(),
 	}
 	data, _ := json.Marshal(resp)
 	return &ToolResult{
@@ -261,6 +280,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 		}
 		return ErrorResult(err.Error())
 	}
+	session.Touch() // T1-6: counts as activity against the idle timeout.
 
 	output := session.Read()
 
@@ -268,6 +288,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 		SessionID: sessionID,
 		Output:    output,
 		Status:    session.GetStatus(),
+		Error:     session.GetExitReason(),
 	}
 	data, _ := json.Marshal(resp)
 	return &ToolResult{
@@ -309,6 +330,7 @@ func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
 		}
 		return ErrorResult(err.Error())
 	}
+	session.Touch() // T1-6: counts as activity against the idle timeout.
 
 	if session.IsDone() {
 		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
@@ -561,6 +583,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
 		}
 		return ErrorResult(err.Error())
 	}
+	session.Touch() // T1-6: counts as activity against the idle timeout.
 
 	ptyKeyMode := session.GetPtyKeyMode()
 

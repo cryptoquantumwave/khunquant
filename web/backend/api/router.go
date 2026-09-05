@@ -139,4 +139,20 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Webull re-authentication (Connect button + status polling)
 	h.registerWebullRoutes(mux)
+
+	// Health and readiness checks. Both middleware.PasswordAuth and
+	// middleware.SessionAuth exempt these two paths from auth so external
+	// monitors can poll them, but nothing previously registered them on the
+	// mux, so they 404'd. Keep the handler minimal and dependency-free: it
+	// must not touch config, gateway state, or auth.
+	mux.HandleFunc("GET /api/health", handleHealthCheck)
+	mux.HandleFunc("GET /api/ready", handleHealthCheck)
+}
+
+// handleHealthCheck reports liveness/readiness for external monitors. It is
+// intentionally unauthenticated (see RegisterRoutes) and does no work beyond
+// confirming the process is up and serving HTTP.
+func handleHealthCheck(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

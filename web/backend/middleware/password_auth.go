@@ -18,14 +18,30 @@ type PasswordAuthConfig struct {
 	// PasswordHash is the bcrypt hash of the dashboard password.
 	// If empty, password authentication is disabled.
 	PasswordHash string
+
+	// LauncherToken, when set, is accepted as an alternative credential to
+	// the dashboard password: a caller presenting it via Bearer/X-Launcher-Token
+	// header or the launcher_token query parameter is authorized exactly as if
+	// they had supplied the correct Basic password. The launcher token is at
+	// least as privileged a secret as the dashboard password (it also guards
+	// /pico/ws), so treating it as an alternative login credential does not
+	// weaken this gate. It does NOT, by itself, mint a session cookie — see
+	// SessionAuth's doc comment for why a token-authenticated request is
+	// re-checked on every subsequent request rather than remembered.
+	LauncherToken string
 }
 
-// PasswordAuth requires HTTP Basic authentication if a password hash is configured.
-// If no password is configured (empty hash), the middleware passes all requests through.
-// Requests are checked against the stored bcrypt hash; wrong credentials return 401.
+// PasswordAuth requires HTTP Basic authentication (or the launcher token, or
+// an established session) if a password hash is configured. If no password is
+// configured (empty hash), the middleware passes all requests through.
+// Requests are checked against the stored bcrypt hash; wrong or missing
+// credentials return 401.
 //
 // This middleware should be placed after IP allowlist checks so only IP-allowed
-// requests need to verify the password.
+// requests need to verify the password, and *before* SessionAuth: SessionAuth's
+// loopback/token auto-session rules are disabled whenever a password is
+// configured, precisely so that a caller cannot obtain a session here without
+// first clearing this gate.
 func PasswordAuth(cfg PasswordAuthConfig, next http.Handler) http.Handler {
 	// If no password configured, allow all requests through.
 	if strings.TrimSpace(cfg.PasswordHash) == "" {
@@ -50,6 +66,12 @@ func PasswordAuth(cfg PasswordAuthConfig, next http.Handler) http.Handler {
 		// that session (logout) therefore revokes access, which is the whole
 		// point of having sessions at all.
 		if hasValidSession(r, cfg.Sessions) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// The launcher token is an alternative launcher credential.
+		if checkRequestToken(r, cfg.LauncherToken) {
 			next.ServeHTTP(w, r)
 			return
 		}

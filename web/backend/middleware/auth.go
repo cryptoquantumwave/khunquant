@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,18 +13,46 @@ const LauncherTokenQueryParam = "launcher_token"
 
 // SessionAuth issues and validates session cookies for the launcher web UI.
 //
-// Trust rules (applied in order):
+// Trust rules when no dashboard password is configured (passwordHash == ""),
+// applied in order:
 //  1. Valid kq_session cookie → allow.
 //  2. Loopback caller whose Origin (if present) matches the server host → auto-issue cookie.
 //  3. Bearer / X-Launcher-Token header or launcher_token query parameter matches secret
 //     → auto-issue cookie.
 //  4. Otherwise → 401 for API requests.
 //
+// When a dashboard password IS configured, rules 2 and 3 above are disabled:
+// a loopback caller or a bearer token no longer auto-issues a session, because
+// doing so would let anyone reach the dashboard without ever presenting the
+// password (this was T2-1, a real bypass). A valid existing session (rule 1)
+// still short-circuits, but everything else is passed straight through to the
+// next handler unauthenticated-by-this-middleware.
+//
+// That pass-through is only safe because this middleware is meant to sit
+// *inside* PasswordAuth (main.go wires IPAllowlist → PasswordAuth →
+// SessionAuth → mux): PasswordAuth has already rejected any request that
+// didn't present a valid session, correct Basic credentials, the launcher
+// token, or hit an exempted path (health checks, /api/auth/login) before
+// SessionAuth ever runs. SessionAuth called directly with a non-empty
+// passwordHash and no PasswordAuth wrapped around it authenticates nothing —
+// callers must not do that.
+//
 // SameSite=Strict on the issued cookie blocks CSRF from cross-origin pages: a page
 // from evil.com cannot carry the cookie when reaching back to localhost.
-func SessionAuth(secret string, store *SessionStore, next http.Handler) http.Handler {
+func SessionAuth(secret string, store *SessionStore, passwordHash string, next http.Handler) http.Handler {
+	passwordConfigured := strings.TrimSpace(passwordHash) != ""
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hasValidSession(r, store) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if passwordConfigured {
+			// PasswordAuth, wrapped around this middleware, has already
+			// authorized the request (session, Basic credentials, launcher
+			// token, or an exempted path). Do not additionally apply the
+			// loopback/token auto-session rules below: those exist to stand
+			// in for a password check, and a password is configured.
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -118,10 +147,16 @@ func checkRequestToken(r *http.Request, secret string) bool {
 		return false
 	}
 	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-		return tok == secret
+		return constantTimeEqual(tok, secret)
 	}
-	return r.Header.Get("X-Launcher-Token") == secret ||
-		r.URL.Query().Get(LauncherTokenQueryParam) == secret
+	return constantTimeEqual(r.Header.Get("X-Launcher-Token"), secret) ||
+		constantTimeEqual(r.URL.Query().Get(LauncherTokenQueryParam), secret)
+}
+
+// constantTimeEqual compares two secrets without leaking their length or
+// content through timing, so a caller cannot probe for a valid prefix.
+func constantTimeEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func shouldRedirectAfterQueryToken(r *http.Request) bool {

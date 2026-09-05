@@ -146,33 +146,49 @@ func main() {
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
-	accessControlledMux, err := middleware.IPAllowlist(middleware.IPAllowlistConfig{
-		AllowedCIDRs:         launcherCfg.AllowedCIDRs,
-		AllowLocalhostBypass: launcherCfg.AllowLocalhostBypass,
-		TrustedProxyCIDRs:    launcherCfg.TrustedProxyCIDRs,
-	}, mux)
-	if err != nil {
-		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
-	}
-
 	// One store shared by the session middleware (which validates and issues),
 	// the password middleware (which defers to an established session), and the
 	// API handler (which mints on login and revokes on logout).
 	sessionStore := middleware.NewSessionStore(0)
 	apiHandler.SetSessionAuth(sessionStore, launcherCfg.DashboardPasswordHash)
 
-	// Apply password auth after IP allowlist (both must pass for access).
+	// SessionAuth is innermost of the three: it validates an existing session
+	// cookie, and (only when no dashboard password is configured) auto-issues
+	// one for a trusted loopback caller or a valid launcher token. When a
+	// password IS configured, PasswordAuth (below) has already gated the
+	// request by the time it reaches here, so those auto-issue rules are
+	// disabled — see SessionAuth's doc comment for why.
+	sessionAuthedMux := middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, launcherCfg.DashboardPasswordHash, mux)
+
+	// PasswordAuth wraps SessionAuth: a request must present a valid session,
+	// correct Basic credentials, or the launcher token (or hit an exempted
+	// path) before SessionAuth's handler — and therefore the mux — ever runs.
+	// This ordering is what fixes the dashboard password bypass: previously
+	// SessionAuth ran first and could auto-issue a session to any loopback
+	// caller with no password check at all.
 	passwordProtectedMux := middleware.PasswordAuth(middleware.PasswordAuthConfig{
-		Sessions:     sessionStore,
-		PasswordHash: launcherCfg.DashboardPasswordHash,
-	}, accessControlledMux)
+		Sessions:      sessionStore,
+		PasswordHash:  launcherCfg.DashboardPasswordHash,
+		LauncherToken: launcherCfg.LauncherToken,
+	}, sessionAuthedMux)
+
+	// IP allowlist is outermost of the three: a caller outside the allowed
+	// network never reaches the password/session checks at all.
+	accessControlledMux, err := middleware.IPAllowlist(middleware.IPAllowlistConfig{
+		AllowedCIDRs:         launcherCfg.AllowedCIDRs,
+		AllowLocalhostBypass: launcherCfg.AllowLocalhostBypass,
+		TrustedProxyCIDRs:    launcherCfg.TrustedProxyCIDRs,
+	}, passwordProtectedMux)
+	if err != nil {
+		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
+	}
 
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
 			middleware.SecurityHeaders(
 				middleware.JSONContentType(
-					middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, passwordProtectedMux),
+					accessControlledMux,
 				),
 			),
 		),

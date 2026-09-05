@@ -32,7 +32,7 @@ func TestSessionCookie_IsNotTheLauncherSecret(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
-	SessionAuth(secret, store, okHandler()).ServeHTTP(rec, req)
+	SessionAuth(secret, store, "", okHandler()).ServeHTTP(rec, req)
 
 	var cookie *http.Cookie
 	for _, c := range rec.Result().Cookies() {
@@ -99,7 +99,7 @@ func TestSessionAuth_RejectsRevokedSession(t *testing.T) {
 		req.RemoteAddr = "203.0.113.5:1234" // not loopback: cookie is the only way in
 		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: id})
 		rec := httptest.NewRecorder()
-		SessionAuth(secret, store, okHandler()).ServeHTTP(rec, req)
+		SessionAuth(secret, store, "", okHandler()).ServeHTTP(rec, req)
 		return rec.Code
 	}
 

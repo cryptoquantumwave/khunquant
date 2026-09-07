@@ -5,10 +5,11 @@ go 1.26.7
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/adhocore/gronx v1.20.3
-	github.com/anthropics/anthropic-sdk-go v1.68.0
+	github.com/anthropics/anthropic-sdk-go v1.70.1
+	github.com/atc0005/go-teams-notify/v2 v2.14.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/ccxt/ccxt/go/v4 v4.5.76
+	github.com/ccxt/ccxt/go/v4 v4.5.77
 	github.com/creack/pty v1.1.24
 	github.com/ergochat/irc-go v0.7.0
 	github.com/ergochat/readline v0.1.3
@@ -23,7 +24,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/mymmrac/telego v1.12.1
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
-	github.com/openai/openai-go/v3 v3.54.0
+	github.com/openai/openai-go/v3 v3.56.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
 	github.com/slack-go/slack v0.29.0
@@ -38,7 +39,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.30.0
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.58.0
 )
 
 require (
@@ -46,7 +47,6 @@ require (
 	github.com/NethermindEth/juno v0.14.0 // indirect
 	github.com/NethermindEth/starknet.go v0.14.0 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
-	github.com/atc0005/go-teams-notify/v2 v2.14.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/bits-and-blooms/bitset v1.21.0 // indirect
@@ -101,9 +101,9 @@ require (
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
 
@@ -130,7 +130,7 @@ require (
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/arch v0.24.0 // indirect
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0

@@ -20,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/clean"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/cron"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/gateway"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/launcher"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/migrate"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/model"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/onboard"
@@ -50,6 +51,7 @@ func NewKhunquantCommand() *cobra.Command {
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),
 		gateway.NewGatewayCommand(),
+		launcher.NewLauncherCommand(),
 		status.NewStatusCommand(),
 		cron.NewCronCommand(),
 		clean.NewCleanCommand(),

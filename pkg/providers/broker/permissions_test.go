@@ -1,6 +1,7 @@
 package broker_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -68,13 +69,47 @@ func TestCheckRisk_NotionalUnderMax(t *testing.T) {
 	}
 }
 
-func TestCheckRisk_NilPriceBypassesNotional(t *testing.T) {
+func TestCheckRisk_NilPriceRefusedWhenCeilingConfigured(t *testing.T) {
 	cfg := &config.Config{
 		TradingRisk: config.TradingRiskConfig{MaxOrderValueUSD: 1},
 	}
-	// price=nil → cannot compute notional, should not return an error for value check
+	// H-3: an unpriced order used to return nil here, so a market order of any
+	// size skipped max_order_value_usd. The caller must resolve a price.
+	if err := broker.CheckRisk(cfg, "buy", "market", 99999, nil); err == nil {
+		t.Error("expected an error for an unpriced order when a ceiling is configured")
+	}
+}
+
+func TestCheckRisk_NilPriceAllowedWithoutCeiling(t *testing.T) {
+	cfg := &config.Config{
+		TradingRisk: config.TradingRiskConfig{MaxOrderValueUSD: 0},
+	}
+	// No ceiling configured (the shipped default) → nothing to evaluate.
 	if err := broker.CheckRisk(cfg, "buy", "market", 99999, nil); err != nil {
-		t.Errorf("unexpected error for nil price: %v", err)
+		t.Errorf("unexpected error when no ceiling is configured: %v", err)
+	}
+}
+
+func TestCheckRiskNotional_RejectsNonFinite(t *testing.T) {
+	cfg := &config.Config{
+		TradingRisk: config.TradingRiskConfig{MaxOrderValueUSD: 1000},
+	}
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := broker.CheckRiskNotional(cfg, v); err == nil {
+			t.Errorf("CheckRiskNotional(%v) returned nil; NaN/Inf defeat every bound check", v)
+		}
+	}
+}
+
+func TestCheckRiskNotional_EnforcesCeiling(t *testing.T) {
+	cfg := &config.Config{
+		TradingRisk: config.TradingRiskConfig{MaxOrderValueUSD: 500},
+	}
+	if err := broker.CheckRiskNotional(cfg, 1000); err == nil {
+		t.Error("expected an error when notional exceeds the ceiling")
+	}
+	if err := broker.CheckRiskNotional(cfg, 100); err != nil {
+		t.Errorf("unexpected error under the ceiling: %v", err)
 	}
 }
 
@@ -98,18 +133,105 @@ func TestCheckRisk_RegularOrderType(t *testing.T) {
 // --- CheckPermission ---
 
 func TestCheckPermission_UnknownExchangeReturnsNil(t *testing.T) {
-	// "unknownex" is not handled by resolveExchangeAccount → (zero, false) → nil
+	// Provider IDs come from a dynamic factory registry, so a provider with no
+	// exchange-account config is a normal thing to exist. It falls through to
+	// CreateProviderForAccount, which reports the real "not registered" error.
 	cfg := &config.Config{}
 	if err := broker.CheckPermission(cfg, "unknownex", "main", config.ScopeTrade); err != nil {
 		t.Errorf("unexpected error for unrecognised exchange: %v", err)
 	}
 }
 
-func TestCheckPermission_AccountNotFoundReturnsNil(t *testing.T) {
-	// resolveExchangeAccount returns (zero, false) → CheckPermission returns nil
+// cfgWithBinanceAccount builds a config where "main" is restricted to market
+// data, so an unresolved name cannot be waved through as if unrestricted.
+func cfgWithBinanceAccount() *config.Config {
+	return &config.Config{
+		Exchanges: config.ExchangesConfig{
+			Binance: config.BinanceExchangeConfig{
+				Accounts: []config.ExchangeAccount{{
+					Name:        "main",
+					APIKey:      *config.NewSecureString("k"),
+					Permissions: []config.PermissionScope{config.ScopeMarketData},
+				}},
+			},
+		},
+	}
+}
+
+func TestCheckPermission_AccountNotFoundFailsClosedForTrade(t *testing.T) {
+	// H-4: a name that does not match any configured account used to pass
+	// silently, so the permission layer never applied the restrictions the
+	// operator wrote down.
+	cfg := cfgWithBinanceAccount()
+	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeTrade); err == nil {
+		t.Error("expected an error when a trading account cannot be resolved")
+	}
+	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeTransfer); err == nil {
+		t.Error("expected an error when a transfer account cannot be resolved")
+	}
+}
+
+func TestCheckPermission_AccountNotFoundAllowsReadOnlyScopes(t *testing.T) {
+	// Read-only scopes do not move money; leave them to the provider.
+	cfg := cfgWithBinanceAccount()
+	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeMarketData); err != nil {
+		t.Errorf("unexpected error for a read-only scope: %v", err)
+	}
+}
+
+func TestCheckPermission_NoAccountsConfiguredStaysPermissive(t *testing.T) {
+	// With no accounts configured nothing can authenticate: the default
+	// factory yields a public, credential-less adapter and a real order fails
+	// at the exchange. Refusing here would break dry-runs and previews without
+	// preventing a single trade.
 	cfg := &config.Config{}
-	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeTrade); err != nil {
-		t.Errorf("unexpected error when account not found: %v", err)
+	if err := broker.CheckPermission(cfg, "binance", "", config.ScopeTrade); err != nil {
+		t.Errorf("unexpected error when no accounts are configured: %v", err)
+	}
+}
+
+func TestCheckPermission_SettradeResolves(t *testing.T) {
+	cfg := &config.Config{
+		Exchanges: config.ExchangesConfig{
+			Settrade: config.SettradeExchangeConfig{
+				Enabled: true,
+				Accounts: []config.SettradeExchangeAccount{{
+					ExchangeAccount: config.ExchangeAccount{
+						Name:        "main",
+						APIKey:      *config.NewSecureString("k"),
+						Permissions: []config.PermissionScope{config.ScopeMarketData},
+					},
+				}},
+			},
+		},
+	}
+	// Resolvable and restricted → the scope check applies rather than being skipped.
+	if err := broker.CheckPermission(cfg, "settrade", "main", config.ScopeTrade); err == nil {
+		t.Error("expected an error when the settrade account lacks trade permission")
+	}
+	if err := broker.CheckPermission(cfg, "settrade", "main", config.ScopeMarketData); err != nil {
+		t.Errorf("unexpected error for a permitted scope: %v", err)
+	}
+}
+
+func TestCheckPermission_WebullResolvesWithoutStaticAPIKey(t *testing.T) {
+	// Webull authenticates with a session; a keyless account is still a real
+	// account and its permissions must be consulted.
+	cfg := &config.Config{
+		Exchanges: config.ExchangesConfig{
+			Webull: config.WebullExchangeConfig{
+				Enabled: true,
+				Accounts: []config.WebullExchangeAccount{{
+					ExchangeAccount: config.ExchangeAccount{
+						Name:        "main",
+						Permissions: []config.PermissionScope{config.ScopeMarketData},
+					},
+				}},
+			},
+		},
+	}
+	if err := broker.CheckPermission(cfg, "webull", "main", config.ScopeTrade); err == nil {
+		t.Error("expected an error when the webull account lacks trade permission")
 	}
 }
 
@@ -190,18 +312,27 @@ func TestCheckPermission_Bitkub(t *testing.T) {
 	}
 }
 
-func TestCheckPermission_OKX_NoAccount(t *testing.T) {
-	// OKX with empty key → resolveExchangeAccount returns (acc, false) → CheckPermission nil
+func TestCheckPermission_OKX_UnknownAccountFailsClosed(t *testing.T) {
+	// OKX has an account configured, so a name that matches none of them is a
+	// misconfiguration rather than an unconfigured exchange.
 	cfg := &config.Config{
 		Exchanges: config.ExchangesConfig{
 			OKX: config.OKXExchangeConfig{
-				Enabled:  true,
-				Accounts: []config.OKXExchangeAccount{},
+				Enabled: true,
+				Accounts: []config.OKXExchangeAccount{{
+					ExchangeAccount: config.ExchangeAccount{
+						Name:   "main",
+						APIKey: *config.NewSecureString("key"),
+					},
+				}},
 			},
 		},
 	}
-	if err := broker.CheckPermission(cfg, "okx", "", config.ScopeTrade); err != nil {
-		t.Errorf("unexpected error for missing okx account: %v", err)
+	if err := broker.CheckPermission(cfg, "okx", "typo", config.ScopeTrade); err == nil {
+		t.Error("expected an error when the named okx account does not exist")
+	}
+	if err := broker.CheckPermission(cfg, "okx", "main", config.ScopeTrade); err != nil {
+		t.Errorf("unexpected error for a configured okx account: %v", err)
 	}
 }
 

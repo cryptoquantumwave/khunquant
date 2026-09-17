@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -85,8 +86,13 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if providerID == "" || symbol == "" || orderType == "" || side == "" {
 		return ErrorResult("provider, symbol, type, and side are required")
 	}
-	if amount <= 0 {
-		return ErrorResult("amount must be positive")
+	// M-7: NaN defeats an ordinary "<= 0" guard, because every comparison
+	// against it is false. It arrives straight from JSON tool arguments.
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 {
+		return ErrorResult("amount must be a positive, finite number")
+	}
+	if price != nil && (math.IsNaN(*price) || math.IsInf(*price, 0) || *price <= 0) {
+		return ErrorResult("price must be a positive, finite number")
 	}
 	if orderType == "limit" && price == nil {
 		return ErrorResult("price is required for limit orders")
@@ -98,8 +104,15 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	// --- Gate 1c: risk controls ---
-	if err := broker.CheckRisk(t.cfg, side, orderType, amount, price); err != nil {
+	// Order-type guards need no price and run here. The notional ceiling runs
+	// at Gate 3b, once a market order has a price to be measured against.
+	if err := broker.CheckOrderType(t.cfg, orderType); err != nil {
 		return ErrorResult(err.Error())
+	}
+	if price != nil {
+		if err := broker.CheckRiskNotional(t.cfg, amount*(*price)); err != nil {
+			return ErrorResult(err.Error())
+		}
 	}
 
 	// --- Gate 1d: daily loss limit ---
@@ -129,6 +142,33 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(fmt.Sprintf("market %s is currently closed", symbol))
 	}
 
+	// --- Gate 3b: price the order ---
+	//
+	// H-3: a market order carries no price, and every downstream check that
+	// needed one simply skipped itself - max_order_value_usd never applied to
+	// a market order, and the balance preflight below compared a base-currency
+	// amount against a quote-currency balance ("need 2 BTC, have 5000 USDT"
+	// passes). Resolve the live price once here and use it for both.
+	effectivePrice := price
+	if effectivePrice == nil {
+		if md, ok := p.(broker.MarketDataProvider); ok {
+			if ticker, err := md.FetchTicker(ctx, symbol); err == nil && ticker.Last != nil {
+				if last := *ticker.Last; last > 0 && !math.IsNaN(last) && !math.IsInf(last, 0) {
+					effectivePrice = &last
+				}
+			}
+		}
+	}
+	if effectivePrice != nil {
+		if err := broker.CheckRiskNotional(t.cfg, amount*(*effectivePrice)); err != nil {
+			return ErrorResult(err.Error())
+		}
+	} else if t.cfg.TradingRisk.MaxOrderValueUSD > 0 {
+		return ErrorResult(fmt.Sprintf(
+			"cannot price %s on %s to enforce max_order_value_usd — refusing the order rather than placing it unchecked",
+			symbol, providerID))
+	}
+
 	// --- Gate 4: balance preflight (for buy orders) ---
 	if side == "buy" {
 		if pp, ok := p.(broker.PortfolioProvider); ok {
@@ -145,8 +185,8 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 						}
 					}
 					needed := amount
-					if price != nil {
-						needed = amount * (*price)
+					if effectivePrice != nil {
+						needed = amount * (*effectivePrice)
 					}
 					if quoteBalance < needed {
 						return ErrorResult(fmt.Sprintf("insufficient %s balance: have %.8g, need %.8g", quoteCurrency, quoteBalance, needed)).
@@ -158,8 +198,8 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	// --- Gate 5: position size warning ---
-	if price != nil {
-		notional := amount * (*price)
+	if effectivePrice != nil {
+		notional := amount * (*effectivePrice)
 		if notional > positionWarnThresholdUSD {
 			if !confirm {
 				return ErrorResult(fmt.Sprintf("large order warning: notional value %.2f exceeds %.0f USD. Set confirm=true to proceed.", notional, float64(positionWarnThresholdUSD)))

@@ -146,13 +146,24 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 	if notionalPrice == nil {
 		notionalPrice = stopPrice
 	}
-	riskAmount := quantity
+	if err := broker.CheckOrderType(t.cfg, strings.ToLower(orderTypeUpper)); err != nil {
+		return ErrorResult(err.Error())
+	}
 	if notionalPrice != nil {
 		// notional = limit_price × 100 (contracts) × quantity
-		riskAmount = quantity * (*notionalPrice) * 100
-	}
-	if err := broker.CheckRisk(t.cfg, strings.ToLower(side), strings.ToLower(orderTypeUpper), riskAmount, nil); err != nil {
-		return ErrorResult(err.Error())
+		//
+		// H-3: this was passed to CheckRisk as an "amount" with a nil price,
+		// which returned before looking at it, so max_order_value_usd never
+		// applied to an option order. It is a USD notional, so it goes to the
+		// notional check directly.
+		if err := broker.CheckRiskNotional(t.cfg, quantity*(*notionalPrice)*100); err != nil {
+			return ErrorResult(err.Error())
+		}
+	} else if t.cfg.TradingRisk.MaxOrderValueUSD > 0 {
+		// A market option order carries neither limit nor stop price, so there
+		// is no USD figure to measure. quantity alone is a contract count, not
+		// a notional, and comparing it to a USD ceiling would be meaningless.
+		return ErrorResult("cannot evaluate max_order_value_usd for an unpriced option order — supply a limit or stop price")
 	}
 
 	// --- Gate 1d: daily loss limit ---

@@ -28,6 +28,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/routing"
 	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
@@ -116,6 +117,15 @@ func NewAgentLoop(
 	var stateManager *state.Manager
 	if defaultAgent != nil {
 		stateManager = state.NewManager(defaultAgent.Workspace)
+	}
+
+	// C-4: give the daily loss limit somewhere to survive a restart. Every mode
+	// that runs trading tools (agent, gateway, cron, launcher) builds an
+	// AgentLoop, so wiring it here covers all of them; left unset, the limit
+	// silently resets to zero on every restart.
+	if defaultAgent != nil && defaultAgent.Workspace != "" {
+		broker.GlobalLossTracker.SetStorePath(
+			filepath.Join(defaultAgent.Workspace, "state", "daily_loss.json"))
 	}
 
 	al := &AgentLoop{

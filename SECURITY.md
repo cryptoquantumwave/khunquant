@@ -22,7 +22,7 @@ Upstream picoclaw implements OS-level process confinement for child processes vi
 The sole defence against subprocess risks is a regex deny-list defined in `pkg/tools/shell.go` (`defaultDenyPatterns` and platform-specific `windowsDenyPatterns`). The guard function `guardCommand` validates user-supplied commands before execution.
 
 This layer **structurally cannot provide**:
-- **Filesystem confinement**: The regex inspects the command string only; it does not resolve symlinks, does not prevent path traversal via relative paths or environment variables, and does not forbid writes to files outside the workspace.
+- **Filesystem confinement**: The regex inspects the command string only, and does not forbid writes to files outside the workspace. It is *not* purely textual any more — when `restrict_to_workspace` is set, `checkWorkspaceViolation` resolves symlinks, blocks `..` traversal, and expands `~` and `$HOME` against the child's own environment (`pkg/tools/shell_env.go`), with a restricted child's `HOME` set to the workspace so the guard and the shell agree on what `~` means. That closes the common escapes, not the category: this is still string analysis of one command, not a kernel-enforced boundary.
 - **Resource limits**: No CPU time, memory, or I/O quotas. A command can exhaust system resources.
 - **Capability dropping**: Process retains all capabilities of its parent. It can bind to privileged ports, modify kernel state, or load kernel modules if the parent can.
 - **PID/namespace isolation**: The child process is visible in the same PID namespace; it can signal or inspect sibling processes.
@@ -38,7 +38,7 @@ The deny-list catches common attack patterns in the command string:
 - Package manager operations (`apt`, `yum`, `npm -g`, `pip --user`), container ops, and git push.
 
 **The regex layer can be bypassed** by:
-- Obfuscating commands in environment variables or files written by prior steps.
+- Obfuscating commands in files written by prior steps. (Environment variables are a weaker vector than they were: exec children get an allowlisted environment rather than the gateway's — so no API keys — and the workspace guard expands `~`/`$HOME` and unset variables the way the shell will.)
 - Using lesser-known commands not on the deny-list (e.g., `shred`, `srm`, `dd bs=` with a different argument order).
 - Exploiting parser bugs in the regex engine or shell itself (e.g., Unicode normalization, locale-specific character classes).
 

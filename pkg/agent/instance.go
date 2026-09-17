@@ -116,7 +116,7 @@ func NewAgentInstance(
 		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, buildExecAllowPatterns(cfg))
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -560,6 +560,35 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	var configured []string
 	if cfg != nil {
 		configured = cfg.Tools.AllowReadPaths
+	}
+
+	compiled := compilePatterns(configured)
+	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern())
+	for _, pattern := range compiled {
+		if pattern.String() == mediaDirPattern.String() {
+			return compiled
+		}
+	}
+
+	return append(compiled, mediaDirPattern)
+}
+
+// buildExecAllowPatterns returns the paths exec may reach outside the
+// workspace.
+//
+// M-1: exec used to be handed the *read* allowlist. But exec is not a reader -
+// it runs a shell, and a path it may touch is a path it may write:
+// allow_read_paths granted "> /that/path/file" just as surely as "cat". A
+// configuration that reads as read-only was therefore read-write in practice,
+// which is the opposite of what the setting looks like it does.
+//
+// It gets the write allowlist instead, which is the honest reading of "a path
+// this agent may modify", plus the media temp directory that exec-based media
+// processing (ffmpeg and friends) writes into.
+func buildExecAllowPatterns(cfg *config.Config) []*regexp.Regexp {
+	var configured []string
+	if cfg != nil {
+		configured = cfg.Tools.AllowWritePaths
 	}
 
 	compiled := compilePatterns(configured)

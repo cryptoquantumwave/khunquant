@@ -182,7 +182,12 @@ func main() {
 	// password IS configured, PasswordAuth (below) has already gated the
 	// request by the time it reaches here, so those auto-issue rules are
 	// disabled — see SessionAuth's doc comment for why.
-	sessionAuthedMux := middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, launcherCfg.DashboardPasswordHash, mux)
+	// H-7: CSRF is enforced for every mutating /api route here rather than
+	// relying on each handler to remember. It sits inside the auth chain, so an
+	// unauthenticated cross-site request is still rejected as 401 by
+	// PasswordAuth before this can answer 403.
+	sessionAuthedMux := middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, launcherCfg.DashboardPasswordHash,
+		middleware.CSRFMutations(mux))
 
 	// PasswordAuth wraps SessionAuth: a request must present a valid session,
 	// correct Basic credentials, or the launcher token (or hit an exempted

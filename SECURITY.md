@@ -87,7 +87,11 @@ If no allowlist is provided, the process exits with an error.
 
 ### CSRF Protection Semantics
 
-State-changing launcher endpoints (currently `/api/pico/setup` only) are protected against Cross-Site Request Forgery (CSRF) attacks via origin verification. The mechanism works as follows:
+Every state-changing request — `POST`, `PUT`, `PATCH` or `DELETE` to any `/api/` route — is protected against Cross-Site Request Forgery (CSRF) via origin verification. The check is applied centrally by the `CSRFMutations` middleware (`web/backend/middleware/csrf.go`), which sits inside the auth chain, so a route is covered by existing rather than by each handler remembering to ask.
+
+Handlers that were individually protected before the check was centralised still call it inline as well. That redundancy is deliberate: a future refactor could reorder or drop the middleware, and those routes would remain protected.
+
+The mechanism works as follows:
 
 - **Sec-Fetch-Site header** (modern browsers): Checked first. Values `cross-site` and `same-site` are rejected immediately; `same-origin` is accepted immediately. The value `none` (top-level navigation) and absent headers fall through to `Origin` header checks.
 - **Origin header** (older browsers): If present and non-empty, parsed as a URL and compared against the request's own scheme and host. Must match exactly. The special value `"null"` (used in sandboxed contexts) is rejected as unidentified. Malformed URLs or headers containing whitespace are rejected as well.
@@ -151,22 +155,21 @@ State-changing launcher endpoints (currently `/api/pico/setup` only) are protect
 
 - **`GET /oauth/callback`**: Top-level cross-site navigation from OAuth provider (Google, Anthropic). Naturally carries `Sec-Fetch-Site: cross-site`. Defense is state validation (checking `state` parameter against stored flows), not CSRF headers. This is correct and intentional.
 - **Read-only endpoints (GET, HEAD)**: Do not mutate state. CSRF protection adds failure modes with no security benefit.
-- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns` — validation only, no state changes. (`POST /api/models/fetch` is no longer in this category: it persists fetched results to `model_catalogs.json` and is CSRF-protected like the other mutating model endpoints — see `handleFetchModels`'s SSRF/CSRF policy comment in `web/backend/api/models.go`.)
+- **Test-only endpoints without persistence**: `POST /api/config/test-command-patterns` validates patterns and changes nothing. It is nonetheless covered by `CSRFMutations`, like every other mutating `/api/` route — a uniform rule is easier to reason about, and to keep correct as routes are added, than an exemption list, and protecting this one costs nothing. (`POST /api/models/fetch` was once listed here and is not test-only at all: it persists fetched results to `model_catalogs.json` — see `handleFetchModels`'s SSRF/CSRF policy comment in `web/backend/api/models.go`.)
 
-**Endpoints NOT yet protected (out of scope for this change):**
+**Coverage is now universal.** Earlier releases protected only the launcher setup endpoints, leaving agent configuration and memory writes, delta-neutral position management, cron scheduling, device pairing, the sandbox, system autostart and broker reconnection reachable from any page the operator merely visited — the session cookie rides along automatically, so a forged request from an attacker's page was indistinguishable from a real one at the network layer. `CSRFMutations` closes that gap by covering every mutating `/api/` route by default; a newly added route is protected without its author doing anything.
 
-Agent operations are not yet CSRF-protected:
-- `/api/agent/config/files/*` (agent-specific configuration file operations)
-- `/api/agent/memory/files/*` (agent memory snapshots and queries)
-- `/api/agent/snapshots/*` (agent state snapshots)
-- `/api/agent/delta-neutral/*` (delta-neutral position management)
-- `/api/cron/jobs/*` (cron job scheduling)
-- `/api/pairing/*` (device pairing operations)
-- `/api/sandbox/*` (isolated code execution environment)
-- `/api/system/autostart` (system autostart configuration)
-- `/api/exchanges/webull/*/connect` (Webull broker reconnection)
+**Calling the API from a script**: because unidentified callers are rejected, a non-browser client must positively identify itself. Sending `Sec-Fetch-Site: none` does **not** work — that value falls through to the `Origin`/`Referer` branch, and a request with neither header is refused. Send an `Origin` matching the launcher's own scheme and host instead:
 
-These are **deliberately out of scope** for this CSRF sweep, which focuses on launcher setup operations. Agent-specific operations should be reviewed and protected in a separate task.
+```bash
+curl -X POST http://127.0.0.1:18800/api/gateway/restart \
+  -H "Origin: http://127.0.0.1:18800" \
+  -H "Authorization: Bearer $LAUNCHER_TOKEN"
+```
+
+No exemption exists for token-authenticated callers. Nothing shipped sends a token header to these routes — the dashboard authenticates by cookie and relies on the browser to supply `Sec-Fetch-Site` — so an exemption would be attack surface with no consumer.
+
+**Note the opposite polarity of the gateway management API** (`/api/cron/*` on the gateway's own port, see above): that guard *rejects* requests carrying browser markers, because its only legitimate caller is the launcher backend making a server-to-server call. The launcher's CSRF check demands proof of a same-origin browser; the gateway's demands the absence of a browser. Each matches its own caller, and a request forwarded from one to the other satisfies both: `proxyToGateway` forwards only `Content-Type` and `Authorization`, so the browser's origin headers do not reach the gateway.
 
 ## Reporting Security Issues
 

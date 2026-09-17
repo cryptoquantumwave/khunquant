@@ -118,6 +118,30 @@ func main() {
 		)
 	}
 
+	// C-6: with no dashboard password, SessionAuth issues a session to any
+	// caller that reaches the launcher over loopback. That is defensible for a
+	// single local console, but -public and trusted proxies both put non-local
+	// users on the other end: isTrustedLoopbackCaller trusts RemoteAddr, and a
+	// same-host reverse proxy or tunnel makes every remote user look like
+	// loopback. Warn rather than refuse, so existing deployments keep working.
+	if launcherCfg.DashboardPasswordHash == "" &&
+		(effectivePublic || len(launcherCfg.TrustedProxyCIDRs) > 0) {
+		reason := "trusting proxy headers from trusted_proxy_cidrs"
+		if effectivePublic {
+			reason = "listening on 0.0.0.0"
+			if len(launcherCfg.TrustedProxyCIDRs) > 0 {
+				reason = "listening on 0.0.0.0 and trusting proxy headers"
+			}
+		}
+		log.Printf(
+			"WARNING: no dashboard password is set (%s).\n"+
+				"  Any caller reaching this launcher over loopback - including remote users\n"+
+				"  arriving through a reverse proxy or tunnel - gets a session without\n"+
+				"  authenticating. Set one with: khunquant launcher set-password",
+			reason,
+		)
+	}
+
 	// Ensure a persistent launcher token exists.
 	if launcherCfg.LauncherToken == "" {
 		launcherCfg.LauncherToken = generateLauncherToken()

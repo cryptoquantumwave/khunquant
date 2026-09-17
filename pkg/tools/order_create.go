@@ -46,7 +46,11 @@ func (t *CreateOrderTool) Parameters() map[string]any {
 			},
 			"amount": map[string]any{"type": "number", "description": "Order quantity in base currency units."},
 			"price":  map[string]any{"type": "number", "description": "Limit price (required for limit orders)."},
-			"params": map[string]any{"type": "object", "description": "Extra provider-specific parameters (optional)."},
+			"params": map[string]any{
+				"type": "object",
+				"description": "Extra provider-specific execution parameters (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly, stopPrice. " +
+					"Parameters that change the trading mode (tdMode, marginMode, leverage, borrow flags) are refused unless trading_risk permits margin or leverage; unrecognised keys are refused.",
+			},
 			"confirm": map[string]any{
 				"type":        "boolean",
 				"description": "Must be true to actually place the order. Use false to dry-run the safety checks only.",
@@ -70,9 +74,12 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		price = &v
 	}
 
-	var params map[string]interface{}
-	if v, ok := args["params"].(map[string]interface{}); ok {
-		params = v
+	// H-5: exchange parameters are not inert - {"tdMode":"cross"} turns a spot
+	// order into a margin one - so they are filtered against the risk flags
+	// rather than forwarded verbatim.
+	params, paramsErr := sanitizeOrderParams(args["params"], t.cfg.TradingRisk)
+	if paramsErr != nil {
+		return ErrorResult(paramsErr.Error())
 	}
 
 	// --- Gate 0: paper trading mode redirect ---

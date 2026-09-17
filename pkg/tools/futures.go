@@ -183,7 +183,12 @@ func (t *FuturesOpenPositionTool) Parameters() map[string]any {
 			"price":       map[string]any{"type": "number", "description": "Required for limit entry orders."},
 			"stop_loss":   map[string]any{"type": "number", "description": "Optional stop-loss trigger price."},
 			"take_profit": map[string]any{"type": "number", "description": "Optional take-profit trigger price."},
-			"params":      map[string]any{"type": "object", "description": "Extra CCXT/exchange params."},
+			"params": map[string]any{
+				"type": "object",
+				"description": "Extra CCXT/exchange execution params (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly. " +
+					"Margin and leverage keys are refused unless trading_risk permits them, and unrecognised keys are refused; " +
+					"use the side, leverage and margin_mode arguments rather than passing them here.",
+			},
 			"confirm":     map[string]any{"type": "boolean", "description": "Must be true to place live futures orders."},
 		},
 		"required": []string{"provider", "symbol", "side", "leverage", "confirm"},
@@ -204,7 +209,13 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		orderType = "market"
 	}
 	confirm, _ := args["confirm"].(bool)
-	params := copyToolParams(args["params"])
+	// H-5: filtered against the risk flags rather than forwarded verbatim. The
+	// tool's own margin mode and position side travel as dedicated request
+	// fields, so nothing here depends on those arriving through params.
+	params, paramsErr := sanitizeOrderParams(args["params"], t.cfg.TradingRisk)
+	if paramsErr != nil {
+		return ErrorResult(paramsErr.Error())
+	}
 
 	var price *float64
 	if v := numberArg(args, "price"); v > 0 {

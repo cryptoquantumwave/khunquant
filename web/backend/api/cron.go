@@ -33,8 +33,23 @@ func (h *Handler) gatewayBase() (string, error) {
 	return fmt.Sprintf("http://%s:%d", host, cfg.Gateway.Port), nil
 }
 
+// gatewayManagementAPI returns the gateway base URL together with the bearer
+// token its management routes require. The token is read server-side and never
+// exposed to the browser, matching how the sandbox proxy handles its own token.
+func (h *Handler) gatewayManagementAPI() (string, string, error) {
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to load config: %w", err)
+	}
+	host := cfg.Gateway.Host
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, cfg.Gateway.Port), cfg.Gateway.ManagementToken, nil
+}
+
 // proxyToGateway forwards the request to the gateway and streams the response back.
-func proxyToGateway(w http.ResponseWriter, r *http.Request, targetURL string) {
+func proxyToGateway(w http.ResponseWriter, r *http.Request, targetURL, token string) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
@@ -44,6 +59,9 @@ func proxyToGateway(w http.ResponseWriter, r *http.Request, targetURL string) {
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := client.Do(req)
@@ -61,7 +79,7 @@ func proxyToGateway(w http.ResponseWriter, r *http.Request, targetURL string) {
 // --- List -------------------------------------------------------------------
 
 func (h *Handler) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
-	base, err := h.gatewayBase()
+	base, token, err := h.gatewayManagementAPI()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -69,7 +87,15 @@ func (h *Handler) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
 
 	// Try the live gateway first.
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(base + "/api/cron/jobs")
+	req, reqErr := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/api/cron/jobs", nil)
+	if reqErr != nil {
+		http.Error(w, fmt.Sprintf("failed to build request: %v", reqErr), http.StatusInternalServerError)
+		return
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
 	if err == nil {
 		defer resp.Body.Close()
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
@@ -97,37 +123,37 @@ func (h *Handler) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
 // --- Update -----------------------------------------------------------------
 
 func (h *Handler) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
-	base, err := h.gatewayBase()
+	base, token, err := h.gatewayManagementAPI()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := r.PathValue("id")
-	proxyToGateway(w, r, base+"/api/cron/jobs/"+id)
+	proxyToGateway(w, r, base+"/api/cron/jobs/"+id, token)
 }
 
 // --- Delete -----------------------------------------------------------------
 
 func (h *Handler) handleDeleteCronJob(w http.ResponseWriter, r *http.Request) {
-	base, err := h.gatewayBase()
+	base, token, err := h.gatewayManagementAPI()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := r.PathValue("id")
-	proxyToGateway(w, r, base+"/api/cron/jobs/"+id)
+	proxyToGateway(w, r, base+"/api/cron/jobs/"+id, token)
 }
 
 // --- Run --------------------------------------------------------------------
 
 func (h *Handler) handleRunCronJob(w http.ResponseWriter, r *http.Request) {
-	base, err := h.gatewayBase()
+	base, token, err := h.gatewayManagementAPI()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := r.PathValue("id")
-	proxyToGateway(w, r, base+"/api/cron/jobs/"+id+"/run")
+	proxyToGateway(w, r, base+"/api/cron/jobs/"+id+"/run", token)
 }
 
 // --- File fallback helpers (used only when gateway is offline) --------------

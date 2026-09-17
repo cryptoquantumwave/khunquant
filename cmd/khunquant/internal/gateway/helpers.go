@@ -300,7 +300,8 @@ func setupAndStartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore)
+	ensureManagementToken(cfg)
+	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore, cfg.Gateway.ManagementToken)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, agentLoop)
 	}
@@ -594,7 +595,8 @@ func restartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore)
+	ensureManagementToken(cfg)
+	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore, cfg.Gateway.ManagementToken)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, al)
 	} else {

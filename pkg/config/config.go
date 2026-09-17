@@ -1005,6 +1005,13 @@ func (c *ModelConfig) Validate() error {
 type GatewayConfig struct {
 	Host string `json:"host" env:"KHUNQUANT_GATEWAY_HOST"`
 	Port int    `json:"port" env:"KHUNQUANT_GATEWAY_PORT"`
+	// ManagementToken guards the cron management API, which can create and run
+	// agent directives. Minted and persisted on first gateway start. It is a
+	// plain string rather than a SecureString because the Gateway subtree is
+	// tagged yaml:"-": a SecureString here would marshal as withheld with
+	// nothing in .security.yml to restore from, blanking itself on next save.
+	// It is kept out of API responses by secretFieldNames instead.
+	ManagementToken string `json:"management_token,omitempty" env:"KHUNQUANT_GATEWAY_MANAGEMENT_TOKEN"`
 }
 
 type ToolDiscoveryConfig struct {

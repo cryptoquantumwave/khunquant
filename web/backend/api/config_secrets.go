@@ -44,6 +44,8 @@ var secretFieldNames = map[string]bool{
 	"webhook_url":          true,
 	"private_key":          true,
 	"signing_secret":       true,
+	// Exact-key matching means the "token" entry above does not cover this one.
+	"management_token": true,
 }
 
 // redactSecrets walks a marshaled config tree and replaces every non-empty

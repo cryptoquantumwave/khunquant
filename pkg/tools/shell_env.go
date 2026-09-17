@@ -285,23 +285,48 @@ func expandShellRefs(cmd string, env []string) (string, string) {
 	return expanded, ""
 }
 
-// checkDirectoryChange refuses "cd -", whose target is OLDPWD: a directory this
-// guard cannot see and that may sit outside the workspace.
+// checkDirectoryChange refuses directory changes whose target this guard cannot
+// account for.
 //
-// Bare "cd" and "cd ~" are deliberately allowed. Both land in HOME, and a
-// workspace-restricted child has HOME set to the workspace itself
-// (buildChildEnv), so they are moves to the workspace root rather than escapes.
+//   - "cd -" always: its target is OLDPWD, which the guard cannot see and which
+//     may sit outside the workspace.
+//   - bare "cd", "cd ~" and "cd $HOME" only when no workspace is configured.
+//
+// The second case is the subtle one. Those three all land in HOME, and when a
+// workspace is set, a restricted child's HOME *is* the workspace
+// (buildChildEnv), so they move to the workspace root - harmless, and refusing
+// them would break ordinary use. With workingDir empty there is no override, so
+// the child keeps the real home while the guard goes on resolving relative
+// paths against cwd: "cd && cat .ssh/id_rsa" would check a path in cwd and read
+// one in the user's home. The HOME override is what makes those commands safe,
+// so they are allowed exactly when it is in effect.
+//
 // Relative escapes like "cd ../.." remain the traversal pattern's job.
-func checkDirectoryChange(cmd string) string {
+func (t *ExecTool) checkDirectoryChange(cmd string) string {
+	homeIsWorkspace := t.workingDir != ""
+
 	for _, segment := range splitShellSegments(cmd) {
 		fields := strings.Fields(segment)
-		if len(fields) < 2 {
+		if len(fields) == 0 {
 			continue
 		}
-		switch fields[0] {
-		case "cd", "pushd":
-			if fields[1] == "-" {
-				return "directory change to an unknown previous directory"
+		if fields[0] != "cd" && fields[0] != "pushd" {
+			continue
+		}
+
+		if len(fields) == 1 {
+			if !homeIsWorkspace {
+				return "directory change to the home directory"
+			}
+			continue
+		}
+
+		switch fields[1] {
+		case "-":
+			return "directory change to an unknown previous directory"
+		case "~", "$HOME", "${HOME}":
+			if !homeIsWorkspace {
+				return "directory change to the home directory"
 			}
 		}
 	}

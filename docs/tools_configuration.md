@@ -91,6 +91,12 @@ prefix group; a bare `"*"` is ignored, since it would restore the full environme
 }
 ```
 
+Note that the workspace guard expands `~`, `$HOME`, and *unset* variables when checking paths, but
+leaves other set variables literal. A passed-through variable holding an absolute path is therefore
+not resolved during the check: with `env_passthrough: ["DATA_DIR"]` and `DATA_DIR=/etc`, the command
+`cat $DATA_DIR/passwd` is checked as written. Pass through variables that name directories only if
+the agent is meant to reach them.
+
 When `restrict_to_workspace` is enabled, `HOME` is additionally set to the workspace directory so that
 `~` means the same path to the safety guard and to the shell. Tools that keep user-level configuration
 in `$HOME` (git, npm, pip) therefore look for it inside the workspace while the restriction is active.

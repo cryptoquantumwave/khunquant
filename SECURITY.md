@@ -40,6 +40,7 @@ The deny-list catches common attack patterns in the command string:
 **The regex layer can be bypassed** by:
 - Obfuscating commands in files written by prior steps. (Environment variables are a weaker vector than they were: exec children get an allowlisted environment rather than the gateway's — so no API keys — and the workspace guard expands `~`/`$HOME` and unset variables the way the shell will.)
 - Using lesser-known commands not on the deny-list (e.g., `shred`, `srm`, `dd bs=` with a different argument order).
+- Running code through an interpreter: `python -c`, `perl -e`, `node -e`, and equivalents are **not** blocked, and deliberately so — they are ordinary development commands, and denying them would break far more legitimate work than it would prevent. An agent that can run an interpreter can do anything that interpreter can, which is the reason this layer is described as a deny-list and not a sandbox.
 - Exploiting parser bugs in the regex engine or shell itself (e.g., Unicode normalization, locale-specific character classes).
 
 ## Launcher Dashboard — Network and Application-Level Access Control

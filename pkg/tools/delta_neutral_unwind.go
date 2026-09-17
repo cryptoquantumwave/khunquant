@@ -226,6 +226,8 @@ func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, pl
 
 	var positionSide, positionMarginMode string
 	var liveContracts float64
+	// C-4: snapshot the unrealised PnL before the close realises it.
+	var pnlBeforeClose *float64
 	for _, p := range positions {
 		if p.Contracts == nil || *p.Contracts == 0 {
 			continue
@@ -241,6 +243,7 @@ func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, pl
 		if liveContracts < 0 {
 			liveContracts = -liveContracts
 		}
+		pnlBeforeClose = p.UnrealizedPnl
 		if p.Side != nil {
 			positionSide = *p.Side
 		}
@@ -294,6 +297,13 @@ func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, pl
 			order = mergeOrderFillData(order, fetched)
 		}
 	}
+
+	// Prorate against the live position: this plan may hold only part of it.
+	filledContracts := closeContracts
+	if order.Filled != nil && *order.Filled > 0 {
+		filledContracts = *order.Filled
+	}
+	recordRealisedLoss(plan.FuturesSymbol, pnlBeforeClose, filledContracts, liveContracts, nil)
 
 	baseQty := closeContracts * perContractSize
 	var avgFillPrice, filledNotional float64

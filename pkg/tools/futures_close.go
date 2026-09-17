@@ -80,6 +80,9 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	}
 	var closeAmount float64
 	var positionSide, positionMarginMode string
+	// C-4: snapshot the unrealised PnL before the close; afterwards the position
+	// is gone and the loss it realised is unrecoverable.
+	var pnlBeforeClose *float64
 	for _, p := range positions {
 		if p.Contracts == nil || *p.Contracts == 0 {
 			continue
@@ -92,6 +95,7 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 			continue
 		}
 		closeAmount = math.Abs(*p.Contracts)
+		pnlBeforeClose = p.UnrealizedPnl
 		if p.Side != nil {
 			positionSide = *p.Side
 		}
@@ -129,7 +133,9 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	closeID := orderID(order)
 
 	// Verify fill
-	filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, symbol, closeAmount)
+	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, closeAmount)
+	// closeAmount is the whole position here, so it is also the denominator.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, closeAmount, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, closeAmount)
@@ -223,6 +229,7 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 	}
 	var positionSize float64
 	var positionSide, posMarginMode string
+	var pnlBeforeClose *float64
 	for _, p := range positions {
 		if p.Contracts == nil || *p.Contracts == 0 {
 			continue
@@ -235,6 +242,7 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 			continue
 		}
 		positionSize = math.Abs(*p.Contracts)
+		pnlBeforeClose = p.UnrealizedPnl
 		if p.Side != nil {
 			positionSide = *p.Side
 		}
@@ -282,7 +290,10 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 		return ErrorResult(fmt.Sprintf("futures_reduce_position failed: %v", err)).WithError(err)
 	}
 	closeID := orderID(order)
-	filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
+	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
+	// The snapshot describes the whole position, so prorate against the
+	// position's size - dividing by finalAmount would over-record by 1/fraction.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, positionSize, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, finalAmount)
@@ -342,6 +353,7 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 	type activePos struct {
 		symbol, side, marginMode string
 		contracts                float64
+		pnlBeforeClose           *float64
 	}
 	var active []activePos
 	for _, p := range positions {
@@ -349,8 +361,9 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 			continue
 		}
 		ap := activePos{
-			symbol:    normalizeFuturesSymbol(*p.Symbol),
-			contracts: math.Abs(*p.Contracts),
+			symbol:         normalizeFuturesSymbol(*p.Symbol),
+			contracts:      math.Abs(*p.Contracts),
+			pnlBeforeClose: p.UnrealizedPnl,
 		}
 		if p.Side != nil {
 			ap.side = *p.Side
@@ -407,7 +420,9 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 			continue
 		}
 		closeID := orderID(order)
-		filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
+		filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
+		// Flatten closes many positions; each records its own loss.
+		recordRealisedLoss(ap.symbol, ap.pnlBeforeClose, filled, ap.contracts, verifyErr)
 		fillNote := ""
 		if partial {
 			fillNote = fmt.Sprintf(" partial %.8g/%.8g", filled, ap.contracts)

@@ -8,6 +8,7 @@ import (
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -160,6 +161,53 @@ func verifyFuturesFill(ctx context.Context, fp broker.FuturesProvider, id, symbo
 	}
 	partial := filled > 0 && requestedAmount > 0 && math.Abs(filled-requestedAmount)/requestedAmount > 1e-6
 	return filled, status, partial, nil
+}
+
+// recordRealisedLoss feeds the daily loss limit (C-4) from a closing order.
+//
+// ccxt.Position also carries RealizedPnl, but no adapter in this repository
+// populates or reads it: its value is whatever ccxt's generic parser happened to
+// fill, and where non-nil its meaning varies by exchange (cumulative-since-open
+// on some, per-close on others). The honest source is the position's
+// UnrealizedPnl captured immediately before the close, prorated by how much of
+// the position actually filled.
+//
+// positionContracts must be the size of the POSITION the snapshot describes,
+// not the amount requested. Reducing 10% of a position and dividing by the
+// requested amount would record the entire position's loss.
+//
+// Only losses are recorded; gains do not offset the limit, matching
+// DailyLossTracker.RecordLoss.
+func recordRealisedLoss(symbol string, pnlBeforeClose *float64, filled, positionContracts float64, verifyErr error) {
+	if pnlBeforeClose == nil {
+		return
+	}
+	pnl := *pnlBeforeClose
+	if math.IsNaN(pnl) || math.IsInf(pnl, 0) || pnl >= 0 {
+		return
+	}
+	loss := -pnl
+
+	switch {
+	case verifyErr != nil:
+		// The fill could not be verified, so filled is 0 and proration would
+		// silently record nothing. A safety control must not under-count when
+		// its input is missing: record the whole snapshot and say so.
+		logger.WarnCF("tools", "Could not verify the closing fill; recording the full position loss against the daily limit",
+			map[string]any{"symbol": symbol, "loss_usd": loss, "error": verifyErr.Error()})
+	case filled <= 0 || positionContracts <= 0:
+		return
+	default:
+		fraction := filled / positionContracts
+		if fraction > 1 {
+			fraction = 1
+		}
+		loss *= fraction
+	}
+
+	if loss > 0 && !math.IsNaN(loss) && !math.IsInf(loss, 0) {
+		broker.GlobalLossTracker.RecordLoss(loss)
+	}
 }
 
 // marginHealthFromPosition computes margin health from a ccxt.Position.

@@ -178,7 +178,7 @@ func verifyFuturesFill(ctx context.Context, fp broker.FuturesProvider, id, symbo
 //
 // Only losses are recorded; gains do not offset the limit, matching
 // DailyLossTracker.RecordLoss.
-func recordRealisedLoss(symbol string, pnlBeforeClose *float64, filled, positionContracts float64, verifyErr error) {
+func recordRealisedLoss(symbol string, pnlBeforeClose *float64, filled, requested, positionContracts float64, verifyErr error) {
 	if pnlBeforeClose == nil {
 		return
 	}
@@ -190,10 +190,20 @@ func recordRealisedLoss(symbol string, pnlBeforeClose *float64, filled, position
 
 	switch {
 	case verifyErr != nil:
-		// The fill could not be verified, so filled is 0 and proration would
-		// silently record nothing. A safety control must not under-count when
-		// its input is missing: record the whole snapshot and say so.
-		logger.WarnCF("tools", "Could not verify the closing fill; recording the full position loss against the daily limit",
+		// The fill could not be verified, so filled is 0 and prorating by it
+		// would silently record nothing. A safety control must not under-count
+		// when its input is missing, but it must not wildly over-count either:
+		// assume the requested amount filled. For a full close that is the whole
+		// position; for a partial reduce it is the reduce amount, where charging
+		// the whole position's loss would over-record by 1/fraction.
+		if requested > 0 && positionContracts > 0 {
+			fraction := requested / positionContracts
+			if fraction > 1 {
+				fraction = 1
+			}
+			loss *= fraction
+		}
+		logger.WarnCF("tools", "Could not verify the closing fill; recording the requested amount's loss against the daily limit",
 			map[string]any{"symbol": symbol, "loss_usd": loss, "error": verifyErr.Error()})
 	case filled <= 0 || positionContracts <= 0:
 		return

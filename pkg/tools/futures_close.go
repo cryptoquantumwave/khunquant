@@ -134,8 +134,9 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 
 	// Verify fill
 	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, closeAmount)
-	// closeAmount is the whole position here, so it is also the denominator.
-	recordRealisedLoss(symbol, pnlBeforeClose, filled, closeAmount, verifyErr)
+	// closeAmount is the whole position here, so it is both the requested
+	// amount and the denominator.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, closeAmount, closeAmount, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, closeAmount)
@@ -293,7 +294,8 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
 	// The snapshot describes the whole position, so prorate against the
 	// position's size - dividing by finalAmount would over-record by 1/fraction.
-	recordRealisedLoss(symbol, pnlBeforeClose, filled, positionSize, verifyErr)
+	// finalAmount is what was requested, used only if the fill is unverifiable.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, finalAmount, positionSize, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, finalAmount)
@@ -422,7 +424,7 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 		closeID := orderID(order)
 		filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
 		// Flatten closes many positions; each records its own loss.
-		recordRealisedLoss(ap.symbol, ap.pnlBeforeClose, filled, ap.contracts, verifyErr)
+		recordRealisedLoss(ap.symbol, ap.pnlBeforeClose, filled, ap.contracts, ap.contracts, verifyErr)
 		fillNote := ""
 		if partial {
 			fillNote = fmt.Sprintf(" partial %.8g/%.8g", filled, ap.contracts)

@@ -303,7 +303,7 @@ func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, pl
 	if order.Filled != nil && *order.Filled > 0 {
 		filledContracts = *order.Filled
 	}
-	recordRealisedLoss(plan.FuturesSymbol, pnlBeforeClose, filledContracts, liveContracts, nil)
+	recordRealisedLoss(plan.FuturesSymbol, pnlBeforeClose, filledContracts, closeContracts, liveContracts, nil)
 
 	baseQty := closeContracts * perContractSize
 	var avgFillPrice, filledNotional float64

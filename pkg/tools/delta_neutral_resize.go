@@ -419,10 +419,33 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 	side := entrySide
 	reduceOnly := false
 
+	// C-4: a reduce-only resize realises part of the position's loss, so the
+	// unrealised PnL is snapshotted before the order. Only decreases pay for the
+	// extra position fetch.
+	var pnlBeforeClose *float64
+	var liveContracts float64
+
 	// If decrease: use reduce-only close (opposite side)
 	if isDecrease {
 		side = futuresCloseSide(positionSide)
 		reduceOnly = true
+
+		if positions, posErr := fp.FetchFuturesPositions(ctx, []string{plan.FuturesSymbol}); posErr == nil {
+			for _, p := range positions {
+				if p.Contracts == nil || *p.Contracts == 0 || p.Symbol == nil {
+					continue
+				}
+				if normalizeFuturesSymbol(*p.Symbol) != normalizeFuturesSymbol(plan.FuturesSymbol) {
+					continue
+				}
+				liveContracts = *p.Contracts
+				if liveContracts < 0 {
+					liveContracts = -liveContracts
+				}
+				pnlBeforeClose = p.UnrealizedPnl
+				break
+			}
+		}
 	} else {
 		// If increase: set leverage before entering
 		if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, positionSide); err != nil {
@@ -486,6 +509,16 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 		if fetched, fetchErr := fp.FetchFuturesOrder(ctx, oid, plan.FuturesSymbol); fetchErr == nil {
 			order = mergeOrderFillData(order, fetched)
 		}
+	}
+
+	// Record the loss this reduce realised, prorated against the live position:
+	// a resize closes only part of it.
+	if isDecrease {
+		filledContracts := numContracts
+		if order.Filled != nil && *order.Filled > 0 {
+			filledContracts = *order.Filled
+		}
+		recordRealisedLoss(plan.FuturesSymbol, pnlBeforeClose, filledContracts, numContracts, liveContracts, nil)
 	}
 
 	// Use actual fill data from the order; fall back to pre-fill estimates.

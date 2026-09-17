@@ -551,13 +551,20 @@ func (c *WeComAppChannel) handleMessageCallback(ctx context.Context, w http.Resp
 		return
 	}
 
-	// Read request body
-	body, err := io.ReadAll(r.Body)
+	// Read request body, bounded. The signature is verified further down, so an
+	// unauthenticated caller reaches this read and could otherwise exhaust
+	// memory by streaming an endless payload. Mirrors aibot.go's handler.
+	const maxBodySize = 4 << 20 // 4 MB
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
+	if len(body) > maxBodySize {
+		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	// Parse XML to get encrypted message
 	var encryptedMsg struct {

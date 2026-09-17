@@ -61,11 +61,39 @@ The exec tool is used to execute shell commands.
 |------------------------|-------|---------|--------------------------------------------|
 | `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
 | `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
+| `env_passthrough`      | array | []      | Extra environment variables children inherit |
 
 ### Functionality
 
 - **`enable_deny_patterns`**: Set to `false` to completely disable the default dangerous command blocking patterns
 - **`custom_deny_patterns`**: Add custom deny regex patterns; commands matching these will be blocked
+- **`env_passthrough`**: Names additional environment variables that executed commands may inherit
+
+### Child Process Environment
+
+Commands started by the exec tool do **not** inherit KhunQuant's environment. That environment holds
+the LLM and exchange API keys (see `.env.example`), and a child that inherits it hands every one of
+them to any command the agent runs — `printenv`, or any program that reads credentials from the
+environment on its own.
+
+Children instead receive an allowlist: `PATH`, `HOME`, `TMPDIR`/`TMP`/`TEMP`, `LANG`, `LC_*`, `TZ`,
+`USER`, `LOGNAME`, `SHELL`, `TERM` (plus `SystemRoot`, `ComSpec`, `PATHEXT`, the profile directories
+and similar on Windows), and anything named in `env_passthrough`. An entry ending in `*` passes a
+prefix group; a bare `"*"` is ignored, since it would restore the full environment and the leak with it.
+
+```json
+{
+  "tools": {
+    "exec": {
+      "env_passthrough": ["GOFLAGS", "CI_*"]
+    }
+  }
+}
+```
+
+When `restrict_to_workspace` is enabled, `HOME` is additionally set to the workspace directory so that
+`~` means the same path to the safety guard and to the shell. Tools that keep user-level configuration
+in `$HOME` (git, npm, pip) therefore look for it inside the workspace while the restriction is active.
 
 ### Default Blocked Command Patterns
 

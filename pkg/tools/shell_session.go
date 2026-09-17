@@ -52,6 +52,9 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	// H-2: same scrubbed environment as the one-shot path, so a background or
+	// PTY session is not a way to inherit the credentials it withholds.
+	cmd.Env = t.childEnv()
 
 	prepareCommandForTermination(cmd)
 

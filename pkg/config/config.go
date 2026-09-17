@@ -1077,6 +1077,12 @@ type ExecConfig struct {
 	CustomDenyPatterns  []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"  json:"custom_deny_patterns"`
 	CustomAllowPatterns []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS" json:"custom_allow_patterns"`
 	TimeoutSeconds      int      `                                 env:"KHUNQUANT_TOOLS_EXEC_TIMEOUT_SECONDS"       json:"timeout_seconds"` // 0 means use default (60s)
+	// EnvPassthrough names environment variables exec children may inherit in
+	// addition to the base allowlist in shell_env.go. Empty by default: this
+	// process holds LLM and exchange API keys in its environment, and a child
+	// that inherits them hands every one of them to any command the model runs.
+	// An entry may end in "*" to pass a prefix group (e.g. "CI_*").
+	EnvPassthrough []string `env:"KHUNQUANT_TOOLS_EXEC_ENV_PASSTHROUGH" json:"env_passthrough,omitempty"`
 }
 
 type SkillsToolsConfig struct {

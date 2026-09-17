@@ -40,6 +40,7 @@ type ExecTool struct {
 	allowPatterns       []*regexp.Regexp
 	customAllowPatterns []*regexp.Regexp
 	allowedPathPatterns []*regexp.Regexp
+	envPassthrough      []string
 	restrictToWorkspace bool
 	allowRemote         bool
 }
@@ -185,6 +186,7 @@ func NewExecToolWithConfig(
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
+	var envPassthrough []string
 	allowRemote := true
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
@@ -194,6 +196,7 @@ func NewExecToolWithConfig(
 		execConfig := config.Tools.Exec
 		enableDenyPatterns := execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
+		envPassthrough = execConfig.EnvPassthrough
 		if enableDenyPatterns {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if runtime.GOOS == "windows" {
@@ -239,6 +242,7 @@ func NewExecToolWithConfig(
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
 		allowedPathPatterns: allowedPathPatterns,
+		envPassthrough:      envPassthrough,
 		sessionManager:      NewSessionManager(),
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
@@ -421,6 +425,8 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	// H-2: never inherit this process's environment - it holds the API keys.
+	cmd.Env = t.childEnv()
 
 	prepareCommandForTermination(cmd)
 

@@ -3,8 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -148,7 +149,10 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 
 	// Create an Execution record (T2.5 state machine entry)
 	now := time.Now()
-	attemptID := fmt.Sprintf("attempt_%d_%d", plan.ID, rand.Int63n(1e6))
+	// M-18: math/rand is seeded predictably and only spans 1e6 values, so two
+	// attempts for the same plan could collide on an ID that is the
+	// idempotency key for a two-leg live order.
+	attemptID := fmt.Sprintf("attempt_%d_%s", plan.ID, uuid.NewString())
 	exec := &deltaneutral.Execution{
 		PlanID:      plan.ID,
 		AttemptID:   attemptID,

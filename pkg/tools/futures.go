@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -534,17 +535,28 @@ func stringArg(args map[string]any, key string) string {
 	return strings.TrimSpace(v)
 }
 
+// numberArg reads a numeric tool argument.
+//
+// M-7: NaN and Inf are normalised to 0 so the callers' "must be positive"
+// guards reject them. Returned as-is they would pass every such guard, since
+// all comparisons against NaN are false, and then flow into notional and
+// leverage arithmetic.
 func numberArg(args map[string]any, key string) float64 {
+	var f float64
 	switch v := args[key].(type) {
 	case float64:
-		return v
+		f = v
 	case int:
-		return float64(v)
+		f = float64(v)
 	case int64:
-		return float64(v)
+		f = float64(v)
 	default:
 		return 0
 	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
+	return f
 }
 
 func priceText(price *float64) string {

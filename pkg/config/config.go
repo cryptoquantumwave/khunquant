@@ -204,8 +204,20 @@ type TradingRiskConfig struct {
 	AllowMargin bool `json:"allow_margin" env:"KHUNQUANT_TRADING_ALLOW_MARGIN"`
 
 	// AllowLeverage enables leveraged / futures order types.
-	// Default false — must explicitly opt-in.
+	//
+	// NOTE: unlike AllowMargin, this ships **enabled** — DefaultConfig sets
+	// AllowLeverage: true. The comment here used to claim the opposite, as did
+	// the CheckLeverage error message. Set it to false to require an explicit
+	// opt-in for futures.
 	AllowLeverage bool `json:"allow_leverage" env:"KHUNQUANT_TRADING_ALLOW_LEVERAGE"`
+
+	// MaxDCAAmountPerOrderUSD caps the USD notional of a single automated DCA
+	// order. 0 means no limit (the shipped default).
+	//
+	// Separate from MaxOrderValueUSD because DCA orders execute unattended on a
+	// schedule: an operator may reasonably want a tighter ceiling on what fires
+	// without anyone watching than on what they place by hand.
+	MaxDCAAmountPerOrderUSD float64 `json:"max_dca_amount_per_order_usd" env:"KHUNQUANT_TRADING_MAX_DCA_ORDER_USD"`
 }
 
 // OKXExchangeAccount extends ExchangeAccount with the OKX-specific passphrase.

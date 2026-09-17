@@ -28,8 +28,9 @@ func (t *ExecuteDCAOrderTool) Name() string { return NameExecuteDCAOrder }
 func (t *ExecuteDCAOrderTool) Description() string {
 	return "Execute one DCA order for a plan. Supports both buy (DCA-in) and sell (DCA-out). " +
 		"For indicator-triggered plans, evaluates the TA condition before placing the order and silently skips if the condition is not met. " +
-		"Enforces guardrail limits (max executions per hour/day/week) when configured. " +
-		"Pre-authorized for DCA automation — no additional confirmation is needed."
+		"Enforces guardrail limits (max executions per hour/day/week), the configured notional ceilings " +
+		"and the daily loss limit before placing anything, and simulates instead of trading when paper mode is on. " +
+		"Executes the plan the operator already approved, so it takes no separate confirmation argument."
 }
 
 func (t *ExecuteDCAOrderTool) Parameters() map[string]any {
@@ -133,6 +134,34 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	default:
 		// "quote": divide the quote budget by the current price.
 		baseAmount = plan.AmountPerOrder / currentPrice
+	}
+
+	// Risk gates. C-3/H-6: this tool placed live orders on a schedule with no
+	// notional ceiling, no daily-loss check and no paper-mode handling - the
+	// only unattended order path in the tree, and the least guarded.
+	//
+	// baseAmount * currentPrice is the USD notional either way: for a "quote"
+	// plan the division above is undone, for a "base" plan it prices the
+	// shares. Gates run before the order, so a refusal places nothing.
+	quoteNotional := baseAmount * currentPrice
+	if max := t.cfg.TradingRisk.MaxDCAAmountPerOrderUSD; max > 0 && quoteNotional > max {
+		return t.recordFailure(ctx, plan, currentPrice, fmt.Sprintf(
+			"DCA order notional %.2f USD exceeds configured max_dca_amount_per_order_usd %.2f", quoteNotional, max))
+	}
+	if err := broker.CheckRiskNotional(t.cfg, quoteNotional); err != nil {
+		return t.recordFailure(ctx, plan, currentPrice, err.Error())
+	}
+	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+		return t.recordFailure(ctx, plan, currentPrice, err.Error())
+	}
+
+	// Paper trading mode: report what would have happened and place nothing.
+	// No execution row is written, so plan statistics stay a record of real
+	// fills only.
+	if t.cfg.TradingRisk.PaperTradingMode {
+		return UserResult(fmt.Sprintf(
+			"[paper] DCA %s for plan %d (%s) simulated — no live order placed:\n  Symbol: %s\n  Price:  %.8g\n  Qty:    %.8g\n  Amount: %.4f\n",
+			plan.Side, planID, plan.Name, plan.Symbol, currentPrice, baseAmount, quoteNotional))
 	}
 
 	tp, ok := p.(broker.TradingProvider)

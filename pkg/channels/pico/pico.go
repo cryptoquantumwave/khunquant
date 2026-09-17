@@ -2,6 +2,7 @@ package pico
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -476,7 +477,7 @@ func (c *PicoChannel) authenticate(r *http.Request) bool {
 	// Check Authorization header
 	auth := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
-		if after == token {
+		if constantTimeTokenMatch(after, token) {
 			return true
 		}
 	}
@@ -488,7 +489,7 @@ func (c *PicoChannel) authenticate(r *http.Request) bool {
 
 	// Check query parameter only when explicitly allowed
 	if c.config.AllowTokenQuery {
-		if r.URL.Query().Get("token") == token {
+		if constantTimeTokenMatch(r.URL.Query().Get("token"), token) {
 			return true
 		}
 	}
@@ -501,11 +502,23 @@ func (c *PicoChannel) authenticate(r *http.Request) bool {
 func (c *PicoChannel) matchedSubprotocol(r *http.Request) string {
 	token := c.config.Token.String()
 	for _, proto := range websocket.Subprotocols(r) {
-		if after, ok := strings.CutPrefix(proto, "token."); ok && after == token {
+		if after, ok := strings.CutPrefix(proto, "token."); ok && constantTimeTokenMatch(after, token) {
 			return proto
 		}
 	}
 	return ""
+}
+
+// constantTimeTokenMatch compares a presented token against the configured one
+// without letting the comparison's duration reveal how much of it was correct.
+//
+// L-4: the three call sites used ==, which returns at the first differing byte.
+// A caller free to retry - and the Bearer, subprotocol and query paths all
+// allow that - can use the timing difference to recover the token one byte at a
+// time. Length is still distinguishable, which matches constantTimeEqual in the
+// launcher's auth middleware and is not what this defends against.
+func constantTimeTokenMatch(presented, expected string) bool {
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
 }
 
 // readLoop reads messages from a WebSocket connection.

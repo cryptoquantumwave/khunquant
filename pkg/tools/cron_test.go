@@ -22,6 +22,7 @@ type stubJobExecutor struct {
 	lastKey         string
 	lastChan        string
 	lastChatID      string
+	lastOrigin      string // tool-call origin carried on the context
 	publishedResp   string
 	publishedChan   string
 	publishedChatID string
@@ -29,7 +30,7 @@ type stubJobExecutor struct {
 }
 
 func (s *stubJobExecutor) ProcessDirectWithChannel(
-	_ context.Context,
+	ctx context.Context,
 	content, sessionKey, channel, chatID string,
 	_ bool,
 ) (string, error) {
@@ -37,6 +38,7 @@ func (s *stubJobExecutor) ProcessDirectWithChannel(
 	s.lastKey = sessionKey
 	s.lastChan = channel
 	s.lastChatID = chatID
+	s.lastOrigin = ToolOrigin(ctx)
 	return s.response, s.err
 }
 
@@ -249,6 +251,36 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	}
 	if executor.publishedChan != "telegram" || executor.publishedChatID != "chat-1" {
 		t.Fatalf("published target = %s/%s, want telegram/chat-1", executor.publishedChan, executor.publishedChatID)
+	}
+}
+
+// TestCronTool_ExecuteJobTagsOriginCron pins the tagging that gates financial
+// tools on scheduled jobs. Without it nothing fails if the tag is deleted: the
+// agent still runs the job, just unattended and ungated.
+//
+// The job's channel is deliberately "telegram" - a remote channel. This stub
+// stands in for the agent loop, so the assertion is that cron tags the context
+// *before* handing off, independently of the loop's own channel-derived tag.
+// Which tag wins when both apply is pinned separately by
+// TestWithToolOrigin_SetOnceKeepsCron.
+func TestCronTool_ExecuteJobTagsOriginCron(t *testing.T) {
+	executor := &stubJobExecutor{response: "generated reply"}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+
+	job := &cron.CronJob{ID: "job-origin"}
+	job.Payload.Channel = "telegram"
+	job.Payload.To = "chat-1"
+	job.Payload.Message = "run the scheduled task"
+
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+
+	if executor.lastOrigin == "" {
+		t.Fatal("the agent saw no tool-call origin: cron's tagging was lost or removed")
+	}
+	if executor.lastOrigin != OriginCron {
+		t.Fatalf("origin = %q, want %q", executor.lastOrigin, OriginCron)
 	}
 }
 

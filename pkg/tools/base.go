@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/constants"
+)
 
 // Tool is the interface that all tools must implement.
 type Tool interface {
@@ -23,7 +27,56 @@ type toolCtxKey struct{ name string }
 var (
 	ctxKeyChannel = &toolCtxKey{"channel"}
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
+	ctxKeyOrigin  = &toolCtxKey{"origin"}
 )
+
+// Tool call origins. A turn is tagged where it starts, and the tag travels with
+// the context into ExecuteWithContext, so a policy can distinguish a person
+// typing a command from a scheduled job running unattended.
+const (
+	// OriginInternal is a local console or CLI turn.
+	OriginInternal = "internal"
+	// OriginRemote is a turn driven by a message from a chat channel.
+	OriginRemote = "remote"
+	// OriginCron is a scheduled job: no human is present to answer a prompt.
+	OriginCron = "cron"
+)
+
+// WithToolOrigin returns a child context tagged with the origin of the turn.
+//
+// It is deliberately set-once: the first tag wins and later calls are no-ops.
+// Cron tags at its own call site, which is outside the agent loop, and the loop
+// then tags every turn by channel. Were this unconditional, the loop's tag
+// would overwrite "cron" with "internal" and the scheduled-job gate would never
+// fire. Enforcing that here rather than asking each call site to check first
+// means a new call site cannot reintroduce the bug. It also gives sub-turns
+// spawned from a cron turn the correct answer: they stay cron.
+func WithToolOrigin(ctx context.Context, origin string) context.Context {
+	if origin == "" || ToolOrigin(ctx) != "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyOrigin, origin)
+}
+
+// ToolOrigin extracts the turn's origin from ctx, or "" if untagged.
+func ToolOrigin(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyOrigin).(string)
+	return v
+}
+
+// OriginForChannel maps the channel a turn arrived on to its origin.
+//
+// constants.IsInternalChannel covers cli, system and subagent. A subagent turn
+// is the agent's own work rather than a stranger's message, so it counts as
+// internal - and a subagent spawned from a cron turn keeps "cron" regardless,
+// because WithToolOrigin is set-once. An empty channel means no channel was
+// attached at all (a direct local invocation), which is likewise internal.
+func OriginForChannel(channel string) string {
+	if channel == "" || constants.IsInternalChannel(channel) {
+		return OriginInternal
+	}
+	return OriginRemote
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {

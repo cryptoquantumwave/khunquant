@@ -425,6 +425,14 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		)
 	}
 
+	// Tag the turn as cron-originated before handing it to the agent. This has to
+	// happen here, at the call site, rather than inside the agent loop: the loop
+	// reaches ProcessDirectWithChannel for CLI turns too (loop.go routes
+	// ProcessDirect through it), and that function hardcodes SenderID "cron" for
+	// every caller - so keying off the sender would label CLI turns as scheduled
+	// jobs and gate them as if no human were present.
+	ctx = WithToolOrigin(ctx, OriginCron)
+
 	// Call agent with the prepared prompt
 	response, err := t.executor.ProcessDirectWithChannel(
 		ctx,

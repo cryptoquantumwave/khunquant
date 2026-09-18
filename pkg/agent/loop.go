@@ -1112,6 +1112,11 @@ func (al *AgentLoop) runAgentLoop(
 		}
 		ctx = withTurnState(ctx, rootTS)
 		ctx = WithAgentLoop(ctx, al) // Inject AgentLoop for tool access
+		// Tag the turn's origin so tool policy can tell a person typing a command
+		// from a message arriving over a chat channel. WithToolOrigin is set-once,
+		// so a cron job - which tags at its own call site, before the loop is
+		// entered - keeps its "cron" tag here rather than being relabelled.
+		ctx = tools.WithToolOrigin(ctx, tools.OriginForChannel(opts.Channel))
 		isRootTurn = true
 
 		// Register this root turn state so HardAbort can find it

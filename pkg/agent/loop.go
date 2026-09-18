@@ -128,6 +128,12 @@ func NewAgentLoop(
 			filepath.Join(defaultAgent.Workspace, "state", "daily_loss.json"))
 	}
 
+	// C-2: arm per-tool policy. Wired here for the same reason as the loss
+	// tracker above — every mode that runs trading tools builds an AgentLoop —
+	// and because ExecuteWithContext is a method on ToolRegistry and has no
+	// config of its own to read paper mode from.
+	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
+
 	al := &AgentLoop{
 		bus:         msgBus,
 		cfg:         cfg,

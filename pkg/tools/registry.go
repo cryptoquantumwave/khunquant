@@ -221,6 +221,20 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// Always inject — tools validate what they require.
 	ctx = WithToolContext(ctx, channel, chatID)
 
+	// C-2: enforce per-tool policy here rather than inside each tool. This is
+	// the single funnel for LLM-driven calls — Execute delegates to it — so a
+	// tool cannot be reached without passing this, and a new tool inherits its
+	// declared policy without having to remember anything.
+	//
+	// It does NOT cover callers that construct a tool and invoke Execute
+	// directly, such as the launcher's delta-neutral force-unwind. Those need
+	// their own guard; see the paper-mode refusal in agent_delta_neutral.go.
+	if refusal := checkToolPolicy(ctx, name); refusal != nil {
+		logger.WarnCF("tool", "Tool call refused by policy",
+			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
+		return refusal
+	}
+
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult

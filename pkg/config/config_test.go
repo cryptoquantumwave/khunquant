@@ -503,6 +503,21 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 	}
 }
 
+// TestIsToolEnabled_UnknownTool pins default-allow, which is deliberate but
+// sharp-edged: a tool registered without a matching arm below runs
+// unconditionally, and no setting an operator can write will disable it. All
+// five option tools shipped that way - including option_create_order, which
+// places real orders, while create_order and futures_open_position are
+// disabled by default under a stated "opt-in for live trading" policy.
+//
+// The default stays because four registered read-only tools still have no arm
+// (funding_rate_history, webull_reconnect, get_delta_neutral_spread,
+// get_delta_neutral_earn) and flipping it would switch them off silently.
+// Nothing depends on default-allow otherwise: MCP, skills and tool-search tools
+// are registered directly and never consult this switch.
+//
+// TestCatalogToolsHaveEnableArms in web/backend/api is the guard that catches a
+// catalogued tool with no arm.
 func TestIsToolEnabled_UnknownTool(t *testing.T) {
 	cfg := &ToolsConfig{}
 	if !cfg.IsToolEnabled("nonexistent_tool_xyz") {

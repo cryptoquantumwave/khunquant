@@ -1195,6 +1195,18 @@ type ToolsConfig struct {
 	FuturesCancelOrders       ToolConfig `json:"futures_cancel_orders"      envPrefix:"KHUNQUANT_TOOLS_FUTURES_CANCEL_ORDERS_"`
 	FuturesEmergencyFlatten   ToolConfig `json:"futures_emergency_flatten"  envPrefix:"KHUNQUANT_TOOLS_FUTURES_EMERGENCY_FLATTEN_"`
 
+	// Options (Track B3)
+	//
+	// These were registered in instance.go but had no config fields, no arms in
+	// IsToolEnabled and no defaults entry. IsToolEnabled is default-allow for
+	// unknown names, so all five ran unconditionally and no setting could turn
+	// them off - including option_create_order, which places real orders.
+	OptionQuote       ToolConfig `json:"option_quote"        envPrefix:"KHUNQUANT_TOOLS_OPTION_QUOTE_"`
+	OptionCreateOrder ToolConfig `json:"option_create_order" envPrefix:"KHUNQUANT_TOOLS_OPTION_CREATE_ORDER_"`
+	OptionCancelOrder ToolConfig `json:"option_cancel_order" envPrefix:"KHUNQUANT_TOOLS_OPTION_CANCEL_ORDER_"`
+	OptionGetOrder    ToolConfig `json:"option_get_order"    envPrefix:"KHUNQUANT_TOOLS_OPTION_GET_ORDER_"`
+	OptionOpenOrders  ToolConfig `json:"option_open_orders"  envPrefix:"KHUNQUANT_TOOLS_OPTION_OPEN_ORDERS_"`
+
 	// Technical analysis tools (Track C)
 	CalculateIndicators ToolConfig `json:"calculate_indicators" envPrefix:"KHUNQUANT_TOOLS_CALCULATE_INDICATORS_"`
 	MarketAnalysis      ToolConfig `json:"market_analysis"      envPrefix:"KHUNQUANT_TOOLS_MARKET_ANALYSIS_"`
@@ -1771,6 +1783,16 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.FuturesCancelOrders.Enabled
 	case "futures_emergency_flatten":
 		return t.FuturesEmergencyFlatten.Enabled
+	case "option_quote":
+		return t.OptionQuote.Enabled
+	case "option_create_order":
+		return t.OptionCreateOrder.Enabled
+	case "option_cancel_order":
+		return t.OptionCancelOrder.Enabled
+	case "option_get_order":
+		return t.OptionGetOrder.Enabled
+	case "option_open_orders":
+		return t.OptionOpenOrders.Enabled
 	case "calculate_indicators":
 		return t.CalculateIndicators.Enabled
 	case "market_analysis":

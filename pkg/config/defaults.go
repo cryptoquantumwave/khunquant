@@ -592,6 +592,24 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 
+			// Options (Track B3) — order placement disabled by default, matching
+			// create_order and futures_open_position. Reads stay on.
+			OptionQuote: ToolConfig{
+				Enabled: true,
+			},
+			OptionCreateOrder: ToolConfig{
+				Enabled: false,
+			},
+			OptionCancelOrder: ToolConfig{
+				Enabled: true,
+			},
+			OptionGetOrder: ToolConfig{
+				Enabled: true,
+			},
+			OptionOpenOrders: ToolConfig{
+				Enabled: true,
+			},
+
 			// Technical analysis tools (Track C)
 			CalculateIndicators: ToolConfig{
 				Enabled: true,

@@ -128,6 +128,12 @@ func TestApproval_CodeIsNotInModelContext(t *testing.T) {
 
 	held := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1))
 	code := requestCode(t, ctx, NameCreateOrder, orderArgs(1))
+	// held and code only correspond because Request reuses the pending entry
+	// for an identical call. Pin that, or this test could compare a stale
+	// result against a fresh code and pass vacuously.
+	if codes := approvalCodePattern.FindAllStringSubmatch(strings.Join(lastSent.texts, "\n"), -1); len(codes) != 2 || codes[0][1] != codes[1][1] {
+		t.Fatalf("repeating an identical held call did not reuse its code: %q", lastSent.texts)
+	}
 
 	for field, v := range map[string]string{"ForLLM": held.ForLLM, "ForUser": held.ForUser} {
 		if strings.Contains(v, code) {
@@ -301,6 +307,9 @@ func TestApproval_DeliveryFailureIsReported(t *testing.T) {
 	refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1))
 	if refusal == nil || !strings.Contains(refusal.ForLLM, "channel down") {
 		t.Fatalf("delivery failure not reported: %+v", refusal)
+	}
+	if n := len(Approvals().entries); n != 0 {
+		t.Fatalf("undelivered request left %d pending approval(s)", n)
 	}
 }
 

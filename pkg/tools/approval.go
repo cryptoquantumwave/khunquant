@@ -185,6 +185,12 @@ func (s *ApprovalStore) resolve(code, channel, chatID, senderID string, grant bo
 	return e.key.Tool, nil
 }
 
+func (s *ApprovalStore) discard(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.entries, code)
+}
+
 func (s *ApprovalStore) pruneLocked() {
 	now := s.now()
 	for code, e := range s.entries {
@@ -336,6 +342,9 @@ func checkApproval(ctx context.Context, name string, args map[string]any) *ToolR
 			"/deny %s. Expires in %s.",
 		name, describeArgsForApproval(args), code, code, DefaultApprovalTTL)
 	if err := notify(ctx, channel, chatID, text); err != nil {
+		// Nobody received the code, so nobody can redeem it. Leaving the
+		// entry would only occupy a slot until it expires.
+		store.discard(code)
 		return policyRefusal(name, fmt.Sprintf(
 			"%s requires operator approval, but the request could not be delivered: %v", name, err))
 	}

@@ -129,16 +129,7 @@ func NewAgentLoop(
 			filepath.Join(defaultAgent.Workspace, "state", "daily_loss.json"))
 	}
 
-	// C-2: arm per-tool policy. Wired here for the same reason as the loss
-	// tracker above — every mode that runs trading tools builds an AgentLoop —
-	// and because ExecuteWithContext is a method on ToolRegistry and has no
-	// config of its own to read paper mode from.
-	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
-	if ignored := tools.SetRequiredApprovals(cfg.Tools.ApprovalRequiredTools()); len(ignored) > 0 {
-		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
-			map[string]any{"tools": ignored})
-	}
-	tools.SetApprovalNotifier(approvalNotifier(msgBus))
+	armToolPolicy(cfg, msgBus)
 
 	al := &AgentLoop{
 		bus:         msgBus,
@@ -639,6 +630,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
+
+	// Re-arm policy before the swap. Either order leaves a brief window in
+	// which old tools meet new policy or vice versa; this order means turning
+	// paper mode on starts refusing unsimulated tools no later than the new
+	// tools start simulating.
+	armToolPolicy(cfg, al.bus)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
@@ -2199,6 +2196,31 @@ func (al *AgentLoop) handleCommand(
 	default: // OutcomePassthrough — let the message fall through to LLM
 		return "", false
 	}
+}
+
+// armToolPolicy hands the running configuration to the tool policy check.
+//
+// C-2: wired from NewAgentLoop for the same reason as the loss tracker - every
+// mode that runs trading tools builds an AgentLoop - and because
+// ExecuteWithContext is a method on ToolRegistry with no config of its own.
+//
+// It must ALSO run on every config reload. ReloadProviderAndConfig rebuilds the
+// tools from the new config, so a tool that implements paper mode itself picks
+// up a change at once; the policy's copy would not. Turning paper_trading_mode
+// on from the dashboard would then leave create_order simulating while the
+// backstop - still holding the old value - let futures_open_position place
+// live orders.
+//
+// Both production callers of NewAgentLoop are separate process modes (the CLI
+// agent and the gateway), one loop each, so the process-global notifier is
+// never shared between two buses.
+func armToolPolicy(cfg *config.Config, msgBus *bus.MessageBus) {
+	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
+	if ignored := tools.SetRequiredApprovals(cfg.Tools.ApprovalRequiredTools()); len(ignored) > 0 {
+		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
+			map[string]any{"tools": ignored})
+	}
+	tools.SetApprovalNotifier(approvalNotifier(msgBus))
 }
 
 // approvalNotifier delivers approval codes to the operator. Chat channels get an

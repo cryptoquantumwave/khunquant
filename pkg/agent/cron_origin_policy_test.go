@@ -59,3 +59,46 @@ func TestCronTurnStillRunsDCAExecution(t *testing.T) {
 		t.Fatalf("%s executed %d time(s) on a cron turn, want 1", tools.NameExecuteDCAOrder, n)
 	}
 }
+
+// Paper mode switched on by a config reload must reach the policy backstop, not
+// only the rebuilt tools. Otherwise the tools that simulate start simulating
+// while the ones that cannot keep placing live orders.
+func TestConfigReloadRearmsThePaperModeBackstop(t *testing.T) {
+	call := func(id string) providers.LLMResponse {
+		return providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+			ID: id, Type: "function", Name: tools.NameFuturesOpenPosition,
+			Arguments: map[string]any{"value": "1"},
+		}}}
+	}
+	prov := &charScriptedProvider{responses: []providers.LLMResponse{
+		call("c1"), {Content: "done"}, call("c2"), {Content: "done"},
+	}}
+	al, cleanup := newCharLoop(t, prov)
+	defer cleanup()
+	t.Cleanup(func() { tools.SetPolicyConfig(false) })
+
+	run := func() int {
+		tool := &charRecordingTool{name: tools.NameFuturesOpenPosition, llmOutput: "LIVE ORDER"}
+		al.RegisterTool(tool)
+		if _, err := al.ProcessDirect(context.Background(), "open it", "reload-sess"); err != nil {
+			t.Fatal(err)
+		}
+		return len(tool.calls())
+	}
+
+	// Control: paper mode off, the tool runs.
+	if n := run(); n != 1 {
+		t.Fatalf("with paper mode off, %s executed %d time(s), want 1", tools.NameFuturesOpenPosition, n)
+	}
+
+	newCfg := *al.GetConfig()
+	newCfg.TradingRisk.PaperTradingMode = true
+	if err := al.ReloadProviderAndConfig(context.Background(), prov, &newCfg); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if n := run(); n != 0 {
+		t.Fatalf("paper mode enabled by reload, but %s still executed %d time(s)",
+			tools.NameFuturesOpenPosition, n)
+	}
+}

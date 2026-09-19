@@ -23,9 +23,12 @@ import (
 //
 // The property that matters is that the model cannot satisfy the gate itself:
 //
-//   - The code travels only in ForUser, which is published to the chat and never
-//     written to session history. ForLLM says approval is pending but does not
-//     carry the code.
+//   - The code is delivered by the approval notifier straight to the operator's
+//     chat (or terminal), never through the tool result. ForLLM is written to
+//     session history, so it says approval is pending but does not carry the
+//     code. ForUser is not used either: processMessage runs turns with
+//     SendResponse=false, which drops ForUser, so relying on it would leave the
+//     operator with nothing to approve.
 //   - /approve is a command, consumed by handleCommand before any LLM turn, so
 //     the operator's reply never enters model context either.
 //   - An approval is bound to the channel, chat AND sender that made the request.
@@ -246,13 +249,29 @@ func isPreviewCall(args map[string]any) bool {
 	return ok && !b
 }
 
+// ApprovalNotifier delivers an approval request to the operator on the chat the
+// call came from.
+type ApprovalNotifier func(ctx context.Context, channel, chatID, text string) error
+
 // Package-level store, following the policy table. The command handlers and the
 // registry hook must share one instance, and the registry has no field that
 // every clone would reliably carry (see the note on defaultToolPolicies).
 var (
-	approvalMu    sync.RWMutex
-	approvalStore = NewApprovalStore(DefaultApprovalTTL)
+	approvalMu       sync.RWMutex
+	approvalStore    = NewApprovalStore(DefaultApprovalTTL)
+	approvalNotifier ApprovalNotifier
 )
+
+// SetApprovalNotifier installs how approval codes reach the operator and
+// returns the previous notifier. With none installed, gated calls are refused
+// outright: a code nobody receives can only expire.
+func SetApprovalNotifier(n ApprovalNotifier) ApprovalNotifier {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	prev := approvalNotifier
+	approvalNotifier = n
+	return prev
+}
 
 // Approvals returns the shared approval store.
 func Approvals() *ApprovalStore {
@@ -295,9 +314,16 @@ func checkApproval(ctx context.Context, name string, args map[string]any) *ToolR
 	}
 	key := ApprovalKey{Channel: channel, ChatID: chatID, SenderID: sender, Tool: name, ArgsHash: hash}
 
-	store := Approvals()
+	approvalMu.RLock()
+	store, notify := approvalStore, approvalNotifier
+	approvalMu.RUnlock()
+
 	if store.Consume(key) {
 		return nil
+	}
+	if notify == nil {
+		return policyRefusal(name, fmt.Sprintf(
+			"%s requires operator approval, but no way to reach the operator is configured.", name))
 	}
 
 	code, err := store.Request(key)
@@ -305,18 +331,23 @@ func checkApproval(ctx context.Context, name string, args map[string]any) *ToolR
 		return policyRefusal(name, fmt.Sprintf("%s requires operator approval: %v", name, err))
 	}
 
+	text := fmt.Sprintf(
+		"🔐 Approval needed for %s\n%s\n\nReply /approve %s to allow this exact call once, or "+
+			"/deny %s. Expires in %s.",
+		name, describeArgsForApproval(args), code, code, DefaultApprovalTTL)
+	if err := notify(ctx, channel, chatID, text); err != nil {
+		return policyRefusal(name, fmt.Sprintf(
+			"%s requires operator approval, but the request could not be delivered: %v", name, err))
+	}
+
+	// Deliberately no code here and no ForUser: see the note at the top of
+	// this file.
 	return &ToolResult{
-		// The code is deliberately absent here: ForLLM is written to session
-		// history and read by the model.
 		ForLLM: fmt.Sprintf(
 			"%s is waiting for operator approval and did NOT run. The operator has been sent a "+
 				"one-time code. Do not retry until the operator says they have approved it; then "+
 				"repeat exactly the same call with the same arguments. Changing any argument "+
 				"requires a new approval.", name),
-		ForUser: fmt.Sprintf(
-			"🔐 Approval needed for %s\n%s\n\nReply /approve %s to allow this exact call once, or "+
-				"/deny %s. Expires in %s.",
-			name, describeArgsForApproval(args), code, code, DefaultApprovalTTL),
 		IsError: true,
 	}
 }

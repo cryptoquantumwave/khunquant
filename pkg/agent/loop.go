@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -137,6 +138,7 @@ func NewAgentLoop(
 		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
 			map[string]any{"tools": ignored})
 	}
+	tools.SetApprovalNotifier(approvalNotifier(msgBus))
 
 	al := &AgentLoop{
 		bus:         msgBus,
@@ -2199,6 +2201,28 @@ func (al *AgentLoop) handleCommand(
 	}
 }
 
+// approvalNotifier delivers approval codes to the operator. Chat channels get an
+// outbound message. The CLI has no outbound consumer - only the channel manager
+// drains the bus - so the code is written to the terminal's stderr instead.
+func approvalNotifier(msgBus *bus.MessageBus) tools.ApprovalNotifier {
+	return func(ctx context.Context, channel, chatID, text string) error {
+		if channel == "cli" {
+			_, err := fmt.Fprintln(os.Stderr, "\n"+text)
+			return err
+		}
+		if msgBus == nil {
+			return fmt.Errorf("no message bus to reach channel %q", channel)
+		}
+		pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+			Channel: channel,
+			ChatID:  chatID,
+			Content: text,
+		})
+	}
+}
+
 func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOptions) *commands.Runtime {
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
@@ -2206,6 +2230,8 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		Config:          cfg,
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
+		ApproveToolCall: tools.Approvals().Approve,
+		DenyToolCall:    tools.Approvals().Deny,
 		GetEnabledChannels: func() []string {
 			if al.channelManager == nil {
 				return nil

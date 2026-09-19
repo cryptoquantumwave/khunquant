@@ -15,6 +15,30 @@ var approvalCodePattern = regexp.MustCompile(`/approve ([A-Z2-9]{8})`)
 // installs a fresh store, restoring all three afterwards.
 func armApproval(t *testing.T, names ...string) *ApprovalStore {
 	t.Helper()
+	armApprovalWithNotifier(t, func(context.Context, string, string, string) error { return nil }, names...)
+	return Approvals()
+}
+
+// sentApprovals records what the notifier delivered, so tests read the code
+// from where the operator would.
+type sentApprovals struct{ texts []string }
+
+func (s *sentApprovals) notify(_ context.Context, channel, chatID, text string) error {
+	s.texts = append(s.texts, channel+"|"+chatID+"|"+text)
+	return nil
+}
+
+func (s *sentApprovals) last() string {
+	if len(s.texts) == 0 {
+		return ""
+	}
+	return s.texts[len(s.texts)-1]
+}
+
+var lastSent *sentApprovals
+
+func armApprovalWithNotifier(t *testing.T, notify ApprovalNotifier, names ...string) {
+	t.Helper()
 	armPolicy(t, false, map[string]ToolPolicy{})
 
 	policyMu.Lock()
@@ -25,13 +49,20 @@ func armApproval(t *testing.T, names ...string) *ApprovalStore {
 	store := NewApprovalStore(DefaultApprovalTTL)
 	prevStore := SetApprovalStore(store)
 
+	sent := &sentApprovals{}
+	lastSent = sent
+	prevNotifier := SetApprovalNotifier(func(ctx context.Context, channel, chatID, text string) error {
+		_ = sent.notify(ctx, channel, chatID, text)
+		return notify(ctx, channel, chatID, text)
+	})
+
 	t.Cleanup(func() {
+		SetApprovalNotifier(prevNotifier)
 		SetApprovalStore(prevStore)
 		policyMu.Lock()
 		policyApproval = prevApproval
 		policyMu.Unlock()
 	})
-	return store
 }
 
 func approvalCtx(channel, chatID, sender string) context.Context {
@@ -44,13 +75,17 @@ func approvalCtx(channel, chatID, sender string) context.Context {
 // operator was sent.
 func requestCode(t *testing.T, ctx context.Context, name string, args map[string]any) string {
 	t.Helper()
+	before := len(lastSent.texts)
 	held := checkToolPolicy(ctx, name, args)
 	if held == nil {
 		t.Fatalf("%s ran without approval", name)
 	}
-	m := approvalCodePattern.FindStringSubmatch(held.ForUser)
+	if len(lastSent.texts) != before+1 {
+		t.Fatalf("held call sent the operator %d messages, want 1", len(lastSent.texts)-before)
+	}
+	m := approvalCodePattern.FindStringSubmatch(lastSent.last())
 	if m == nil {
-		t.Fatalf("held call gave the operator no code: %q", held.ForUser)
+		t.Fatalf("held call gave the operator no code: %q", lastSent.last())
 	}
 	return m[1]
 }
@@ -94,11 +129,14 @@ func TestApproval_CodeIsNotInModelContext(t *testing.T) {
 	held := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1))
 	code := requestCode(t, ctx, NameCreateOrder, orderArgs(1))
 
-	if strings.Contains(held.ForLLM, code) {
-		t.Fatalf("ForLLM carries the approval code, so the model can read it: %q", held.ForLLM)
+	for field, v := range map[string]string{"ForLLM": held.ForLLM, "ForUser": held.ForUser} {
+		if strings.Contains(v, code) {
+			t.Errorf("%s carries the approval code: %q", field, v)
+		}
 	}
-	if held.Silent {
-		t.Error("held result is Silent, so the operator never sees the code")
+	// Delivered to the chat the call came from, and nowhere else.
+	if !strings.HasPrefix(lastSent.last(), "telegram|chat1|") {
+		t.Errorf("code delivered to the wrong place: %q", lastSent.last())
 	}
 }
 
@@ -238,8 +276,31 @@ func TestApproval_NoIdentityRefusesWithoutACode(t *testing.T) {
 	if refusal == nil {
 		t.Fatal("a call with no sender ran despite requiring approval")
 	}
-	if approvalCodePattern.MatchString(refusal.ForUser) {
-		t.Fatalf("issued a code nobody can ever redeem: %q", refusal.ForUser)
+	if len(lastSent.texts) != 0 {
+		t.Fatalf("issued a code nobody can ever redeem: %q", lastSent.texts)
+	}
+}
+
+func TestApproval_NoNotifierRefusesWithoutACode(t *testing.T) {
+	store := armApproval(t, NameCreateOrder)
+	SetApprovalNotifier(nil)
+
+	if refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1)); refusal == nil {
+		t.Fatal("a gated call ran with no way to reach the operator")
+	}
+	if n := len(store.entries); n != 0 {
+		t.Fatalf("left %d pending approval(s) that nobody was told about", n)
+	}
+}
+
+func TestApproval_DeliveryFailureIsReported(t *testing.T) {
+	armApprovalWithNotifier(t, func(context.Context, string, string, string) error {
+		return errors.New("channel down")
+	}, NameCreateOrder)
+
+	refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1))
+	if refusal == nil || !strings.Contains(refusal.ForLLM, "channel down") {
+		t.Fatalf("delivery failure not reported: %+v", refusal)
 	}
 }
 
@@ -280,8 +341,8 @@ func TestApproval_BlockedOriginWinsOverApproval(t *testing.T) {
 	if refusal == nil {
 		t.Fatal("cron call ran")
 	}
-	if approvalCodePattern.MatchString(refusal.ForUser) {
-		t.Fatalf("a cron-blocked call was offered for approval: %q", refusal.ForUser)
+	if len(lastSent.texts) != 0 {
+		t.Fatalf("a cron-blocked call was offered for approval: %q", lastSent.texts)
 	}
 	if n := len(store.entries); n != 0 {
 		t.Fatalf("blocked call left %d pending approval(s)", n)
@@ -315,9 +376,12 @@ func TestApproval_RegistryHoldsThenRuns(t *testing.T) {
 	if tool.calls != 0 {
 		t.Fatal("a held call reached Execute")
 	}
-	m := approvalCodePattern.FindStringSubmatch(held.ForUser)
+	if held == nil || !held.IsError {
+		t.Fatalf("registry did not hold the call: %+v", held)
+	}
+	m := approvalCodePattern.FindStringSubmatch(lastSent.last())
 	if m == nil {
-		t.Fatalf("registry returned no approval code: %q", held.ForUser)
+		t.Fatalf("registry sent no approval code: %q", lastSent.last())
 	}
 
 	if _, err := store.Approve(m[1], "telegram", "chat1", "alice"); err != nil {

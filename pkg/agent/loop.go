@@ -316,7 +316,7 @@ func registerSharedTools(
 				})
 
 				// Set SubTurnSpawner for direct sub-turn execution
-				spawner := NewSubTurnSpawner(al)
+				spawner := NewSubTurnSpawner(al, currentAgentID)
 				spawnTool.SetSpawner(spawner)
 
 				agent.Tools.Register(spawnTool)

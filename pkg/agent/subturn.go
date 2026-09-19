@@ -119,6 +119,11 @@ type SubTurnConfig struct {
 	// truncated while preserving system messages and recent context.
 	MaxContextRunes int
 
+	// AgentID names the agent the child is built from: its tools, provider
+	// and context builder. Empty means the default agent, which is only right
+	// for callers with no agent of their own (the package-level SpawnSubTurn).
+	AgentID string
+
 	// Can be extended with temperature, topP, etc.
 }
 
@@ -175,6 +180,10 @@ func (al *AgentLoop) generateSubTurnID() string {
 // This allows tools to spawn sub-turns without circular dependency.
 type AgentLoopSpawner struct {
 	al *AgentLoop
+	// agentID is the agent whose spawn/subagent/delegate tools own this
+	// spawner. A child is built from it - never from the default agent, which
+	// would hand a restricted agent's subagent the default agent's tools.
+	agentID string
 }
 
 // SpawnSubTurn implements tools.SubTurnSpawner interface.
@@ -184,9 +193,28 @@ func (s *AgentLoopSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnCo
 		return nil, errors.New("parent turnState not found in context - cannot spawn sub-turn outside of a turn")
 	}
 
+	// The child runs as the delegation target when there is one (M-6),
+	// otherwise as the agent that spawned it.
+	baseID := s.agentID
+	if cfg.TargetAgentID != "" {
+		baseID = cfg.TargetAgentID
+	}
+	model := cfg.Model
+	if baseID != "" {
+		base, ok := s.al.GetRegistry().GetAgent(baseID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", baseID)
+		}
+		// delegate names an agent, not a model: use the agent's own.
+		if model == "" {
+			model = base.Model
+		}
+	}
+
 	// Convert tools.SubTurnConfig to agent.SubTurnConfig
 	agentCfg := SubTurnConfig{
-		Model:           cfg.Model,
+		AgentID:         baseID,
+		Model:           model,
 		Tools:           cfg.Tools,
 		SystemPrompt:    cfg.SystemPrompt,
 		MaxTokens:       cfg.MaxTokens,
@@ -199,9 +227,9 @@ func (s *AgentLoopSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnCo
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
 }
 
-// NewSubTurnSpawner creates a SubTurnSpawner for the given AgentLoop.
-func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner {
-	return &AgentLoopSpawner{al: al}
+// NewSubTurnSpawner creates a SubTurnSpawner for the tools of agent agentID.
+func NewSubTurnSpawner(al *AgentLoop, agentID string) *AgentLoopSpawner {
+	return &AgentLoopSpawner{al: al, agentID: agentID}
 }
 
 // SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
@@ -455,6 +483,13 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 	// It reuses the parent loop's provider and config, but gets its own
 	// ephemeral session store and tool registry.
 	parentAgent := al.GetRegistry().GetDefaultAgent()
+	if cfg.AgentID != "" {
+		a, ok := al.GetRegistry().GetAgent(cfg.AgentID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", cfg.AgentID)
+		}
+		parentAgent = a
+	}
 
 	// Determine which tools to use: explicit config or inherit from parent
 	toolRegistry := tools.NewToolRegistry()

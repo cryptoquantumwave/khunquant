@@ -2112,7 +2112,7 @@ func TestSpawnSubTurn_NilTurnState(t *testing.T) {
 
 func TestAgentLoopSpawner_SpawnSubTurn_NilTurnState(t *testing.T) {
 	al := &AgentLoop{}
-	spawner := NewSubTurnSpawner(al)
+	spawner := NewSubTurnSpawner(al, "")
 	_, err := spawner.SpawnSubTurn(context.Background(), tools.SubTurnConfig{})
 	if err == nil {
 		t.Error("AgentLoopSpawner.SpawnSubTurn with no turnState should return error")

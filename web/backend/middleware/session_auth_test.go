@@ -244,3 +244,28 @@ func TestIssuedCookieLifetimeMatchesSessionTTL(t *testing.T) {
 		t.Fatalf("cookie lives %v, session lives %v", lifetime.Round(time.Minute), store.TTL())
 	}
 }
+
+// The provider redirect arrives without the SameSite=Strict session cookie, so
+// the OAuth callback must pass PasswordAuth on its own - and only it.
+func TestPasswordAuth_LetsOnlyTheOAuthCallbackThrough(t *testing.T) {
+	h := PasswordAuth(PasswordAuthConfig{
+		Sessions:     NewSessionStore(0),
+		PasswordHash: hashFor(t, "hunter2"),
+	}, okHandler())
+
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, OAuthCallbackPath + "?code=c&state=s", http.StatusOK},
+		{http.MethodPost, OAuthCallbackPath, http.StatusUnauthorized},
+		{http.MethodGet, OAuthCallbackPath + "x", http.StatusUnauthorized},
+		{http.MethodGet, "/api/config", http.StatusUnauthorized},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.want)
+		}
+	}
+}

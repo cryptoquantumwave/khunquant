@@ -204,6 +204,8 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 const (
 	LoginPath  = "/api/auth/login"
 	LogoutPath = "/api/auth/logout"
+	// OAuthCallbackPath is where an OAuth provider redirects the browser.
+	OAuthCallbackPath = "/oauth/callback"
 )
 
 // ClearSessionCookie expires the session cookie on the client. Pairs with

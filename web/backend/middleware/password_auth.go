@@ -62,6 +62,17 @@ func PasswordAuth(cfg PasswordAuthConfig, next http.Handler) http.Handler {
 			return
 		}
 
+		// The OAuth provider redirects the browser here cross-site, and the
+		// session cookie is SameSite=Strict, so it is not sent: with a
+		// password set, every provider login stalled on a Basic prompt. The
+		// handler authenticates the request itself - it requires the
+		// unguessable, single-use state of a flow an authenticated user
+		// started, and fails otherwise.
+		if r.URL.Path == OAuthCallbackPath && r.Method == http.MethodGet {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// An established session stands in for the Basic challenge. Revoking
 		// that session (logout) therefore revokes access, which is the whole
 		// point of having sessions at all.

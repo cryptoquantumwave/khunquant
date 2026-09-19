@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1251,6 +1252,34 @@ type ToolsConfig struct {
 
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
+
+	// Policies holds operator additions to the built-in tool policy table,
+	// keyed by tool name. It is sparse on purpose: SaveConfig writes every
+	// field, so seeding it from the code defaults would freeze today's table
+	// into every config.json and a later hardening would never apply. Only
+	// tools the operator names appear here.
+	Policies map[string]ToolPolicyConfig `json:"policies,omitempty"`
+}
+
+// ToolPolicyConfig is an operator's policy addition for one tool. Fields can
+// only tighten what the built-in table allows.
+type ToolPolicyConfig struct {
+	// RequireApproval holds each call until the operator replies /approve with
+	// a one-time code sent to the chat. Ignored for tools that reduce exposure.
+	RequireApproval bool `json:"require_approval,omitempty"`
+}
+
+// ApprovalRequiredTools returns the tools the operator has flagged
+// require_approval, sorted.
+func (c *ToolsConfig) ApprovalRequiredTools() []string {
+	var names []string
+	for name, p := range c.Policies {
+		if p.RequireApproval {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled.

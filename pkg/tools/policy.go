@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -30,6 +31,11 @@ type ToolPolicy struct {
 	// checks nothing - which today places live orders under paper mode in
 	// silence.
 	RefuseUnderPaperMode bool
+
+	// RequiresApproval holds the call until the operator replies /approve with
+	// a one-time code (see approval.go). No shipped entry sets it: approval is
+	// opt-in, per tool, via tools.policies.<tool>.require_approval.
+	RequiresApproval bool
 }
 
 // defaultToolPolicies is the policy table.
@@ -86,11 +92,29 @@ func defaultToolPolicies() map[string]ToolPolicy {
 //     dangerous direction: an operator cutting losses must never be blocked.
 //   - every get_*/list_* tool is read-only.
 
+// riskReducingTools reduce exposure. They are absent from the table and must
+// never be gated - an operator cutting losses cannot be told to wait - so an
+// operator's require_approval on one of them is ignored rather than honoured.
+var riskReducingTools = map[string]bool{
+	NameFuturesClosePosition:       true,
+	NameFuturesReducePosition:      true,
+	NameFuturesCancelOrders:        true,
+	NameFuturesEmergencyFlatten:    true,
+	NameCancelOrder:                true,
+	NameEmergencyStop:              true,
+	NameUnwindDeltaNeutralPosition: true,
+}
+
 var (
 	policyMu      sync.RWMutex
 	policyTable   = defaultToolPolicies()
 	policyPaper   bool
 	policyEnabled bool
+
+	// policyApproval is the operator's opt-in set from
+	// tools.policies.<tool>.require_approval, kept apart from the table so the
+	// code defaults and the operator's additions cannot overwrite each other.
+	policyApproval = map[string]bool{}
 )
 
 // SetPolicyConfig wires the policy check to the running configuration.
@@ -110,6 +134,26 @@ func SetPolicyConfig(paperTradingMode bool) {
 	defer policyMu.Unlock()
 	policyPaper = paperTradingMode
 	policyEnabled = true
+}
+
+// SetRequiredApprovals sets the tools whose calls need operator approval,
+// replacing any previous set. It returns the names it ignored because they
+// reduce exposure, sorted, so the caller can warn about them.
+func SetRequiredApprovals(names []string) (ignored []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		if riskReducingTools[n] {
+			ignored = append(ignored, n)
+			continue
+		}
+		set[n] = true
+	}
+	sort.Strings(ignored)
+
+	policyMu.Lock()
+	defer policyMu.Unlock()
+	policyApproval = set
+	return ignored
 }
 
 // SetToolPolicies replaces the table. Intended for operator overrides and for
@@ -134,13 +178,14 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 //
 // The refusal sets ForUser as well as ForLLM: a block the operator never sees
 // is indistinguishable from the tool quietly doing nothing.
-func checkToolPolicy(ctx context.Context, name string) *ToolResult {
+func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
 	policyMu.RLock()
 	enabled, paper := policyEnabled, policyPaper
 	policy, declared := policyTable[name]
+	needsApproval := policy.RequiresApproval || policyApproval[name]
 	policyMu.RUnlock()
 
-	if !enabled || !declared {
+	if !enabled || (!declared && !needsApproval) {
 		return nil
 	}
 
@@ -162,6 +207,12 @@ func checkToolPolicy(ctx context.Context, name string) *ToolResult {
 			"%s is blocked while paper_trading_mode is on. This tool has no simulated mode, so "+
 				"running it would place real orders despite paper mode. Disable paper_trading_mode "+
 				"to use it.", name))
+	}
+
+	// Approval runs last: a call that would be refused anyway must not cost the
+	// operator an approval they then cannot use.
+	if needsApproval {
+		return checkApproval(ctx, name, args)
 	}
 
 	return nil

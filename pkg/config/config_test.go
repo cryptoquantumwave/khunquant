@@ -878,3 +878,25 @@ func TestAgentConfig_MCPServersRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// tools.policies must stay sparse. SaveConfig writes every field, so a default
+// that serialised as "policies": {} - or worse, a seeded table - would be
+// frozen into every operator's config.json.
+func TestToolPoliciesOmittedWhenEmpty(t *testing.T) {
+	raw, err := json.Marshal(DefaultConfig().Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"policies"`) {
+		t.Fatalf("default tools config serialises a policies key: %s", raw)
+	}
+
+	var tc ToolsConfig
+	if err := json.Unmarshal([]byte(`{"policies":{"create_order":{"require_approval":true},"transfer_funds":{}}}`), &tc); err != nil {
+		t.Fatal(err)
+	}
+	got := tc.ApprovalRequiredTools()
+	if len(got) != 1 || got[0] != "create_order" {
+		t.Fatalf("ApprovalRequiredTools = %v, want [create_order]", got)
+	}
+}

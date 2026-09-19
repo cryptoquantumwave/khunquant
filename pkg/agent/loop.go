@@ -133,6 +133,10 @@ func NewAgentLoop(
 	// and because ExecuteWithContext is a method on ToolRegistry and has no
 	// config of its own to read paper mode from.
 	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
+	if ignored := tools.SetRequiredApprovals(cfg.Tools.ApprovalRequiredTools()); len(ignored) > 0 {
+		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
+			map[string]any{"tools": ignored})
+	}
 
 	al := &AgentLoop{
 		bus:         msgBus,
@@ -1123,6 +1127,9 @@ func (al *AgentLoop) runAgentLoop(
 		// so a cron job - which tags at its own call site, before the loop is
 		// entered - keeps its "cron" tag here rather than being relabelled.
 		ctx = tools.WithToolOrigin(ctx, tools.OriginForChannel(opts.Channel))
+		// The sender is what an operator approval is bound to: only the person
+		// who made a request can approve it.
+		ctx = tools.WithToolSender(ctx, opts.SenderID)
 		isRootTurn = true
 
 		// Register this root turn state so HardAbort can find it

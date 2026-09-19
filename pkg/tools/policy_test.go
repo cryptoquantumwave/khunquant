@@ -42,7 +42,7 @@ func TestCheckToolPolicy_InertUntilArmed(t *testing.T) {
 	})
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if got := checkToolPolicy(ctx, NameCreateOrder); got != nil {
+	if got := checkToolPolicy(ctx, NameCreateOrder, nil); got != nil {
 		t.Fatalf("unarmed policy refused %s: %q", NameCreateOrder, got.ForLLM)
 	}
 }
@@ -51,7 +51,7 @@ func TestCheckToolPolicy_RefusesFinancialToolFromCron(t *testing.T) {
 	armPolicy(t, false, nil)
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	refusal := checkToolPolicy(ctx, NameCreateOrder)
+	refusal := checkToolPolicy(ctx, NameCreateOrder, nil)
 	if refusal == nil {
 		t.Fatalf("%s was allowed on a cron turn", NameCreateOrder)
 	}
@@ -74,7 +74,7 @@ func TestCheckToolPolicy_RefusesFinancialToolFromCron(t *testing.T) {
 func TestCheckToolPolicy_UntaggedOriginFailsClosed(t *testing.T) {
 	armPolicy(t, false, nil)
 
-	if refusal := checkToolPolicy(context.Background(), NameCreateOrder); refusal == nil {
+	if refusal := checkToolPolicy(context.Background(), NameCreateOrder, nil); refusal == nil {
 		t.Fatalf("%s was allowed on an untagged turn", NameCreateOrder)
 	}
 }
@@ -84,7 +84,7 @@ func TestCheckToolPolicy_AllowsPersonDrivenTurns(t *testing.T) {
 
 	for _, origin := range []string{OriginInternal, OriginRemote} {
 		ctx := WithToolOrigin(context.Background(), origin)
-		if refusal := checkToolPolicy(ctx, NameCreateOrder); refusal != nil {
+		if refusal := checkToolPolicy(ctx, NameCreateOrder, nil); refusal != nil {
 			t.Errorf("%s refused on a %s turn: %q", NameCreateOrder, origin, refusal.ForLLM)
 		}
 	}
@@ -108,21 +108,9 @@ func TestCheckToolPolicy_DCAExecutionStillRunsOnCron(t *testing.T) {
 	armPolicy(t, false, nil)
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameExecuteDCAOrder); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameExecuteDCAOrder, nil); refusal != nil {
 		t.Fatalf("%s refused on cron, which disables scheduled DCA: %q", NameExecuteDCAOrder, refusal.ForLLM)
 	}
-}
-
-// riskReducingTools must never be refused: an operator cutting losses cannot be
-// told to wait.
-var riskReducingTools = []string{
-	NameFuturesClosePosition,
-	NameFuturesReducePosition,
-	NameFuturesCancelOrders,
-	NameFuturesEmergencyFlatten,
-	NameCancelOrder,
-	NameEmergencyStop,
-	NameUnwindDeltaNeutralPosition,
 }
 
 // TestRiskReducingToolsAreAbsentFromTheTable states the actual guarantee: these
@@ -137,7 +125,7 @@ var riskReducingTools = []string{
 func TestRiskReducingToolsAreAbsentFromTheTable(t *testing.T) {
 	table := defaultToolPolicies()
 
-	for _, name := range riskReducingTools {
+	for name := range riskReducingTools {
 		if _, declared := table[name]; declared {
 			t.Errorf("%s has a policy entry: reducing exposure must never be refusable", name)
 		}
@@ -155,13 +143,13 @@ func TestCheckToolPolicy_BlocksWhateverTheTableLists(t *testing.T) {
 	})
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition); refusal == nil {
+	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, nil); refusal == nil {
 		t.Fatal("a tool listed with BlockedOrigins was not refused: the blocking logic is inert")
 	}
 
 	// And the same tool is allowed once the table no longer lists it.
 	armPolicy(t, false, map[string]ToolPolicy{})
-	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, nil); refusal != nil {
 		t.Fatalf("an unlisted tool was refused: %q", refusal.ForLLM)
 	}
 }
@@ -171,7 +159,7 @@ func TestCheckToolPolicy_PaperModeBackstop(t *testing.T) {
 
 	ctx := WithToolOrigin(context.Background(), OriginInternal)
 
-	refusal := checkToolPolicy(ctx, NameFuturesOpenPosition)
+	refusal := checkToolPolicy(ctx, NameFuturesOpenPosition, nil)
 	if refusal == nil {
 		t.Fatalf("%s ran under paper mode despite having no simulated mode", NameFuturesOpenPosition)
 	}
@@ -187,7 +175,7 @@ func TestCheckToolPolicy_PaperAwareToolsAreNotBackstopped(t *testing.T) {
 
 	ctx := WithToolOrigin(context.Background(), OriginInternal)
 	for _, name := range []string{NameCreateOrder, NameOptionCreateOrder, NameExecuteDCAOrder} {
-		if refusal := checkToolPolicy(ctx, name); refusal != nil {
+		if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
 			t.Errorf("%s was refused under paper mode, but it simulates internally: %q", name, refusal.ForLLM)
 		}
 	}
@@ -198,7 +186,7 @@ func TestCheckToolPolicy_BackstopOnlyAppliesUnderPaperMode(t *testing.T) {
 	armPolicy(t, false, nil)
 
 	ctx := WithToolOrigin(context.Background(), OriginInternal)
-	if refusal := checkToolPolicy(ctx, NameFuturesOpenPosition); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameFuturesOpenPosition, nil); refusal != nil {
 		t.Fatalf("%s refused with paper mode off: %q", NameFuturesOpenPosition, refusal.ForLLM)
 	}
 }
@@ -211,7 +199,7 @@ func TestCheckToolPolicy_UndeclaredToolIsAllowed(t *testing.T) {
 	armPolicy(t, true, nil)
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameGetTicker); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameGetTicker, nil); refusal != nil {
 		t.Fatalf("read-only %s was refused: %q", NameGetTicker, refusal.ForLLM)
 	}
 }
@@ -225,7 +213,7 @@ func TestCheckToolPolicy_PaperBackstopFiresForWhateverIsFlagged(t *testing.T) {
 	})
 
 	ctx := WithToolOrigin(context.Background(), OriginInternal)
-	if refusal := checkToolPolicy(ctx, NameGetTicker); refusal == nil {
+	if refusal := checkToolPolicy(ctx, NameGetTicker, nil); refusal == nil {
 		t.Fatal("a tool flagged RefuseUnderPaperMode ran under paper mode: the backstop is inert")
 	}
 }

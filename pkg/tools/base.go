@@ -28,6 +28,7 @@ var (
 	ctxKeyChannel = &toolCtxKey{"channel"}
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
 	ctxKeyOrigin  = &toolCtxKey{"origin"}
+	ctxKeySender  = &toolCtxKey{"sender"}
 )
 
 // Tool call origins. A turn is tagged where it starts, and the tag travels with
@@ -76,6 +77,22 @@ func OriginForChannel(channel string) string {
 		return OriginInternal
 	}
 	return OriginRemote
+}
+
+// WithToolSender tags the turn with the sender who started it, so an operator
+// approval can be bound to the person who made the request. Set-once for the
+// same reason as WithToolOrigin: a sub-turn must not relabel its requester.
+func WithToolSender(ctx context.Context, senderID string) context.Context {
+	if senderID == "" || ToolSender(ctx) != "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeySender, senderID)
+}
+
+// ToolSender extracts the turn's sender from ctx, or "" if untagged.
+func ToolSender(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeySender).(string)
+	return v
 }
 
 // WithToolContext returns a child context carrying channel and chatID.

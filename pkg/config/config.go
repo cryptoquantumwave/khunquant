@@ -1011,7 +1011,7 @@ type GatewayConfig struct {
 	// plain string rather than a SecureString because the Gateway subtree is
 	// tagged yaml:"-": a SecureString here would marshal as withheld with
 	// nothing in .security.yml to restore from, blanking itself on next save.
-	// It is kept out of API responses by secretFieldNames instead.
+	// It is kept out of API responses and logs by CredentialFieldNames instead.
 	ManagementToken string `json:"management_token,omitempty" env:"KHUNQUANT_GATEWAY_MANAGEMENT_TOKEN"`
 }
 
@@ -1442,6 +1442,8 @@ func LoadConfig(path string) (*Config, error) {
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
 	}
+
+	registerSecretsForRedaction(cfg)
 
 	return cfg, nil
 }

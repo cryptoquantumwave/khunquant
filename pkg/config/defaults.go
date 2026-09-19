@@ -84,9 +84,12 @@ func DefaultConfig() *Config {
 				MentionOnly: false,
 			},
 			MaixCam: MaixCamConfig{
-				Enabled:   false,
-				Host:      "0.0.0.0",
-				Port:      18790,
+				Enabled: false,
+				// H-12: loopback by default, and not the gateway's port (18790),
+				// which it previously shared. Listening on the network also
+				// requires a token; see MaixCamChannel.Start.
+				Host:      "127.0.0.1",
+				Port:      18791,
 				AllowFrom: FlexibleStringSlice{},
 			},
 			QQ: QQConfig{

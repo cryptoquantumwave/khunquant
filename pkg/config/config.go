@@ -666,6 +666,12 @@ type MaixCamConfig struct {
 	Enabled            bool                `json:"enabled"              yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_ENABLED"`
 	Host               string              `json:"host"                 yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_HOST"`
 	Port               int                 `json:"port"                 yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_PORT"`
+	// Token is the shared secret a device must send first ({"type":"auth",
+	// "token":"..."}). Required when Host is not loopback. A plain string, not
+	// SecureString, because the maixcam subtree is yaml:"-" and could not be
+	// restored from .security.yml; "token" is in CredentialFieldNames, which
+	// keeps it out of API responses and logs.
+	Token              string              `json:"token,omitempty"      yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_TOKEN"`
 	AllowFrom          FlexibleStringSlice `json:"allow_from"           yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_ALLOW_FROM"`
 	ReasoningChannelID string              `json:"reasoning_channel_id" yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_REASONING_CHANNEL_ID"`
 }

@@ -191,7 +191,10 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
-		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		// Match the server-side session. The cookie used to live 7 days
+		// against a 12-hour session, so the browser kept presenting an ID
+		// the server had long forgotten.
+		Expires: time.Now().Add(store.TTL()),
 	})
 }
 

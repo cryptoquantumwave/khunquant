@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,5 +198,49 @@ func TestPasswordAuth_AllowsLoginPath(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("login path got %d, want 200 (it must be reachable unauthenticated)", rec.Code)
+	}
+}
+
+// Only IDs shaped like Create's output reach the comparison. Asserting that
+// Valid rejects junk would prove nothing - junk never matches a live session
+// anyway - so this checks the shape gate itself, and that Valid consults it.
+func TestSessionIDShapeGate(t *testing.T) {
+	store := NewSessionStore(0)
+	id, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validSessionIDShape(id) || !store.Valid(id) {
+		t.Fatal("a freshly created session id fails the shape gate")
+	}
+	for _, bad := range []string{
+		"", id[:63], id + "0", strings.ToUpper(id), strings.Repeat("g", 64), strings.Repeat("a", 1<<20),
+	} {
+		if validSessionIDShape(bad) {
+			t.Errorf("shape gate accepted a malformed id (len %d)", len(bad))
+		}
+	}
+
+	// Valid must consult the gate: a well-formed but unknown id is compared
+	// and rejected; a live id with its shape broken is rejected before that.
+	store.sessions[strings.ToUpper(id)] = time.Now().Add(time.Hour)
+	if store.Valid(strings.ToUpper(id)) {
+		t.Fatal("Valid accepted a live session whose id fails the shape gate: the gate is not consulted")
+	}
+}
+
+// The cookie must not outlive the session it names.
+func TestIssuedCookieLifetimeMatchesSessionTTL(t *testing.T) {
+	store := NewSessionStore(0)
+	rec := httptest.NewRecorder()
+	IssueSessionFor(rec, httptest.NewRequest(http.MethodPost, LoginPath, nil), store)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("got %d cookies, want 1", len(cookies))
+	}
+	lifetime := time.Until(cookies[0].Expires)
+	if lifetime > store.TTL()+time.Minute || lifetime < store.TTL()-time.Minute {
+		t.Fatalf("cookie lives %v, session lives %v", lifetime.Round(time.Minute), store.TTL())
 	}
 }

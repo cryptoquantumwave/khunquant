@@ -145,6 +145,27 @@ fixes the defect. Do not leave a permanently-red test in the tree.
 - A PR body should state what the change adds, its safety-relevant properties, how it was tested,
   and its known limitations — reviewers should not have to infer any of these from the diff.
 
+## Security Conventions
+
+See SECURITY.md for the full posture. The rules that new code most often breaks:
+
+- **A tool that moves money gets a row in `defaultToolPolicies()`** (`pkg/tools/policy.go`),
+  keyed by its `Name*` constant: `BlockedOrigins: {OriginCron}`, and `RefuseUnderPaperMode` unless
+  the tool simulates paper mode itself. `TestPolicyCoversKnownFinancialTools` lists them
+  explicitly — add the new tool there. A tool that only *reduces* exposure gets no row.
+- **Trading tools check `CheckPermission`, `CheckRiskNotional` and `CheckDailyLoss`**, and futures
+  mutations `CheckLeverage`. Reject non-finite numbers yourself — the generic validator does not.
+- **A new `ToolConfig` field needs an `IsToolEnabled` switch arm**, which is default-allow for
+  unknown names. `TestCatalogToolsHaveEnableArms` catches a missing arm for catalog tools.
+- **Credentials under a `yaml:"-"` subtree** (`Providers`, `Tools`, `Debug`, `Gateway`, most
+  channels) must be plain strings named in `config.CredentialFieldNames`, never `SecureString` —
+  a `SecureString` there marshals as withheld with nothing to restore it and blanks on the next
+  save. The name list is what keeps them out of API responses and logs.
+- **Anything that builds a context from `context.Background()` and then runs tools** must carry
+  `tools.WithToolOrigin` / `tools.WithToolSender` over from the parent. Untagged turns fail closed.
+- **Package-level state armed from config must be re-armed on reload**, not just at startup —
+  see `armToolPolicy`, called from both `NewAgentLoop` and `ReloadProviderAndConfig`.
+
 ## Exchange API Pitfalls
 
 ### Futures order `amount` is in **contracts**, not base currency

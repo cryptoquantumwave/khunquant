@@ -50,9 +50,9 @@ The deny-list catches common attack patterns in the command string:
 The web launcher (`web/backend`) implements multi-layer access control:
 
 1. **IP allowlist** (optional, network-level): A CIDR allowlist in `launcher-config.json` (field `allowed_cidrs`). Requests from IPs outside this range are rejected at the network level.
-2. **Trusted-proxy X-Forwarded-For parsing**: If the launcher is behind a reverse proxy (e.g., nginx), it can extract the client IP from the `X-Forwarded-For` header, but only when the proxy's IP is in `trusted_proxy_cidrs`.
+2. **Trusted-proxy X-Forwarded-For parsing**: If the launcher is behind a reverse proxy (e.g., nginx), it can extract the client IP from the `X-Forwarded-For` header, but only when the proxy's IP is in `trusted_proxy_cidrs`. That list decides who may claim to be any client address, so it is guarded: a `/0` entry (`0.0.0.0/0`, `::/0`) fails validation at startup, and the dashboard API accepts the field only unchanged — edit `launcher-config.json` to change it.
 3. **Password authentication** (optional, application-level): A bcrypt-hashed password stored in `launcher-config.json` (field `dashboard_password_hash`). Verified via HTTP Basic authentication, a `POST /api/auth/login` session cookie, or the launcher token — see "Password Authentication Semantics" below. This layer is **independent of** the IP allowlist—both must pass (if configured).
-4. **CSRF protection on state-changing endpoints** (application-level): State-changing launcher setup endpoints (e.g., `POST /api/pico/setup`) verify that requests originate from the launcher's own origin, not from an attacker's page. The check uses the `Sec-Fetch-Site` header when present (modern browsers), falls back to comparing parsed `Origin` and then `Referer` headers against the request's own scheme and host, and rejects requests that cannot be identified.
+4. **CSRF protection on state-changing endpoints** (application-level): Every mutating `/api/` route verifies that the request originates from the launcher's own origin, not from an attacker's page. The check uses the `Sec-Fetch-Site` header when present (modern browsers), falls back to comparing parsed `Origin` and then `Referer` headers against the request's own scheme and host, and rejects requests that cannot be identified.
 
 ### Password Authentication Semantics
 
@@ -64,10 +64,13 @@ The web launcher (`web/backend`) implements multi-layer access control:
 - **Credentials accepted**: on each request, in order — (1) a valid `kq_session` cookie from a prior login, (2) HTTP Basic authentication checked against the bcrypt hash, or (3) the launcher token (`Authorization: Bearer`, `X-Launcher-Token`, or `launcher_token` query parameter) — the launcher token is treated as an alternative launcher credential, since it is at least as privileged a secret as the dashboard password.
 - **Sessions are opt-in, not automatic**: `POST /api/auth/login` exchanges the dashboard password for a session cookie; `POST /api/auth/logout` revokes it. Basic-authenticated and launcher-token-authenticated requests are **not** automatically upgraded into a session — each such request is checked again on its own. In particular, presenting the launcher token authorizes that one request but does not mint a persistent session; only a successful password login does.
 - **Health checks exempt**: `/api/health` and `/api/ready` skip password authentication (and session/loopback checks) to allow external health monitors to function.
+- **OAuth callback exempt**: `GET /oauth/callback` (exactly — not a prefix, not `POST`) skips password authentication. The provider redirects the browser there cross-site, and the session cookie is `SameSite=Strict`, so it is not sent; before the exemption every provider login stalled on a Basic prompt once a password was set. The handler authenticates the request itself: it requires the unguessable, single-use `state` of a flow an authenticated user started.
+- **Failed attempts lock an address out**: five wrong passwords from one address within 15 minutes — through the login form or Basic auth, which share one budget — earn `429` with `Retry-After` until the window passes. The check runs before bcrypt, and a request that offers no password does not count. It keys on the TCP peer, never `X-Forwarded-For` (which the client writes), so behind a reverse proxy all clients share the proxy's budget: a lockout there applies to everyone, the conservative failure for a password check.
+- **Session cookies**: `HttpOnly`, `SameSite=Strict`, expire with the 12-hour server-side session, and are `Secure` when the launcher serves TLS **or** `behind_tls_proxy: true` is set in `launcher-config.json` — needed behind a TLS-terminating proxy, where the launcher itself sees plain HTTP. The setting is explicit rather than inferred from `X-Forwarded-Proto`, which the client can write.
 
 ### Fail-Closed Guard
 
-The launcher refuses to start in public mode (listening on `0.0.0.0`) without an explicit IP allowlist. The guard is in `web/backend/main.go`, lines 113–119:
+The launcher refuses to start in public mode (listening on `0.0.0.0`) without an explicit IP allowlist. The guard is in `web/backend/main.go` (search for "Refusing to start in public mode"):
 
 ```go
 // Refuse to start in public mode without an explicit CIDR allowlist — the
@@ -113,19 +116,7 @@ The mechanism works as follows:
 - **HTTPS not enforced**: The launcher does not require TLS. If a password is configured, credentials are transmitted via HTTP Basic auth in the request header. Over plain HTTP, these credentials can be intercepted. TLS is strongly recommended when exposing the launcher over a network.
 - **No audit log**: Access is not logged by user or timestamp (though the launcher emits structured request logs). There is no record of who accessed the dashboard or what changes were made.
 - **Password hash in config file**: The bcrypt-hashed password is stored in the plaintext `launcher-config.json` file on disk. File permissions are set to 0o600 (read/write for owner only), but the hash could be extracted and cracked if the file is compromised.
-- **CSRF protection**: Protects the following 13 launcher setup operations with `Sec-Fetch-Site: same-origin` validation (modern browsers) and Origin/Referer fallback (older browsers):
-  1. **Configuration** (`PUT /api/config`, `PATCH /api/config`, `POST /api/config/reset`)
-  2. **Pico channel** (`POST /api/pico/setup`, `POST /api/pico/token`)
-  3. **Gateway lifecycle** (`POST /api/gateway/start`, `POST /api/gateway/stop`, `POST /api/gateway/restart`, `POST /api/gateway/logs/clear`)
-  4. **Model management** (`POST /api/models`, `PUT /api/models/{index}`, `DELETE /api/models/{index}`, `POST /api/models/default`)
-  5. **OAuth** (`POST /api/oauth/login`, `POST /api/oauth/logout`, `POST /api/oauth/flows/{id}/poll`, `POST /api/oauth/providers/{provider}/select-model`)
-  6. **Session** (`DELETE /api/sessions/{id}`)
-  7. **Skills** (`POST /api/skills/import`, `DELETE /api/skills/{name}`)
-  8. **Tools** (`PUT /api/tools/{name}/state`)
-  9. **System** (`PUT /api/system/launcher-config`)
-  10. **Updates** (`POST /api/update/apply`)
-  
-  Read-only endpoints (GET requests) are not protected. Certain operations deliberately excluded (see below).
+- **CSRF protection** covers every mutating `/api/` route; see "CSRF Protection Coverage & Special Cases" below. (An older list of 13 protected setup operations used to appear here; it described the pre-`CSRFMutations` state and is superseded.)
 - **Pico `allow_origins` is empty by default, and that is not "allow anything"**: Setup no longer records the Origin of whichever request happened to trigger it. That pin locked the channel to a single host — a launcher configured from `localhost` then rejected the same user reaching it over the LAN or on another port. With the list empty the channel falls back to a same-origin check (`isSameOriginRequest`, `pkg/channels/pico/pico.go`), which is what actually protects a browser; the pin added nothing on top of it. An operator who wants specific origins can still set `allow_origins` explicitly, and a wildcard `*` is never written automatically.
 
 - **Pico WebSocket token is never sent to the browser**: The Pico channel authenticates its WebSocket handshake with a `token.<value>` subprotocol. The launcher proxies `/pico/ws` and attaches that token server-side from config, so no API response carries it and no browser holds it. `GET /api/pico/info` returns only `ws_url` and `enabled`; `POST /api/pico/token` rotates the token and returns the same token-free payload. The proxy also discards any subprotocol the caller supplied, so a client cannot present a token of its own choosing to the gateway, and strips the gateway's echoed subprotocol from the handshake response.
@@ -136,6 +127,8 @@ The mechanism works as follows:
   Redaction is keyed on field name (`api_key`, `token`, `secret`, …), not on a list of known config paths, so a newly added provider or search backend is withheld the moment it is added rather than when someone remembers to update a list. Empty values are left as-is so "not configured" stays distinguishable from "configured but withheld".
 
   **Reachability:** `GET /api/config` sits behind the launcher session/password middleware and the IP allowlist, so this was never remote-unauthenticated. The exposure was that any dashboard-authenticated session — and anything that records its responses, such as browser devtools, extensions, or a HAR export — could read provider and tool API keys in full. Anyone who can read `config.json` on disk still has them.
+
+- **Exec sessions are unreachable from the model**: the `exec` schema sets `additionalProperties: false` and names only `command` and `working_dir`, so registry validation rejects `action`, `background`, `pty` and every session argument before `Execute` runs; the only direct caller (cron) passes `action: run`. That unreachability is the control — sessions have an idle reaper but no hard lifetime or count cap — and `TestExecSessionArgumentsAreUnreachableThroughTheRegistry` pins it. Exposing sessions to the model must add those caps in the same change. The rest of this bullet describes the guard that applies if they are reached.
 
 - **Exec sessions guard their input, not just their first command**: `exec` supports background and PTY sessions (`action: run` with `background`/`pty`, then `poll`/`read`/`write`/`send-keys`/`kill`). A session is a running shell, so anything written into it afterwards is executed too. `guardSessionInput` therefore applies the exec deny patterns to `write` data and to the literal (non-control-key) portion of `send-keys`.
 
@@ -169,7 +162,81 @@ curl -X POST http://127.0.0.1:18800/api/gateway/restart \
 
 No exemption exists for token-authenticated callers. Nothing shipped sends a token header to these routes — the dashboard authenticates by cookie and relies on the browser to supply `Sec-Fetch-Site` — so an exemption would be attack surface with no consumer.
 
-**Note the opposite polarity of the gateway management API** (`/api/cron/*` on the gateway's own port, see above): that guard *rejects* requests carrying browser markers, because its only legitimate caller is the launcher backend making a server-to-server call. The launcher's CSRF check demands proof of a same-origin browser; the gateway's demands the absence of a browser. Each matches its own caller, and a request forwarded from one to the other satisfies both: `proxyToGateway` forwards only `Content-Type` and `Authorization`, so the browser's origin headers do not reach the gateway.
+**Note the opposite polarity of the gateway management API** (`/api/cron/*` on the gateway's own port, see "Gateway Management API" below): that guard *rejects* requests carrying browser markers, because its only legitimate caller is the launcher backend making a server-to-server call. The launcher's CSRF check demands proof of a same-origin browser; the gateway's demands the absence of a browser. Each matches its own caller, and a request forwarded from one to the other satisfies both: `proxyToGateway` forwards only `Content-Type` and `Authorization`, so the browser's origin headers do not reach the gateway.
+
+## Gateway Management API
+
+The gateway exposes a small management API (`/api/cron/*`) on its own port (default `127.0.0.1:18790`) for the launcher to manage scheduled jobs. Three guards apply to every route, installed by wrapping the mux so a later route cannot skip them:
+
+- **Bearer token**: `gateway.management_token` is minted and persisted before any route registers (the ordering matters — the bearer middleware passes everything when the token is empty). The launcher forwards it as `Authorization`. It is a plain string rather than a `SecureString` because the `gateway` subtree is `yaml:"-"`; it is withheld from API responses and logs by name.
+- **Loopback only**: requests must come from a loopback peer.
+- **No browsers**: a request carrying `Origin` or a `Sec-Fetch-Site` other than `none` is rejected — the only legitimate caller is a server-to-server call from the launcher.
+
+The launcher no longer forces the gateway onto `0.0.0.0` in `-public` mode. To expose the gateway (for example for webhooks), set `gateway.host` / `KHUNQUANT_GATEWAY_HOST` explicitly.
+
+## Trading Safety
+
+The agent can place real orders on the exchanges and brokers it is configured for. The LLM is treated as potentially attacker-controlled (prompt injection through fetched pages, messages, tool output), so the controls below do not rely on the model behaving.
+
+### Per-tool policy
+
+`pkg/tools/policy.go` holds a policy table keyed by tool-name constants, enforced inside `ToolRegistry.ExecuteWithContext` — the single funnel for every model-driven tool call — after argument validation. A tool gets its guarantees from the table, not from remembering to call a check. Refusals are shown to the operator as well as to the model.
+
+- **Scheduled jobs cannot move money.** Each turn is tagged with its origin — `internal` (CLI), `remote` (a chat channel) or `cron` — where it starts: cron at its own call site, the agent loop for every other root turn, and sub-turns (`spawn`, `subagent`, `delegate`) inherit their parent's tag. Financial tools (spot/option order placement, transfers, futures leverage/open/protection, delta-neutral open/resize, earn, DCA and delta-neutral plan writes) and `install_skill` refuse `cron` turns. A turn with **no** tag is refused too: "unknown" must not be the one value that slips past the gate. `execute_dca_order` is deliberately exempt — scheduled DCA is its purpose.
+- **Risk-reducing tools are never gated**: closing, reducing, cancelling, flattening, emergency stop and delta-neutral unwind carry no policy. An operator cutting losses is never told to wait.
+- **Paper-mode backstop**: `create_order`, `option_create_order` and `execute_dca_order` simulate under `trading_risk.paper_trading_mode` themselves. Every other money-moving tool has no simulation, so under paper mode the policy refuses it rather than let it trade live. The flag is re-read on every config reload, including a dashboard change.
+- **Scheduled jobs are unattended agent turns**: with `deliver` false (the default), even a plain `message` job runs through the agent; `type: directive` only adds a prompt prefix. Any channel can schedule one. The origin tag above is what keeps such a job from trading; requiring confirmation for every agent-turn job would break ordinary reminders and is not done.
+
+### Operator approval (opt-in)
+
+A tool listed as `tools.policies.<tool>.require_approval: true` does not run on the model's say-so. The first call is held and a one-time 8-character code is sent to the chat the call came from (the terminal's stderr on the CLI). Replying `/approve <code>` lets the **identical** call run once; `/deny <code>` discards it; codes expire after 5 minutes.
+
+- The code never enters model context: it is delivered by a notifier, not in the tool result, and `/approve` is consumed as a command before any LLM turn.
+- An approval is bound to the channel, chat **and sender** that made the request, and to a hash of the exact arguments (`confirm` excluded, so preview and execute match). Changing the amount needs a new approval.
+- `/approve` from the `system` or `subagent` channels, from `async:*` senders (async tool results are re-published inbound with model-influenced content) or from the `cron` sender outside the CLI is refused before the store is consulted.
+- Off by default. Risk-reducing tools cannot be flagged. Approvals are in memory, so a restart drops pending ones (the model's retry simply asks again). A call inside a sub-turn cannot be approved — it has no chat to bind to — and is refused.
+
+### What the registry does not cover
+
+The funnel covers model-driven calls. Code that constructs a tool and calls `Execute` directly bypasses it; today that is the dashboard's delta-neutral force-unwind, which carries its own paper-mode refusal (`409`).
+
+### Limits and loss tracking
+
+`trading_risk` caps (`max_order_value_usd`, `daily_loss_limit_usd`, `max_dca_amount_per_order_usd`) are **zero by default, meaning unlimited**, and leverage is allowed by default; the shipped defaults do not restrict live trading. When set:
+
+- `daily_loss_limit_usd` counts realised losses from **futures closes, reduces and flattens, and delta-neutral unwinds and resizes**, persisted to `<workspace>/state/daily_loss.json`. **Spot and DCA sells are not counted** — attributing one sell needs a trade-history fetch and an average-cost diff on every sell. Two processes sharing a workspace can lose each other's recorded loss.
+- Market orders are priced from a ticker so notional caps apply to them too, and an order that cannot be priced is refused while a cap is set. `create_order`, the futures tools, `transfer_funds`, `create_dca_plan` and `open_delta_neutral_position` reject NaN and infinite amounts (checked per tool, not by the generic validator). Exchange `params` on `create_order` and futures orders pass through an allowlist, with margin/leverage keys only when allowed.
+
+`option_create_order` is **disabled by default** (`tools.option_create_order.enabled`); the other option tools are read-only and enabled.
+
+## Credentials and Secrets
+
+- **At rest**: `enc://` values are AES-256-GCM encrypted under a key derived with HKDF-SHA256 from an SSH private key and a passphrase (`HMAC-SHA256(SHA256(sshKey), passphrase)` as input keying material). HKDF is chosen for speed on small devices; it is **not** a password-hardening KDF, so the strength rests on the SSH key being secret, not on the passphrase being hard to guess. A slower KDF (Argon2id) would need a new scheme prefix and is not implemented.
+- **The passphrase file is a degraded mode**: `~/.khunquant/.passphrase` (or `$KHUNQUANT_HOME/.passphrase`) lets the process start unattended, at the cost of storing the passphrase beside the data it protects. It is written `0600`, and is **refused** — with a warning naming `chmod 600` — when group or others can read it. `KHUNQUANT_KEY_PASSPHRASE` takes precedence. `.passphrase` is in `.gitignore`.
+- **Logs**: every credential in the loaded config is registered for redaction — every `SecureString`, plus every string under a credential-named field or map key (the same name list the dashboard API uses, `config.CredentialFieldNames`). Messages and fields are redacted in both the console and the file log. Tool calls log argument names and a short redacted preview at Info; full arguments only at Debug.
+- **Child processes**: `exec` commands and stdio MCP servers start from an allowlisted environment (`PATH`, `HOME`, locale, temp dirs, …), not the gateway's, so they do not inherit API keys. Pass more with `tools.exec.env_passthrough` or a server's `inherit_env`; `inherit_all_env: true` restores full inheritance for an MCP server and logs a warning on every start. A server's explicit `env` and `env_file` are unaffected.
+
+## Channels
+
+- **`allow_from`**: an empty list currently admits everyone, and each such channel logs a warning at startup. **A future release will treat an empty `allow_from` as deny-all.** Add your IDs, or `"*"` to keep a channel open deliberately.
+- **Matrix**: `join_on_invite` defaults to `false` for new configs (existing configs keep their saved value).
+- **MaixCam**: devices must send `{"type":"auth","token":"..."}` first when `channels.maixcam.token` is set; the channel refuses to listen on a non-loopback address without a token. Only authenticated devices receive agent replies (the channel broadcasts to connected clients). Defaults: `127.0.0.1:18791`. Messages are capped at 64 KiB and the detector label is sanitised before it reaches the agent.
+- **Skills**: installing from ClawHub fails closed when moderation metadata cannot be fetched (`tools.skills.registries.clawhub.allow_unverified` overrides), malware-flagged skills are refused before download, and extraction is staged so a half-extracted skill is never loaded.
+- **Serial**: the serial tool accepts only device paths (`/dev/...`, `COMn`).
+- **File access**: `allow_read_paths` / `allow_write_paths` entries are anchored at the start of the path; an entry without a leading `^` is anchored with a warning.
+
+## Upgrade Notes (breaking changes)
+
+- `option_create_order` is disabled by default — set `tools.option_create_order.enabled: true` to place option orders.
+- `-public` no longer moves the gateway onto `0.0.0.0` — set `gateway.host` explicitly.
+- CSRF protection covers every mutating `/api/` route — scripts must send a matching `Origin`.
+- Stdio MCP servers no longer inherit the environment — use `inherit_env` or `env`.
+- Skill installs fail when ClawHub moderation metadata is unavailable — or set `allow_unverified`.
+- MaixCam on a network address needs a token, and devices must send it first.
+- A `/0` in `trusted_proxy_cidrs` fails validation; the dashboard cannot change the list.
+- A group- or world-readable `.passphrase` is ignored until `chmod 600`.
+- Allow-path patterns without a leading `^` are anchored and can stop matching mid-path.
+- Container images built from `docker/Dockerfile` and `Dockerfile.full` run as UID 1000.
 
 ## Reporting Security Issues
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -202,11 +204,35 @@ func (t *SerialTool) write(args map[string]any) *ToolResult {
 	return SilentResult(string(result))
 }
 
+// windowsCOMPort matches COM1..COM999, optionally in the \\.\COM10 device
+// namespace form Windows needs for ports above COM9.
+var windowsCOMPort = regexp.MustCompile(`(?i)^(?:\\\\\.\\)?COM[0-9]{1,3}$`)
+
+// validateSerialPort accepts a device path and nothing else.
+//
+// L-1: port was passed straight to the OS open call, so the model could aim
+// the serial tool at any file the process can open read-write - the open
+// fails at the terminal ioctl for a regular file, but only after the file has
+// been opened. A port is a device: a clean path under /dev, or a COM port.
+// Both forms are accepted on every OS; the wrong one simply fails to open.
+func validateSerialPort(port string) error {
+	if windowsCOMPort.MatchString(port) {
+		return nil
+	}
+	if strings.HasPrefix(port, "/dev/") && path.Clean(port) == port && !strings.Contains(port, "\x00") {
+		return nil
+	}
+	return fmt.Errorf("port %q is not a serial device: use a path under /dev/ (e.g. /dev/ttyUSB0) or a COM port (e.g. COM3)", port)
+}
+
 func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 	port, ok := args["port"].(string)
 	port = strings.TrimSpace(port)
 	if !ok || port == "" {
 		return serialConfig{}, ErrorResult("port is required (for example /dev/ttyUSB0, /dev/cu.usbserial-0001, or COM3)")
+	}
+	if err := validateSerialPort(port); err != nil {
+		return serialConfig{}, ErrorResult(err.Error())
 	}
 
 	cfg := serialConfig{

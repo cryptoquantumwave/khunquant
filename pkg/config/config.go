@@ -1337,6 +1337,14 @@ type MCPServerConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
+	// InheritEnv names variables from the launching process to pass through to
+	// the server (stdio only), on top of a base allowlist (PATH, HOME, locale,
+	// ...). A trailing "*" allows a prefix. Nothing else is inherited: the
+	// process environment holds every LLM and exchange API key.
+	InheritEnv []string `json:"inherit_env,omitempty"`
+	// InheritAllEnv passes the launching process's entire environment through,
+	// the pre-M-5 behaviour. Logged as a warning on every start.
+	InheritAllEnv bool `json:"inherit_all_env,omitempty"`
 	// Type is "stdio", "sse", or "http" (default: stdio if command is set, sse if url is set)
 	Type string `json:"type,omitempty"`
 	// URL is used for SSE/HTTP transport

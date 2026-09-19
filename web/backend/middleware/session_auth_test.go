@@ -278,7 +278,8 @@ func TestSessionCookieSecureBehindTLSProxy(t *testing.T) {
 		IssueSessionFor(rec, httptest.NewRequest(http.MethodPost, LoginPath, nil), NewSessionStore(0))
 		return rec.Result().Cookies()[0].Secure
 	}
-	t.Cleanup(func() { SetSecureCookies(false) })
+	prev := secureCookies.Load()
+	t.Cleanup(func() { SetSecureCookies(prev) })
 
 	if issue() {
 		t.Fatal("plain-HTTP cookie is Secure without behind_tls_proxy; the check below proves nothing")

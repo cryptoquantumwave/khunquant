@@ -173,6 +173,7 @@ func main() {
 	// One store shared by the session middleware (which validates and issues),
 	// the password middleware (which defers to an established session), and the
 	// API handler (which mints on login and revokes on logout).
+	middleware.SetSecureCookies(launcherCfg.BehindTLSProxy)
 	sessionStore := middleware.NewSessionStore(0)
 	apiHandler.SetSessionAuth(sessionStore, launcherCfg.DashboardPasswordHash)
 

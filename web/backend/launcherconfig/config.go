@@ -27,6 +27,11 @@ type Config struct {
 	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
 	LauncherToken        string   `json:"launcher_token,omitempty"`
 	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
+	// BehindTLSProxy marks session cookies Secure even though the launcher
+	// itself serves plain HTTP, for deployments behind a TLS-terminating
+	// reverse proxy. An explicit setting, not X-Forwarded-Proto: that header
+	// is written by the client unless a proxy overwrites it.
+	BehindTLSProxy bool `json:"behind_tls_proxy,omitempty"`
 }
 
 // Default returns default launcher settings.

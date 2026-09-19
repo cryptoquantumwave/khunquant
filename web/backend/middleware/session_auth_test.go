@@ -269,3 +269,22 @@ func TestPasswordAuth_LetsOnlyTheOAuthCallbackThrough(t *testing.T) {
 		}
 	}
 }
+
+// behind_tls_proxy: the launcher sees plain HTTP, but the cookie must still be
+// Secure.
+func TestSessionCookieSecureBehindTLSProxy(t *testing.T) {
+	issue := func() bool {
+		rec := httptest.NewRecorder()
+		IssueSessionFor(rec, httptest.NewRequest(http.MethodPost, LoginPath, nil), NewSessionStore(0))
+		return rec.Result().Cookies()[0].Secure
+	}
+	t.Cleanup(func() { SetSecureCookies(false) })
+
+	if issue() {
+		t.Fatal("plain-HTTP cookie is Secure without behind_tls_proxy; the check below proves nothing")
+	}
+	SetSecureCookies(true)
+	if !issue() {
+		t.Fatal("cookie is not Secure with behind_tls_proxy set")
+	}
+}

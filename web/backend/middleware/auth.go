@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -173,6 +174,17 @@ func sanitizedTokenURL(r *http.Request) string {
 	return u.String()
 }
 
+// secureCookies is set once at startup from launcher config (behind_tls_proxy).
+var secureCookies atomic.Bool
+
+// SetSecureCookies marks session cookies Secure regardless of r.TLS. M-12:
+// behind a TLS-terminating proxy the launcher sees plain HTTP, so r.TLS is nil
+// and the session cookie was issued without Secure - a browser would then send
+// it over any plain-HTTP request to the same host.
+func SetSecureCookies(on bool) { secureCookies.Store(on) }
+
+func cookieSecure(r *http.Request) bool { return r.TLS != nil || secureCookies.Load() }
+
 // issueSessionCookie mints a fresh session and sets it on the response. The
 // cookie carries a random session ID, never the launcher secret.
 func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionStore) {
@@ -183,7 +195,7 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 	if err != nil {
 		return
 	}
-	secure := r.TLS != nil
+	secure := cookieSecure(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    id,
@@ -217,7 +229,7 @@ func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})

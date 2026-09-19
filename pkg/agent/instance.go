@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -543,12 +542,27 @@ func (a *AgentInstance) AllowsMCPServer(serverName string) bool {
 	return ok
 }
 
+// compilePatterns compiles allow_read_paths / allow_write_paths entries.
+//
+// L-2: patterns are matched with MatchString, which finds a match anywhere in
+// the path. An entry written as a directory - "/home/me/data" - therefore also
+// allowed "/tmp/x/home/me/data/..." and any other path containing it. Each
+// entry is now anchored at the start. That can only narrow what an entry
+// matches: ".*\.csv$" keeps its meaning, and an entry that relied on matching
+// mid-path stops matching (fail closed) with a warning naming it.
 func compilePatterns(patterns []string) []*regexp.Regexp {
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {
+		if !strings.HasPrefix(p, "^") {
+			logger.WarnCF("agent", "Anchoring allow-path pattern at the start of the path; "+
+				"write it with a leading ^ to silence this",
+				map[string]any{"pattern": p, "anchored": "^" + p})
+			p = "^" + p
+		}
 		re, err := regexp.Compile(p)
 		if err != nil {
-			fmt.Printf("Warning: invalid path pattern %q: %v\n", p, err)
+			logger.WarnCF("agent", "Ignoring invalid allow-path pattern",
+				map[string]any{"pattern": p, "error": err.Error()})
 			continue
 		}
 		compiled = append(compiled, re)

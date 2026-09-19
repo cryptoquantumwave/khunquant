@@ -110,7 +110,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			return
 		}
 		for _, d := range dirs {
-			if !d.IsDir() {
+			// Hidden directories are never skills. Installs stage into one
+			// before renaming it into place.
+			if !d.IsDir() || strings.HasPrefix(d.Name(), ".") {
 				continue
 			}
 			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")

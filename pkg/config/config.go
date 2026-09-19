@@ -1319,6 +1319,10 @@ type ClawHubRegistryConfig struct {
 	Timeout         int    `json:"timeout"           env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
 	MaxZipSize      int    `json:"max_zip_size"      env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
 	MaxResponseSize int    `json:"max_response_size" env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
+	// AllowUnverified installs a skill even when its moderation metadata
+	// cannot be fetched. Off by default: without metadata there is no malware
+	// verdict, and installing then means running unreviewed third-party code.
+	AllowUnverified bool `json:"allow_unverified,omitempty" env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_ALLOW_UNVERIFIED"`
 }
 
 // MCPServerConfig defines configuration for a single MCP server

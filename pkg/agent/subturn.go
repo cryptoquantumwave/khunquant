@@ -285,6 +285,13 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// childCtx starts from Background, so the policy tags on the spawning
+	// turn do not carry over by themselves - and a child is never a root turn,
+	// so runAgentLoop will not tag it either. Untagged fails closed, which
+	// would refuse every financial tool a person's subagent calls; worse in
+	// spirit, a cron job's subagent would stop being "cron". Carry both.
+	childCtx = tools.WithToolOrigin(childCtx, tools.ToolOrigin(ctx))
+	childCtx = tools.WithToolSender(childCtx, tools.ToolSender(ctx))
 
 	// 5. Establish parent-child relationship (thread-safe)
 	parentTS.mu.Lock()

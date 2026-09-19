@@ -109,7 +109,11 @@ func DefaultConfig() *Config {
 				Homeserver:   "https://matrix.org",
 				UserID:       "",
 				DeviceID:     "",
-				JoinOnInvite: true,
+				// H-11: off for fresh configs. With an empty allow_from, joining
+				// every room the bot is invited to makes it answer anyone who
+				// invites it. Existing configs are unaffected: SaveConfig writes
+				// every field, so theirs already carry an explicit value.
+				JoinOnInvite: false,
 				AllowFrom:    FlexibleStringSlice{},
 				GroupTrigger: GroupTriggerConfig{
 					MentionOnly: true,

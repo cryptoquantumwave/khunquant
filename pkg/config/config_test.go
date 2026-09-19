@@ -900,3 +900,24 @@ func TestToolPoliciesOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("ApprovalRequiredTools = %v, want [create_order]", got)
 	}
 }
+
+// A fresh config does not auto-join Matrix rooms; an existing config that
+// saved join_on_invite: true keeps it, because LoadConfig unmarshals over the
+// defaults.
+func TestMatrixJoinOnInviteDefaultsOffButSavedValueWins(t *testing.T) {
+	if DefaultConfig().Channels.Matrix.JoinOnInvite {
+		t.Fatal("join_on_invite defaults to true")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"channels":{"matrix":{"join_on_invite":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Channels.Matrix.JoinOnInvite {
+		t.Fatal("an existing config's saved join_on_invite: true was overridden by the new default")
+	}
+}

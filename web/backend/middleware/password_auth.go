@@ -87,12 +87,23 @@ func PasswordAuth(cfg PasswordAuthConfig, next http.Handler) http.Handler {
 			return
 		}
 
-		// Extract and verify credentials.
+		// Extract and verify credentials. Only a request that actually offers a
+		// password counts against the limiter; a plain page load does not.
 		_, pass, ok := r.BasicAuth()
-		if !ok || !verifyPassword(cfg.PasswordHash, pass) {
+		if !ok {
 			rejectPasswordAuth(w, r)
 			return
 		}
+		if allowed, retry := DefaultAuthLimiter.Allow(r); !allowed {
+			RejectTooManyAttempts(w, retry)
+			return
+		}
+		if !verifyPassword(cfg.PasswordHash, pass) {
+			DefaultAuthLimiter.Fail(r)
+			rejectPasswordAuth(w, r)
+			return
+		}
+		DefaultAuthLimiter.Succeed(r)
 
 		next.ServeHTTP(w, r)
 	})

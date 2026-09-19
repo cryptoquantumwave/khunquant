@@ -104,7 +104,7 @@ func (t *CronTool) Parameters() map[string]any {
 			"type": map[string]any{
 				"type":        "string",
 				"enum":        []string{"message", "directive"},
-				"description": "Message generation strategy. 'message' (default): content is sent directly as-is. 'directive': content is treated as instructions for an AI agent to execute before delivery.",
+				"description": "Message generation strategy. 'message' (default): with deliver=true the content is sent as-is; with deliver=false (the default) it is processed by the agent as a new turn. 'directive': content is always treated as instructions for the agent to execute, whatever deliver is.",
 			},
 			"deliver": map[string]any{
 				"type":        "boolean",

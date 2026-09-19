@@ -1862,7 +1862,9 @@ func (al *AgentLoop) runLLMIteration(
 				defer wg.Done()
 
 				argsJSON, _ := json.Marshal(tc.Arguments)
-				argsPreview := utils.Truncate(string(argsJSON), 200)
+				// Redact before truncating: a secret cut at the boundary would
+				// otherwise leave its prefix in the log.
+				argsPreview := utils.Truncate(logger.Redact(string(argsJSON)), 200)
 				logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 					map[string]any{
 						"agent_id":  agent.ID,

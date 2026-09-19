@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -191,7 +192,17 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	// H-9: arguments are model-written and can carry anything - a pasted key,
+	// a command with a token in it, a message body. Info (the default level,
+	// and what the dashboard shows) gets the argument names and a short
+	// redacted preview; the full arguments are Debug only.
 	logger.InfoCF("tool", "Tool execution started",
+		map[string]any{
+			"tool":         name,
+			"arg_keys":     sortedArgKeys(args),
+			"args_preview": argsPreview(args),
+		})
+	logger.DebugCF("tool", "Tool execution arguments",
 		map[string]any{
 			"tool": name,
 			"args": args,
@@ -456,4 +467,29 @@ func (r *ToolRegistry) GetAll() []Tool {
 		}
 	}
 	return tools
+}
+
+const argsPreviewLen = 200
+
+func sortedArgKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// argsPreview is a redacted, truncated rendering of args. Redaction runs
+// before truncation, so a secret cut in half at the boundary is still caught.
+func argsPreview(args map[string]any) string {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return "(unprintable)"
+	}
+	s := logger.Redact(string(raw))
+	if len(s) > argsPreviewLen {
+		s = s[:argsPreviewLen] + "…"
+	}
+	return s
 }

@@ -235,6 +235,11 @@ type SessionManager struct {
 	idleTimeout time.Duration
 	stopCh      chan struct{}
 	stopOnce    sync.Once
+	// wakeCh interrupts the reap loop's sleep when the idle timeout changes.
+	// Without it the loop keeps sleeping on the interval it computed from the
+	// *previous* timeout - up to 5 minutes - so a shortened timeout would not
+	// be enforced until that sleep expired.
+	wakeCh chan struct{}
 }
 
 func NewSessionManager() *SessionManager {
@@ -242,6 +247,7 @@ func NewSessionManager() *SessionManager {
 		sessions:    make(map[string]*ProcessSession),
 		idleTimeout: defaultSessionIdleTimeout,
 		stopCh:      make(chan struct{}),
+		wakeCh:      make(chan struct{}, 1),
 	}
 
 	go sm.reapLoop()
@@ -255,8 +261,16 @@ func NewSessionManager() *SessionManager {
 // sessions that finished on their own.
 func (sm *SessionManager) SetIdleTimeout(d time.Duration) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	sm.idleTimeout = d
+	sm.mu.Unlock()
+
+	// Wake the reap loop so it recomputes its interval against the new value
+	// rather than finishing a sleep sized by the old one. Non-blocking: a wake
+	// already queued achieves the same thing.
+	select {
+	case sm.wakeCh <- struct{}{}:
+	default:
+	}
 }
 
 // Shutdown kills every session this manager owns and stops its background
@@ -300,14 +314,19 @@ func (sm *SessionManager) reapLoop() {
 			interval = minIdleReapInterval
 		}
 
+		timer := time.NewTimer(interval)
 		select {
-		case <-time.After(interval):
+		case <-timer.C:
 			sm.reapIdleSessions()
 			if time.Since(lastCleanup) >= maxIdleReapInterval {
 				sm.cleanupOldSessions()
 				lastCleanup = time.Now()
 			}
+		case <-sm.wakeCh:
+			// The idle timeout changed; recompute the interval from it.
+			timer.Stop()
 		case <-sm.stopCh:
+			timer.Stop()
 			return
 		}
 	}

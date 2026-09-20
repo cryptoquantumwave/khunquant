@@ -264,6 +264,47 @@ func TestSessionManager_IdleTimeout_KillsIdleSession(t *testing.T) {
 	t.Fatalf("idle session was not reaped within the deadline; last status = %q", status)
 }
 
+// A timeout shortened *after* the reap loop has already begun sleeping must
+// still be enforced promptly. The loop sizes its sleep from the timeout it
+// read at the top of the iteration, so with the 30-minute default it sleeps
+// for 3 minutes; before SetIdleTimeout woke it, a shorter timeout set during
+// that sleep did not take effect until the sleep expired.
+//
+// The two tests above only ever passed because they set the timeout while the
+// reap goroutine was still starting up - a race they usually, but not always,
+// won. This one removes the race by settling first, so it fails outright
+// rather than intermittently if the wake-up is lost.
+func TestSessionManager_ShortenedIdleTimeoutInterruptsTheReapSleep(t *testing.T) {
+	dir := t.TempDir()
+	tool, err := NewExecTool(dir, false)
+	if err != nil {
+		t.Fatalf("NewExecTool() error = %v", err)
+	}
+	t.Cleanup(tool.Shutdown)
+
+	// Long enough for the reap loop to have entered its 3-minute sleep, and
+	// three orders of magnitude short of it, so this is not itself a race.
+	time.Sleep(200 * time.Millisecond)
+
+	sessionID := startBackgroundSession(t, tool, "sleep 30")
+	tool.sessionManager.SetIdleTimeout(50 * time.Millisecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		session, err := tool.sessionManager.Get(sessionID)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", sessionID, err)
+		}
+		status = session.GetStatus()
+		if status == "exited" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("a timeout shortened mid-sleep was not enforced; last status = %q", status)
+}
+
 // Once reaped, a subsequent poll (through the public action, this time) must
 // report the session as exited rather than running.
 func TestSessionManager_IdleTimeout_PollReportsExited(t *testing.T) {

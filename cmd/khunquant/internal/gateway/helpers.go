@@ -209,6 +209,7 @@ func setupAndStartServices(
 	msgBus *bus.MessageBus,
 ) (*gatewayServices, error) {
 	services := &gatewayServices{}
+	warnOpenPermissions(cfg)
 
 	// Setup cron tool and service
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute

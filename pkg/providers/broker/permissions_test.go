@@ -1,6 +1,7 @@
 package broker_test
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -158,20 +159,50 @@ func cfgWithBinanceAccount() *config.Config {
 	}
 }
 
-func TestCheckPermission_AccountNotFoundFailsClosedForTrade(t *testing.T) {
+func TestCheckPermission_UnknownAccount_TradeDenied(t *testing.T) {
 	// H-4: a name that does not match any configured account used to pass
 	// silently, so the permission layer never applied the restrictions the
 	// operator wrote down.
 	cfg := cfgWithBinanceAccount()
-	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeTrade); err == nil {
-		t.Error("expected an error when a trading account cannot be resolved")
-	}
-	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeTransfer); err == nil {
-		t.Error("expected an error when a transfer account cannot be resolved")
+	for _, scope := range []config.PermissionScope{config.ScopeTrade, config.ScopeTransfer} {
+		err := broker.CheckPermission(cfg, "binance", "nonexistent", scope)
+		if err == nil {
+			t.Fatalf("scope %q: expected an error when the account cannot be resolved", scope)
+		}
+		if !errors.Is(err, broker.ErrAccountNotFound) {
+			t.Errorf("scope %q: error %v does not wrap broker.ErrAccountNotFound", scope, err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") || !strings.Contains(err.Error(), "config.exchanges") {
+			t.Errorf("scope %q: error should name the account and say where to add it, got: %v", scope, err)
+		}
 	}
 }
 
-func TestCheckPermission_AccountNotFoundAllowsReadOnlyScopes(t *testing.T) {
+// Every provider whose accounts resolveExchangeAccount knows about must refuse a
+// misspelt account name, not just binance.
+func TestCheckPermission_UnknownAccount_TradeDeniedForEveryProvider(t *testing.T) {
+	named := config.ExchangeAccount{Name: "main", APIKey: *config.NewSecureString("k")}
+	cfg := &config.Config{Exchanges: config.ExchangesConfig{
+		Binance:   config.BinanceExchangeConfig{Accounts: []config.ExchangeAccount{named}},
+		BinanceTH: config.BinanceTHExchangeConfig{Accounts: []config.ExchangeAccount{named}},
+		Bitkub:    config.BitkubExchangeConfig{Accounts: []config.ExchangeAccount{named}},
+		OKX:       config.OKXExchangeConfig{Accounts: []config.OKXExchangeAccount{{ExchangeAccount: named}}},
+		Webull:    config.WebullExchangeConfig{Accounts: []config.WebullExchangeAccount{{ExchangeAccount: named}}},
+		Settrade:  config.SettradeExchangeConfig{Accounts: []config.SettradeExchangeAccount{{ExchangeAccount: named}}},
+	}}
+
+	for _, provider := range []string{"binance", "binanceth", "bitkub", "okx", "webull", "settrade"} {
+		err := broker.CheckPermission(cfg, provider, "typo", config.ScopeTrade)
+		if !errors.Is(err, broker.ErrAccountNotFound) {
+			t.Errorf("%s: want ErrAccountNotFound for a misspelt account, got %v", provider, err)
+		}
+		if err := broker.CheckPermission(cfg, provider, "main", config.ScopeTrade); err != nil {
+			t.Errorf("%s: configured account refused: %v", provider, err)
+		}
+	}
+}
+
+func TestCheckPermission_UnknownAccount_MarketDataAllowed(t *testing.T) {
 	// Read-only scopes do not move money; leave them to the provider.
 	cfg := cfgWithBinanceAccount()
 	if err := broker.CheckPermission(cfg, "binance", "nonexistent", config.ScopeMarketData); err != nil {

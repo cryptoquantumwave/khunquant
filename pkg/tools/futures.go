@@ -136,11 +136,13 @@ func (t *FuturesSetLeverageTool) Execute(ctx context.Context, args map[string]an
 	if err := broker.CheckLeverage(t.cfg, "set leverage"); err != nil {
 		return ErrorResult(err.Error())
 	}
-	if !confirm {
-		return UserResult(fmt.Sprintf("Dry-run: would set %dx leverage on %s %s (%s). Set confirm=true to apply.", lev, providerID, symbol, marginMode))
-	}
+	// Permission is checked before the dry-run return so a preview on an
+	// account that may not trade is refused the same way the live call is.
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
+	}
+	if !confirm {
+		return UserResult(fmt.Sprintf("Dry-run: would set %dx leverage on %s %s (%s). Set confirm=true to apply.", lev, providerID, symbol, marginMode))
 	}
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
 	if err != nil {

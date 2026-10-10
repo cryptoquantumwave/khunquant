@@ -1,12 +1,18 @@
 package broker
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
+
+// ErrAccountNotFound is returned by CheckPermission when a trade or transfer
+// names an account that cannot be resolved against a provider that has accounts
+// configured. Callers can test for it with errors.Is.
+var ErrAccountNotFound = errors.New("broker: account not configured")
 
 // CheckPermission looks up the named account in cfg and verifies it has the
 // requested scope. Returns a descriptive error if denied.
@@ -28,15 +34,22 @@ func CheckPermission(cfg *config.Config, providerID, accountName string, scope c
 		// That is the case this protects: a named account whose permissions
 		// were meant to restrict it, skipped because the name did not match.
 		//
-		// When a provider has *no* accounts configured, nothing can
-		// authenticate - the default factory yields a public, credential-less
-		// adapter and a real order fails at the exchange - so refusing here
-		// would only break dry-runs and previews without preventing a trade.
-		// Unknown providers likewise fall through to CreateProviderForAccount,
-		// which returns the real "not registered" error.
+		// Two branches stay permissive on purpose, and are documented
+		// exceptions rather than oversights:
+		//
+		//   - A provider with *no* accounts configured (including every
+		//     provider ID that resolveExchangeAccount does not know, such as
+		//     MT5, which has no ExchangesConfig surface). Nothing can
+		//     authenticate there - the default factory yields a public,
+		//     credential-less adapter and a real order fails at the exchange -
+		//     so refusing would only break dry-runs and previews without
+		//     preventing a trade.
+		//   - Unknown provider IDs likewise fall through to
+		//     CreateProviderForAccount, which returns the real "not
+		//     registered" error.
 		if scopeMovesFunds(scope) && configuredAccountCount(cfg, providerID) > 0 {
-			return fmt.Errorf("account %q on provider %q could not be resolved — cannot verify %q permission; check config.exchanges.%s.accounts[]",
-				accountName, providerID, scope, strings.ToLower(providerID))
+			return fmt.Errorf("%w: provider %q account %q — add it under config.exchanges",
+				ErrAccountNotFound, providerID, accountName)
 		}
 		return nil
 	}

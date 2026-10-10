@@ -66,8 +66,8 @@ func defaultToolPolicies() map[string]ToolPolicy {
 		NameOpenDeltaNeutralPosition:   {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 		NameResizeDeltaNeutralPosition: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
-		// Earn moves real funds via Subscribe/Redeem and checks neither
-		// permission nor paper mode.
+		// Earn moves real funds via Subscribe/Redeem. It checks trade
+		// permission itself but has no paper mode.
 		NameManageEarnPosition: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
 		// Plan writes set the amounts a later execution spends. They place no
@@ -87,8 +87,8 @@ func defaultToolPolicies() map[string]ToolPolicy {
 //   - execute_dca_order runs on a schedule by design - blocking cron would
 //     disable DCA entirely. It already honours paper mode and the risk gates.
 //   - futures_close_position, futures_reduce_position, futures_cancel_orders,
-//     futures_emergency_flatten, cancel_order, emergency_stop and
-//     unwind_delta_neutral_position all reduce exposure. Refusing them is the
+//     futures_emergency_flatten, cancel_order, option_cancel_order,
+//     emergency_stop and unwind_delta_neutral_position all reduce exposure. Refusing them is the
 //     dangerous direction: an operator cutting losses must never be blocked.
 //   - every get_*/list_* tool is read-only.
 
@@ -101,6 +101,7 @@ var riskReducingTools = map[string]bool{
 	NameFuturesCancelOrders:        true,
 	NameFuturesEmergencyFlatten:    true,
 	NameCancelOrder:                true,
+	NameOptionCancelOrder:          true,
 	NameEmergencyStop:              true,
 	NameUnwindDeltaNeutralPosition: true,
 }

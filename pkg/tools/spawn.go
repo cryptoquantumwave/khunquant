@@ -111,9 +111,18 @@ Task: %s`, label, task)
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
+		// The spawn outlives this tool call, and usually the turn that made
+		// it: the agent loop cancels a turn's context as soon as the turn
+		// returns. Run on a context that keeps the turn's values (turn state,
+		// origin, sender, turn ID) but not its cancellation, or a spawn still
+		// waiting for a concurrency slot would be cancelled by its parent
+		// merely finishing. A hard abort of the parent still stops it: that
+		// travels through the turn tree, not through this context.
+		spawnCtx := context.WithoutCancel(ctx)
+
 		// Launch async sub-turn in goroutine
 		go func() {
-			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
+			result, err := t.spawner.SpawnSubTurn(spawnCtx, SubTurnConfig{
 				Model:        t.defaultModel,
 				Tools:        nil, // Will inherit from parent via context
 				SystemPrompt: systemPrompt,
@@ -128,7 +137,7 @@ Task: %s`, label, task)
 
 			// Call callback if provided
 			if cb != nil {
-				cb(ctx, result)
+				cb(spawnCtx, result)
 			}
 		}()
 

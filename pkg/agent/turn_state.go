@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/session"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -32,16 +33,47 @@ func turnStateFromContext(ctx context.Context) *turnState {
 // ====================== turnState ======================
 
 type turnState struct {
-	ctx                  context.Context
-	cancelFunc           context.CancelFunc // Used to cancel all children when this turn finishes
-	turnID               string
-	parentTurnID         string
-	depth                int
-	childTurnIDs         []string // MUST be accessed under mu lock or maybe add a getter method
-	pendingResults       chan *tools.ToolResult
-	session              session.SessionStore
-	initialHistoryLength int // Snapshot of session history length at turn start, for rollback on hard abort
-	mu                   sync.Mutex
+	ctx context.Context
+	// cancelFunc cancels this turn's own context. Finish(true) calls it and
+	// then hard-aborts every child; a graceful finish leaves children running.
+	cancelFunc context.CancelFunc
+	// turnID identifies the turn. A root turn's ID is the one carried in its
+	// context (tools.TurnID) and is the key it is registered under; a
+	// sub-turn's is "subturn-N".
+	turnID string
+	// sessionKey is the session a root turn runs on. Empty for sub-turns, which
+	// are found through their parent rather than by session.
+	sessionKey     string
+	parentTurnID   string
+	depth          int
+	childTurnIDs   []string // MUST be accessed under mu lock or maybe add a getter method
+	pendingResults chan *tools.ToolResult
+	session        session.SessionStore
+	// initialHistoryLength is the session history length when the turn began,
+	// the point a hard abort rolls back to. It is only meaningful once
+	// historySnapshotTaken is set, which happens after the turn has acquired
+	// its session lock: measured any earlier it would count messages of
+	// whichever turn holds the lock at that moment. Both are guarded by mu,
+	// since HardAbort reads them from another goroutine.
+	initialHistoryLength int
+	historySnapshotTaken bool
+	// rollbackOnExit asks the turn to roll its session back once more as it
+	// returns. HardAbort rolls back at once, but the aborted turn may still be
+	// inside a tool call and append that call's result afterwards. Guarded by mu.
+	rollbackOnExit bool
+	// exited is set when a root turn has returned and given up its session.
+	// Guarded by mu.
+	exited bool
+	// children are the sub-turns currently running under this turn, so a hard
+	// abort can reach them: their contexts are deliberately not derived from
+	// this turn's, to let them outlive a graceful finish. Guarded by mu.
+	children []*turnState
+	// hardAborted is set by Finish(true). A turn that has been hard-aborted
+	// accepts no new children. Guarded by mu.
+	hardAborted bool
+	// abortedChan is closed on hard abort. Lazily initialized under mu.
+	abortedChan chan struct{}
+	mu          sync.Mutex
 	isFinished           bool          // MUST be accessed under mu lock
 	closeOnce            sync.Once     // Ensures pendingResults channel is closed exactly once
 	concurrencySem       chan struct{} // Limits concurrent child sub-turns
@@ -80,18 +112,157 @@ type TurnInfo struct {
 
 // GetActiveTurn retrieves information about the currently active turn for a session.
 // Returns nil if no active turn exists for the given session key.
+//
+// Several root turns can be registered for one session - one running, the rest
+// waiting for the session lock. The running one is reported; if none has
+// started yet, the one that registered first.
 func (al *AgentLoop) GetActiveTurn(sessionKey string) *TurnInfo {
-	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
-	if !ok {
+	ts := al.activeTurnStates.activeForSession(sessionKey)
+	if ts == nil {
 		return nil
 	}
-
-	ts, ok := tsInterface.(*turnState)
-	if !ok {
-		return nil
-	}
-
 	return ts.Info()
+}
+
+// ====================== Turn Registry ======================
+
+// turnRegistry tracks the root turns that are running or waiting for their
+// session lock.
+//
+// Turns are keyed by turn ID, not by session key: two turns on one session
+// are distinct entries (a heartbeat always uses the key "heartbeat", and a cron
+// turn shares the session of the chat it reports to), so one finishing cannot
+// remove the other. bySession is the index that answers "which turns belong to
+// this session", in registration order.
+//
+// The zero value is ready to use.
+type turnRegistry struct {
+	mu        sync.Mutex
+	byID      map[string]*turnState
+	bySession map[string][]*turnState
+	// subTurns is every sub-turn that is running right now, whatever its
+	// depth. A root turn unregisters when it returns, but its async sub-turns
+	// may run on; this is how a cancel still finds them.
+	subTurns map[*turnState]struct{}
+}
+
+// addSubTurn records a running sub-turn; removeSubTurn forgets it when it returns.
+func (r *turnRegistry) addSubTurn(ts *turnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.subTurns == nil {
+		r.subTurns = make(map[*turnState]struct{})
+	}
+	r.subTurns[ts] = struct{}{}
+}
+
+func (r *turnRegistry) removeSubTurn(ts *turnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.subTurns, ts)
+}
+
+// cancelTargets returns what a cancel has to abort, for one session or (all)
+// for every session:
+//
+//   - registered: the root turns that are running or queued, oldest first;
+//   - orphaned: root turns that have already returned but still have sub-turns
+//     running - async sub-turns outlive a parent's normal return by design.
+//
+// Aborting a root reaches every sub-turn under it, so the roots are all a
+// caller needs. Both lists come from one look at the registry, so no turn is
+// in both.
+func (r *turnRegistry) cancelTargets(sessionKey string, all bool) (registered, orphaned []*turnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if all {
+		for _, ts := range r.byID {
+			registered = append(registered, ts)
+		}
+	} else {
+		registered = append(registered, r.bySession[sessionKey]...)
+	}
+	seen := make(map[*turnState]struct{})
+	for sub := range r.subTurns {
+		root := sub.root()
+		if r.byID[root.turnID] == root {
+			continue // still registered: already in the first list
+		}
+		if !all && root.sessionKey != sessionKey {
+			continue
+		}
+		if _, dup := seen[root]; dup {
+			continue
+		}
+		seen[root] = struct{}{}
+		orphaned = append(orphaned, root)
+	}
+	return registered, orphaned
+}
+
+// register adds a root turn. It must be called before ts is shared with
+// another goroutine, because it may rewrite ts.turnID: IDs are unique for
+// every turn the loop mints itself, but a caller that supplies its own ID in
+// the context could reuse one for two overlapping turns, and the second must
+// not replace the first.
+func (r *turnRegistry) register(ts *turnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byID == nil {
+		r.byID = make(map[string]*turnState)
+		r.bySession = make(map[string][]*turnState)
+	}
+	if _, taken := r.byID[ts.turnID]; taken || ts.turnID == "" {
+		ts.turnID = ts.turnID + "#" + tools.NewTurnID()
+	}
+	r.byID[ts.turnID] = ts
+	r.bySession[ts.sessionKey] = append(r.bySession[ts.sessionKey], ts)
+}
+
+// unregister removes exactly ts. It is a no-op if ts is not registered, so it
+// is safe to call twice.
+func (r *turnRegistry) unregister(ts *turnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byID[ts.turnID] != ts {
+		return
+	}
+	delete(r.byID, ts.turnID)
+	turns := r.bySession[ts.sessionKey]
+	for i, t := range turns {
+		if t == ts {
+			turns = append(turns[:i], turns[i+1:]...)
+			break
+		}
+	}
+	if len(turns) == 0 {
+		delete(r.bySession, ts.sessionKey)
+	} else {
+		r.bySession[ts.sessionKey] = turns
+	}
+}
+
+// forSession returns the root turns registered for the session, oldest first.
+func (r *turnRegistry) forSession(sessionKey string) []*turnState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]*turnState(nil), r.bySession[sessionKey]...)
+}
+
+// activeForSession returns the session's running turn - the one that holds the
+// session lock - or, if none has started, the first one registered. Nil if the
+// session has no turn.
+func (r *turnRegistry) activeForSession(sessionKey string) *turnState {
+	turns := r.forSession(sessionKey)
+	if len(turns) == 0 {
+		return nil
+	}
+	for _, ts := range turns {
+		if ts.hasStarted() {
+			return ts
+		}
+	}
+	return turns[0]
 }
 
 // Info returns a read-only snapshot of the turn state information.
@@ -178,10 +349,157 @@ func (ts *turnState) Finished() <-chan struct{} {
 	return ts.finishedChan
 }
 
+// Aborted returns a channel that is closed when the turn is hard-aborted. A
+// graceful finish does not close it.
+func (ts *turnState) Aborted() <-chan struct{} {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.abortedChan == nil {
+		// Finish(true) creates the channel itself before closing it, so a nil
+		// channel here means no hard abort has happened yet.
+		ts.abortedChan = make(chan struct{})
+	}
+	return ts.abortedChan
+}
+
+// addChild records child as a running sub-turn of ts. It returns false, and
+// records nothing, if ts has been hard-aborted: the abort has already walked
+// the children, so one added now would never be cancelled.
+func (ts *turnState) addChild(child *turnState) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.hardAborted {
+		return false
+	}
+	ts.children = append(ts.children, child)
+	ts.childTurnIDs = append(ts.childTurnIDs, child.turnID)
+	return true
+}
+
+// removeChild forgets a sub-turn that has returned. Its ID stays in
+// childTurnIDs, which is the record of everything this turn spawned.
+func (ts *turnState) removeChild(child *turnState) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for i, c := range ts.children {
+		if c == child {
+			ts.children = append(ts.children[:i], ts.children[i+1:]...)
+			return
+		}
+	}
+}
+
+// setHistorySnapshot records n, the length of the turn's session history, as
+// the point a hard abort rolls back to. A root turn sets it once it holds its
+// session lock and before it writes anything.
+func (ts *turnState) setHistorySnapshot(n int) {
+	ts.mu.Lock()
+	ts.initialHistoryLength = n
+	ts.historySnapshotTaken = true
+	ts.mu.Unlock()
+}
+
+// snapshotHistory is setHistorySnapshot for a caller that has not already
+// loaded the session: it reads the history to measure it.
+func (ts *turnState) snapshotHistory() {
+	if ts.session == nil {
+		return
+	}
+	ts.setHistorySnapshot(len(ts.session.GetHistory(ts.sessionKey)))
+}
+
+// root returns the root turn of the tree ts belongs to (ts itself for a root).
+// The parent links are set once, before a turn is shared, so no lock is needed.
+func (ts *turnState) root() *turnState {
+	for ts.parentTurnState != nil {
+		ts = ts.parentTurnState
+	}
+	return ts
+}
+
+// exit is called by a root turn as it returns, while it still holds its
+// session lock. If a hard abort asked for it, the session is rolled back one
+// last time, now that the turn can no longer write; after that the turn is
+// marked exited and never touches the session again - see rollbackHistory.
+func (ts *turnState) exit() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.rollbackOnExit {
+		ts.rollbackHistoryLocked()
+	}
+	ts.exited = true
+}
+
+// hasStarted reports whether the turn has got past waiting for its session
+// lock and begun work.
+func (ts *turnState) hasStarted() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.historySnapshotTaken
+}
+
+// rollbackHistory drops the messages this turn added to its session, leaving
+// what was there before the turn began. It does nothing for a turn that never
+// took its snapshot - one cancelled while still waiting for the session lock
+// has added nothing, and has no length to roll back to.
+//
+// It also does nothing once the turn has exited. From that moment the session
+// lock is free and the session may belong to the next turn; truncating it to
+// this turn's snapshot would cut into that turn's messages. mu is held across
+// the rollback so that "has not exited" stays true while it runs: exit takes
+// the same lock before the turn gives the session up.
+func (ts *turnState) rollbackHistory() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.exited {
+		return
+	}
+	ts.rollbackHistoryLocked()
+}
+
+// rollbackHistoryLocked is rollbackHistory's body. The caller holds mu.
+func (ts *turnState) rollbackHistoryLocked() {
+	keep, ok := ts.initialHistoryLength, ts.historySnapshotTaken
+	if !ok || ts.session == nil {
+		return
+	}
+	history := ts.session.GetHistory(ts.sessionKey)
+	if len(history) <= keep {
+		return
+	}
+	logger.InfoCF("agent", "Rolling back session history", map[string]any{
+		"session_key": ts.sessionKey,
+		"turn_id":     ts.turnID,
+		"from":        len(history),
+		"to":          keep,
+	})
+	ts.session.SetHistory(ts.sessionKey, history[:keep])
+}
+
+// drainPendingResults returns the sub-turn results waiting for this turn,
+// without blocking.
+func (ts *turnState) drainPendingResults() []*tools.ToolResult {
+	var results []*tools.ToolResult
+	for {
+		select {
+		case result := <-ts.pendingResults:
+			if result != nil {
+				results = append(results, result)
+			}
+		default:
+			return results
+		}
+	}
+}
+
 // Finish marks the turn as finished.
 //
 // If isHardAbort is true (Hard Abort):
-//   - Cancels all child contexts immediately via cancelFunc
+//   - Cancels this turn's context via cancelFunc
+//   - Hard-aborts every running child, and theirs, by walking the turn tree
+//     (child contexts are independent of the parent's, so cancelling the
+//     parent's context alone would not reach them)
+//   - Refuses any child spawned afterwards
 //   - Used for user-initiated termination (e.g., "stop now")
 //
 // If isHardAbort is false (Graceful Finish):
@@ -195,6 +513,7 @@ func (ts *turnState) Finished() <-chan struct{} {
 // "send on closed channel" panics from concurrently finishing async subturns.
 func (ts *turnState) Finish(isHardAbort bool) {
 	var fc chan struct{}
+	var children []*turnState
 
 	ts.mu.Lock()
 	if !ts.isFinished {
@@ -204,12 +523,24 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		}
 		fc = ts.finishedChan
 	}
+	if isHardAbort && !ts.hardAborted {
+		ts.hardAborted = true
+		if ts.abortedChan == nil {
+			ts.abortedChan = make(chan struct{})
+		}
+		close(ts.abortedChan) // exactly once: guarded by hardAborted under mu
+		children = append(children, ts.children...)
+	}
 	ts.mu.Unlock()
 
 	if isHardAbort {
-		// Hard abort: immediately cancel all children
+		// Hard abort: cancel this turn, then every child. mu is released
+		// first: each child takes its own lock, and none is held across.
 		if ts.cancelFunc != nil {
 			ts.cancelFunc()
+		}
+		for _, child := range children {
+			child.Finish(true)
 		}
 	} else {
 		// Graceful finish: signal parent ended, let children decide

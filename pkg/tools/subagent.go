@@ -129,8 +129,12 @@ func (sm *SubagentManager) Spawn(
 }
 
 func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, callback AsyncCallback) {
+	// Under mu like every other write to the task: GetTask hands the same
+	// *SubagentTask to readers on other goroutines.
+	sm.mu.Lock()
 	task.Status = "running"
 	task.Created = time.Now().UnixMilli()
+	sm.mu.Unlock()
 
 	// Build system prompt for subagent
 	systemPrompt := `You are a subagent. Complete the given task independently and report the result.

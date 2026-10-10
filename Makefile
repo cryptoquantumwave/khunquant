@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test sync-workspace
+.PHONY: all build install uninstall clean help test test-race sync-workspace
 
 # Build variables
 BINARY_NAME=khunquant
@@ -304,6 +304,10 @@ vet: generate
 ## test: Test Go code
 test: generate
 	@$(GO) test ./...
+
+## test-race: Run the agent loop and tool tests under the race detector (optional; CI does not run -race)
+test-race: generate
+	@$(GO) test -race ./pkg/agent/... ./pkg/tools/...
 
 ## cover-core: Measure Tier 1 weighted coverage (target ≥80%)
 cover-core: deps

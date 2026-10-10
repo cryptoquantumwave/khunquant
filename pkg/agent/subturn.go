@@ -266,6 +266,11 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 					<-parentTS.concurrencySem
 				}
 			}()
+		case <-parentTS.Aborted():
+			// The parent was hard-aborted while this spawn waited for a slot.
+			// An async spawn runs on a context that outlives its parent's
+			// normal return (see SpawnTool), so ctx does not report this.
+			return nil, context.Canceled
 		case <-timeoutCtx.Done():
 			// Check parent context first - if it was cancelled, propagate that error
 			if ctx.Err() != nil {
@@ -320,11 +325,34 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// spirit, a cron job's subagent would stop being "cron". Carry both.
 	childCtx = tools.WithToolOrigin(childCtx, tools.ToolOrigin(ctx))
 	childCtx = tools.WithToolSender(childCtx, tools.ToolSender(ctx))
+	// The turn ID has to be carried for the same reason. A child shares its
+	// parent's: a message the subagent sends to the user's chat is a message
+	// sent in the parent's turn, and must suppress the parent's duplicate
+	// final reply exactly as if the parent had sent it.
+	childCtx = tools.WithTurnID(childCtx, tools.TurnID(ctx))
+	// A synchronous child runs while its caller - a tool call inside the
+	// parent turn - is blocked on it, so it is still working under the parent's
+	// session lock and may re-enter it; without the marker it would deadlock
+	// against its own parent. An async child gets no such claim: it can
+	// outlive the parent turn, and with it the lock.
+	if !cfg.Async {
+		childCtx = inheritHeldSessionLocks(childCtx, ctx)
+	}
 
-	// 5. Establish parent-child relationship (thread-safe)
-	parentTS.mu.Lock()
-	parentTS.childTurnIDs = append(parentTS.childTurnIDs, childID)
-	parentTS.mu.Unlock()
+	// 5. Establish parent-child relationship (thread-safe). The child is
+	// registered with its parent so a hard abort can reach it - its context is
+	// independent of the parent's, so nothing else would. A parent that has
+	// already been hard-aborted takes no new children: the abort walked the
+	// tree before this one existed.
+	if !parentTS.addChild(childTS) {
+		return nil, context.Canceled
+	}
+	defer parentTS.removeChild(childTS)
+	// Also listed loop-wide. An async child outlives its root turn, and a root
+	// that has returned is no longer registered - without this a cancel issued
+	// after the parent finished could not find the child at all.
+	al.activeTurnStates.addSubTurn(childTS)
+	defer al.activeTurnStates.removeSubTurn(childTS)
 
 	// 6. Emit Spawn event
 	MockEventBus.Emit(SubTurnSpawnEvent{

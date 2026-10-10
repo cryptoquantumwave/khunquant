@@ -52,7 +52,8 @@ type AgentLoop struct {
 	cmdRegistry      *commands.Registry
 	mcp              mcpRuntime
 	steering         *steeringQueue
-	activeTurnStates sync.Map     // key: sessionKey (string), value: *turnState
+	activeTurnStates turnRegistry // Root turns running or waiting for their session lock, by turn ID
+	sessionLocks     sessionLocks // One holder per session key; see sessionlock.go
 	subTurnCounter   atomic.Int64 // Counter for generating unique SubTurn IDs
 	mu               sync.RWMutex
 	// Track active requests for safe provider cleanup
@@ -375,24 +376,22 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			// 	}
 			// }()
 
-			response, err := al.processMessage(ctx, msg)
+			// Name the turn before it starts, so that afterwards we can ask what
+			// the message tool did during this turn and no other. Heartbeat
+			// and cron turns run concurrently with this one on the same tool
+			// instances; without a turn of its own to ask about, a message a
+			// heartbeat sends would make this turn's reply look already sent.
+			turnID := tools.NewTurnID()
+			response, err := al.processMessage(tools.WithTurnID(ctx, turnID), msg)
 			if err != nil {
 				response = providers.FriendlyError(err)
 			}
 
 			if response != "" {
-				// Check if the message tool already sent a response during this round.
-				// If so, skip publishing to avoid duplicate messages to the user.
-				// Use default agent's tools to check (message tool is shared).
-				alreadySent := false
-				defaultAgent := al.GetRegistry().GetDefaultAgent()
-				if defaultAgent != nil {
-					if tool, ok := defaultAgent.Tools.Get("message"); ok {
-						if mt, ok := tool.(*tools.MessageTool); ok {
-							alreadySent = mt.HasSentInRound()
-						}
-					}
-				}
+				// Check if the message tool already sent to this chat during
+				// this turn. If so, skip publishing to avoid duplicate
+				// messages to the user.
+				alreadySent := al.messageSentInTurn(turnID, msg.Channel, msg.ChatID)
 
 				if !alreadySent {
 					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
@@ -414,6 +413,60 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					)
 				}
 			}
+
+			// This loop named the turn, so it clears the turn's state.
+			al.clearTurnMessageState(turnID)
+		}
+	}
+}
+
+// messageSentInTurn reports whether the message tool sent to channel+chatID
+// during the turn.
+//
+// Every agent has its own MessageTool, and the one that sent need not belong
+// to the agent the message was routed to: a delegated sub-turn runs with the
+// target agent's tools while sharing the parent's turn ID. Turn IDs are unique
+// across agents, so asking all of them is exact, and saves resolving the route
+// a second time.
+func (al *AgentLoop) messageSentInTurn(turnID, channel, chatID string) bool {
+	if turnID == "" {
+		return false
+	}
+	sent := false
+	al.forEachMessageTool(func(mt *tools.MessageTool) {
+		if mt.HasSentToInTurn(turnID, channel, chatID) {
+			sent = true
+		}
+	})
+	return sent
+}
+
+// clearTurnMessageState drops what the message tools remember about the turn.
+// It is called by whoever created the turn ID, once the turn's outcome has
+// been decided.
+func (al *AgentLoop) clearTurnMessageState(turnID string) {
+	if turnID == "" {
+		return
+	}
+	al.forEachMessageTool(func(mt *tools.MessageTool) {
+		mt.ClearTurn(turnID)
+	})
+}
+
+func (al *AgentLoop) forEachMessageTool(fn func(*tools.MessageTool)) {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok {
+			continue
+		}
+		if tool, ok := agent.Tools.Get(tools.NameMessage); ok {
+			if mt, ok := tool.(*tools.MessageTool); ok {
+				fn(mt)
+			}
 		}
 	}
 }
@@ -422,6 +475,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 // active scope into the steering queue. Messages from other scopes are requeued
 // so they can be processed normally after the active turn. It drains all
 // immediately available messages, blocking for the first one until ctx is done.
+//
+// DEAD CODE: nothing calls this. It is kept, unwired, for the scheduler work
+// that will route inbound messages while a turn is running. Do not wire it up
+// as it stands: it competes with Run for the inbound channel, and a message it
+// requeues goes to the back of the queue, behind anything that arrived since.
 func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) {
 	blocking := true
 	for {
@@ -492,20 +550,24 @@ func (al *AgentLoop) Stop() {
 	al.running.Store(false)
 }
 
+// PublishResponseIfNeeded publishes a turn's final response unless the message
+// tool already sent to the same chat during that turn.
+//
+// "That turn" is the turn ID carried in ctx. The caller runs the turn first
+// and calls this afterwards, so it must have put the ID in ctx itself, before
+// the turn (tools.WithTurnID): an ID the agent loop mints on its own is cleared
+// when the turn returns, and with no ID there is nothing to ask about and the
+// response is always published. Because the caller owns the ID, this is also
+// where the turn's message state is released - nothing asks about it again.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	turnID := tools.TurnID(ctx)
+	defer al.clearTurnMessageState(turnID)
+
 	if response == "" {
 		return
 	}
 
-	alreadySentToSameChat := false
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent != nil {
-		if tool, ok := defaultAgent.Tools.Get("message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
-				alreadySentToSameChat = mt.HasSentTo(channel, chatID)
-			}
-		}
-	}
+	alreadySentToSameChat := al.messageSentInTurn(turnID, channel, chatID)
 
 	if alreadySentToSameChat {
 		logger.DebugCF(
@@ -950,13 +1012,6 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return "", routeErr
 	}
 
-	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
-	if tool, ok := agent.Tools.Get("message"); ok {
-		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
-			resetter.ResetSentInRound()
-		}
-	}
-
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
 	scopeKey := resolveScopeKey(route, msg.SessionKey)
 	sessionKey := scopeKey
@@ -1110,14 +1165,32 @@ func (al *AgentLoop) runAgentLoop(
 		isRootTurn = false
 	} else {
 		// This is a top-level turn — initialize a new root TurnState
+		isRootTurn = true
+
+		// 1. Identity. A caller that needs to ask about this turn after it has
+		// returned (Run, the cron tool) put the ID in ctx and owns the per-turn
+		// state kept under it; otherwise the turn is ours to name and to clear.
+		turnID := tools.TurnID(ctx)
+		ownsTurnID := turnID == ""
+		if ownsTurnID {
+			turnID = tools.NewTurnID()
+			ctx = tools.WithTurnID(ctx, turnID)
+		}
+
+		// 2. Cancellation. Every root turn gets a context of its own, so that
+		// it can be stopped (CancelTurnsForSession, CancelAllTurns, HardAbort)
+		// without cancelling whatever its caller's context also governs.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+
 		rootTS = &turnState{
-			ctx:                  ctx,
-			turnID:               opts.SessionKey, // Associate this turn graph with the current session key
-			depth:                0,
-			session:              agent.Sessions,
-			initialHistoryLength: len(agent.Sessions.GetHistory("")), // Snapshot for rollback on hard abort
-			pendingResults:       make(chan *tools.ToolResult, 16),
-			concurrencySem:       make(chan struct{}, maxConcurrentSubTurns), // maxConcurrentSubTurns
+			cancelFunc:     cancel,
+			turnID:         turnID,
+			sessionKey:     opts.SessionKey,
+			depth:          0,
+			session:        agent.Sessions,
+			pendingResults: make(chan *tools.ToolResult, 16),
+			concurrencySem: make(chan struct{}, maxConcurrentSubTurns), // maxConcurrentSubTurns
 		}
 		ctx = withTurnState(ctx, rootTS)
 		ctx = WithAgentLoop(ctx, al) // Inject AgentLoop for tool access
@@ -1129,11 +1202,59 @@ func (al *AgentLoop) runAgentLoop(
 		// The sender is what an operator approval is bound to: only the person
 		// who made a request can approve it.
 		ctx = tools.WithToolSender(ctx, opts.SenderID)
-		isRootTurn = true
 
-		// Register this root turn state so HardAbort can find it
-		al.activeTurnStates.Store(opts.SessionKey, rootTS)
-		defer al.activeTurnStates.Delete(opts.SessionKey)
+		rootTS.ctx = ctx
+
+		// 3. Registration, before waiting for the lock: a turn that is still
+		// queued behind another must be as cancellable as one that is running.
+		al.activeTurnStates.register(rootTS)
+
+		// 4. One root turn per session at a time, for the whole turn.
+		//
+		// Until inbound messages are dispatched concurrently, Run handles them
+		// one after another on a single goroutine. So while Run waits here for a
+		// session that a heartbeat or cron turn holds, every user queued behind
+		// that message waits too - including users of other sessions. The wait
+		// ends when the holder finishes or this turn is cancelled.
+		//
+		// A context that already holds this session's lock passes straight
+		// through (see sessionLocks.lock), so a turn started from inside
+		// WithSessionLockContext does not deadlock on its own caller.
+		lockedCtx, unlock, lockErr := al.sessionLocks.lock(ctx, opts.SessionKey)
+		if lockErr != nil {
+			al.activeTurnStates.unregister(rootTS)
+			rootTS.Finish(false)
+			cancel()
+			if ownsTurnID {
+				al.clearTurnMessageState(turnID)
+			}
+			return "", fmt.Errorf("turn cancelled while waiting for session %q: %w", opts.SessionKey, lockErr)
+		}
+		ctx = lockedCtx
+
+		// 5. Whatever way the turn ends.
+		defer func() {
+			// Finish is idempotent; this covers the returns that never reach
+			// the Finish below (an LLM error, a cancellation), so that anything
+			// waiting on Finished() is released and children learn the parent
+			// is gone.
+			rootTS.Finish(false)
+			// A hard abort rolled the session back while this turn could still
+			// write to it. exit does it again now that the turn has stopped,
+			// still under the session lock, so that nothing it added survives -
+			// and marks the turn as done with its session, so that an abort
+			// arriving later cannot roll back into the next turn's messages.
+			rootTS.exit()
+			al.activeTurnStates.unregister(rootTS)
+			unlock()
+			// Releases the context. This is not a hard abort: it does not walk
+			// the turn tree, so async sub-turns - whose contexts are their own -
+			// keep running, as a graceful finish intends.
+			cancel()
+			if ownsTurnID {
+				al.clearTurnMessageState(turnID)
+			}
+		}()
 	}
 
 	// 0. Record last channel for heartbeat notifications (skip internal channels and cli)
@@ -1156,6 +1277,17 @@ func (al *AgentLoop) runAgentLoop(
 	if !opts.NoHistory {
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
+	}
+	if isRootTurn {
+		// Snapshot for rollback on hard abort: the length of this turn's own
+		// session, taken under the session lock - nothing else writes to the
+		// session until the turn unlocks. The history just loaded is reused
+		// when there is one; loading a session parses its whole file.
+		if opts.NoHistory {
+			rootTS.snapshotHistory()
+		} else {
+			rootTS.setHistorySnapshot(len(history))
+		}
 	}
 	messages := agent.ContextBuilder.BuildMessages(
 		history,
@@ -1227,7 +1359,9 @@ func (al *AgentLoop) runAgentLoop(
 	// IMPORTANT: Before finishing the turn, do a final poll for any pending SubTurn results.
 	// This ensures we don't lose results that arrived after the last iteration poll.
 	if isRootTurn {
-		finalResults := al.dequeuePendingSubTurnResults(opts.SessionKey)
+		// Drained from this turn's own state, not looked up by session key:
+		// a session can have other turns registered, waiting for the lock.
+		finalResults := rootTS.drainPendingResults()
 		if len(finalResults) > 0 {
 			// Inject late-arriving results into the final response
 			for _, result := range finalResults {
@@ -1707,8 +1841,14 @@ func (al *AgentLoop) runLLMIteration(
 		if reasoningContent == "" {
 			reasoningContent = response.ReasoningContent
 		}
+		// The two reasoning publishers below run detached and can still be
+		// publishing when the turn returns - for the final response they
+		// usually are. The turn's context is cancelled on return, so they get
+		// one without that cancellation, or the last reasoning of every turn
+		// would be dropped. Each bounds itself with its own short timeout.
+		detachedCtx := context.WithoutCancel(ctx)
 		go al.handleReasoning(
-			ctx,
+			detachedCtx,
 			reasoningContent,
 			opts.Channel,
 			al.targetReasoningChannelID(opts.Channel),
@@ -1718,7 +1858,7 @@ func (al *AgentLoop) runLLMIteration(
 		// and independent of the per-channel reasoning-channel-ID path above
 		// (which no-ops for pico because targetReasoningChannelID is empty).
 		if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
-			go al.publishPicoReasoning(ctx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+			go al.publishPicoReasoning(detachedCtx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
 		}
 
 		logger.DebugCF("agent", "LLM response",

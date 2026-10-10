@@ -432,6 +432,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	// every caller - so keying off the sender would label CLI turns as scheduled
 	// jobs and gate them as if no human were present.
 	ctx = WithToolOrigin(ctx, OriginCron)
+	ctx = WithTurnID(ctx, NewTurnID()) // PublishResponseIfNeeded below asks about this turn after it has returned
 
 	// Call agent with the prepared prompt
 	response, err := t.executor.ProcessDirectWithChannel(

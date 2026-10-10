@@ -940,18 +940,7 @@ func setupCronTool(
 	}
 
 	// Delta-neutral tools (Track F) — require cron service + the store opened above.
-	dnEnabled := cfg.Tools.IsToolEnabled("create_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("list_delta_neutral_plans") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("update_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_summary") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_history") ||
-		cfg.Tools.IsToolEnabled("prepare_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("open_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("unwind_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("render_delta_neutral_yield_chart")
-	if dnEnabled && dnStore != nil {
+	if dnToolsEnabled(cfg) && dnStore != nil {
 		if cfg.Tools.IsToolEnabled("create_delta_neutral_plan") {
 			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService))
 		}

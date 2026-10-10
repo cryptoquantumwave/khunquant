@@ -21,7 +21,7 @@ func NewDeleteDeltaNeutralPlanTool(store *deltaneutral.Store, cronService *cron.
 func (t *DeleteDeltaNeutralPlanTool) Name() string { return NameDeleteDeltaNeutralPlan }
 
 func (t *DeleteDeltaNeutralPlanTool) Description() string {
-	return "Delete a delta-neutral plan and cancel its scheduled cron job. Reject if the plan is active (require pause/close first). " +
+	return "Delete a delta-neutral plan and cancel its scheduled cron job. Reject if the plan is active, or has any open/unreconciled position in any status (unwind first). " +
 		"All snapshots, alerts, and execution history for the plan are also deleted. This action is irreversible."
 }
 
@@ -53,6 +53,24 @@ func (t *DeleteDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	// Reject deletion of active plans
 	if plan.Status == deltaneutral.PlanStatusActive {
 		return ErrorResult(fmt.Sprintf("cannot delete an active plan (status=%s); pause or close it first", plan.Status))
+	}
+
+	// Reject deletion of a plan that still has open or unreconciled exposure: deleting
+	// cascades away the leg history that unwind sizes from and the monitor job that watches
+	// the position. closed/archived plans are exempt: only a fully settled unwind sets
+	// closed, and legacy closed plans written by older code may have legs that do not net
+	// to zero. Fails closed if the check itself errors.
+	if plan.Status != deltaneutral.PlanStatusClosed && plan.Status != deltaneutral.PlanStatusArchived {
+		hasExposure, err := t.store.HasOpenExposure(ctx, planID)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("cannot verify that plan %d has no open exposure: %v. Refusing to delete.", planID, err))
+		}
+		if hasExposure {
+			return ErrorResult(fmt.Sprintf(
+				"cannot delete plan %d (status=%s): it still has open or unreconciled exposure. "+
+					"Run unwind_delta_neutral_position first (or close the position manually on the exchange), then delete it.",
+				planID, plan.Status))
+		}
 	}
 
 	// Remove cron job

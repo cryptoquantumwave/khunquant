@@ -60,11 +60,24 @@ func handleDeltaNeutralMonitorJob(
 	// so a full monitor run would produce 100% delta drift and bogus alerts.
 	if plan.Status == deltaneutral.PlanStatusClosed ||
 		plan.Status == deltaneutral.PlanStatusArchived ||
-		plan.Status == deltaneutral.PlanStatusFailed ||
 		plan.Status == deltaneutral.PlanStatusDraft ||
 		plan.Status == deltaneutral.PlanStatusReady {
 		logger.DebugCF("dn-monitor", "Plan not monitorable (status: "+plan.Status+"), skipping", map[string]any{"plan_id": planID})
 		return "plan status not monitorable", nil
+	}
+	// A failed plan normally holds no position and is skipped — but a plan that still has
+	// open exposure must stay monitored (unwind skips failed plans, so the monitor is the
+	// only thing watching it). If the exposure check itself errors, keep monitoring.
+	if plan.Status == deltaneutral.PlanStatusFailed {
+		hasExposure, expErr := dnStore.HasOpenExposure(ctx, planID)
+		if expErr != nil {
+			logger.WarnCF("dn-monitor", "Could not check open exposure of failed plan; monitoring it anyway", map[string]any{
+				"plan_id": planID, "error": expErr.Error(),
+			})
+		} else if !hasExposure {
+			logger.DebugCF("dn-monitor", "Plan not monitorable (status: failed, no open exposure), skipping", map[string]any{"plan_id": planID})
+			return "plan status not monitorable", nil
+		}
 	}
 
 	now := time.Now().UTC()

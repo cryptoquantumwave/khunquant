@@ -845,7 +845,7 @@ type TeamsWebhookTarget struct {
 
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"KHUNQUANT_HEARTBEAT_ENABLED"`
-	Interval int  `json:"interval" env:"KHUNQUANT_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Interval int  `json:"interval" env:"KHUNQUANT_HEARTBEAT_INTERVAL"` // minutes, min 30
 }
 
 type DevicesConfig struct {
@@ -1424,10 +1424,16 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Versioned migration steps (migrations.go). Never saves: the new version
+	// is persisted by the next SaveConfig. A failing step fails the load, since
+	// the config may be half-migrated.
+	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
+		return nil, err
+	}
+
 	// Migrate legacy channel config fields to new unified structures.
 	// Still unconditional: these are idempotent and predate versioning, and
-	// gating them on version carries user-data risk for no gain until there is
-	// a second version to gate against.
+	// are deliberately not step-gated (see migration.go).
 	cfg.migrateChannelConfigs()
 
 	// Auto-migrate: if only legacy providers config exists, convert to model_list
@@ -1489,6 +1495,16 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 	}
 
 	if err := env.Parse(cfg); err != nil {
+		return nil, err
+	}
+
+	// Same version gate and migrations as LoadConfig. Callers of this loader
+	// may go on to save, and a save stamps this build's version, so a config
+	// from a newer build must be refused here too.
+	if err := checkConfigVersion(cfg.Version); err != nil {
+		return nil, err
+	}
+	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
 		return nil, err
 	}
 

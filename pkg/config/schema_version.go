@@ -8,11 +8,14 @@ import (
 // CurrentConfigVersion is the schema version this build writes and understands.
 //
 // Version 1 is the shape the config already had when versioning was introduced,
-// so the 0 → 1 transition migrates nothing. The point of the field is future
-// changes: today the migrations in this package infer what needs converting by
-// inspecting the data (see migrateChannelConfigs and the providers → model_list
-// conversion), which means they run on every load and have to keep guessing.
-// A recorded version lets a later migration know what it is reading instead.
+// so the 0 -> 1 step ("baseline" in migrations.go) changes nothing but the
+// recorded version. A recorded version lets a later migration know what it is
+// reading instead of guessing from the data, as the unconditional conversions in
+// migration.go (migrateChannelConfigs, providers -> model_list) have to.
+//
+// To change the schema: bump this constant and append the matching step to
+// migrationSteps in migrations.go (a test fails if the chain has a gap), and
+// state the effect for existing users in the MR.
 const CurrentConfigVersion = 1
 
 // legacyConfigVersion is what an absent "version" key means: a config written
@@ -38,11 +41,11 @@ func checkConfigVersion(version int) error {
 
 // applyConfigVersion stamps the current version onto a config being saved.
 //
-// Deliberately separate from the migration functions: this records what shape
-// was written, it does not change the shape. The existing migrations still run
-// unconditionally on load, exactly as before — gating those on version is a
-// change with real user-data risk and buys nothing until there is a second
-// version to gate against.
+// Deliberately separate from the migration steps: this records what shape was
+// written, it does not change the shape. Loaders run migrationSteps but never
+// save, so a migrated config reaches disk at the new version only on the next
+// SaveConfig, through here. The legacy conversions in migration.go still run
+// unconditionally on load, exactly as before.
 func applyConfigVersion(cfg *Config) {
 	if cfg == nil {
 		return

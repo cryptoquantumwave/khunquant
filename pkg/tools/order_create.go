@@ -2,11 +2,13 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -111,12 +113,15 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	// --- Gate 1c: risk controls ---
-	// Order-type guards need no price and run here. The notional ceiling runs
-	// at Gate 3b, once a market order has a price to be measured against.
+	// Order-type guards need no price and run here. The notional ceiling is
+	// measured in USD: a USD-like quote with an explicit price is checked now,
+	// with no network call. Any other quote (THB...) needs a rate from the
+	// provider, and a market order needs a price, so both are measured at
+	// Gate 3b once the provider exists.
 	if err := broker.CheckOrderType(t.cfg, orderType); err != nil {
 		return ErrorResult(err.Error())
 	}
-	if price != nil {
+	if price != nil && exchanges.USDLike(broker.SymbolQuote(symbol, providerID)) {
 		if err := broker.CheckRiskNotional(t.cfg, amount*(*price)); err != nil {
 			return ErrorResult(err.Error())
 		}
@@ -148,63 +153,65 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	// H-3: a market order carries no price, and every downstream check that
 	// needed one simply skipped itself - max_order_value_usd never applied to
 	// a market order, and the balance preflight below compared a base-currency
-	// amount against a quote-currency balance ("need 2 BTC, have 5000 USDT"
-	// passes). Resolve the live price once here and use it for both.
-	effectivePrice := price
-	if effectivePrice == nil {
-		if md, ok := p.(broker.MarketDataProvider); ok {
-			if ticker, err := md.FetchTicker(ctx, symbol); err == nil && ticker.Last != nil {
-				if last := *ticker.Last; last > 0 && !math.IsNaN(last) && !math.IsInf(last, 0) {
-					effectivePrice = &last
-				}
-			}
+	// amount against a quote-currency balance. Resolve the price once here
+	// (ask for a buy, bid for a sell, last as the fallback) and use it for both.
+	//
+	// The ceiling is in USD, but amount*price is in the symbol's quote
+	// currency, so a 30,000 THB order used to be compared as "30,000". With a
+	// ceiling set the notional is converted to USD, and an order whose USD
+	// value cannot be determined is refused (fail closed). The conversion
+	// reads the provider's public ticker; it does not touch the rate limiter.
+	md, _ := p.(broker.MarketDataProvider)
+	var nq broker.NotionalQuote
+	priced := false
+	if maxUSD := t.cfg.TradingRisk.MaxOrderValueUSD; maxUSD > 0 {
+		est, estErr := broker.EstimateNotionalUSDWithFallback(ctx, t.cfg, md, symbol, side, amount, price)
+		if estErr != nil {
+			return ErrorResult(unmeasurableOrderMessage(symbol, providerID, estErr)).WithError(estErr)
 		}
-	}
-	if effectivePrice != nil {
-		if err := broker.CheckRiskNotional(t.cfg, amount*(*effectivePrice)); err != nil {
+		if err := broker.CheckRiskNotional(t.cfg, est.USD); err != nil {
 			return ErrorResult(err.Error())
 		}
-	} else if t.cfg.TradingRisk.MaxOrderValueUSD > 0 {
-		return ErrorResult(fmt.Sprintf(
-			"cannot price %s on %s to enforce max_order_value_usd — refusing the order rather than placing it unchecked",
-			symbol, providerID))
+		nq, priced = est, true
+	} else if est, estErr := broker.EstimateNotionalQuote(ctx, md, symbol, side, amount, price); estErr == nil {
+		// No ceiling is configured, so no USD rate is fetched: a non-USD quote
+		// keeps the quote-currency notional (est.USDKnown is false), which is
+		// what the position warning below has always compared. The only
+		// network call is the ticker an unpriced order already needed.
+		nq, priced = est, true
 	}
 
 	// --- Gate 4: balance preflight (for buy orders) ---
-	if side == "buy" {
-		if pp, ok := p.(broker.PortfolioProvider); ok {
-			parts := strings.SplitN(symbol, "/", 2)
-			if len(parts) == 2 {
-				quoteCurrency := parts[1]
-				bals, err := pp.GetBalances(ctx)
-				if err == nil {
-					var quoteBalance float64
-					for _, b := range bals {
-						if strings.EqualFold(b.Asset, quoteCurrency) {
-							quoteBalance = b.Free
-							break
-						}
+	// Only when the order could be priced: needed is the QUOTE-currency notional
+	// compared against the QUOTE balance. Without a price the base amount is
+	// not comparable to that balance, so the preflight is skipped rather than
+	// comparing units of two different assets.
+	if side == "buy" && priced {
+		if pp, ok := p.(broker.PortfolioProvider); ok && strings.Contains(symbol, "/") && nq.Quote != "" {
+			if bals, err := pp.GetBalances(ctx); err == nil {
+				var quoteBalance float64
+				for _, b := range bals {
+					if strings.EqualFold(b.Asset, nq.Quote) {
+						quoteBalance = b.Free
+						break
 					}
-					needed := amount
-					if effectivePrice != nil {
-						needed = amount * (*effectivePrice)
-					}
-					if quoteBalance < needed {
-						return ErrorResult(fmt.Sprintf("insufficient %s balance: have %.8g, need %.8g", quoteCurrency, quoteBalance, needed)).
-							WithError(broker.ErrInsufficientFunds)
-					}
+				}
+				if quoteBalance < nq.QuoteNotional {
+					return ErrorResult(fmt.Sprintf("insufficient %s balance: have %.8g, need %.8g", nq.Quote, quoteBalance, nq.QuoteNotional)).
+						WithError(broker.ErrInsufficientFunds)
 				}
 			}
 		}
 	}
 
 	// --- Gate 5: position size warning ---
-	if effectivePrice != nil {
-		notional := amount * (*effectivePrice)
-		if notional > positionWarnThresholdUSD {
-			if !confirm {
-				return ErrorResult(fmt.Sprintf("large order warning: notional value %.2f exceeds %.0f USD. Set confirm=true to proceed.", notional, float64(positionWarnThresholdUSD)))
+	if priced {
+		if nq.USDKnown {
+			if nq.USD > positionWarnThresholdUSD && !confirm {
+				return ErrorResult(fmt.Sprintf("large order warning: notional value %.2f exceeds %.0f USD. Set confirm=true to proceed.", nq.USD, float64(positionWarnThresholdUSD)))
 			}
+		} else if nq.QuoteNotional > positionWarnThresholdUSD && !confirm {
+			return ErrorResult(fmt.Sprintf("large order warning: notional value %.2f %s (not converted to USD) exceeds %.0f. Set confirm=true to proceed.", nq.QuoteNotional, nq.Quote, float64(positionWarnThresholdUSD)))
 		}
 	}
 
@@ -214,7 +221,11 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		if price != nil {
 			out += fmt.Sprintf(" @ %.8g", *price)
 		}
-		out += fmt.Sprintf(" on %s. Set confirm=true to place the order.", providerID)
+		out += fmt.Sprintf(" on %s.", providerID)
+		if note := usdEstimateNote(nq, providerID); note != "" {
+			out += " Estimated order value " + note + "."
+		}
+		out += " Set confirm=true to place the order."
 		return UserResult(out)
 	}
 
@@ -245,6 +256,37 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if price != nil {
 		out += fmt.Sprintf("  Price:  %.8g\n", *price)
 	}
+	if note := usdEstimateNote(nq, providerID); note != "" {
+		out += "  Value:  " + note + "\n"
+	}
 
 	return UserResult(out)
+}
+
+// unmeasurableOrderMessage explains why an order could not be valued in USD
+// while max_order_value_usd is set. The order is refused rather than placed
+// unchecked.
+func unmeasurableOrderMessage(symbol, providerID string, err error) string {
+	cause := "price"
+	if errors.Is(err, broker.ErrNoUSDRate) {
+		cause = "USD conversion rate"
+	}
+	return fmt.Sprintf(
+		"cannot determine the %s of %s on %s to enforce max_order_value_usd (%v) — refusing the order rather than placing it unchecked",
+		cause, symbol, providerID, err)
+}
+
+// usdEstimateNote renders the USD value of an order whose quote currency is not
+// USD-like, e.g. "5000 THB ≈ $138.89 USD at 36 THB per USD", naming the
+// providing exchange when the rate did not come from the order's own provider.
+// It is empty when the order is already in USD or no rate was fetched.
+func usdEstimateNote(nq broker.NotionalQuote, providerID string) string {
+	if !nq.USDKnown || nq.USDPerQuote <= 0 || exchanges.USDLike(nq.Quote) {
+		return ""
+	}
+	note := fmt.Sprintf("%.8g %s ≈ $%.2f USD at %.4g %s per USD", nq.QuoteNotional, nq.Quote, nq.USD, 1/nq.USDPerQuote, nq.Quote)
+	if nq.RateProvider != "" && !strings.EqualFold(nq.RateProvider, providerID) {
+		note += " (rate from " + nq.RateProvider + ")"
+	}
+	return note
 }

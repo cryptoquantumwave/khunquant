@@ -154,6 +154,12 @@ func CheckRiskNotional(cfg *config.Config, notionalUSD float64) error {
 
 // CheckRisk validates an order against the TradingRiskConfig.
 // Returns an error if the order violates any risk control.
+//
+// Deprecated: CheckRisk compares amount*price - a value in the symbol's QUOTE
+// currency - to the USD ceiling, so it is wrong on every non-USD market (a
+// 30,000 THB order reads as "30,000"). It has no production callers. Price the
+// order with EstimateNotionalUSD and pass NotionalQuote.USD to
+// CheckRiskNotional instead.
 func CheckRisk(cfg *config.Config, side, orderType string, amount float64, price *float64) error {
 	if err := CheckOrderType(cfg, orderType); err != nil {
 		return err

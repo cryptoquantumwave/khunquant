@@ -153,8 +153,12 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
   keyed by its `Name*` constant: `BlockedOrigins: {OriginCron}`, and `RefuseUnderPaperMode` unless
   the tool simulates paper mode itself. `TestPolicyCoversKnownFinancialTools` lists them
   explicitly — add the new tool there. A tool that only *reduces* exposure gets no row.
-- **Trading tools check `CheckPermission`, `CheckRiskNotional` and `CheckDailyLoss`**, and futures
-  mutations `CheckLeverage`. Reject non-finite numbers yourself — the generic validator does not.
+- **Trading tools check `CheckPermission`, `CheckRiskNotional` and `CheckDailyLoss`**, and
+  risk-increasing futures mutations `CheckLeverage(cfg, action, broker.RiskIncrease)`; exits pass
+  `broker.RiskReduce` and skip `CheckDailyLoss` — a safety brake must never block getting out of a
+  position. If an action cannot be classified before it runs, treat it as `RiskIncrease`.
+  `DefaultLimiter.Allow` goes after the dry-run return, right before the first mutation.
+  Reject non-finite numbers yourself — the generic validator does not.
 - **A new `ToolConfig` field needs an `IsToolEnabled` switch arm**, which is default-allow for
   unknown names. `TestCatalogToolsHaveEnableArms` catches a missing arm for catalog tools.
 - **Credentials under a `yaml:"-"` subtree** (`Providers`, `Tools`, `Debug`, `Gateway`, most

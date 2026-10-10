@@ -127,12 +127,6 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(err.Error())
 	}
 
-	// --- Gate 2: rate limit ---
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
-			WithError(broker.ErrRateLimited)
-	}
-
 	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
@@ -224,7 +218,12 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return UserResult(out)
 	}
 
-	// --- Gate 7: execute ---
+	// --- Gate 7: rate limit, then execute ---
+	// Taken only now, after the dry-run and large-order returns, so a preview spends nothing.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
+			WithError(broker.ErrRateLimited)
+	}
 	order, err := tp.CreateOrder(ctx, symbol, orderType, side, amount, price, params)
 	if err != nil {
 		if hint := reauthHint(err, providerID, account); hint != nil {

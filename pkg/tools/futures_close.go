@@ -58,14 +58,12 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	if orderType == "limit" && limitPrice == nil {
 		return ErrorResult("limit_price is required for limit close orders")
 	}
-	if err := broker.CheckLeverage(t.cfg, "close futures position"); err != nil {
+	// A close only reduces exposure: the leverage switch must never block it.
+	if err := broker.CheckLeverage(t.cfg, "close futures position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -115,6 +113,11 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	if !confirm {
 		return UserResult(fmt.Sprintf("Dry-run: would close %s position on %s — %s %.8g %s (reduce-only). Set confirm=true to execute.",
 			symbol, providerID, closeSide, closeAmount, orderType))
+	}
+
+	// Rate limit: spent only on a confirmed close, right before the order.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
@@ -209,14 +212,11 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 	if orderType == "limit" && limitPrice == nil {
 		return ErrorResult("limit_price is required for limit close orders")
 	}
-	if err := broker.CheckLeverage(t.cfg, "reduce futures position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "reduce futures position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -277,6 +277,11 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 			symbol, providerID, finalAmount, finalAmount/positionSize*100, closeSide, finalAmount, orderType))
 	}
 
+	// Rate limit: spent only on a confirmed reduce, right before the order.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
+	}
+
 	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
 		Symbol:       symbol,
 		OrderType:    orderType,
@@ -335,7 +340,7 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 	if providerID == "" {
 		return ErrorResult("provider is required")
 	}
-	if err := broker.CheckLeverage(t.cfg, "emergency flatten"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "emergency flatten", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,7 +89,7 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	// --- Safety gates (sequence from futures.go §225-290) ---
 
 	// Gate 1: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "open delta-neutral futures leg"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "open delta-neutral futures leg", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -107,15 +108,14 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		return ErrorResult(err.Error())
 	}
 
-	// Gate 4: rate limit on both providers
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
+	// Gate 4: per-order value cap, applied to each leg's notional. Opening adds exposure,
+	// so this is a risk-adding gate and sits before the dry-run so a preview tells the truth.
+	legNotional := math.Max(plan.SpotNotionalUSDT, plan.FuturesNotionalUSDT)
+	if err := broker.CheckRiskNotional(t.cfg, legNotional); err != nil {
+		return ErrorResult(fmt.Sprintf("delta-neutral leg: %v", err))
 	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
+
+	// The rate limit is taken after the dry-run return, right before the first order.
 
 	// --- Entry spread gate ---
 	// Fetch the live spread once and reuse it for both the gate and the dry-run
@@ -161,6 +161,12 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	}
 
 	// --- On confirm: execute the two-leg order (§7.9) ---
+
+	// Rate limit: both tokens up front (nothing is placed yet), so a missing second token
+	// cannot strand a half-open position. A dry-run above never reaches this point.
+	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
+		return r
+	}
 
 	// Create an Execution record (T2.5 state machine entry)
 	now := time.Now()

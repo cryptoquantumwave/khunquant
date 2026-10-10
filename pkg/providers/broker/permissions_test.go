@@ -14,7 +14,7 @@ func pricePtr(f float64) *float64 { return &f }
 
 func TestCheckLeverage_Disabled(t *testing.T) {
 	cfg := &config.Config{TradingRisk: config.TradingRiskConfig{AllowLeverage: false}}
-	err := broker.CheckLeverage(cfg, "set_futures_leverage")
+	err := broker.CheckLeverage(cfg, "set_futures_leverage", broker.RiskIncrease)
 	if err == nil {
 		t.Fatal("expected error when allow_leverage=false")
 	}
@@ -25,7 +25,7 @@ func TestCheckLeverage_Disabled(t *testing.T) {
 
 func TestCheckLeverage_Enabled(t *testing.T) {
 	cfg := &config.Config{TradingRisk: config.TradingRiskConfig{AllowLeverage: true}}
-	if err := broker.CheckLeverage(cfg, "set_futures_leverage"); err != nil {
+	if err := broker.CheckLeverage(cfg, "set_futures_leverage", broker.RiskIncrease); err != nil {
 		t.Errorf("expected no error when allow_leverage=true, got: %v", err)
 	}
 }

@@ -178,9 +178,35 @@ func CheckRisk(cfg *config.Config, side, orderType string, amount float64, price
 	return CheckRiskNotional(cfg, amount*(*price))
 }
 
-// CheckLeverage rejects futures actions when trading_risk.allow_leverage is false.
-// Every live futures mutation tool must call this before executing.
-func CheckLeverage(cfg *config.Config, action string) error {
+// RiskDirection says whether an action can add to the user's exposure or only
+// take it away. A safety brake that stops the user from getting OUT of a
+// position defeats its own purpose, so risk-adding gates (the leverage opt-in,
+// the daily-loss limit) apply to RiskIncrease only.
+//
+// RiskIncrease is the zero value on purpose: a call site that forgets to say
+// which way it goes is treated as risk-adding and stays gated (fail closed).
+type RiskDirection int
+
+const (
+	// RiskIncrease is an action that opens or enlarges exposure, or one whose
+	// effect on exposure cannot be classified before it runs.
+	RiskIncrease RiskDirection = iota
+	// RiskReduce is an action that can only shrink exposure or cancel orders:
+	// closes, reduces, flattens, unwinds, resizing down.
+	RiskReduce
+)
+
+// CheckLeverage rejects a risk-adding futures action when
+// trading_risk.allow_leverage is false. A RiskReduce action always passes: the
+// leverage switch must never stop the user from closing a position.
+//
+// Every live futures mutation tool must call this before executing, passing
+// the direction of the action. If an action cannot be classified before it
+// runs, pass RiskIncrease.
+func CheckLeverage(cfg *config.Config, action string, dir RiskDirection) error {
+	if dir == RiskReduce {
+		return nil
+	}
 	if !cfg.TradingRisk.AllowLeverage {
 		return fmt.Errorf("%s requires trading_risk.allow_leverage=true — leverage trading is disabled in this configuration", action)
 	}

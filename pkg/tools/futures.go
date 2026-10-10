@@ -133,7 +133,7 @@ func (t *FuturesSetLeverageTool) Execute(ctx context.Context, args map[string]an
 	if lev > 125 {
 		return ErrorResult("leverage must be <= 125")
 	}
-	if err := broker.CheckLeverage(t.cfg, "set leverage"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "set leverage", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 	// Permission is checked before the dry-run return so a preview on an
@@ -247,7 +247,7 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 
 	// Step 2: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "open futures position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "open futures position", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -256,12 +256,9 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(err.Error())
 	}
 
-	// Step 4: daily loss limit and rate limit
+	// Step 4: daily loss limit (the rate limit is taken after the dry-run, before the first mutation)
 	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q - try again in a minute", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	// Step 5 (dry-run): return before any network calls — all permission/risk gates above
@@ -324,6 +321,12 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 	if notional > positionWarnThresholdUSD {
 		return ErrorResult(fmt.Sprintf("large futures position warning: notional %.2f USD (from %s price) exceeds %.0f USD. Re-run only after explicit user confirmation.", notional, notionalSource, float64(positionWarnThresholdUSD)))
+	}
+
+	// Rate limit: spent only now that the call is confirmed and about to mutate the exchange,
+	// so previews and size/notional refusals above cost nothing.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q - try again in a minute", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	// Step 8: set leverage

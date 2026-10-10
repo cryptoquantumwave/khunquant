@@ -11,9 +11,14 @@ import (
 //
 // C-2: safety checks live inside each tool today, which means a tool added
 // without them is unguarded and nothing says so. CheckLeverage's doc comment -
-// "every live futures mutation tool must call this before executing" - is that
-// convention written down, and a convention is exactly what a new tool forgets.
-// A policy declared here applies whether or not the tool remembers.
+// "every live futures mutation tool must call this before executing, passing the
+// direction of the action" - is that convention written down, and a convention
+// is exactly what a new tool forgets. A policy declared here applies whether or
+// not the tool remembers.
+//
+// The in-tool risk-adding gates (CheckLeverage, CheckDailyLoss) apply to
+// broker.RiskIncrease actions only; exits pass broker.RiskReduce and skip them,
+// so a safety brake never stops the user getting out of a position.
 type ToolPolicy struct {
 	// BlockedOrigins refuses the call when the turn's origin matches. A
 	// scheduled job has no human present to answer for an order, so financial

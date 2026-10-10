@@ -84,9 +84,13 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		}
 	}
 
-	// --- Safety gates (same sequence as open) ---
+	// --- Safety gates ---
+	// Unwind only ever reduces exposure, so it passes the risk-adding gates: the leverage
+	// switch is a RiskReduce no-op and the daily-loss brake is NOT consulted — a brake must
+	// never stop the user getting out of a position. Permission checks still apply, and the
+	// rate limiter is taken below, after the dry-run return.
 
-	if err := broker.CheckLeverage(t.cfg, "unwind delta-neutral position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "unwind delta-neutral position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, plan.FuturesProvider, plan.FuturesAccount, config.ScopeTrade); err != nil {
@@ -94,17 +98,6 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 	if err := broker.CheckPermission(t.cfg, plan.SpotProvider, plan.SpotAccount, config.ScopeTrade); err != nil {
 		return ErrorResult(fmt.Sprintf("spot leg permission denied: %v", err))
-	}
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
-	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
 	}
 
 	// --- Load recorded open exposure from execution history ---
@@ -146,6 +139,13 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 				"Closing this plan's recorded share only (%.4g base / %.4g spot).",
 			conflicts, plan.FuturesSymbol, plan.FuturesProvider,
 			recordedFuturesBase, recordedSpotQty)
+	}
+
+	// --- Rate limit: both tokens up front, only for a real (confirmed) unwind ---
+	// A dry-run must not spend the budget, and taking the second token between the legs
+	// could strand a half-closed hedge, so both are taken before the first order.
+	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
+		return r
 	}
 
 	// --- Execute the unwind (close both legs) ---

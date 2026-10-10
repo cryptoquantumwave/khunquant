@@ -219,7 +219,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			}
 
 			// Gate checks
-			if err := broker.CheckLeverage(t.cfg, "edit delta-neutral leverage"); err != nil {
+			if err := broker.CheckLeverage(t.cfg, "edit delta-neutral leverage", broker.RiskIncrease); err != nil {
 				return ErrorResult(err.Error())
 			}
 			if err := broker.CheckPermission(t.cfg, plan.FuturesProvider, plan.FuturesAccount, config.ScopeTrade); err != nil {

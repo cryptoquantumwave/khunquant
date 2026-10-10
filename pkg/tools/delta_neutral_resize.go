@@ -82,10 +82,20 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("plan status is %q, not active. Cannot resize.", plan.Status))
 	}
 
-	// --- Safety gates (same sequence as open) ---
+	// Direction is known from the arguments alone (the sign of the requested change), before
+	// any network call. A resize-down only reduces exposure, so it passes the risk-adding
+	// gates (leverage switch, daily-loss limit, order-value cap); a resize-up, or an
+	// unclassifiable (NaN) request, is gated exactly like an open.
+	isDecrease := (hasDeltaNotional && deltaNotional < 0) || (hasDeltaPct && deltaPct < 0)
+	dir := broker.RiskIncrease
+	if isDecrease {
+		dir = broker.RiskReduce
+	}
+
+	// --- Safety gates (same sequence as open, risk-adding ones for increases only) ---
 
 	// Gate 1: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position", dir); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -99,20 +109,15 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("spot leg permission denied: %v", err))
 	}
 
-	// Gate 3: daily loss limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	// Gate 3: daily loss limit — only for a resize-up. Getting smaller must stay possible
+	// after the limit trips.
+	if !isDecrease {
+		if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+			return ErrorResult(err.Error())
+		}
 	}
 
-	// Gate 4: rate limit on both providers
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
-	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
+	// The rate limit is taken after the dry-run return, right before the first order.
 
 	// Compute the delta notional (USDT), applied to BOTH legs equally
 	var deltaN float64
@@ -152,13 +157,21 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Determine direction and guard against over-decrease
-	isDecrease := deltaN < 0
+	// (isDecrease was fixed from the arguments above, so the gates and the sizing agree.)
 	absDeltaN := math.Abs(deltaN)
 
 	if isDecrease && absDeltaN > plan.FuturesNotionalUSDT {
 		return ErrorResult(fmt.Sprintf(
 			"cannot decrease position by %.2f USDT; current notional is %.2f USDT",
 			absDeltaN, plan.FuturesNotionalUSDT))
+	}
+
+	// Gate 4: per-order value cap on the delta each leg trades — resize-up only. Before the
+	// dry-run so a preview tells the truth; a resize-down is never blocked by it.
+	if !isDecrease {
+		if err := broker.CheckRiskNotional(t.cfg, absDeltaN); err != nil {
+			return ErrorResult(fmt.Sprintf("delta-neutral resize leg: %v", err))
+		}
 	}
 
 	// Compute new notionals
@@ -198,6 +211,12 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// --- On confirm: execute the resize (adjust both legs by |deltaN|) ---
+
+	// Rate limit: both tokens up front (nothing is placed yet), so a missing second token
+	// cannot strand a half-resized position. A dry-run above never reaches this point.
+	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
+		return r
+	}
 
 	// Create an Execution record for the resize attempt
 	now := time.Now()

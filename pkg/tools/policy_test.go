@@ -168,16 +168,22 @@ func TestCheckToolPolicy_PaperModeBackstop(t *testing.T) {
 	}
 }
 
-// The three tools that implement paper mode themselves must NOT be caught by
-// the backstop, or their simulated output is replaced by a refusal.
+// Only the tools that really simulate paper mode themselves may be exempt from
+// the backstop, or their simulated output is replaced by a refusal. That is
+// create_order (simulated through the broker) and execute_dca_order. Options are
+// NOT simulated, so option_create_order carries the refusal flag too.
 func TestCheckToolPolicy_PaperAwareToolsAreNotBackstopped(t *testing.T) {
 	armPolicy(t, true, nil)
 
 	ctx := WithToolOrigin(context.Background(), OriginInternal)
-	for _, name := range []string{NameCreateOrder, NameOptionCreateOrder, NameExecuteDCAOrder} {
+	for _, name := range []string{NameCreateOrder, NameExecuteDCAOrder} {
 		if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
 			t.Errorf("%s was refused under paper mode, but it simulates internally: %q", name, refusal.ForLLM)
 		}
+	}
+
+	if refusal := checkToolPolicy(ctx, NameOptionCreateOrder, nil); refusal == nil {
+		t.Errorf("%s ran under paper mode, but options have no simulation", NameOptionCreateOrder)
 	}
 }
 

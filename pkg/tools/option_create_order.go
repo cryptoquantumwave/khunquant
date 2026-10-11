@@ -88,10 +88,15 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		stopPrice = &v
 	}
 
-	// --- Gate 0: paper trading mode redirect ---
-	if t.cfg.TradingRisk.PaperTradingMode {
-		paper := NewPaperTradeTool(t.cfg)
-		return paper.Execute(ctx, args)
+	// --- Gate 0: paper trading mode ---
+	// Options have no simulation, so the order is refused rather than placed
+	// for real. (This used to redirect to paper_trade, whose spot-only arguments
+	// rejected every option order with a misleading validation error.) The
+	// policy table carries the same refusal as a registry-level backstop.
+	if broker.IsPaperMode(t.cfg) {
+		msg := "option orders are not simulated in paper_trading_mode, and a real order would break paper mode. " +
+			"No order was placed. Disable paper_trading_mode to trade options."
+		return ErrorResult(msg).WithError(fmt.Errorf("%w: option orders", broker.ErrPaperModeUnsupported))
 	}
 
 	// --- Gate 1: basic validation ---

@@ -84,12 +84,11 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(paramsErr.Error())
 	}
 
-	// --- Gate 0: paper trading mode redirect ---
-	if t.cfg.TradingRisk.PaperTradingMode {
-		// Force all orders through simulation — reuse PaperTradeTool logic
-		paper := NewPaperTradeTool(t.cfg)
-		return paper.Execute(ctx, args)
-	}
+	// Paper mode is not a redirect: every gate below runs identically, and only
+	// the provider differs. TradingProviderFor hands back a simulation to place
+	// the order with and the real provider to read from, so nothing in paper
+	// mode reaches CreateOrder on the exchange.
+	paper := broker.IsPaperMode(t.cfg)
 
 	// --- Gate 1: basic validation ---
 	if providerID == "" || symbol == "" || orderType == "" || side == "" {
@@ -139,14 +138,12 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		}
 	}
 
-	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
+	tp, p, err := broker.TradingProviderFor(t.cfg, providerID, account)
 	if err != nil {
+		if errors.Is(err, broker.ErrOrderExecutionUnsupported) {
+			return ErrorResult(fmt.Sprintf("provider %q does not support order execution", providerID))
+		}
 		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
-	}
-
-	tp, ok := p.(broker.TradingProvider)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("provider %q does not support order execution", providerID))
 	}
 
 	// --- Gate 3: market status ---
@@ -224,7 +221,7 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 
 	// --- Gate 6: confirmation required ---
 	if !confirm {
-		out := fmt.Sprintf("Dry-run: all safety checks passed for %s %s %s x%.8g", side, orderType, symbol, amount)
+		out := paperPrefix(paper) + fmt.Sprintf("Dry-run: all safety checks passed for %s %s %s x%.8g", side, orderType, symbol, amount)
 		if price != nil {
 			out += fmt.Sprintf(" @ %.8g", *price)
 		}
@@ -238,7 +235,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 
 	// --- Gate 7: rate limit, then execute ---
 	// Taken only now, after the dry-run and large-order returns, so a preview spends nothing.
-	if !broker.DefaultLimiter.Allow(providerID) {
+	// Skipped in paper mode: nothing reaches the exchange, so a simulated order
+	// must neither spend the venue's request budget nor be refused for exceeding it.
+	if !paper && !broker.DefaultLimiter.Allow(providerID) {
 		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
 			WithError(broker.ErrRateLimited)
 	}
@@ -258,8 +257,12 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if order.Status != nil {
 		orderStatus = *order.Status
 	}
-	out := fmt.Sprintf("Order placed on %s:\n  ID:     %s\n  Symbol: %s\n  Side:   %s\n  Type:   %s\n  Amount: %.8g\n  Status: %s\n",
-		providerID, id, symbol, side, orderType, amount, orderStatus)
+	headline := fmt.Sprintf("Order placed on %s:", providerID)
+	if paper {
+		headline = fmt.Sprintf("[PAPER] Simulated order on %s (paper_trading_mode is on; NO real order was placed):", providerID)
+	}
+	out := fmt.Sprintf("%s\n  ID:     %s\n  Symbol: %s\n  Side:   %s\n  Type:   %s\n  Amount: %.8g\n  Status: %s\n",
+		headline, id, symbol, side, orderType, amount, orderStatus)
 	if price != nil {
 		out += fmt.Sprintf("  Price:  %.8g\n", *price)
 	}
@@ -268,6 +271,15 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	return UserResult(out)
+}
+
+// paperPrefix marks a result produced in paper mode, so a simulated order is
+// never mistaken for a real one.
+func paperPrefix(paper bool) string {
+	if paper {
+		return "[PAPER] "
+	}
+	return ""
 }
 
 // unmeasurableOrderMessage explains why an order could not be valued in USD

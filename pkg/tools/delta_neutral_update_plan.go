@@ -177,6 +177,19 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
 
+	// Paper mode: changing leverage on an ACTIVE plan calls SetFuturesLeverage
+	// on the live position, and there is no simulated futures venue. Refuse that
+	// one edit before anything is touched (the enable switch below has side
+	// effects of its own); every other edit - and a leverage edit on a draft or
+	// ready plan, which only stores a number - is unaffected.
+	if lev, ok := args["leverage"].(float64); ok && lev > 0 &&
+		plan.Status == deltaneutral.PlanStatusActive && broker.IsPaperMode(t.cfg) {
+		return ErrorResult("changing leverage on an active plan is not simulated in paper_trading_mode, and would change the " +
+			"LIVE leverage of a real position. Nothing was changed. Disable paper_trading_mode to apply it " +
+			"(other plan edits are still allowed).").
+			WithError(fmt.Errorf("%w: live leverage change on an active delta-neutral plan", broker.ErrPaperModeUnsupported))
+	}
+
 	changed := false
 
 	// Update name

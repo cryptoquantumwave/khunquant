@@ -189,7 +189,10 @@ func (a ExchangeAccount) RedactedAPIKey() string {
 
 // TradingRiskConfig holds per-exchange risk controls for order execution.
 type TradingRiskConfig struct {
-	// PaperTradingMode forces all create_order calls to simulate without real execution.
+	// PaperTradingMode simulates create_order (every gate still runs; nothing
+	// reaches the exchange) and refuses every other tool that would open or enlarge
+	// a real position or move funds. Exits of real positions (futures close/reduce/
+	// flatten, delta-neutral unwind, cancels) still act on the real exchange. See SECURITY.md.
 	PaperTradingMode bool `json:"paper_trading_mode" env:"KHUNQUANT_TRADING_PAPER_MODE"`
 
 	// MaxOrderValueUSD rejects any single order whose notional exceeds this value (USD).

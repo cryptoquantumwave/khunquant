@@ -58,8 +58,8 @@ func defaultToolPolicies() map[string]ToolPolicy {
 		NameCreateOrder:   {BlockedOrigins: cronBlocked},
 		NameTransferFunds: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
-		// Options. option_create_order honours paper mode itself.
-		NameOptionCreateOrder: {BlockedOrigins: cronBlocked},
+		// Options are not simulated: the tool refuses in paper mode itself, and the flag is the registry backstop.
+		NameOptionCreateOrder: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
 		// Futures. None of these check paper mode, and all place or modify live
 		// orders or leverage.

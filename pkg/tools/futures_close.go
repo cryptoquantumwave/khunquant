@@ -37,7 +37,13 @@ func (t *FuturesClosePositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesClosePositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	symbol := normalizeFuturesSymbol(stringArg(args, "symbol"))
@@ -178,7 +184,13 @@ func (t *FuturesReducePositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesReducePositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	symbol := normalizeFuturesSymbol(stringArg(args, "symbol"))
@@ -332,7 +344,13 @@ func (t *FuturesEmergencyFlattenTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	confirm, _ := args["confirm"].(bool)

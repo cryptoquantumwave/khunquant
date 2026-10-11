@@ -53,7 +53,13 @@ func (t *UnwindDeltaNeutralPositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *UnwindDeltaNeutralPositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	planID, _ := args["plan_id"].(float64)
 	confirm, _ := args["confirm"].(bool)
 

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -212,8 +213,15 @@ func registerCronAPI(mux interface {
 			http.Error(w, "id is required", http.StatusBadRequest)
 			return
 		}
-		if !cs.RunJobNow(id) {
-			http.Error(w, fmt.Sprintf("job %q not found", id), http.StatusNotFound)
+		if err := cs.RunJobNow(id); err != nil {
+			switch {
+			case errors.Is(err, cron.ErrJobNotFound):
+				http.Error(w, fmt.Sprintf("job %q not found", id), http.StatusNotFound)
+			case errors.Is(err, cron.ErrJobRunning):
+				http.Error(w, fmt.Sprintf("job %q is already running", id), http.StatusConflict)
+			default:
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

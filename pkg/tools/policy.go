@@ -16,7 +16,7 @@ import (
 // is exactly what a new tool forgets. A policy declared here applies whether or
 // not the tool remembers.
 //
-// The in-tool risk-adding gates (CheckLeverage, CheckDailyLoss) apply to
+// The in-tool risk-adding gates (CheckLeverage, CheckDailyLossFor) apply to
 // broker.RiskIncrease actions only; exits pass broker.RiskReduce and skip them,
 // so a safety brake never stops the user getting out of a position.
 type ToolPolicy struct {

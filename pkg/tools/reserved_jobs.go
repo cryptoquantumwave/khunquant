@@ -1,6 +1,11 @@
 package tools
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+)
 
 // Scheduled-job name prefixes that select a code-driven handler. The gateway's
 // dispatcher routes a job by its name, and the handler trusts what the name says
@@ -34,4 +39,16 @@ func IsReservedJobName(name string) bool {
 		}
 	}
 	return false
+}
+
+// removeDCAPlanJobs removes every scheduled job named for the plan - "dca:<id>:"
+// with the trailing colon, so plan 1 never matches plan 12 - except the one
+// whose ID is keepJobID (empty keeps none). Only the DCA tools mint such names.
+func removeDCAPlanJobs(svc *cron.CronService, planID int64, keepJobID string) {
+	prefix := fmt.Sprintf("%s%d:", JobPrefixDCA, planID)
+	for _, j := range svc.ListJobs(true) {
+		if strings.HasPrefix(j.Name, prefix) && j.ID != keepJobID {
+			svc.RemoveJob(j.ID)
+		}
+	}
 }

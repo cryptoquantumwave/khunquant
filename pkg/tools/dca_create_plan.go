@@ -338,6 +338,11 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 
 	plan.CronJobID = job.ID
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {
+		// The gateway runs a dca: job only if it is the job the plan records. A job
+		// whose ID could not be recorded would be refused on every tick, and the
+		// plan would sit enabled with nothing running it: undo both halves.
+		t.cronService.RemoveJob(job.ID)
+		_ = t.store.DeletePlan(ctx, planID)
 		return ErrorResult(fmt.Sprintf("failed to update plan with cron job ID: %v", err))
 	}
 

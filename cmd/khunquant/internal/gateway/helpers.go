@@ -900,7 +900,11 @@ func setupCronTool(
 			return handleIndicatorAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
 		if strings.HasPrefix(job.Name, tools.JobPrefixDCA) && dcaStore != nil {
-			return handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
+			res, err := handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
+			if msgBus != nil {
+				notifyDCAJobNotPlanOwned(msgBus, job, err)
+			}
+			return res, err
 		}
 		if strings.HasPrefix(job.Name, tools.JobPrefixDeltaNeutral) && dnStore != nil {
 			return handleDeltaNeutralMonitorJob(ctx, job, cfg, dnStore, cronTool, msgBus)

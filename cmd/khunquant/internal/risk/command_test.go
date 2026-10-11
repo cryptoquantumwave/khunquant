@@ -161,3 +161,17 @@ func TestRiskStatusCommand_NoStateFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "no samples yet today")
 }
+
+func TestRiskStatusCommand_ShowsCarriedLoss(t *testing.T) {
+	d, path := seededWorkspace(t, 500)
+	seed := &broker.DailyLossTracker{}
+	seed.SetClock(func() time.Time { return cliNow })
+	seed.SetStorePath(path)
+	seed.SampleAccountWith("okx/main", 100, cliNow.Add(-time.Hour), "spot")
+	seed.SampleAccountWith("okx/main", 70, cliNow.Add(-50*time.Minute), "spot")
+	seed.SampleAccountWith("okx/main", 900, cliNow.Add(-5*time.Minute), "funding,spot") // new segment
+
+	out, err := run(t, d, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "okx/main: +30.00 USD carried")
+}

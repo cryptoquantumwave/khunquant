@@ -140,6 +140,11 @@ func printStatus(w io.Writer, s broker.LossSnapshot, limit float64, now time.Tim
 				k, e.BaselineUSD, e.LastUSD, e.Drawdown(), now.Sub(e.LastSampleAt).Round(time.Second))
 		}
 		tw.Flush()
+		for _, k := range keys {
+			if c := s.Accounts[k].CarriedLossUSD; c > 0 {
+				fmt.Fprintf(w, "  %s: +%.2f USD carried from earlier in the day (equity measured differently)\n", k, c)
+			}
+		}
 	}
 
 	fmt.Fprintf(w, "Total loss:    %.2f USD (larger of realised loss and the sum of drawdowns)\n", s.TotalUSD)

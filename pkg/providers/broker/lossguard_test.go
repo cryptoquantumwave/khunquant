@@ -615,11 +615,16 @@ func TestLossGuard_SignatureMismatchIgnored_ThenStaleFailsClosed(t *testing.T) {
 		t.Fatalf("still within the staleness bound, got %v", err)
 	}
 
-	// The mismatch persists: the last comparable sample ages out and the account fails closed.
-	for i := 0; i < 4; i++ {
+	// The mismatch persists: incomparable samples keep arriving while the last
+	// comparable one ages out, and the account fails closed.
+	for i := 0; i < 2; i++ {
 		clk.Advance(5 * time.Minute)
-		tr.SampleAccountWith("a/x", 600, clk.Now(), "spot")
+		tr.SampleAccountWith("a/x", 600, clk.Now(), "spot") // +10 and +15 minutes: still fresh
 	}
+	if err := tr.CheckDailyLossFor(50, "a/x"); err != nil {
+		t.Fatalf("exactly at the bound the last sample is still fresh, got %v", err)
+	}
+	clk.Advance(time.Minute) // +16 minutes with no accepted sample
 	if err := tr.CheckDailyLossFor(50, "a/x"); !errors.Is(err, broker.ErrEquityUnknown) {
 		t.Fatalf("a persistent mismatch must end in fail-closed, got %v", err)
 	}
@@ -627,20 +632,181 @@ func TestLossGuard_SignatureMismatchIgnored_ThenStaleFailsClosed(t *testing.T) {
 		t.Errorf("total = %v, want 0", got)
 	}
 
-	// The wallet comes back: comparable again, and the account recovers.
-	tr.SampleAccountWith("a/x", 990, clk.Now(), "funding,spot")
+	// It does not stay closed: the next sample starts a new segment (see
+	// TestLossGuard_PartialBaselineRecoversAfterStaleBound for the full story).
+	tr.SampleAccountWith("a/x", 600, clk.Now(), "spot")
 	if err := tr.CheckDailyLossFor(50, "a/x"); err != nil {
-		t.Fatalf("a comparable sample must restore the account, got %v", err)
-	}
-	if got := tr.TodayLossUSD(); got != 10 {
-		t.Errorf("total = %v, want 10 (1000 -> 990)", got)
+		t.Fatalf("the next sample must re-baseline the account, got %v", err)
 	}
 
-	// The signature survives a restart.
+	// The new signature survives a restart.
 	again := newGuardAt(t, path, clk)
-	again.SampleAccountWith("a/x", 100, clk.Now(), "spot")
-	if e := again.Snapshot().Accounts["a/x"]; e.Signature != "funding,spot" || e.LastUSD != 990 {
-		t.Errorf("persisted signature lost: %+v", e)
+	if e := again.Snapshot().Accounts["a/x"]; e.Signature != "spot" || e.LastUSD != 600 || e.BaselineUSD != 600 {
+		t.Errorf("persisted re-baseline lost: %+v", e)
+	}
+}
+
+// A baseline taken while a wallet type failed (likeliest: the first sample at
+// gateway start) must not lock the account out for the rest of the day.
+func TestLossGuard_PartialBaselineRecoversAfterStaleBound(t *testing.T) {
+	tr, clk := newGuard(t)
+	tr.EnableEquityGuard([]string{"a/x"}, 15*time.Minute)
+	tr.SampleAccountWith("a/x", 600, clk.Now(), "spot") // funding failed at baseline time
+
+	clk.Advance(5 * time.Minute)
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "funding,spot") // full sample: incomparable
+	if err := tr.CheckDailyLossFor(50, "a/x"); err != nil {
+		t.Fatalf("while the baseline sample is fresh the order is allowed, got %v", err)
+	}
+	if e := tr.Snapshot().Accounts["a/x"]; e.LastUSD != 600 || e.Signature != "spot" {
+		t.Fatalf("the incomparable sample must be ignored, got %+v", e)
+	}
+
+	clk.Advance(11 * time.Minute) // 16 minutes since the accepted sample
+	if err := tr.CheckDailyLossFor(50, "a/x"); !errors.Is(err, broker.ErrEquityUnknown) {
+		t.Fatalf("after the stale bound the account fails closed, got %v", err)
+	}
+
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "funding,spot")
+	if err := tr.CheckDailyLossFor(50, "a/x"); err != nil {
+		t.Fatalf("the next sample must re-baseline the account, got %v", err)
+	}
+	e := tr.Snapshot().Accounts["a/x"]
+	if e.BaselineUSD != 1000 || e.Signature != "funding,spot" || e.CarriedLossUSD != 0 {
+		t.Errorf("re-baseline wrong: %+v", e)
+	}
+	if got := tr.TodayLossUSD(); got != 0 {
+		t.Errorf("no loss was measured, total = %v", got)
+	}
+}
+
+func TestLossGuard_NewSegmentCarriesDrawdown(t *testing.T) {
+	tr, clk := newGuard(t)
+	tr.EnableEquityGuard([]string{"a/x"}, 15*time.Minute)
+
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "spot")
+	clk.Advance(time.Minute)
+	tr.SampleAccountWith("a/x", 960, clk.Now(), "spot") // segment 1: loses 40
+
+	clk.Advance(20 * time.Minute) // the signature changes and the old figure ages out
+	tr.SampleAccountWith("a/x", 2000, clk.Now(), "funding,spot")
+	e := tr.Snapshot().Accounts["a/x"]
+	if e.CarriedLossUSD != 40 || e.BaselineUSD != 2000 {
+		t.Fatalf("segment 2 must start with the 40 USD carried, got %+v", e)
+	}
+	if got := tr.TodayLossUSD(); got != 40 {
+		t.Fatalf("total = %v, want the carried 40", got)
+	}
+
+	clk.Advance(time.Minute)
+	tr.SampleAccountWith("a/x", 1970, clk.Now(), "funding,spot") // segment 2: loses 30
+	if got := tr.TodayLossUSD(); got != 70 {
+		t.Fatalf("total = %v, want 70 (40 carried + 30)", got)
+	}
+	err := tr.CheckDailyLossFor(60, "a/x")
+	if err == nil || errors.Is(err, broker.ErrEquityUnknown) {
+		t.Fatalf("70 must trip a 60 limit, got %v", err)
+	}
+
+	// A gain in segment 2 does not offset the carried loss.
+	clk.Advance(time.Minute)
+	tr.SampleAccountWith("a/x", 2500, clk.Now(), "funding,spot")
+	if got := tr.TodayLossUSD(); got != 40 {
+		t.Errorf("a later gain must not reduce the carried 40, total = %v", got)
+	}
+}
+
+func TestLossGuard_FlappingSignatureNeverForgetsLoss(t *testing.T) {
+	tr, clk := newGuard(t)
+	tr.EnableEquityGuard([]string{"a/x"}, 15*time.Minute)
+	var last float64
+	check := func(want float64) {
+		t.Helper()
+		got := tr.TodayLossUSD()
+		if got < last {
+			t.Fatalf("the day's loss must be monotone, went %v -> %v", last, got)
+		}
+		if got != want {
+			t.Fatalf("total = %v, want %v", got, want)
+		}
+		last = got
+	}
+
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "A")
+	tr.SampleAccountWith("a/x", 990, clk.Now(), "A")
+	check(10)
+	clk.Advance(20 * time.Minute)
+	tr.SampleAccountWith("a/x", 500, clk.Now(), "B") // A -> B across the bound
+	check(10)
+	tr.SampleAccountWith("a/x", 480, clk.Now(), "B")
+	check(30)
+	clk.Advance(20 * time.Minute)
+	tr.SampleAccountWith("a/x", 990, clk.Now(), "A") // B -> A across the bound
+	check(30)
+	tr.SampleAccountWith("a/x", 985, clk.Now(), "A")
+	check(35)
+
+	// Within a segment a recovery still reduces that segment's drawdown (as
+	// always), but never the 30 carried from the earlier segments.
+	tr.SampleAccountWith("a/x", 2000, clk.Now(), "A")
+	if got := tr.TodayLossUSD(); got != 30 {
+		t.Errorf("total = %v, want the carried 30", got)
+	}
+}
+
+func TestLossGuard_CarriedLossPersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daily_loss.json")
+	clk := newFakeClock(guardStart)
+	tr := newGuardAt(t, path, clk)
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "spot")
+	tr.SampleAccountWith("a/x", 950, clk.Now(), "spot")
+	clk.Advance(20 * time.Minute)
+	tr.SampleAccountWith("a/x", 3000, clk.Now(), "funding,spot")
+
+	after := newGuardAt(t, path, clk)
+	if e := after.Snapshot().Accounts["a/x"]; e.CarriedLossUSD != 50 {
+		t.Fatalf("carried loss must persist, got %+v", e)
+	}
+	if got := after.TodayLossUSD(); got != 50 {
+		t.Errorf("total after restart = %v, want 50", got)
+	}
+
+	// Reset clears it.
+	if err := after.Reset("moved funds"); err != nil {
+		t.Fatal(err)
+	}
+	if e := after.Snapshot().Accounts["a/x"]; e.CarriedLossUSD != 0 || after.TodayLossUSD() != 0 {
+		t.Errorf("Reset must clear the carried loss, got %+v", e)
+	}
+}
+
+func TestLossGuard_CarriedLossClearedAtRollover(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 10, 7, 23, 0, 0, 0, time.UTC))
+	tr := newGuardAt(t, "", clk)
+	tr.EnableEquityGuard([]string{"a/x"}, 15*time.Minute)
+	tr.SampleAccountWith("a/x", 1000, clk.Now(), "spot")
+	tr.SampleAccountWith("a/x", 950, clk.Now(), "spot")
+	clk.Advance(20 * time.Minute)
+	tr.SampleAccountWith("a/x", 3000, clk.Now(), "funding,spot") // carried 50, at 23:20
+	clk.Advance(35 * time.Minute)
+	tr.SampleAccountWith("a/x", 3000, clk.Now(), "funding,spot") // 23:55
+	clk.Advance(10 * time.Minute)                                // 00:05, 8 Oct: the fresh sample is carried
+	e := tr.Snapshot().Accounts["a/x"]
+	if e.CarriedLossUSD != 0 || e.BaselineUSD != 3000 || tr.TodayLossUSD() != 0 {
+		t.Errorf("a new day starts with no carried loss, got %+v total=%v", e, tr.TodayLossUSD())
+	}
+}
+
+func TestLossGuard_NegativeCarriedLossOnLoadIsIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daily_loss.json")
+	clk := newFakeClock(guardStart)
+	raw := `{"day":"2026-10-07","total_usd":0,"accounts":{"a/x":{"baseline_usd":10,"last_usd":10,"carried_loss_usd":-500}}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr := newGuardAt(t, path, clk)
+	if got := tr.TodayLossUSD(); got != 0 {
+		t.Errorf("a negative carried loss must be treated as 0, total = %v", got)
 	}
 }
 

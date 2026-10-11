@@ -65,6 +65,14 @@ type AccountEquity struct {
 	// types that contributed). Only samples with the baseline's signature are
 	// comparable to it; others are ignored.
 	Signature string `json:"signature,omitempty"`
+
+	// CarriedLossUSD is the drawdown of earlier measurement segments of this
+	// loss day. When the signature changes and the account has already gone
+	// stale, the account is re-baselined and the loss measured so far is moved
+	// here. It is never offset by later gains: the two segments are not
+	// comparable, so a gain in one cannot be shown to cancel a loss in the
+	// other (conservative on purpose).
+	CarriedLossUSD float64 `json:"carried_loss_usd,omitempty"`
 }
 
 // Drawdown is how far the latest sample sits below the baseline (never negative).
@@ -73,6 +81,12 @@ func (e AccountEquity) Drawdown() float64 {
 		return d
 	}
 	return 0
+}
+
+// LossUSD is the account's loss for the day: the loss carried from earlier
+// measurement segments plus the current segment's drawdown.
+func (e AccountEquity) LossUSD() float64 {
+	return e.CarriedLossUSD + e.Drawdown()
 }
 
 // DailyLossTracker is safe for concurrent use. The zero value is ready to use:
@@ -238,6 +252,17 @@ func (t *DailyLossTracker) SampleAccountWith(key string, usd float64, at time.Ti
 		t.accounts[key] = AccountEquity{BaselineUSD: usd, BaselineAt: at, LastUSD: usd, LastSampleAt: at, Signature: signature}
 	case at.Before(cur.LastSampleAt):
 		return
+	case cur.Signature != signature && t.now().Sub(cur.LastSampleAt) > t.staleBoundLocked():
+		// The last comparable sample is already older than the staleness bound,
+		// so the account is failing closed and continuity is lost anyway: start
+		// a new measurement segment, keeping the loss measured so far.
+		carried := cur.LossUSD()
+		logger.WarnCF("broker", "Equity is now measured differently from today's baseline and the old figure is stale; re-baselining the account and keeping its loss so far",
+			map[string]any{"account": key, "old_signature": cur.Signature, "new_signature": signature, "carried_loss_usd": carried})
+		t.accounts[key] = AccountEquity{
+			BaselineUSD: usd, BaselineAt: at, LastUSD: usd, LastSampleAt: at,
+			Signature: signature, CarriedLossUSD: carried,
+		}
 	case cur.Signature != signature:
 		if t.warnedMismatch[key] != t.day {
 			if t.warnedMismatch == nil {
@@ -373,6 +398,7 @@ func (t *DailyLossTracker) Reset(reason string) error {
 	for k, e := range t.accounts {
 		e.BaselineUSD = e.LastUSD
 		e.BaselineAt = e.LastSampleAt
+		e.CarriedLossUSD = 0
 		t.accounts[k] = e
 	}
 	t.realized = 0
@@ -397,9 +423,18 @@ func (t *DailyLossTracker) syncLocked() {
 func (t *DailyLossTracker) totalLocked() float64 {
 	var drawdown float64
 	for _, e := range t.accounts {
-		drawdown += e.Drawdown()
+		drawdown += e.LossUSD()
 	}
 	return math.Max(t.realized, drawdown)
+}
+
+// staleBoundLocked is how old an account's latest sample may be before it
+// counts as stale: the armed guard's bound, else the default.
+func (t *DailyLossTracker) staleBoundLocked() time.Duration {
+	if t.guardOn && t.staleAfter > 0 {
+		return t.staleAfter
+	}
+	return defaultEquityStaleAfter
 }
 
 // rolloverLocked starts a fresh loss day: realised goes to zero, and each
@@ -429,6 +464,7 @@ func (t *DailyLossTracker) rolloverLocked() {
 		}
 		e.BaselineUSD = e.LastUSD
 		e.BaselineAt = e.LastSampleAt
+		e.CarriedLossUSD = 0
 		carried[k] = e
 	}
 	t.day = t.today()
@@ -510,6 +546,12 @@ func (t *DailyLossTracker) loadLocked() {
 		t.realized = 0
 	}
 	t.accounts = rec.Accounts
+	for k, e := range t.accounts {
+		if e.CarriedLossUSD < 0 || math.IsNaN(e.CarriedLossUSD) || math.IsInf(e.CarriedLossUSD, 0) {
+			e.CarriedLossUSD = 0
+			t.accounts[k] = e
+		}
+	}
 	t.resetAt = rec.ResetAt
 	t.resetReason = rec.ResetReason
 }

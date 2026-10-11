@@ -1,9 +1,9 @@
 # ============================================================
 # Stage 1: Build the khunquant binary
 # ============================================================
-# Go version pinned to match go.mod (1.26.7) for reproducible builds.
+# Go version pinned to match go.mod (1.26.9) for reproducible builds.
 # This ensures the builder uses exactly what CI tests.
-FROM golang:1.26.7-alpine AS builder
+FROM golang:1.26.9-alpine AS builder
 
 RUN apk add --no-cache git make
 

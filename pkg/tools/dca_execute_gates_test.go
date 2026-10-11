@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,6 +21,23 @@ type dcaGateMock struct {
 	id      string
 	last    float64
 	ordered bool
+
+	// tickers overrides the last price per symbol; with strict set a symbol
+	// that is not listed has no ticker (an unknown FX pair, say) instead of
+	// answering with last.
+	tickers map[string]float64
+	strict  bool
+	fetched []string
+	candles []ccxt.OHLCV
+
+	// What the last CreateOrder saw, and what the next one returns.
+	orders      int
+	orderType   string
+	orderSide   string
+	orderPrice  *float64
+	orderAmount float64
+	orderResp   *ccxt.Order
+	orderErr    error
 }
 
 func (m *dcaGateMock) ID() string                     { return m.id }
@@ -28,8 +46,14 @@ func (m *dcaGateMock) GetMarketStatus(context.Context, string) (broker.MarketSta
 	return broker.MarketOpen, nil
 }
 
-func (m *dcaGateMock) FetchTicker(context.Context, string) (ccxt.Ticker, error) {
+func (m *dcaGateMock) FetchTicker(_ context.Context, symbol string) (ccxt.Ticker, error) {
+	m.fetched = append(m.fetched, symbol)
 	last := m.last
+	if v, ok := m.tickers[symbol]; ok {
+		last = v
+	} else if m.strict {
+		return ccxt.Ticker{}, errors.New("no ticker for " + symbol)
+	}
 	return ccxt.Ticker{Last: &last}, nil
 }
 
@@ -38,7 +62,7 @@ func (m *dcaGateMock) FetchTickers(context.Context, []string) (map[string]ccxt.T
 }
 
 func (m *dcaGateMock) FetchOHLCV(context.Context, string, string, *int64, int) ([]ccxt.OHLCV, error) {
-	return nil, nil
+	return m.candles, nil
 }
 
 func (m *dcaGateMock) FetchOrderBook(context.Context, string, int) (ccxt.OrderBook, error) {
@@ -49,8 +73,16 @@ func (m *dcaGateMock) LoadMarkets(context.Context) (map[string]ccxt.MarketInterf
 	return nil, nil
 }
 
-func (m *dcaGateMock) CreateOrder(context.Context, string, string, string, float64, *float64, map[string]interface{}) (ccxt.Order, error) {
+func (m *dcaGateMock) CreateOrder(_ context.Context, _ string, orderType, side string, amount float64, price *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	m.ordered = true
+	m.orders++
+	m.orderType, m.orderSide, m.orderAmount, m.orderPrice = orderType, side, amount, price
+	if m.orderErr != nil {
+		return ccxt.Order{}, m.orderErr
+	}
+	if m.orderResp != nil {
+		return *m.orderResp, nil
+	}
 	id := "mock-order"
 	return ccxt.Order{Id: &id}, nil
 }
@@ -77,8 +109,9 @@ func (m *dcaGateMock) FetchMyTrades(context.Context, string, *int64, int) ([]ccx
 
 // newDCAGateFixture registers a priced mock provider under its own name (the
 // rate limiter allows 5 calls per minute per provider) and seeds an enabled
-// plan pointing at it. seedPlan's 100-quote order at a 50000 price is a
-// 100 USD notional.
+// plan pointing at it. The plan trades BTC/USDT (a USD-like quote, so no rate
+// is involved): its 100-quote order at a 50000 price is a 100 USD notional.
+// THB cases re-point the plan with setDCAPlan.
 func newDCAGateFixture(t *testing.T, providerName string) (*dca.Store, *dcaGateMock, int64) {
 	t.Helper()
 
@@ -86,6 +119,8 @@ func newDCAGateFixture(t *testing.T, providerName string) (*dca.Store, *dcaGateM
 	broker.RegisterFactory(providerName, func(*config.Config) (broker.Provider, error) {
 		return mock, nil
 	})
+	// The USD rate cache is keyed by provider ID; do not leak a rate from here.
+	t.Cleanup(broker.ResetUSDRateCache)
 
 	store := newTestDCAStore(t)
 	planID := seedPlan(t, store, "GatePlan-"+providerName, true)
@@ -95,6 +130,7 @@ func newDCAGateFixture(t *testing.T, providerName string) (*dca.Store, *dcaGateM
 		t.Fatalf("GetPlan: %v", err)
 	}
 	plan.Provider = providerName
+	plan.Symbol = "BTC/USDT"
 	if err := store.UpdatePlan(context.Background(), plan); err != nil {
 		t.Fatalf("UpdatePlan: %v", err)
 	}
@@ -163,13 +199,18 @@ func TestExecuteDCAOrder_PaperModeSimulates(t *testing.T) {
 		t.Errorf("expected the result to be marked as simulated, got: %s", result.ForUser)
 	}
 
-	// Plan statistics must stay a record of real fills only.
+	// MR-006: a paper run now leaves exactly one "skipped" row (the audit
+	// trail), but no "completed" one, so real-fill counts stay at zero.
 	count, err := store.CountExecutionsInPeriod(context.Background(), planID, "day")
 	if err != nil {
 		t.Fatalf("CountExecutionsInPeriod: %v", err)
 	}
 	if count != 0 {
-		t.Errorf("paper mode wrote %d execution row(s); expected none", count)
+		t.Errorf("paper mode produced %d completed row(s); expected none", count)
+	}
+	rows := dcaRows(t, store, planID)
+	if len(rows) != 1 || rows[0].Status != "skipped" || rows[0].ErrorMsg != dca.PaperSkipReason {
+		t.Errorf("expected one paper skipped row, got %+v", rows)
 	}
 }
 

@@ -266,6 +266,9 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 	if err := srv.ListenAndServe(); err != nil {
+		// log.Fatalf exits without running defers, so release the proactive
+		// database handle explicitly.
+		_ = apiHandler.Close()
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }

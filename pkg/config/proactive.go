@@ -307,6 +307,37 @@ func (c ProactiveConfig) OwnerRoute() (proactive.OwnerRoute, bool) {
 	}, true
 }
 
+// ValidateOwnerInput judges an owner on its own, the way `khunquant owner set`
+// and the launcher's owner form both must: all three fields are required, an
+// unrelated typo elsewhere in the proactive section is none of its business,
+// and a group chat, a non-canonical sender or a platform mismatch is refused
+// with the reason. On success it returns the normalised owner to store (channel
+// lower-cased, sender in canonical "platform:id" form).
+func ValidateOwnerInput(channel, chatID, sender string) (OwnerConfig, error) {
+	var missing []string
+	for _, f := range []struct{ name, v string }{
+		{"channel", channel}, {"chat id", chatID}, {"sender id", sender},
+	} {
+		if strings.TrimSpace(f.v) == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return OwnerConfig{}, fmt.Errorf("channel, chat id and sender id must all be set (missing: %s)",
+			strings.Join(missing, ", "))
+	}
+	candidate := defaultProactiveConfig()
+	candidate.Owner = OwnerConfig{Channel: channel, ChatID: chatID, SenderID: sender}
+	if err := ValidateProactive(candidate); err != nil {
+		return OwnerConfig{}, err
+	}
+	route, ok := candidate.OwnerRoute()
+	if !ok {
+		return OwnerConfig{}, errors.New("channel, chat id and sender id must all be set and valid")
+	}
+	return OwnerConfig{Channel: route.Channel, ChatID: route.ChatID, SenderID: route.SenderID}, nil
+}
+
 // EffectiveModes is what proactive components must apply. Compute it with
 // ProactiveConfig.Effective; never read the raw fields.
 type EffectiveModes struct {

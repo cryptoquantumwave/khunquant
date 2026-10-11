@@ -463,3 +463,26 @@ func TestProactive_EnvOverride(t *testing.T) {
 		t.Fatalf("env override disturbed other fields: %+v", p)
 	}
 }
+
+func TestValidateOwnerInput(t *testing.T) {
+	got, err := ValidateOwnerInput(" Telegram ", " 123456789 ", " telegram:123456789 ")
+	if err != nil {
+		t.Fatalf("valid owner refused: %v", err)
+	}
+	if got != validOwner() {
+		t.Errorf("normalised owner = %+v, want %+v", got, validOwner())
+	}
+
+	for name, tc := range map[string]struct{ channel, chat, sender, want string }{
+		"group chat":        {"telegram", "-100123", "telegram:123456789", "direct chat"},
+		"username sender":   {"telegram", "123456789", "telegram:alice", "numeric user id"},
+		"not canonical":     {"telegram", "123456789", "123456789", "canonical"},
+		"platform mismatch": {"telegram", "123456789", "discord:123456789", "does not match"},
+		"missing channel":   {"", "123456789", "telegram:123456789", "missing: channel"},
+		"missing both":      {"telegram", "", " ", "missing: chat id, sender id"},
+	} {
+		if _, err := ValidateOwnerInput(tc.channel, tc.chat, tc.sender); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want it to mention %q", name, err, tc.want)
+		}
+	}
+}

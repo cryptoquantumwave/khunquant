@@ -7,7 +7,6 @@
 package owner
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -104,24 +103,18 @@ func newSetCommand(d deps) *cobra.Command {
 			}
 
 			// Judge the owner on its own: an unrelated typo elsewhere in the
-			// section must not stop the operator from fixing the owner.
-			candidate := config.DefaultConfig().Proactive
-			candidate.Owner = config.OwnerConfig{Channel: channel, ChatID: chatID, SenderID: sender}
-			if err := config.ValidateProactive(candidate); err != nil {
+			// section must not stop the operator from fixing the owner. The
+			// launcher's owner form uses the same helper.
+			owner, err := config.ValidateOwnerInput(channel, chatID, sender)
+			if err != nil {
 				return fmt.Errorf("owner not saved:\n%w", err)
-			}
-			route, ok := candidate.OwnerRoute()
-			if !ok {
-				return errors.New("owner not saved: channel, chat id and sender must all be set")
 			}
 
 			cfg, path, err := loadConfig(d)
 			if err != nil {
 				return err
 			}
-			cfg.Proactive.Owner = config.OwnerConfig{
-				Channel: route.Channel, ChatID: route.ChatID, SenderID: route.SenderID,
-			}
+			cfg.Proactive.Owner = owner
 			if err := d.save(path, cfg); err != nil {
 				return fmt.Errorf("error saving config: %w", err)
 			}

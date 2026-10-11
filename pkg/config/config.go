@@ -122,6 +122,7 @@ type Config struct {
 	Exchanges   ExchangesConfig   `json:"exchanges"             yaml:"exchanges,omitempty"`
 	TradingRisk TradingRiskConfig `json:"trading_risk,omitempty" yaml:"-"`
 	Heartbeat   HeartbeatConfig   `json:"heartbeat"             yaml:"-"`
+	Proactive   ProactiveConfig   `json:"proactive"             yaml:"-"`
 	Devices     DevicesConfig     `json:"devices"               yaml:"-"`
 	Debug       DebugConfig       `json:"debug"                 yaml:"-"`
 	Voice       VoiceConfig       `json:"voice"                 yaml:"-"`
@@ -1456,6 +1457,9 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Never fails the load; see reportProactive.
+	reportProactive(cfg.Proactive)
+
 	// Migrate legacy channel config fields to new unified structures.
 	// Still unconditional: these are idempotent and predate versioning, and
 	// are deliberately not step-gated (see migration.go).
@@ -1532,6 +1536,8 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
 		return nil, err
 	}
+
+	reportProactive(cfg.Proactive)
 
 	cfg.migrateChannelConfigs()
 

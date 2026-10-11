@@ -695,6 +695,7 @@ func DefaultConfig() *Config {
 			Enabled:  true,
 			Interval: 30,
 		},
+		Proactive: defaultProactiveConfig(),
 		Devices: DevicesConfig{
 			Enabled:    false,
 			MonitorUSB: true,

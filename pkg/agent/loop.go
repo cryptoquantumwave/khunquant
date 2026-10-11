@@ -2483,6 +2483,7 @@ func (al *AgentLoop) handleCommand(
 		Channel:  msg.Channel,
 		ChatID:   msg.ChatID,
 		SenderID: msg.SenderID,
+		PeerKind: msg.Peer.Kind,
 		Text:     msg.Content,
 		Reply: func(text string) error {
 			commandReply = text

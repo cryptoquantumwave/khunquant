@@ -4,6 +4,7 @@
 # Excludes: cmd/*, web/frontend, TUI, hardware stubs, Tier 2 adapters (LLM providers, channel adapters, exchanges)
 
 github.com/cryptoquantumwave/khunquant/pkg/agent
+github.com/cryptoquantumwave/khunquant/pkg/attention
 github.com/cryptoquantumwave/khunquant/pkg/auth
 github.com/cryptoquantumwave/khunquant/pkg/bus
 github.com/cryptoquantumwave/khunquant/pkg/channels

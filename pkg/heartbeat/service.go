@@ -46,8 +46,16 @@ type HeartbeatService struct {
 	stopChan  chan struct{}
 }
 
-// NewHeartbeatService creates a new heartbeat service
-func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *HeartbeatService {
+// NewHeartbeatService creates a new heartbeat service. stateMgr is the shared
+// state manager (normally the agent loop's), so the service sees the last
+// channel as it is now rather than as it was when the service was built. A nil
+// manager is allowed and reads as "no last channel".
+func NewHeartbeatService(
+	workspace string,
+	intervalMinutes int,
+	enabled bool,
+	stateMgr *state.Manager,
+) *HeartbeatService {
 	// Apply minimum interval
 	if intervalMinutes < minIntervalMinutes && intervalMinutes != 0 {
 		intervalMinutes = minIntervalMinutes
@@ -61,8 +69,24 @@ func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *H
 		workspace: workspace,
 		interval:  time.Duration(intervalMinutes) * time.Minute,
 		enabled:   enabled,
-		state:     state.NewManager(workspace),
+		state:     stateMgr,
 	}
+}
+
+// lastChannel returns the last active channel from the shared state manager,
+// or "" when the service was built without one.
+func (hs *HeartbeatService) lastChannel() string {
+	if hs.state == nil {
+		return ""
+	}
+	return hs.state.GetLastChannel()
+}
+
+// LastDestination is the channel and chat a heartbeat would be addressed to
+// right now, resolved from the shared state manager on every call. Both are
+// empty when nothing usable has been recorded.
+func (hs *HeartbeatService) LastDestination() (channel, chatID string) {
+	return hs.parseLastChannel(hs.lastChannel())
 }
 
 // SetBus sets the message bus for delivering heartbeat results.
@@ -174,7 +198,7 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	}
 
 	// Get last channel info for context
-	lastChannel := hs.state.GetLastChannel()
+	lastChannel := hs.lastChannel()
 	channel, chatID := hs.parseLastChannel(lastChannel)
 
 	// Debug log for channel resolution
@@ -323,7 +347,7 @@ func (hs *HeartbeatService) sendResponse(response string) {
 	}
 
 	// Get last channel from state
-	lastChannel := hs.state.GetLastChannel()
+	lastChannel := hs.lastChannel()
 	if lastChannel == "" {
 		hs.logInfof("No last channel recorded, heartbeat result not sent")
 		return

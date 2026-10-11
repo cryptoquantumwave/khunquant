@@ -915,6 +915,15 @@ func inferMediaType(filename, contentType string) string {
 	return "file"
 }
 
+// State returns the loop's persistent state manager (last channel and chat).
+// Services that need to read "where did the user last talk to us" must share
+// this instance rather than build their own: a Manager reads the file only when
+// it is constructed, so a private copy goes stale. It is safe for concurrent
+// use. It is nil when the registry has no default agent.
+func (al *AgentLoop) State() *state.Manager {
+	return al.state
+}
+
 // RecordLastChannel records the last active channel for this workspace.
 // This uses the atomic state save mechanism to prevent data loss on crash.
 func (al *AgentLoop) RecordLastChannel(channel string) error {

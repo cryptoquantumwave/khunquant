@@ -653,10 +653,54 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 			continue
 		}
 
+		// A proactive message (pkg/notify) is appended to the session as an
+		// assistant message and can follow another assistant message. Several
+		// providers insist on alternating roles, so consecutive plain-text
+		// assistant messages become one. A message that carries tool calls is
+		// never merged: its tool results must stay paired with it.
+		if n := len(final); n > 0 && mergeableAssistantText(final[n-1]) && mergeableAssistantText(msg) {
+			final[n-1] = mergeAssistantText(final[n-1], msg)
+			continue
+		}
+
 		final = append(final, msg)
 	}
 
+	// A session can open with a proactive assistant message (pkg/notify writes
+	// it into a session that has no history yet). Chat APIs differ in how they
+	// treat a conversation that does not start with a user turn: Anthropic
+	// rejects it, Gemini-style backends can too. Fixing it here, once, keeps
+	// every provider adapter out of it. A leading assistant message that
+	// carries tool calls never gets here: the first pass drops it.
+	if len(final) > 0 && final[0].Role == "assistant" && len(final[0].ToolCalls) == 0 {
+		final = append([]providers.Message{{Role: "user", Content: providers.ConversationStartPlaceholder}}, final...)
+	}
+
 	return final
+}
+
+// mergeableAssistantText reports whether m is an assistant message that is
+// nothing but text (no tool calls, no media), the only kind that may be merged
+// with a neighbour.
+func mergeableAssistantText(m providers.Message) bool {
+	return m.Role == "assistant" && len(m.ToolCalls) == 0 && len(m.Media) == 0 && m.ToolCallID == ""
+}
+
+// mergeAssistantText joins two text-only assistant messages with a blank line.
+func mergeAssistantText(a, b providers.Message) providers.Message {
+	a.Content = joinNonEmpty(a.Content, b.Content)
+	a.ReasoningContent = joinNonEmpty(a.ReasoningContent, b.ReasoningContent)
+	return a
+}
+
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "\n\n" + b
 }
 
 func (cb *ContextBuilder) AddToolResult(

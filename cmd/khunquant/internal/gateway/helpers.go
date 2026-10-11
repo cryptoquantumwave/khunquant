@@ -49,6 +49,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/pid"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -70,6 +71,7 @@ type gatewayServices struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
+	NotifyService    *notify.Service // nil when proactive is off or the service could not be built; nil means delivery is disabled
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

@@ -22,6 +22,10 @@ type (
 	CacheControl           = protocoltypes.CacheControl
 )
 
+// ConversationStartPlaceholder is the user turn that opens a history which would
+// otherwise start with an assistant message. See protocoltypes.
+const ConversationStartPlaceholder = protocoltypes.ConversationStartPlaceholder
+
 type LLMProvider interface {
 	Chat(
 		ctx context.Context,

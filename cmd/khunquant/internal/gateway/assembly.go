@@ -144,7 +144,7 @@ func (p phase) sayf(format string, args ...any) {
 
 // buildServices constructs and starts every gateway service for cfg, in this
 // order: loss guard, cron, heartbeat, media store, channel manager (and agent
-// loop wiring, voice), HTTP server, routes, channels, devices.
+// loop wiring, voice), HTTP server, routes, channels, notify, devices.
 //
 // On error it returns the services that were already started, not nil, so the
 // caller can keep tracking and later stop them.
@@ -270,12 +270,20 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 			cfg.Gateway.Host, cfg.Gateway.Port)
 	}
 
+	// Owner delivery. It needs the channel manager (to send) and the agent
+	// loop (to write the message into the owner's session), so it comes after
+	// both. A failure to build it leaves delivery disabled and the gateway up.
+	s.NotifyService = buildNotifyService(d, s.ChannelManager)
+
 	// Device service, on the shared state manager.
 	s.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
 	}, d.State)
 	s.DeviceService.SetBus(msgBus)
+	if s.NotifyService != nil {
+		s.DeviceService.SetNotifier(deviceNotifier{svc: s.NotifyService})
+	}
 	if err := s.DeviceService.Start(context.Background()); err != nil {
 		if d.Reload {
 			logger.WarnCF("device", "Failed to restart device service", map[string]any{"error": err.Error()})
@@ -335,7 +343,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: loss guard, channels, devices, heartbeat, cron, media store.
+// resources. Order: loss guard, channels, devices, notify, heartbeat, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
 func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
@@ -350,6 +358,9 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.DeviceService != nil {
 		s.DeviceService.Stop()
 	}
+	// After the device service, its last caller. Drains queued session writes.
+	stopNotifyService(s.NotifyService)
+	s.NotifyService = nil
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}

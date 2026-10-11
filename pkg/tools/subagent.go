@@ -27,6 +27,10 @@ type SubTurnConfig struct {
 	Timeout         time.Duration // 0 = use default (5 minutes)
 	MaxContextRunes int           // 0 = auto, -1 = no limit, >0 = explicit limit
 	TargetAgentID   string        // for delegate tool: target a specific named agent
+
+	// NoPendingDelivery: the caller delivers an Async result itself, so it must
+	// not also be queued on the parent turn (see agent.SubTurnConfig).
+	NoPendingDelivery bool
 }
 
 type SubagentTask struct {

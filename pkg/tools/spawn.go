@@ -120,16 +120,32 @@ Task: %s`, label, task)
 		// travels through the turn tree, not through this context.
 		spawnCtx := context.WithoutCancel(ctx)
 
+		cfg := SubTurnConfig{
+			Model:        t.defaultModel,
+			Tools:        nil, // Will inherit from parent via context
+			SystemPrompt: systemPrompt,
+			MaxTokens:    t.maxTokens,
+			Temperature:  t.temperature,
+			Async:        true, // Async execution
+			// The task runs to completion within its own timeout, whether or
+			// not the turn that started it is still running: it is work the
+			// user was told about. An explicit cancel still stops it.
+			Critical: true,
+			// The callback is the one way the result reaches the user; queueing
+			// it on the parent turn as well would deliver it twice.
+			NoPendingDelivery: true,
+		}
+		if agentID != "" {
+			// Run as the named agent, with its model and temperature: a model
+			// of the spawning agent's would override the target's own.
+			cfg.TargetAgentID = agentID
+			cfg.Model = ""
+			cfg.Temperature = 0
+		}
+
 		// Launch async sub-turn in goroutine
 		go func() {
-			result, err := t.spawner.SpawnSubTurn(spawnCtx, SubTurnConfig{
-				Model:        t.defaultModel,
-				Tools:        nil, // Will inherit from parent via context
-				SystemPrompt: systemPrompt,
-				MaxTokens:    t.maxTokens,
-				Temperature:  t.temperature,
-				Async:        true, // Async execution
-			})
+			result, err := t.spawner.SpawnSubTurn(spawnCtx, cfg)
 
 			if err != nil {
 				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)

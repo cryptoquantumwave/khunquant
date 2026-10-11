@@ -1081,6 +1081,99 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 	return route.SessionKey
 }
 
+// deliverAsyncToolResult turns the result of a tool that finished in the
+// background (spawn) into something the user sees. It is the only path by which
+// such a result is delivered.
+//
+//   - a failure is reported straight to the origin chat;
+//   - a result with no content publishes nothing (it is logged);
+//   - otherwise the result re-enters the loop as an inbound system message,
+//     which processSystemMessage turns into a follow-up turn.
+//
+// A result whose origin is internal (cli, ...) has nowhere to go: it is logged
+// at WARN rather than dropped without a trace.
+func (al *AgentLoop) deliverAsyncToolResult(opts processOptions, tc providers.ToolCall, result *tools.ToolResult) {
+	label := asyncTaskLabel(tc)
+	internal := constants.IsInternalChannel(opts.Channel)
+
+	// Send ForUser content directly to the user (immediate feedback),
+	// mirroring the synchronous tool execution path.
+	if !result.Silent && result.ForUser != "" {
+		outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer outCancel()
+		_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
+			Channel: opts.Channel,
+			ChatID:  opts.ChatID,
+			Content: result.ForUser,
+		})
+	}
+
+	// A failure: the task could not run, or ended in error (an explicit cancel
+	// included - the user is told the task did not finish).
+	if result.Err != nil {
+		friendly := providers.FriendlyError(result.Err)
+		if internal {
+			logger.WarnCF("agent", "Background task failed; origin is internal, nothing sent to a user",
+				map[string]any{
+					"task": label, "tool": tc.Name, "channel": opts.Channel,
+					"outcome": "failed", "error": friendly,
+				})
+			return
+		}
+		outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer outCancel()
+		_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
+			Channel: opts.Channel,
+			ChatID:  opts.ChatID,
+			Content: fmt.Sprintf("⚠️ Background task '%s' failed: %s", label, friendly),
+		})
+		return
+	}
+
+	// Determine content for the agent loop (ForLLM or error).
+	content := result.ContentForLLM()
+	if content == "" {
+		logger.WarnCF("subturn", "subturn completed with no output",
+			map[string]any{"task": label, "tool": tc.Name, "channel": opts.Channel})
+		return
+	}
+	if internal {
+		logger.WarnCF("agent", "Background task finished; origin is internal, nothing sent to a user",
+			map[string]any{
+				"task": label, "tool": tc.Name, "channel": opts.Channel,
+				"outcome": "completed", "content_len": len(content),
+			})
+		return
+	}
+
+	logger.InfoCF("agent", "Async tool completed, publishing result",
+		map[string]any{
+			"tool":        tc.Name,
+			"content_len": len(content),
+			"channel":     opts.Channel,
+		})
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pubCancel()
+	_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
+		Channel:  "system",
+		SenderID: fmt.Sprintf("async:%s", tc.Name),
+		ChatID:   fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID),
+		Content:  content,
+	})
+}
+
+// asyncTaskLabel names a background task for the user: the label the model
+// gave it, else the start of its task, else the tool's name.
+func asyncTaskLabel(tc providers.ToolCall) string {
+	for _, key := range []string{"label", "task"} {
+		if v, _ := tc.Arguments[key].(string); strings.TrimSpace(v) != "" {
+			return utils.Truncate(strings.TrimSpace(v), 60)
+		}
+	}
+	return tc.Name
+}
+
 func (al *AgentLoop) processSystemMessage(
 	ctx context.Context,
 	msg bus.InboundMessage,
@@ -2017,39 +2110,7 @@ func (al *AgentLoop) runLLMIteration(
 				// as an inbound system message so processSystemMessage routes it
 				// back to the user via the normal agent loop.
 				asyncCallback := func(_ context.Context, result *tools.ToolResult) {
-					// Send ForUser content directly to the user (immediate feedback),
-					// mirroring the synchronous tool execution path.
-					if !result.Silent && result.ForUser != "" {
-						outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer outCancel()
-						_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-							Channel: opts.Channel,
-							ChatID:  opts.ChatID,
-							Content: result.ForUser,
-						})
-					}
-
-					// Determine content for the agent loop (ForLLM or error).
-					content := result.ContentForLLM()
-					if content == "" {
-						return
-					}
-
-					logger.InfoCF("agent", "Async tool completed, publishing result",
-						map[string]any{
-							"tool":        tc.Name,
-							"content_len": len(content),
-							"channel":     opts.Channel,
-						})
-
-					pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer pubCancel()
-					_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
-						Channel:  "system",
-						SenderID: fmt.Sprintf("async:%s", tc.Name),
-						ChatID:   fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID),
-						Content:  content,
-					})
+					al.deliverAsyncToolResult(opts, tc, result)
 				}
 
 				toolResult := agent.Tools.ExecuteWithContext(

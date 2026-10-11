@@ -718,6 +718,21 @@ func TestCancelTurnsForSession_StopsRootTurn(t *testing.T) {
 	}
 }
 
+// awaitSpawnFailureNotice waits for the "Background task ... failed" notice a
+// cancelled spawn publishes to the user's chat.
+func awaitSpawnFailureNotice(t *testing.T, msgBus *bus.MessageBus) {
+	t.Helper()
+	select {
+	case msg := <-msgBus.OutboundChan():
+		if msg.ChatID != "chat-1" || !strings.Contains(msg.Content, "Background task") ||
+			!strings.Contains(msg.Content, "failed") {
+			t.Errorf("spawn reported %+v, want a failure notice for the cancelled task", msg)
+		}
+	case <-time.After(testWait):
+		t.Fatal("the cancelled spawn never reported back")
+	}
+}
+
 // A sub-turn's context is built from context.Background, so that it can
 // outlive its parent's normal return. Cancelling the parent's context does not
 // reach it; CancelAllTurns must, through the turn tree.
@@ -813,17 +828,10 @@ func TestCancelAllTurns_ReachesSubTurns(t *testing.T) {
 			t.Errorf("parent turn returned (%q, %v), want context.Canceled", res.response, res.err)
 		}
 
-		// The spawn's goroutine reports its failure as a system message; that
+		// The spawn's goroutine reports its failure to the user's chat; that
 		// is the last thing it does, so waiting for it leaves nothing of this
 		// test running into the next one.
-		select {
-		case msg := <-msgBus.InboundChan():
-			if msg.Channel != "system" || !strings.Contains(msg.Content, "context canceled") {
-				t.Errorf("spawn reported %+v, want a system message about the cancellation", msg)
-			}
-		case <-time.After(testWait):
-			t.Fatal("the cancelled spawn never reported back")
-		}
+		awaitSpawnFailureNotice(t, msgBus)
 	})
 
 	// The case a stop command meets most often: the turn that spawned the
@@ -885,11 +893,7 @@ func TestCancelAllTurns_ReachesSubTurns(t *testing.T) {
 		}
 
 		// As above: wait for the spawn's goroutine to report and finish.
-		select {
-		case <-msgBus.InboundChan():
-		case <-time.After(testWait):
-			t.Fatal("the cancelled spawn never reported back")
-		}
+		awaitSpawnFailureNotice(t, msgBus)
 		if n := cancel(al); n != 0 {
 			t.Errorf("a second cancel reported %d turn(s) stopped with nothing left running, want 0", n)
 		}

@@ -124,7 +124,18 @@ type SubTurnConfig struct {
 	// for callers with no agent of their own (the package-level SpawnSubTurn).
 	AgentID string
 
-	// Can be extended with temperature, topP, etc.
+	// Temperature overrides the sampling temperature of the child. Zero means
+	// "not set": the child uses the temperature of the agent it is built from.
+	Temperature float64
+
+	// NoPendingDelivery stops an Async result from also being queued on the
+	// parent's pendingResults (and so from being appended to the parent's final
+	// response). It is for callers that deliver the result themselves, such as
+	// the spawn tool's callback: delivering it twice would tell the user twice.
+	// It does not change the session-lock rule for Async children.
+	NoPendingDelivery bool
+
+	// Can be extended with topP, etc.
 }
 
 // ====================== Sub-turn Events (Aligned with EventBus) ======================
@@ -222,6 +233,9 @@ func (s *AgentLoopSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnCo
 		Critical:        cfg.Critical,
 		Timeout:         cfg.Timeout,
 		MaxContextRunes: cfg.MaxContextRunes,
+		Temperature:     cfg.Temperature,
+
+		NoPendingDelivery: cfg.NoPendingDelivery,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -374,7 +388,7 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 		}
 
 		// Result Delivery Strategy (Async vs Sync)
-		if cfg.Async {
+		if cfg.Async && !cfg.NoPendingDelivery {
 			deliverSubTurnResult(parentTS, childID, result)
 		}
 
@@ -477,6 +491,16 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	}
 }
 
+// isSubTurnSpawningTool reports whether the named tool starts sub-turns. A child
+// is never given one.
+func isSubTurnSpawningTool(name string) bool {
+	switch name {
+	case tools.NameSpawn, tools.NameDelegate, "subagent":
+		return true
+	}
+	return false
+}
+
 // runTurn builds a temporary AgentInstance from SubTurnConfig and delegates to
 // the real agent loop. The child's ephemeral session is used for history so it
 // never pollutes the parent session.
@@ -526,6 +550,11 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 		toolsToRegister = parentAgent.Tools.GetAll()
 	}
 	for _, t := range toolsToRegister {
+		// A child cannot start children of its own, whichever way its tools
+		// were chosen: depth stays at 1.
+		if isSubTurnSpawningTool(t.Name()) {
+			continue
+		}
 		toolRegistry.Register(t)
 	}
 
@@ -547,6 +576,9 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 	}
 	if childAgent.MaxTokens == 0 {
 		childAgent.MaxTokens = parentAgent.MaxTokens
+	}
+	if cfg.Temperature != 0 {
+		childAgent.Temperature = cfg.Temperature
 	}
 
 	// Resolve MaxContextRunes configuration

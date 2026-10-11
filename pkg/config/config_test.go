@@ -492,7 +492,7 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 		"set_price_alert", "set_indicator_alert", "transfer_funds",
 		"config_encrypt_keys", "create_dca_plan", "list_dca_plans",
 		"update_dca_plan", "delete_dca_plan", "execute_dca_order",
-		"get_dca_history", "get_dca_summary", "get_pnl_summary", "get_pnl_detail",
+		"get_dca_history", "get_dca_summary", "get_pnl_summary", "get_pnl_detail", "get_profile", "update_profile",
 	}
 	for _, name := range toolNames {
 		// with zero-value config all named tools should return false (not enabled)

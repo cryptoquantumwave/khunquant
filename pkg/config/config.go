@@ -1282,6 +1282,10 @@ type ToolsConfig struct {
 	GetPnLSummary ToolConfig `json:"get_pnl_summary" envPrefix:"KHUNQUANT_TOOLS_GET_PNL_SUMMARY_"`
 	GetPnLDetail  ToolConfig `json:"get_pnl_detail"  envPrefix:"KHUNQUANT_TOOLS_GET_PNL_DETAIL_"`
 
+	// User profile (typed preferences)
+	GetProfile    ToolConfig `json:"get_profile"    envPrefix:"KHUNQUANT_TOOLS_GET_PROFILE_"`
+	UpdateProfile ToolConfig `json:"update_profile" envPrefix:"KHUNQUANT_TOOLS_UPDATE_PROFILE_"`
+
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
 
@@ -1953,6 +1957,10 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.GetPnLSummary.Enabled
 	case "get_pnl_detail":
 		return t.GetPnLDetail.Enabled
+	case "get_profile":
+		return t.GetProfile.Enabled
+	case "update_profile":
+		return t.UpdateProfile.Enabled
 	default:
 		return true
 	}

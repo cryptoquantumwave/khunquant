@@ -167,6 +167,14 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	p := phase{reload: d.Reload}
 	starting := p.pick("starting", "restarting")
 
+	// The shared proactive database: opened once per process, closed at
+	// shutdown only. A failure here is not fatal; the services that need it
+	// report their own absence.
+	if _, err := proactiveDB(d); err != nil {
+		logger.ErrorCF("gateway", "Shared proactive database unavailable",
+			map[string]any{"error": err.Error()})
+	}
+
 	s.LossGuard = lossGuardStarter(cfg)
 
 	// Cron tool and service.

@@ -17,6 +17,7 @@ github.com/cryptoquantumwave/khunquant/pkg/fileutil
 github.com/cryptoquantumwave/khunquant/pkg/health
 github.com/cryptoquantumwave/khunquant/pkg/heartbeat
 github.com/cryptoquantumwave/khunquant/pkg/identity
+github.com/cryptoquantumwave/khunquant/pkg/intent
 github.com/cryptoquantumwave/khunquant/pkg/logger
 github.com/cryptoquantumwave/khunquant/pkg/mcp
 github.com/cryptoquantumwave/khunquant/pkg/media

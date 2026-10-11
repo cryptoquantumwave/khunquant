@@ -196,10 +196,19 @@ func registerSharedTools(
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
+	// The profile tools share one store (the user has one profile) and are
+	// built once here, so they reach both the CLI agent and the gateway and are
+	// rebuilt with the new config on every reload. See profile_wiring.go.
+	profile := profileTools(cfg, openProfileStore(cfg))
+
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok {
 			continue
+		}
+
+		for _, pt := range profile {
+			agent.Tools.Register(pt)
 		}
 
 		if cfg.Tools.IsToolEnabled("web") {

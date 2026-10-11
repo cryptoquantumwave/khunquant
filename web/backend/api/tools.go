@@ -575,6 +575,20 @@ var toolCatalog = []toolCatalogEntry{
 		Category:    tools.CatPnL,
 		ConfigKey:   tools.NameGetPnLDetail,
 	},
+
+	// User profile
+	{
+		Name:        tools.NameGetProfile,
+		Description: tools.DescGetProfile,
+		Category:    tools.CatProfile,
+		ConfigKey:   tools.NameGetProfile,
+	},
+	{
+		Name:        tools.NameUpdateProfile,
+		Description: tools.DescUpdateProfile,
+		Category:    tools.CatProfile,
+		ConfigKey:   tools.NameUpdateProfile,
+	},
 }
 
 func (h *Handler) registerToolRoutes(mux *http.ServeMux) {
@@ -857,6 +871,10 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.ManageEarnPosition.Enabled = enabled
 	case tools.NameGetPnLSummary:
 		cfg.Tools.GetPnLSummary.Enabled = enabled
+	case tools.NameGetProfile:
+		cfg.Tools.GetProfile.Enabled = enabled
+	case tools.NameUpdateProfile:
+		cfg.Tools.UpdateProfile.Enabled = enabled
 	case tools.NameGetPnLDetail:
 		cfg.Tools.GetPnLDetail.Enabled = enabled
 	default:

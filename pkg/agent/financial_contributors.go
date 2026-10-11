@@ -8,6 +8,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 )
@@ -19,7 +20,13 @@ import (
 // Parameters are passed explicitly (not via cfg) so this function can be called
 // without depending on any newly-added config fields — the caller (instance.go) extracts
 // them from cfg.Agents.Defaults.
-func buildFinancialContributors(workspace string, maxAssets, maxDCA, maxDN int) []FinancialContributor {
+//
+// profileStore is the owner's profile store (nil to leave the profile line out).
+func buildFinancialContributors(
+	workspace string,
+	maxAssets, maxDCA, maxDN int,
+	profileStore *intent.Store,
+) []FinancialContributor {
 	var contributors []FinancialContributor
 
 	// Portfolio snapshot contributor.
@@ -46,8 +53,44 @@ func buildFinancialContributors(workspace string, maxAssets, maxDCA, maxDN int) 
 		contributors = append(contributors, &dnContributor{store: dnStore, maxPlans: maxDN})
 	}
 
+	// Owner profile contributor: silent until a profile version is stored.
+	if profileStore != nil {
+		contributors = append(contributors, &profileContributor{store: profileStore})
+	}
+
 	return contributors
 }
+
+// --- Profile contributor ---
+
+// profileContributor renders the owner's typed profile as one line. It
+// contributes nothing until at least one version has been stored, so a clean
+// install's prompt is byte-identical to one built without it. The store belongs
+// to the shared database handle, so Close does not close it.
+type profileContributor struct {
+	store *intent.Store
+}
+
+func (p *profileContributor) Name() string { return "profile" }
+
+func (p *profileContributor) Section(ctx context.Context) (string, error) {
+	v, ok, err := p.store.Latest(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read profile: %w", err)
+	}
+	if !ok {
+		return "", nil
+	}
+	// PromptLine re-checks every field it prints and leaves out the free-text
+	// ones, whatever the stored row holds.
+	line := v.Profile.PromptLine()
+	if line == "" {
+		return "", nil
+	}
+	return line + "\n", nil
+}
+
+func (p *profileContributor) Close() error { return nil }
 
 // --- Portfolio contributor ---
 

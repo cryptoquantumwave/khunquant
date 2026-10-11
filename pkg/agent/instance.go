@@ -186,6 +186,7 @@ func NewAgentInstance(
 			defaults.MaxContextAssets,
 			defaults.MaxContextDCAPlans,
 			defaults.MaxContextDNPlans,
+			openProfileStore(cfg),
 		)
 		if len(contributors) > 0 {
 			ttl := time.Duration(defaults.FinancialContextTTLMinutes) * time.Minute

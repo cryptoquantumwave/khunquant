@@ -130,6 +130,7 @@ var toolClasses = map[string]Class{
 	NameGetDCAHistory:                 ClassRead,
 	NameGetDCASummary:                 ClassRead,
 	NameListDeltaNeutralPlans:         ClassRead,
+	NameGetProfile:                    ClassRead,
 	NameGetDeltaNeutralPlan:           ClassRead,
 	NameGetDeltaNeutralSummary:        ClassRead,
 	NameGetDeltaNeutralHistory:        ClassRead,
@@ -149,7 +150,11 @@ var toolClasses = map[string]Class{
 	NameAppendFile:   ClassLocalState,
 	NameTakeSnapshot: ClassLocalState,
 
-	// Things that run later.
+	// Things that run later. update_profile is here although it only writes a
+	// row: the profile sets the quiet hours and notification budget that govern
+	// every later background message, so a background turn must never be able to
+	// change it (the autonomous ceiling denies this class).
+	NameUpdateProfile:           ClassAutomation,
 	NameCron:                    ClassAutomation,
 	NameSetPriceAlert:           ClassAutomation,
 	NameSetIndicatorAlert:       ClassAutomation,

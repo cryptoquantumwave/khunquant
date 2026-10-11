@@ -91,6 +91,10 @@ const (
 	NameGetPnLSummary = "get_pnl_summary"
 	NameGetPnLDetail  = "get_pnl_detail"
 
+	// User profile (typed preferences: time zone, active hours, budget, ...)
+	NameGetProfile    = "get_profile"
+	NameUpdateProfile = "update_profile"
+
 	// DCA — Dollar Cost Averaging (Track E)
 	NameCreateDCAPlan   = "create_dca_plan"
 	NameListDCAPlans    = "list_dca_plans"
@@ -141,6 +145,7 @@ const (
 	CatDCA           = "dca"
 	CatPnL           = "pnl"
 	CatDeltaNeutral  = "delta_neutral"
+	CatProfile       = "profile"
 	CatOptions       = "options"
 )
 
@@ -220,6 +225,10 @@ const (
 	// Earn tool descriptions
 	DescEarnOverview       = "View all flexible earn products available on an exchange and current earn positions held. Lists APY, minimum subscription amounts, and auto-subscription status. Provider may be 'binance', 'okx', or empty/'all' to query all supported exchanges. Positions require API keys; products may be public."
 	DescManageEarnPosition = "Subscribe to, redeem from, or configure auto-subscription on a flexible earn product. Actions: 'subscribe' (invest amount with optional auto-renewal), 'redeem' (withdraw amount or all), 'set_auto_subscribe' (enable/disable auto-renewal). Approval-mode: confirm=false shows dry-run review, confirm=true executes the transaction."
+
+	// User profile tool descriptions
+	DescGetProfile    = "Show the owner's structured profile: time zone, active hours, language, risk tolerance, allocation targets, assets to avoid, daily notification budget and digest time, with its version and who last changed it."
+	DescUpdateProfile = "Change the owner's structured profile: only the fields given change, and fields listed in reset return to their default. Owner only; never available to scheduled or background turns."
 
 	// Options tool descriptions (single-leg only)
 	DescOptionQuote       = "Fetch market data for options contracts including price, greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. Requires underlying symbol, expiry date (yyyy-MM-dd), strike price, and option type (CALL/PUT)."

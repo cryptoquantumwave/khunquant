@@ -364,7 +364,10 @@
     },
     "cron": {
       "enabled": true,
-      "exec_timeout_minutes": 5
+      "exec_timeout_minutes": 5,
+      "workers": 4,
+      "misfire_grace_minutes": 60,
+      "job_timeout_minutes": 10
     },
     "mcp": {
       "enabled": false,

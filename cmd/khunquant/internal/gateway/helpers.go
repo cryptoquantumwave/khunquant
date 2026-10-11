@@ -845,6 +845,8 @@ func setupCronTool(
 
 	// Create cron service
 	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService.SetOptions(cronOptionsFromConfig(cfg))
+	cronService.SetOnMissed(missedJobNotifier(msgBus))
 
 	// Create and register CronTool if enabled
 	var cronTool *tools.CronTool
@@ -880,21 +882,23 @@ func setupCronTool(
 
 	// Set onJob handler — alert, DCA, and DN jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
-	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
+	// The ctx carries the per-run job timeout and is cancelled when the cron service
+	// gives up waiting at stop; every handler uses it instead of context.Background().
+	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
 		if strings.HasPrefix(job.Name, "price_alert:") {
-			return handlePriceAlertJob(context.Background(), job, cfg, cronService, msgBus)
+			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
 		if strings.HasPrefix(job.Name, "indicator_alert:") {
-			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
+			return handleIndicatorAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
 		if strings.HasPrefix(job.Name, "dca:") && dcaStore != nil {
-			return handleDCAAutoJob(context.Background(), job, cfg, dcaStore, cronTool)
+			return handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
 		}
 		if strings.HasPrefix(job.Name, "dn:") && dnStore != nil {
-			return handleDeltaNeutralMonitorJob(context.Background(), job, cfg, dnStore, cronTool, msgBus)
+			return handleDeltaNeutralMonitorJob(ctx, job, cfg, dnStore, cronTool, msgBus)
 		}
 		if cronTool != nil {
-			return cronTool.ExecuteJob(context.Background(), job), nil
+			return cronTool.ExecuteJob(ctx, job)
 		}
 		return "", fmt.Errorf("no executor configured for job %q", job.Name)
 	})

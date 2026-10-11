@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ type stubJobExecutor struct {
 	lastChan        string
 	lastChatID      string
 	lastOrigin      string // tool-call origin carried on the context
+	lastNoHistory   bool
 	publishedResp   string
 	publishedChan   string
 	publishedChatID string
@@ -32,8 +34,9 @@ type stubJobExecutor struct {
 func (s *stubJobExecutor) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
-	_ bool,
+	noHistory bool,
 ) (string, error) {
+	s.lastNoHistory = noHistory
 	s.lastPrompt = content
 	s.lastKey = sessionKey
 	s.lastChan = channel
@@ -200,8 +203,8 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -228,14 +231,17 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send me a poem"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
-	// Each execution uses a unique session key "cron-{jobID}-{timestamp}" so
-	// conversation history does not accumulate across runs (upstream 36b9693d3).
-	if !strings.HasPrefix(executor.lastKey, "cron-job-1-") {
-		t.Fatalf("sessionKey = %q, want prefix cron-job-1-", executor.lastKey)
+	// Cron turns run in an isolated, job-scoped session; the "agent:" prefix is
+	// what makes the agent loop honour the key.
+	if executor.lastKey != "agent:main:cron:job-1" {
+		t.Fatalf("sessionKey = %q, want agent:main:cron:job-1", executor.lastKey)
+	}
+	if !executor.lastNoHistory {
+		t.Fatal("cron turns must not load session history")
 	}
 	if executor.lastChan != "telegram" || executor.lastChatID != "chat-1" {
 		t.Fatalf("executor target = %s/%s, want telegram/chat-1", executor.lastChan, executor.lastChatID)
@@ -272,8 +278,8 @@ func TestCronTool_ExecuteJobTagsOriginCron(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "run the scheduled task"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	if executor.lastOrigin == "" {
@@ -293,8 +299,8 @@ func TestCronTool_ExecuteJobSkipsEmptyAgentResponse(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "say nothing"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	if executor.publishedResp != "" {
@@ -311,8 +317,8 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send weather"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	if executor.publishedResp != "" {
@@ -331,8 +337,8 @@ func TestCronTool_ExecuteJobDirectiveAddsPromptPrefix(t *testing.T) {
 	job.Payload.Message = originalMsg
 	job.Payload.Type = "directive"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	wantPrompt := "Please execute the following directive and provide the result:\n\n" + originalMsg
@@ -355,8 +361,8 @@ func TestCronTool_ExecuteJobDirectiveWithDeliverRoutesToAgent(t *testing.T) {
 	job.Payload.Type = "directive"
 	job.Payload.Deliver = true
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	if executor.lastPrompt == "" {
@@ -387,8 +393,8 @@ func TestCronTool_ExecuteJobDeliverMessageDirectlyToBus(t *testing.T) {
 	job.Payload.Message = "hello world"
 	job.Payload.Deliver = true
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	if executor.lastPrompt != "" {
@@ -414,8 +420,8 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "echo cron-test-ok"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -444,9 +450,12 @@ func TestCronTool_ExecuteJobReturnsErrorWithoutPublish(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "do something"
 
-	got := tool.ExecuteJob(context.Background(), job)
-	if !strings.Contains(got, "agent failure") {
-		t.Fatalf("ExecuteJob() = %q, want error message", got)
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "agent failure") {
+		t.Fatalf("ExecuteJob() = %q, %v, want an error carrying the agent failure", got, err)
+	}
+	if !errors.Is(err, executor.err) {
+		t.Fatalf("the returned error must unwrap to the agent error, got %v", err)
 	}
 
 	if executor.publishedResp != "" {

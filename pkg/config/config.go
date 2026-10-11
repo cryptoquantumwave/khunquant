@@ -1094,6 +1094,17 @@ type CronToolsConfig struct {
 	ToolConfig            `    envPrefix:"KHUNQUANT_TOOLS_CRON_"`
 	ExecTimeoutMinutes    int      `                                 env:"KHUNQUANT_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"     json:"exec_timeout_minutes"` // 0 means no timeout
 	CommandAllowedRemotes []string `                                 env:"KHUNQUANT_TOOLS_CRON_COMMAND_ALLOWED_REMOTES" json:"command_allowed_remotes"`
+	// Workers bounds how many scheduled jobs run concurrently (<=0 selects 4).
+	// At most one LLM-backed job runs at a time regardless of this value.
+	Workers int `env:"KHUNQUANT_TOOLS_CRON_WORKERS" json:"workers"`
+	// MisfireGraceMinutes is how late a one-shot job may start after the assistant
+	// was offline at its due time and still run. Older ones are marked missed,
+	// disabled and reported once. 0 means no grace.
+	MisfireGraceMinutes int `env:"KHUNQUANT_TOOLS_CRON_MISFIRE_GRACE_MINUTES" json:"misfire_grace_minutes"`
+	// JobTimeoutMinutes caps a single scheduled run, whatever its kind. 0 means no
+	// timeout. ExecTimeoutMinutes above is separate: it only bounds the shell
+	// command of a command job.
+	JobTimeoutMinutes int `env:"KHUNQUANT_TOOLS_CRON_JOB_TIMEOUT_MINUTES" json:"job_timeout_minutes"`
 }
 
 type ExecConfig struct {

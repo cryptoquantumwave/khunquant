@@ -79,8 +79,8 @@ func TestCronTool_ExecuteJobRunsEachJobAsItsOwnTurn(t *testing.T) {
 		job.Payload.Channel = "telegram"
 		job.Payload.To = "chat-1"
 		job.Payload.Message = "report"
-		if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-			t.Fatalf("ExecuteJob() = %q, want ok", got)
+		if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+			t.Fatalf("ExecuteJob() = %q, %v, want ok", got, err)
 		}
 		return executor.processTurnID, executor.publishTurnID
 	}
@@ -104,7 +104,7 @@ func TestCronTool_ExecuteJobRunsEachJobAsItsOwnTurn(t *testing.T) {
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "report"
-	tool.ExecuteJob(WithTurnID(context.Background(), "outer-turn"), job)
+	_, _ = tool.ExecuteJob(WithTurnID(context.Background(), "outer-turn"), job)
 	if executor.processTurnID == "outer-turn" || executor.processTurnID == "" {
 		t.Errorf("job ran as turn %q, want a fresh ID of its own", executor.processTurnID)
 	}

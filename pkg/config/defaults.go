@@ -431,7 +431,10 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				ExecTimeoutMinutes: 5,
+				ExecTimeoutMinutes:  5,
+				Workers:             4,
+				MisfireGraceMinutes: 60,
+				JobTimeoutMinutes:   10,
 			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{

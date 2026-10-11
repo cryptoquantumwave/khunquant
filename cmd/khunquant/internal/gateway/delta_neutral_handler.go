@@ -507,7 +507,7 @@ func handleDeltaNeutralMonitorJob(
 
 	// If cronTool is available, escalate to LLM for agent explanation.
 	if cronTool != nil {
-		return cronTool.ExecuteJob(ctx, job), nil
+		return cronTool.ExecuteJob(ctx, job)
 	}
 
 	// Alert delivered but no agent explanation.

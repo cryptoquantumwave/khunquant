@@ -556,8 +556,8 @@ func TestCronTurn_MessageToolSuppressionStillWorks(t *testing.T) {
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "CRON_SAME_CHAT report"
-	if got := cronTool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob = %q, want ok", got)
+	if got, err := cronTool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob = %q, %v, want ok", got, err)
 	}
 	if got, want := drain(), []string{"chat-1: cron says hi"}; !equalStrings(got, want) {
 		t.Errorf("job that messaged its own chat published %q, want only %q "+
@@ -568,8 +568,8 @@ func TestCronTurn_MessageToolSuppressionStillWorks(t *testing.T) {
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "CRON_OTHER_CHAT report"
-	if got := cronTool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob = %q, want ok", got)
+	if got, err := cronTool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
+		t.Fatalf("ExecuteJob = %q, %v, want ok", got, err)
 	}
 	want := []string{"other-chat: note to someone else", "chat-1: cron final other chat"}
 	if got := drain(); !equalStrings(got, want) {

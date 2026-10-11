@@ -107,5 +107,5 @@ func handleDCAAutoJob(
 	if cronTool == nil {
 		return "", fmt.Errorf("dca-gate: no cronTool configured for plan %d", planID)
 	}
-	return cronTool.ExecuteJob(ctx, job), nil
+	return cronTool.ExecuteJob(ctx, job)
 }

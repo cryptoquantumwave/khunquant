@@ -232,6 +232,12 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 	return NormalizeAgentID(r.resolveDefaultAgentID())
 }
 
+// DefaultAgentID returns the normalized ID of the agent that handles messages no
+// binding claims. It is the same agent ResolveRoute falls back to.
+func (r *RouteResolver) DefaultAgentID() string {
+	return NormalizeAgentID(r.resolveDefaultAgentID())
+}
+
 func (r *RouteResolver) resolveDefaultAgentID() string {
 	agents := r.cfg.Agents.List
 	if len(agents) == 0 {

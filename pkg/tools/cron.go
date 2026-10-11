@@ -11,9 +11,46 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/routing"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
+
+// llmJobSem admits one LLM-backed scheduled job at a time. It is package-level
+// so it also holds across a config reload, which builds a new CronTool while a
+// job from the previous one may still be running. Deterministic handlers never
+// touch it and keep using the remaining cron workers.
+var llmJobSem = make(chan struct{}, 1)
+
+// acquireLLMSlot waits for the LLM-job slot or ctx cancellation.
+func acquireLLMSlot(ctx context.Context) error {
+	select {
+	case llmJobSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseLLMSlot() { <-llmJobSem }
+
+// sessionResetter is implemented by executors that can empty a session. It is
+// optional: an executor without it simply leaves the cron session to grow.
+type sessionResetter interface {
+	ResetSession(ctx context.Context, sessionKey string) error
+}
+
+// jobError is the error ExecuteJob returns for a failed agent turn. Its message
+// is the friendly, classified text (what the job result used to carry), and it
+// still unwraps to the underlying error so callers can match on it.
+type jobError struct {
+	msg string
+	err error
+}
+
+func (e *jobError) Error() string { return e.msg }
+func (e *jobError) Unwrap() error { return e.err }
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
@@ -112,7 +149,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"no_history": map[string]any{
 				"type":        "boolean",
-				"description": "If true, each run is stateless — no session history is loaded or accumulated between executions. Default: false.",
+				"description": "Accepted for compatibility. Scheduled agent runs are always stateless: each run starts without session history and does not see earlier runs or the main conversation.",
 			},
 		},
 		"required": []string{"action"},
@@ -337,8 +374,11 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 	return SilentResult(fmt.Sprintf("Cron job '%s' %s", updatedJob.Name, status))
 }
 
-// ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+// ExecuteJob executes a cron job through the agent. A non-nil error means the
+// run failed; the cron service records it as the job's LastError. Failures are
+// deliberately not pushed to the user's chat (see
+// TestCronTool_ExecuteJobReturnsErrorWithoutPublish).
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -361,7 +401,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 				ChatID:  chatID,
 				Content: fmt.Sprintf("Scheduled command '%s' skipped: command execution is disabled", job.Payload.Command),
 			})
-			return "ok"
+			return "ok", nil
 		}
 
 		args := map[string]any{
@@ -386,9 +426,9 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			ChatID:  chatID,
 			Content: output,
 		}); err != nil {
-			return err.Error()
+			return "", err
 		}
-		return "ok"
+		return "ok", nil
 	}
 
 	// Determine message generation strategy
@@ -405,15 +445,18 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			ChatID:  chatID,
 			Content: job.Payload.Message,
 		}); err != nil {
-			return err.Error()
+			return "", err
 		}
-		return "ok"
+		return "ok", nil
 	}
 
-	// For deliver=false OR directive mode, process through agent.
-	// Use a unique key per execution ("cron-{jobID}-{timestamp}") so conversation
-	// history does not accumulate across runs of the same job (upstream 36b9693d3).
-	sessionKey := fmt.Sprintf("cron-%s-%d", job.ID, time.Now().UnixMilli())
+	// For deliver=false OR directive mode, process through the agent, in a session
+	// of its own ("agent:<defaultAgent>:cron:<jobID>"). The "agent:" prefix is what
+	// makes the agent loop honour the key; anything else falls back to the routed
+	// main session and cron output would land in the user's conversation. History
+	// is not loaded for these turns (see noHistory below), so runs of one job do
+	// not accumulate context.
+	sessionKey := t.cronSessionKey(job.ID)
 
 	// Prepare the prompt based on type
 	prompt := job.Payload.Message
@@ -434,27 +477,50 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	ctx = WithToolOrigin(ctx, OriginCron)
 	ctx = WithTurnID(ctx, NewTurnID()) // PublishResponseIfNeeded below asks about this turn after it has returned
 
-	// Call agent with the prepared prompt
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		prompt,
-		sessionKey,
-		channel,
-		chatID,
-		job.Payload.NoHistory,
-	)
+	// At most one LLM-backed job at a time; wait for the slot honouring ctx so a
+	// job timeout or service stop is not stuck behind a long-running turn.
+	if err := acquireLLMSlot(ctx); err != nil {
+		return "", &jobError{msg: fmt.Sprintf("waiting for another scheduled agent job to finish: %v", err), err: err}
+	}
+
+	// Call agent with the prepared prompt. Every cron turn is stateless
+	// (noHistory=true) regardless of Payload.NoHistory: the session key is stable
+	// per job, so loading its history would accumulate context across runs.
+	// The session is emptied first, so it only ever holds the most recent run
+	// (kept after the run for debugging) instead of growing without bound.
+	response, err := func() (string, error) {
+		defer releaseLLMSlot()
+		if r, ok := t.executor.(sessionResetter); ok {
+			if rerr := r.ResetSession(ctx, sessionKey); rerr != nil {
+				logger.WarnCF("cron", "failed to reset the job's session before the run", map[string]any{
+					"job_id": job.ID, "session_key": sessionKey, "error": rerr.Error(),
+				})
+			}
+		}
+		return t.executor.ProcessDirectWithChannel(ctx, prompt, sessionKey, channel, chatID, true)
+	}()
 	if err != nil {
-		// Return a friendly, classified message as the job result instead of a
+		// Return a friendly, classified message as the job error instead of a
 		// raw error dump. We deliberately do NOT publish to the channel here —
 		// scheduled-job failures are surfaced via the job result, not pushed to
 		// the user's chat (see TestCronTool_ExecuteJobReturnsErrorWithoutPublish).
-		return providers.FriendlyError(err)
+		return "", &jobError{msg: providers.FriendlyError(err), err: err}
 	}
 
 	if response != "" {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
-	return "ok"
+	return "ok", nil
+}
+
+// cronSessionKey is the isolated session for a job's agent turns, built from the
+// same default agent ID the router falls back to.
+func (t *CronTool) cronSessionKey(jobID string) string {
+	agentID := routing.DefaultAgentID
+	if t.cfg != nil {
+		agentID = routing.NewRouteResolver(t.cfg).DefaultAgentID()
+	}
+	return fmt.Sprintf("agent:%s:cron:%s", agentID, jobID)
 }
 
 func (t *CronTool) getJob(ctx context.Context, args map[string]any) *ToolResult {

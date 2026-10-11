@@ -474,7 +474,7 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 	cfg := &ToolsConfig{}
 	toolNames := []string{
 		"web", "cron", "exec", "skills", "media_cleanup",
-		"append_file", "edit_file", "find_skills", "i2c", "install_skill",
+		"append_file", "edit_file", "find_skills", "i2c", "install_skill", "load_skill",
 		"list_dir", "message", "read_file", "spawn", "spi",
 		"subagent", "web_fetch", "send_file", "write_file", "mcp",
 		"get_assets_list", "get_total_value", "list_portfolios",

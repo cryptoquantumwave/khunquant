@@ -492,6 +492,9 @@
     "install_skill": {
       "enabled": true
     },
+    "load_skill": {
+      "enabled": true
+    },
     "list_dir": {
       "enabled": true
     },

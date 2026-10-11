@@ -491,6 +491,9 @@ func DefaultConfig() *Config {
 			InstallSkill: ToolConfig{
 				Enabled: true,
 			},
+			LoadSkill: ToolConfig{
+				Enabled: true, // read-only; light prompts list skills and rely on it
+			},
 			ListDir: ToolConfig{
 				Enabled: true,
 			},

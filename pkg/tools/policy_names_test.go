@@ -54,7 +54,7 @@ func knownToolNames() map[string]bool {
 	names := []string{
 		NameReadFile, NameWriteFile, NameListDir, NameEditFile, NameAppendFile,
 		NameExec, NameCron, NameWebSearch, NameWebFetch, NameMessage, NameSendFile,
-		NameFindSkills, NameInstallSkill, NameSpawn, NameDelegate, NameSubagent,
+		NameFindSkills, NameInstallSkill, NameLoadSkill, NameSpawn, NameDelegate, NameSubagent,
 		NameGetAssetsList, NameGetTotalValue, NameListPortfolios, NameWebullReconnect,
 		NameTakeSnapshot, NameQuerySnapshots, NameSnapshotSummary, NameDeleteSnapshots,
 		NameI2C, NameSPI, NameSerial, NameToolSearchRegex, NameToolSearchBM25,

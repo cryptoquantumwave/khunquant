@@ -114,6 +114,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   tools.NameInstallSkill,
 	},
 	{
+		Name:        tools.NameLoadSkill,
+		Description: tools.DescLoadSkill,
+		Category:    tools.CatSkills,
+		ConfigKey:   tools.NameLoadSkill,
+	},
+	{
 		Name:        tools.NameSpawn,
 		Description: tools.DescSpawn,
 		Category:    tools.CatAgents,
@@ -726,6 +732,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Skills.Enabled = true
 		}
+	case tools.NameLoadSkill:
+		cfg.Tools.LoadSkill.Enabled = enabled
 	case tools.NameSpawn:
 		cfg.Tools.Spawn.Enabled = enabled
 		if enabled {

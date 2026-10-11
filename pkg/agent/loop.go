@@ -72,7 +72,8 @@ type processOptions struct {
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
 	UserMessage             string              // User message content (may include prefix)
-	ForcedSkills            []string            // Skills explicitly requested for this message
+	ForcedSkills            []string            // Skills to carry in full in a light prompt (PromptFull already has them all)
+	PromptMode              PromptMode          // PromptFull (default: user turns) or PromptLight (background turns)
 	SystemPromptOverride    string              // Override the default system prompt (Used by SubTurns)
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -84,6 +85,14 @@ type processOptions struct {
 	NoHistory               bool                // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                // If true, skip the steering poll at loop start (used by Continue)
 	SkipAddUserMessage      bool                // If true, skip adding UserMessage to session history
+}
+
+// promptBuildOptions is the system prompt selection for a turn. Every
+// BuildMessages call of the turn, the context-usage estimate and the budget
+// check must use the same value, or an estimate based on one prompt would be
+// compared against a request built with another.
+func (o processOptions) promptBuildOptions() BuildOptions {
+	return BuildOptions{Mode: o.PromptMode, ForcedSkills: o.ForcedSkills}
 }
 
 type continuationTarget struct {
@@ -295,6 +304,14 @@ func registerSharedTools(
 			if install_skills_enable {
 				agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
 			}
+		}
+
+		// load_skill reads an installed skill through the loader the system
+		// prompt lists skills from. It does not need the skill registries, so
+		// it is not gated on the "skills" master switch: a light prompt names
+		// skills the model can only read through this tool.
+		if cfg.Tools.IsToolEnabled("load_skill") && agent.ContextBuilder != nil {
+			agent.Tools.Register(tools.NewLoadSkillTool(agent.ContextBuilder.SkillsLoader()))
 		}
 
 		// Spawn and spawn_status tools share a SubagentManager.
@@ -1454,13 +1471,14 @@ func (al *AgentLoop) runAgentLoop(
 			rootTS.setHistorySnapshot(len(history))
 		}
 	}
-	messages := agent.ContextBuilder.BuildMessages(
+	messages := agent.ContextBuilder.BuildMessagesWithOptions(
 		history,
 		summary,
 		opts.UserMessage,
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.promptBuildOptions(),
 	)
 
 	// Resolve media:// refs: images→base64 data URLs, non-images→local paths in content
@@ -1482,9 +1500,10 @@ func (al *AgentLoop) runAgentLoop(
 			})
 			newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 			newSummary := agent.Sessions.GetSummary(opts.SessionKey)
-			messages = agent.ContextBuilder.BuildMessages(
+			messages = agent.ContextBuilder.BuildMessagesWithOptions(
 				newHistory, newSummary, opts.UserMessage,
 				opts.Media, opts.Channel, opts.ChatID,
+				opts.promptBuildOptions(),
 			)
 			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 		}
@@ -1574,7 +1593,7 @@ func (al *AgentLoop) runAgentLoop(
 			Channel:      opts.Channel,
 			ChatID:       opts.ChatID,
 			Content:      finalContent,
-			ContextUsage: computeContextUsageFor(ctx, agent, opts.SessionKey),
+			ContextUsage: computeContextUsageFor(ctx, agent, opts.SessionKey, opts.promptBuildOptions()),
 		})
 	}
 
@@ -1963,9 +1982,10 @@ func (al *AgentLoop) runLLMIteration(
 				})
 				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
-				messages = agent.ContextBuilder.BuildMessages(
+				messages = agent.ContextBuilder.BuildMessagesWithOptions(
 					newHistory, newSummary, "",
 					nil, opts.Channel, opts.ChatID,
+					opts.promptBuildOptions(),
 				)
 				continue
 			}
@@ -2599,7 +2619,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage := computeContextUsage(agent, opts.SessionKey)
+			usage := computeContextUsageFor(context.Background(), agent, opts.SessionKey, opts.promptBuildOptions())
 			if usage == nil {
 				return nil
 			}

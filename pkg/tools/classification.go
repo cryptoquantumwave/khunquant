@@ -83,6 +83,7 @@ var toolClasses = map[string]Class{
 	NameWebSearch:  ClassRead,
 	NameWebFetch:   ClassRead,
 	NameFindSkills: ClassRead,
+	NameLoadSkill:  ClassRead,
 	// Discovery tools only promote hidden tools into the definition list; the
 	// promoted tools are classified (or denied as unknown) on their own.
 	NameToolSearchRegex: ClassRead,

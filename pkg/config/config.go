@@ -1175,6 +1175,7 @@ type ToolsConfig struct {
 	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"KHUNQUANT_TOOLS_FIND_SKILLS_"`
 	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"KHUNQUANT_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"KHUNQUANT_TOOLS_INSTALL_SKILL_"`
+	LoadSkill       ToolConfig         `json:"load_skill"                                               envPrefix:"KHUNQUANT_TOOLS_LOAD_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"KHUNQUANT_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"                                                  envPrefix:"KHUNQUANT_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"KHUNQUANT_TOOLS_READ_FILE_"`
@@ -1782,6 +1783,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.I2C.Enabled
 	case "install_skill":
 		return t.InstallSkill.Enabled
+	case "load_skill":
+		return t.LoadSkill.Enabled
 	case "list_dir":
 		return t.ListDir.Enabled
 	case "message":

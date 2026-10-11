@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
 // ToolPolicy declares the guarantees a tool must satisfy before it runs.
@@ -189,6 +191,12 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
 	if !turnMayCall(ctx, name) {
+		if ToolOrigin(ctx) == OriginProactive {
+			return policyRefusal(name, fmt.Sprintf(
+				"tool %q is not permitted in an autonomous (%s) turn. A proactive turn can read data and "+
+					"declare its decision with %s; it cannot message, write, trade or change anything.",
+				name, OriginProactive, NameRespondProactive))
+		}
 		return policyRefusal(name, fmt.Sprintf(
 			"tool %q is not permitted in an autonomous (%s) turn. Turns the assistant starts by itself can "+
 				"read, notify and write workspace files only; trading, funds, scheduling, system and "+
@@ -229,6 +237,12 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	// Approval runs last: a call that would be refused anyway must not cost the
 	// operator an approval they then cannot use.
 	if needsApproval {
+		// An approval request is a message to the operator's chat. A proactive
+		// turn delivers nothing, and nobody is waiting on it to answer one.
+		if origin == OriginProactive {
+			return policyRefusal(name, fmt.Sprintf(
+				"%s requires operator approval, which a proactive turn cannot ask for.", name))
+		}
 		return checkApproval(ctx, name, args)
 	}
 
@@ -254,6 +268,16 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 // Like the rows, the ceiling does nothing until SetPolicyConfig has armed it.
 func turnMayCall(ctx context.Context, name string) bool {
 	origin := ToolOrigin(ctx)
+
+	// A proactive turn is decided before the shortcuts below, which would give
+	// it notify and local-state tools, and before the armed check: the origin
+	// exists only inside agent.RunProactiveTurn, so no embedder that never armed
+	// the policy can be surprised, and a ceiling that depends on a setup call
+	// someone may have skipped is not one to trust for a turn nobody watches.
+	if origin == OriginProactive {
+		return proactiveTurnMayCall(ctx, name)
+	}
+
 	if !IsAutonomousOrigin(origin) {
 		return true
 	}
@@ -277,6 +301,43 @@ func turnMayCall(ctx context.Context, name string) bool {
 		return name == NameExecuteDCAOrder && isDCAJobScope(ctx)
 	}
 	return false
+}
+
+// proactiveTurnMayCall is the ceiling of a proactive turn: every read-class tool
+// (bar web_fetch and the two discovery tools, below) and respond_proactive,
+// nothing else. No notify tool (the runtime delivers, the
+// turn only decides), no local-state tool (it writes no file and no memory), no
+// spawn, no trade, funds, automation or system tool, and no MCP or otherwise
+// unclassified tool.
+//
+// The legacy heartbeat kind additionally keeps take_snapshot, because the
+// heartbeat checklist records a snapshot, and web_fetch, which the legacy
+// heartbeat can call today and whose prompt is the owner's own checklist. Any
+// other kind, or none, gets the stricter set.
+//
+// web_fetch takes a model-chosen URL, and a proactive turn's candidate text can
+// come from outside the process: with it, whatever the read tools returned
+// could be sent to an address the text chose. web_search stays. A new read-class
+// tool that sends model-chosen data to a third party belongs in the exclusions
+// here.
+func proactiveTurnMayCall(ctx context.Context, name string) bool {
+	if name == NameRespondProactive {
+		return true
+	}
+	// The discovery tools are built over the agent's shared registry, not the
+	// turn's clone, and promote tools on it. They would also only promote MCP
+	// tools, which this ceiling denies. A read-only turn must not change shared
+	// state, so they are out although they are read-class.
+	if name == NameToolSearchRegex || name == NameToolSearchBM25 {
+		return false
+	}
+	if name == NameWebFetch {
+		return ProactiveTurnKind(ctx) == proactive.TurnHeartbeatLegacy
+	}
+	if name == NameTakeSnapshot && ProactiveTurnKind(ctx) == proactive.TurnHeartbeatLegacy {
+		return true
+	}
+	return ClassOf(name) == ClassRead
 }
 
 func describeOrigin(origin string) string {

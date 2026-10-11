@@ -85,7 +85,33 @@ type processOptions struct {
 	NoHistory               bool                // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                // If true, skip the steering poll at loop start (used by Continue)
 	SkipAddUserMessage      bool                // If true, skip adding UserMessage to session history
+
+	// The fields below are set by RunProactiveTurn only; their zero values are
+	// the behaviour of every other turn.
+
+	// ExtraTools are registered for this turn only, on a clone of the agent's
+	// registry. Every registry use of the turn goes through the clone.
+	ExtraTools []tools.Tool
+	// ModelOverride pins the model tier for every iteration of the turn,
+	// instead of letting the router score the message.
+	ModelOverride modelOverride
+	// NoOutbound makes the turn publish nothing: no tool output, media,
+	// reasoning, interim text, retry notice or async-task result reaches the
+	// bus, whatever a tool returns, and the turn does not record its channel as
+	// the last active one. The turn's caller decides what, if anything, is said.
+	NoOutbound bool
+	// Report, when set, receives the provider usage and the model of the turn.
+	Report *turnReport
 }
+
+// modelOverride selects the model tier of a turn.
+type modelOverride int
+
+const (
+	modelRouted  modelOverride = iota // default: the router decides (user turns)
+	modelPrimary                      // the agent's normal model, whatever the router would say
+	modelLight                        // the light model when the agent has one, else the normal model
+)
 
 // promptBuildOptions is the system prompt selection for a turn. Every
 // BuildMessages call of the turn, the context-usage estimate and the budget
@@ -1147,6 +1173,14 @@ func (al *AgentLoop) deliverAsyncToolResult(
 	label := asyncTaskLabel(tc)
 	internal := constants.IsInternalChannel(opts.Channel)
 
+	// A turn that delivers nothing also does not announce what a background
+	// task it started produced: not to the user, and not as a follow-up turn.
+	if opts.NoOutbound {
+		logger.WarnCF("agent", "Background task finished in a turn that delivers nothing; result dropped",
+			map[string]any{"task": label, "tool": tc.Name, "channel": opts.Channel})
+		return
+	}
+
 	// Send ForUser content directly to the user (immediate feedback),
 	// mirroring the synchronous tool execution path.
 	if !result.Silent && result.ForUser != "" {
@@ -1352,6 +1386,20 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	// A turn with tools of its own runs on a per-turn copy of the agent whose
+	// registry is a clone with those tools added. The shared registry never
+	// sees them, and every agent.Tools use below - definitions, execution, the
+	// TTL tick, the context estimate - reaches the clone without a parameter
+	// having to be threaded through.
+	if len(opts.ExtraTools) > 0 {
+		turnAgent := *agent
+		turnAgent.Tools = agent.Tools.Clone()
+		for _, tool := range opts.ExtraTools {
+			turnAgent.Tools.Register(tool)
+		}
+		agent = &turnAgent
+	}
+
 	// Check if we're already inside a SubTurn (context already has a turnState).
 	// If so, reuse it instead of creating a new root turnState.
 	// This prevents turnState hierarchy corruption when SubTurns recursively call runAgentLoop.
@@ -1458,7 +1506,7 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	// 0. Record last channel for heartbeat notifications (skip internal channels and cli)
-	if opts.Channel != "" && opts.ChatID != "" {
+	if opts.Channel != "" && opts.ChatID != "" && !opts.NoOutbound {
 		if !constants.IsInternalChannel(opts.Channel) {
 			channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 			if err := al.RecordLastChannel(channelKey); err != nil {
@@ -1744,7 +1792,7 @@ func (al *AgentLoop) runLLMIteration(
 	// selectCandidates evaluates routing once and the decision is sticky for
 	// all tool-follow-up iterations within the same turn so that a multi-step
 	// tool chain doesn't switch models mid-way through.
-	activeCandidates, activeModel, usedLight := al.selectCandidates(agent, opts.UserMessage, messages)
+	activeCandidates, activeModel, usedLight := al.selectTurnCandidates(agent, opts, messages)
 	activeProvider := agent.Provider
 	if usedLight && agent.LightProvider != nil {
 		activeProvider = agent.LightProvider
@@ -1849,6 +1897,10 @@ func (al *AgentLoop) runLLMIteration(
 			}
 		}
 
+		// The model that answered: the candidate the fallback chain settled on,
+		// else the active one.
+		calledModel := activeModel
+
 		callLLM := func() (*providers.LLMResponse, error) {
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
@@ -1884,6 +1936,9 @@ func (al *AgentLoop) runLLMIteration(
 						})
 					}
 					return nil, fbErr
+				}
+				if fbResult.Model != "" {
+					calledModel = fbResult.Model
 				}
 				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 					logger.InfoCF(
@@ -1964,6 +2019,13 @@ func (al *AgentLoop) runLLMIteration(
 				strings.Contains(errMsg, "prompt is too long") ||
 				strings.Contains(errMsg, "request too large"))
 
+			// A turn whose own context is done (its deadline passed, or it was
+			// cancelled) cannot be helped by trying again, and the backoff below
+			// is not interruptible.
+			if ctx.Err() != nil {
+				break
+			}
+
 			if isTimeoutError && retry < maxRetries {
 				backoff := time.Duration(retry+1) * 5 * time.Second
 				logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
@@ -1985,7 +2047,7 @@ func (al *AgentLoop) runLLMIteration(
 					},
 				)
 
-				if retry == 0 && !constants.IsInternalChannel(opts.Channel) {
+				if retry == 0 && !constants.IsInternalChannel(opts.Channel) && !opts.NoOutbound {
 					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 						Channel: opts.Channel,
 						ChatID:  opts.ChatID,
@@ -2037,6 +2099,10 @@ func (al *AgentLoop) runLLMIteration(
 			return "", iteration, false, fmt.Errorf("LLM call failed after retries: %w", classified)
 		}
 
+		if opts.Report != nil {
+			opts.Report.add(response.Usage, calledModel)
+		}
+
 		// Save finishReason to turnState for SubTurn truncation detection
 		if ts := turnStateFromContext(ctx); ts != nil {
 			ts.SetLastFinishReason(response.FinishReason)
@@ -2052,18 +2118,20 @@ func (al *AgentLoop) runLLMIteration(
 		// one without that cancellation, or the last reasoning of every turn
 		// would be dropped. Each bounds itself with its own short timeout.
 		detachedCtx := context.WithoutCancel(ctx)
-		go al.handleReasoning(
-			detachedCtx,
-			reasoningContent,
-			opts.Channel,
-			al.targetReasoningChannelID(opts.Channel),
-		)
-		// For the pico channel, also publish the reasoning as a "thought" message
-		// so the web UI can render it in a collapsible box.  This is best-effort
-		// and independent of the per-channel reasoning-channel-ID path above
-		// (which no-ops for pico because targetReasoningChannelID is empty).
-		if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
-			go al.publishPicoReasoning(detachedCtx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+		if !opts.NoOutbound {
+			go al.handleReasoning(
+				detachedCtx,
+				reasoningContent,
+				opts.Channel,
+				al.targetReasoningChannelID(opts.Channel),
+			)
+			// For the pico channel, also publish the reasoning as a "thought" message
+			// so the web UI can render it in a collapsible box.  This is best-effort
+			// and independent of the per-channel reasoning-channel-ID path above
+			// (which no-ops for pico because targetReasoningChannelID is empty).
+			if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
+				go al.publishPicoReasoning(detachedCtx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+			}
 		}
 
 		logger.DebugCF("agent", "LLM response",
@@ -2077,7 +2145,8 @@ func (al *AgentLoop) runLLMIteration(
 				"channel":        opts.Channel,
 			})
 
-		if al.bus != nil && opts.Channel == "pico" && len(response.ToolCalls) > 0 && opts.AllowInterimPicoPublish {
+		if al.bus != nil && opts.Channel == "pico" && len(response.ToolCalls) > 0 && opts.AllowInterimPicoPublish &&
+			!opts.NoOutbound {
 			if strings.TrimSpace(response.Content) != "" {
 				outCtx, outCancel := context.WithTimeout(ctx, 3*time.Second)
 				err := al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
@@ -2242,12 +2311,14 @@ func (al *AgentLoop) runLLMIteration(
 
 		// Process results in original order (send to user, save to session)
 		for _, r := range agentResults {
-			if !r.result.ResponseHandled {
+			// A turn that delivers nothing cannot have had its request satisfied
+			// by a tool's delivery, whatever the tool claims.
+			if !r.result.ResponseHandled || opts.NoOutbound {
 				allResponsesHandled = false
 			}
 
 			// Send ForUser content to user immediately if not Silent
-			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse {
+			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse && !opts.NoOutbound {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: opts.Channel,
 					ChatID:  opts.ChatID,
@@ -2262,7 +2333,7 @@ func (al *AgentLoop) runLLMIteration(
 
 			// If tool returned media refs, publish them as outbound media only when the
 			// tool explicitly marked the user-visible delivery as already handled.
-			if len(r.result.Media) > 0 {
+			if len(r.result.Media) > 0 && !opts.NoOutbound {
 				outboundMedia := al.buildOutboundMediaMessage(opts.Channel, opts.ChatID, r.result.Media)
 				if r.result.ResponseHandled {
 					if al.channelManager != nil {
@@ -2380,6 +2451,29 @@ func (al *AgentLoop) selectCandidates(
 			"threshold":   agent.Router.Threshold(),
 		})
 	return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel()), true
+}
+
+// selectTurnCandidates is selectCandidates for a turn that may pin its model
+// tier. Turns that do not (ModelOverride unset) are routed exactly as before.
+func (al *AgentLoop) selectTurnCandidates(
+	agent *AgentInstance,
+	opts processOptions,
+	history []providers.Message,
+) (candidates []providers.FallbackCandidate, model string, usedLight bool) {
+	switch opts.ModelOverride {
+	case modelLight:
+		if len(agent.LightCandidates) > 0 && agent.LightProvider != nil {
+			fallback := agent.Model
+			if agent.Router != nil {
+				fallback = agent.Router.LightModel()
+			}
+			return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, fallback), true
+		}
+		fallthrough
+	case modelPrimary:
+		return agent.Candidates, resolvedCandidateModel(agent.Candidates, agent.Model), false
+	}
+	return al.selectCandidates(agent, opts.UserMessage, history)
 }
 
 // GetStartupInfo returns information about loaded tools and skills for logging.

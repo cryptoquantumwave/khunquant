@@ -95,6 +95,10 @@ const (
 	NameGetProfile    = "get_profile"
 	NameUpdateProfile = "update_profile"
 
+	// Proactive turns. respond_proactive is registered per turn on a clone of
+	// the agent's registry and never globally, so it has no catalog entry.
+	NameRespondProactive = "respond_proactive"
+
 	// DCA — Dollar Cost Averaging (Track E)
 	NameCreateDCAPlan   = "create_dca_plan"
 	NameListDCAPlans    = "list_dca_plans"

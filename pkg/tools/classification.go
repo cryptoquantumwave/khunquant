@@ -143,6 +143,11 @@ var toolClasses = map[string]Class{
 	NameMessage:                      ClassNotify,
 	NameSendFile:                     ClassNotify,
 	NameRenderDeltaNeutralYieldChart: ClassNotify,
+	// Declares what a proactive turn wants to tell the owner. It sends nothing
+	// itself - the runtime delivers - but "tell the user something" is its
+	// meaning, so it is classified with the tools that do. Only a proactive turn
+	// is given it (a per-turn registry), and it refuses any other origin.
+	NameRespondProactive: ClassNotify,
 
 	// Workspace writes.
 	NameWriteFile:    ClassLocalState,

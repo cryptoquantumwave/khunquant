@@ -318,6 +318,11 @@ type Decision struct {
 	Question     string // for ask
 	ProposalRef  string // for propose (Phase 3)
 	CandidateIDs []string
+	// DedupKey is the short topic key the model gave the decision ("sol:drop"):
+	// lower-case, [a-z0-9:_-] only, at most 64 characters, "" when it gave none.
+	// Attention may use it to suppress a repeat of a topic that candidates do
+	// not cover (a heartbeat turn has none).
+	DedupKey string
 }
 
 // OwnerRoute is where proactive output goes.

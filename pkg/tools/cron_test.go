@@ -24,6 +24,8 @@ type stubJobExecutor struct {
 	lastChan        string
 	lastChatID      string
 	lastOrigin      string // tool-call origin carried on the context
+	lastScope       AutomationScope
+	lastScopeOK     bool
 	lastNoHistory   bool
 	publishedResp   string
 	publishedChan   string
@@ -42,6 +44,7 @@ func (s *stubJobExecutor) ProcessDirectWithChannel(
 	s.lastChan = channel
 	s.lastChatID = chatID
 	s.lastOrigin = ToolOrigin(ctx)
+	s.lastScope, s.lastScopeOK = AutomationScopeFrom(ctx)
 	return s.response, s.err
 }
 

@@ -261,6 +261,13 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
+	// The job's name is its preview, and a few name prefixes select code-driven
+	// handlers that trust the name (see reserved_jobs.go). A job made here must
+	// not be able to claim one.
+	if IsReservedJobName(messagePreview) {
+		return ErrorResult(reservedJobNameMessage(messagePreview))
+	}
+
 	job, err := t.cronService.AddJob(
 		messagePreview,
 		schedule,
@@ -475,6 +482,9 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, e
 	// every caller - so keying off the sender would label CLI turns as scheduled
 	// jobs and gate them as if no human were present.
 	ctx = WithToolOrigin(ctx, OriginCron)
+	// Record which job this turn runs for. Set-once: the DCA handler tags first,
+	// with the plan ID, and that tag is the one that survives.
+	ctx = WithAutomationScope(ctx, AutomationScope{JobName: job.Name})
 	ctx = WithTurnID(ctx, NewTurnID()) // PublishResponseIfNeeded below asks about this turn after it has returned
 
 	// At most one LLM-backed job at a time; wait for the slot honouring ctx so a
@@ -556,11 +566,23 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
 	}
 
+	// A job owned by a plan or alert carries a reserved name; rewriting its
+	// prompt here would run arbitrary text under that job's authority. Manage
+	// those through their own tools.
+	if IsReservedJobName(job.Name) {
+		return ErrorResult(fmt.Sprintf(
+			"Job %s belongs to an alert or plan (%q) and cannot be edited with the cron tool; use that tool instead",
+			jobID, job.Name))
+	}
+
 	patches := 0
 
 	if name, present, errResult := optionalNonEmptyString(args, "name"); errResult != nil {
 		return errResult
 	} else if present {
+		if IsReservedJobName(name) {
+			return ErrorResult(reservedJobNameMessage(name))
+		}
 		job.Name = name
 		patches++
 	}
@@ -737,4 +759,12 @@ func isCommandAllowedRemote(channel, chatID string, allowed []string) bool {
 	}
 
 	return false
+}
+
+// reservedJobNameMessage is the refusal for a job name with a reserved prefix.
+func reservedJobNameMessage(name string) string {
+	return fmt.Sprintf(
+		"job name %q starts with a reserved prefix (%s): those names belong to alerts, DCA and "+
+			"delta-neutral plans. Start the message differently.",
+		name, strings.Join(ReservedJobNamePrefixes, " "))
 }

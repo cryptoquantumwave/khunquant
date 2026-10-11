@@ -41,7 +41,17 @@ const (
 	OriginRemote = "remote"
 	// OriginCron is a scheduled job: no human is present to answer a prompt.
 	OriginCron = "cron"
+	// OriginHeartbeat is a periodic wake-up the assistant starts by itself: no
+	// human is present either, and the prompt is a file the assistant can edit.
+	OriginHeartbeat = "heartbeat"
 )
+
+// IsAutonomousOrigin reports whether a turn with this origin was started by the
+// assistant's own machinery rather than by a person. Autonomous turns run under
+// the class ceiling in classification.go.
+func IsAutonomousOrigin(origin string) bool {
+	return origin == OriginCron || origin == OriginHeartbeat
+}
 
 // WithToolOrigin returns a child context tagged with the origin of the turn.
 //

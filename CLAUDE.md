@@ -149,6 +149,22 @@ fixes the defect. Do not leave a permanently-red test in the tree.
 
 See SECURITY.md for the full posture. The rules that new code most often breaks:
 
+- **Every new tool must be classified in `pkg/tools/classification.go`** (`ClassOf`: read,
+  notify, local state, automation, trade, funds, system), choosing the more restrictive class when
+  in doubt. Autonomous turns (heartbeat, scheduled jobs, and anything spawned from them) may call
+  read, notify and local-state tools only; an unclassified tool — every MCP tool included — is
+  denied there and hidden from its tool definitions.
+  `TestClassOf_AllRegisteredToolsClassified` (and the gateway variant) fail on a registered tool
+  with no class. Exits are trade tools too: autonomous turns cannot unwind. A turn-starting call
+  site must tag its origin (`tools.WithToolOrigin`); a context built from `context.Background()`
+  that runs a model-driven turn must carry the origin and `AutomationScope` over.
+- **A new workspace state directory or prompt file goes in `autonomousProtectedPaths`**
+  (`pkg/tools/autonomous_paths.go`): autonomous turns may write workspace files with
+  `write_file`/`edit_file`/`append_file`, except under that list, so anything that acts as state,
+  code or system prompt must be on it. A new tool that writes a file at a model-chosen path must
+  call `guardAutonomousWrite`. Job-name prefixes that select a handler are defined once in
+  `pkg/tools/reserved_jobs.go`; a new one is added there so the `cron` tool refuses it.
+
 - **A tool that moves money gets a row in `defaultToolPolicies()`** (`pkg/tools/policy.go`),
   keyed by its `Name*` constant: `BlockedOrigins: {OriginCron}`, and `RefuseUnderPaperMode` unless
   the tool simulates paper mode itself. `TestPolicyCoversKnownFinancialTools` lists them

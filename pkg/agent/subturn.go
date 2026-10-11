@@ -339,6 +339,11 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// spirit, a cron job's subagent would stop being "cron". Carry both.
 	childCtx = tools.WithToolOrigin(childCtx, tools.ToolOrigin(ctx))
 	childCtx = tools.WithToolSender(childCtx, tools.ToolSender(ctx))
+	// The job scope too: a child must not lose the ceiling's job-bound exception
+	// nor be able to claim one its parent did not have.
+	if scope, ok := tools.AutomationScopeFrom(ctx); ok {
+		childCtx = tools.WithAutomationScope(childCtx, scope)
+	}
 	// The turn ID has to be carried for the same reason. A child shares its
 	// parent's: a message the subagent sends to the user's chat is a message
 	// sent in the parent's turn, and must suppress the parent's duplicate

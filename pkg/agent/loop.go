@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -960,6 +961,11 @@ func (al *AgentLoop) ProcessHeartbeat(
 	if agent == nil {
 		return "", fmt.Errorf("no default agent for heartbeat")
 	}
+	// A heartbeat is the assistant waking itself up: tag it before the turn
+	// starts. WithToolOrigin is set-once, so the channel-based tag runAgentLoop
+	// applies afterwards (the heartbeat borrows the user's last active channel,
+	// which would otherwise make it "remote") changes nothing.
+	ctx = tools.WithToolOrigin(ctx, tools.OriginHeartbeat)
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:           "heartbeat",
 		Channel:              channel,
@@ -1091,7 +1097,18 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 //
 // A result whose origin is internal (cli, ...) has nowhere to go: it is logged
 // at WARN rather than dropped without a trace.
-func (al *AgentLoop) deliverAsyncToolResult(opts processOptions, tc providers.ToolCall, result *tools.ToolResult) {
+//
+// turnCtx is the context of the turn that started the task. Only its origin and
+// automation scope are read, and only to hand them to the follow-up turn: a
+// result whose task was started by an autonomous turn must come back as an
+// autonomous turn, or the bus would launder the origin and the follow-up would
+// run as a remote one with every tool.
+func (al *AgentLoop) deliverAsyncToolResult(
+	turnCtx context.Context,
+	opts processOptions,
+	tc providers.ToolCall,
+	result *tools.ToolResult,
+) {
 	label := asyncTaskLabel(tc)
 	internal := constants.IsInternalChannel(opts.Channel)
 
@@ -1159,7 +1176,59 @@ func (al *AgentLoop) deliverAsyncToolResult(opts processOptions, tc providers.To
 		SenderID: fmt.Sprintf("async:%s", tc.Name),
 		ChatID:   fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID),
 		Content:  content,
+		Metadata: autonomousTurnMetadata(turnCtx),
 	})
+}
+
+// Metadata keys that carry an autonomous turn's tag across the bus. They are
+// read only from a message on the "system" channel (see
+// autonomousTagFromSystemMessage), which no channel adapter can publish on.
+const (
+	metadataKeyTurnOrigin     = "khunquant_turn_origin"
+	metadataKeyAutomationJob  = "khunquant_automation_job"
+	metadataKeyAutomationPlan = "khunquant_automation_dca_plan"
+)
+
+// autonomousTurnMetadata returns the metadata that lets the follow-up of an
+// async task keep the autonomous origin (and job scope) of the turn that
+// started it, or nil when that turn was started by a person.
+func autonomousTurnMetadata(turnCtx context.Context) map[string]string {
+	origin := tools.ToolOrigin(turnCtx)
+	if !tools.IsAutonomousOrigin(origin) {
+		return nil
+	}
+	md := map[string]string{metadataKeyTurnOrigin: origin}
+	if scope, ok := tools.AutomationScopeFrom(turnCtx); ok {
+		md[metadataKeyAutomationJob] = scope.JobName
+		if scope.DCAPlanID != 0 {
+			md[metadataKeyAutomationPlan] = strconv.FormatInt(scope.DCAPlanID, 10)
+		}
+	}
+	return md
+}
+
+// autonomousTagFromSystemMessage re-applies the origin and job scope a system
+// message carries to ctx, before runAgentLoop's channel-based tagging runs. Only
+// an autonomous origin is honoured: the field exists to keep a turn restricted,
+// never to grant anything, so a missing, empty or unrecognised value changes
+// nothing. It is a no-op for any channel but "system".
+func autonomousTagFromSystemMessage(ctx context.Context, msg bus.InboundMessage) context.Context {
+	if msg.Channel != "system" {
+		return ctx
+	}
+	origin := inboundMetadata(msg, metadataKeyTurnOrigin)
+	if !tools.IsAutonomousOrigin(origin) {
+		return ctx
+	}
+	ctx = tools.WithToolOrigin(ctx, origin)
+	if job := inboundMetadata(msg, metadataKeyAutomationJob); job != "" {
+		scope := tools.AutomationScope{JobName: job}
+		if plan, err := strconv.ParseInt(inboundMetadata(msg, metadataKeyAutomationPlan), 10, 64); err == nil {
+			scope.DCAPlanID = plan
+		}
+		ctx = tools.WithAutomationScope(ctx, scope)
+	}
+	return ctx
 }
 
 // asyncTaskLabel names a background task for the user: the label the model
@@ -1226,6 +1295,10 @@ func (al *AgentLoop) processSystemMessage(
 
 	// Use the origin session for context
 	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
+
+	// A result that came from a task an autonomous turn started keeps that
+	// turn's origin; this must precede runAgentLoop, whose tag is set-once.
+	ctx = autonomousTagFromSystemMessage(ctx, msg)
 
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:      sessionKey,
@@ -1398,7 +1471,7 @@ func (al *AgentLoop) runAgentLoop(
 	// 1.5. Proactive context budget check: compress before LLM call
 	// rather than waiting for a 400 context-length error.
 	if !opts.NoHistory {
-		toolDefs := agent.Tools.ToProviderDefs()
+		toolDefs := agent.Tools.ToProviderDefsFor(ctx)
 		if isOverContextBudget(agent.ContextWindow, messages, toolDefs, agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": opts.SessionKey})
@@ -1501,7 +1574,7 @@ func (al *AgentLoop) runAgentLoop(
 			Channel:      opts.Channel,
 			ChatID:       opts.ChatID,
 			Content:      finalContent,
-			ContextUsage: computeContextUsage(agent, opts.SessionKey),
+			ContextUsage: computeContextUsageFor(ctx, agent, opts.SessionKey),
 		})
 	}
 
@@ -1694,7 +1767,9 @@ func (al *AgentLoop) runLLMIteration(
 			})
 
 		// Build tool definitions
-		providerToolDefs := agent.Tools.ToProviderDefs()
+		// Definitions are filtered by the same predicate that gates execution, so
+		// an autonomous turn is never shown a tool it would be refused.
+		providerToolDefs := agent.Tools.ToProviderDefsFor(ctx)
 
 		// Log LLM request details
 		logger.DebugCF("agent", "LLM request",
@@ -2109,7 +2184,7 @@ func (al *AgentLoop) runLLMIteration(
 				// as an inbound system message so processSystemMessage routes it
 				// back to the user via the normal agent loop.
 				asyncCallback := func(_ context.Context, result *tools.ToolResult) {
-					al.deliverAsyncToolResult(opts, tc, result)
+					al.deliverAsyncToolResult(ctx, opts, tc, result)
 				}
 
 				toolResult := agent.Tools.ExecuteWithContext(

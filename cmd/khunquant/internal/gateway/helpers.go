@@ -852,6 +852,9 @@ func setupCronTool(
 	cronService := cron.NewCronService(cronStorePath, nil)
 	cronService.SetOptions(cronOptionsFromConfig(cfg))
 	cronService.SetOnMissed(missedJobNotifier(msgBus))
+	if msgBus != nil {
+		sendCeilingNotices(msgBus, cronService) // once per job; see ceiling_notice.go
+	}
 
 	// Create and register CronTool if enabled
 	var cronTool *tools.CronTool
@@ -890,16 +893,16 @@ func setupCronTool(
 	// The ctx carries the per-run job timeout and is cancelled when the cron service
 	// gives up waiting at stop; every handler uses it instead of context.Background().
 	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
-		if strings.HasPrefix(job.Name, "price_alert:") {
+		if strings.HasPrefix(job.Name, tools.JobPrefixPriceAlert) {
 			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "indicator_alert:") {
+		if strings.HasPrefix(job.Name, tools.JobPrefixIndicatorAlert) {
 			return handleIndicatorAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "dca:") && dcaStore != nil {
+		if strings.HasPrefix(job.Name, tools.JobPrefixDCA) && dcaStore != nil {
 			return handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
 		}
-		if strings.HasPrefix(job.Name, "dn:") && dnStore != nil {
+		if strings.HasPrefix(job.Name, tools.JobPrefixDeltaNeutral) && dnStore != nil {
 			return handleDeltaNeutralMonitorJob(ctx, job, cfg, dnStore, cronTool, msgBus)
 		}
 		if cronTool != nil {

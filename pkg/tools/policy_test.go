@@ -99,6 +99,10 @@ func TestCheckToolPolicy_AllowsPersonDrivenTurns(t *testing.T) {
 // even if BlockedOrigins were ignored entirely.
 // TestCheckToolPolicy_BlocksWhateverTheTableLists proves the mechanism, which
 // is what makes this omission meaningful rather than circular.
+//
+// The exemption is no longer "any cron turn": the class ceiling (classification.go)
+// puts execute_dca_order in ClassTrade, and a cron turn may call it only inside a
+// "dca:" job whose scope names a plan. It is still absent from the row table.
 func TestCheckToolPolicy_DCAExecutionStillRunsOnCron(t *testing.T) {
 	if _, declared := defaultToolPolicies()[NameExecuteDCAOrder]; declared {
 		t.Fatalf("%s has a policy entry; a cron block there disables scheduled DCA entirely",
@@ -107,9 +111,15 @@ func TestCheckToolPolicy_DCAExecutionStillRunsOnCron(t *testing.T) {
 
 	armPolicy(t, false, nil)
 
-	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameExecuteDCAOrder, nil); refusal != nil {
-		t.Fatalf("%s refused on cron, which disables scheduled DCA: %q", NameExecuteDCAOrder, refusal.ForLLM)
+	cron := WithToolOrigin(context.Background(), OriginCron)
+	dca := WithAutomationScope(cron, AutomationScope{JobName: "dca:7:weekly", DCAPlanID: 7})
+	if refusal := checkToolPolicy(dca, NameExecuteDCAOrder, nil); refusal != nil {
+		t.Fatalf("%s refused in a dca: job, which disables scheduled DCA: %q", NameExecuteDCAOrder, refusal.ForLLM)
+	}
+
+	// A cron turn that is not a DCA job gets no such exemption.
+	if refusal := checkToolPolicy(cron, NameExecuteDCAOrder, nil); refusal == nil {
+		t.Errorf("%s ran on a cron turn that has no dca: scope", NameExecuteDCAOrder)
 	}
 }
 
@@ -122,12 +132,30 @@ func TestCheckToolPolicy_DCAExecutionStillRunsOnCron(t *testing.T) {
 // The real claim is about the table's contents, so that is what this checks.
 // TestCheckToolPolicy_BlocksWhateverTheTableLists separately proves the
 // mechanism works, which together make the omission meaningful.
+//
+// "Never gated" now holds for turns a person started. An autonomous turn
+// (heartbeat, scheduled job) gets no trade tool at all, exits included - that is
+// the class ceiling, not a row, so the table stays free of these names and the
+// exits stay available to the operator.
 func TestRiskReducingToolsAreAbsentFromTheTable(t *testing.T) {
 	table := defaultToolPolicies()
+	armPolicy(t, false, nil)
 
 	for name := range riskReducingTools {
 		if _, declared := table[name]; declared {
-			t.Errorf("%s has a policy entry: reducing exposure must never be refusable", name)
+			t.Errorf("%s has a policy entry: reducing exposure must never be refusable for a person", name)
+		}
+		for _, origin := range []string{OriginInternal, OriginRemote} {
+			ctx := WithToolOrigin(context.Background(), origin)
+			if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
+				t.Errorf("%s refused on a %s turn: %q", name, origin, refusal.ForLLM)
+			}
+		}
+		for _, origin := range []string{OriginCron, OriginHeartbeat} {
+			ctx := WithToolOrigin(context.Background(), origin)
+			if refusal := checkToolPolicy(ctx, name, nil); refusal == nil {
+				t.Errorf("%s ran on an autonomous %s turn: exits are not available there", name, origin)
+			}
 		}
 	}
 }
@@ -137,19 +165,28 @@ func TestRiskReducingToolsAreAbsentFromTheTable(t *testing.T) {
 // other "not refused" assertion in this file leans on this one.
 func TestCheckToolPolicy_BlocksWhateverTheTableLists(t *testing.T) {
 	// Deliberately pick a tool the real table omits, so a pass here cannot come
-	// from the shipped configuration.
+	// from the shipped configuration. It must also be one the autonomous-turn
+	// class ceiling lets through (a read tool), or the ceiling would answer
+	// before the row was ever consulted and the assertion would prove nothing.
+	if ClassOf(NameGetTicker) != ClassRead {
+		t.Fatalf("test premise: %s must be a read tool", NameGetTicker)
+	}
 	armPolicy(t, false, map[string]ToolPolicy{
-		NameFuturesClosePosition: {BlockedOrigins: []string{OriginCron}},
+		NameGetTicker: {BlockedOrigins: []string{OriginCron}},
 	})
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, nil); refusal == nil {
+	refusal := checkToolPolicy(ctx, NameGetTicker, nil)
+	if refusal == nil {
 		t.Fatal("a tool listed with BlockedOrigins was not refused: the blocking logic is inert")
+	}
+	if strings.Contains(refusal.ForLLM, "autonomous") {
+		t.Fatalf("the class ceiling refused it, not the row: %q", refusal.ForLLM)
 	}
 
 	// And the same tool is allowed once the table no longer lists it.
 	armPolicy(t, false, map[string]ToolPolicy{})
-	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, nil); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameGetTicker, nil); refusal != nil {
 		t.Fatalf("an unlisted tool was refused: %q", refusal.ForLLM)
 	}
 }
@@ -197,16 +234,29 @@ func TestCheckToolPolicy_BackstopOnlyAppliesUnderPaperMode(t *testing.T) {
 	}
 }
 
-// A read-only tool must pass even with policy armed and paper mode on. This one
-// is intentionally a weak assertion - it only exercises the undeclared-tool
-// early return - but it is the behaviour operators depend on most, so it is
-// worth stating explicitly.
+// A tool with no row is allowed for a turn a person started, and for an
+// autonomous turn only when its class is read, notify or local state. "Has no
+// row" used to mean "runs on a schedule" for every tool; it no longer does - a
+// cron turn gets a tool only because its class lets it, so an undeclared tool
+// that is not classified (or is classified above the ceiling) is refused there.
 func TestCheckToolPolicy_UndeclaredToolIsAllowed(t *testing.T) {
 	armPolicy(t, true, nil)
 
-	ctx := WithToolOrigin(context.Background(), OriginCron)
-	if refusal := checkToolPolicy(ctx, NameGetTicker, nil); refusal != nil {
-		t.Fatalf("read-only %s was refused: %q", NameGetTicker, refusal.ForLLM)
+	cron := WithToolOrigin(context.Background(), OriginCron)
+	if refusal := checkToolPolicy(cron, NameGetTicker, nil); refusal != nil {
+		t.Fatalf("read-only %s was refused on cron: %q", NameGetTicker, refusal.ForLLM)
+	}
+
+	// Undeclared and above the ceiling: allowed for a person, refused on cron.
+	user := WithToolOrigin(context.Background(), OriginInternal)
+	if _, declared := defaultToolPolicies()[NameFuturesClosePosition]; declared {
+		t.Fatalf("test premise: %s must have no row", NameFuturesClosePosition)
+	}
+	if refusal := checkToolPolicy(user, NameFuturesClosePosition, nil); refusal != nil {
+		t.Errorf("%s refused for a person: %q", NameFuturesClosePosition, refusal.ForLLM)
+	}
+	if refusal := checkToolPolicy(cron, NameFuturesClosePosition, nil); refusal == nil {
+		t.Errorf("%s ran on a cron turn", NameFuturesClosePosition)
 	}
 }
 

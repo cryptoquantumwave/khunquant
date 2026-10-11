@@ -53,12 +53,9 @@ func TestCronTurnRefusesCreateOrderButCLITurnRunsIt(t *testing.T) {
 	}
 }
 
-// Scheduled DCA is the point of DCA: execute_dca_order must run on cron.
-func TestCronTurnStillRunsDCAExecution(t *testing.T) {
-	if n := runOneToolTurn(t, context.Background(), tools.NameExecuteDCAOrder, true); n != 1 {
-		t.Fatalf("%s executed %d time(s) on a cron turn, want 1", tools.NameExecuteDCAOrder, n)
-	}
-}
+// TestCronTurnStillRunsDCAExecution moved to autonomous_ceiling_test.go: since the
+// class ceiling, execute_dca_order runs on a cron turn only inside its own
+// dca: job, so the test now says so.
 
 // Paper mode switched on by a config reload must reach the policy backstop, not
 // only the rebuilt tools. Otherwise the tools that simulate start simulating

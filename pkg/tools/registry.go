@@ -356,15 +356,33 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
+	return r.toProviderDefs(nil)
+}
+
+// ToProviderDefsFor is ToProviderDefs for one turn: the same definitions in the
+// same order, minus the tools the turn's origin and automation scope may not
+// call. It uses turnMayCall, the predicate ExecuteWithContext enforces, so an
+// autonomous turn is never shown a tool it would be refused; a turn a person
+// started gets exactly what ToProviderDefs returns.
+func (r *ToolRegistry) ToProviderDefsFor(ctx context.Context) []providers.ToolDefinition {
+	return r.toProviderDefs(func(name string) bool { return turnMayCall(ctx, name) })
+}
+
+// toProviderDefs builds the definition list; visible, when non-nil, is asked
+// about each registered name (the key ExecuteWithContext looks tools up by).
+func (r *ToolRegistry) toProviderDefs(visible func(name string) bool) []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
+	for _, registered := range sorted {
+		entry := r.tools[registered]
 
 		if !entry.IsCore && entry.TTL <= 0 {
+			continue
+		}
+		if visible != nil && !visible(registered) {
 			continue
 		}
 

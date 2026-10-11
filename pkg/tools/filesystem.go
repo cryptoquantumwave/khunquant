@@ -480,7 +480,9 @@ func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, erro
 }
 
 type WriteFileTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
+	restrict  bool
 }
 
 func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *WriteFileTool {
@@ -488,7 +490,7 @@ func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.R
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &WriteFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &WriteFileTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace, restrict: restrict}
 }
 
 func (t *WriteFileTool) Name() string {
@@ -527,7 +529,11 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("content is required")
 	}
 
-	if err := t.fs.WriteFile(path, []byte(content)); err != nil {
+	target, refusal := guardAutonomousWrite(ctx, t.Name(), t.workspace, t.restrict, path)
+	if refusal != nil {
+		return refusal
+	}
+	if err := t.fs.WriteFile(target, []byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 

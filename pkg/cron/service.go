@@ -64,6 +64,10 @@ type CronJobState struct {
 	// the run finishes. It is persisted so a crash is visible; Start clears any
 	// value left over from a previous process.
 	Running bool `json:"running,omitempty"`
+	// NotifiedCeilingV1 records that the one-time notice about the autonomous
+	// tool ceiling was sent for this job. Like the other runtime state it stays
+	// with the stored job when UpdateJob replaces the editable parts.
+	NotifiedCeilingV1 bool `json:"notifiedCeilingV1,omitempty"`
 }
 
 type CronJob struct {
@@ -802,6 +806,9 @@ func (cs *CronService) AddJob(
 		},
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
+			// A job created now was created under the autonomous tool ceiling:
+			// nothing changed for it, so the one-time notice is not for it.
+			NotifiedCeilingV1: true,
 		},
 		CreatedAtMS:    now,
 		UpdatedAtMS:    now,
@@ -848,6 +855,24 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 
 		updated.UpdatedAtMS = nowMS
 		*stored = updated
+		return cs.saveStoreUnsafe()
+	}
+	return fmt.Errorf("job not found")
+}
+
+// MarkCeilingNotified records, durably, that the autonomous-ceiling notice has
+// been sent for the job. It touches nothing else about the job, not even
+// UpdatedAtMS. It returns an error if the job is gone or the store cannot be
+// saved; the flag is then unset on disk and the notice is retried next start.
+func (cs *CronService) MarkCeilingNotified(jobID string) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID != jobID {
+			continue
+		}
+		cs.store.Jobs[i].State.NotifiedCeilingV1 = true
 		return cs.saveStoreUnsafe()
 	}
 	return fmt.Errorf("job not found")

@@ -178,6 +178,9 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if planID <= 0 {
 		return ErrorResult("plan_id is required")
 	}
+	if refusal := dcaScopeRefusal(ctx, planID); refusal != nil {
+		return refusal
+	}
 
 	// Request validation, not an attempt, so no row: a plan that does not
 	// exist cannot own one, and a disabled or expired plan is one the schedule

@@ -28,13 +28,13 @@ type ToolPolicy struct {
 	// RefuseUnderPaperMode marks a tool that moves real money and has no paper
 	// implementation of its own.
 	//
-	// This is a backstop, not a redirect. order_create, option_create_order and
-	// dca_execute_order already honour paper mode and produce their own
-	// simulated output, so they are deliberately NOT listed: routing them
-	// through here would either lose their diagnostics or require this file to
-	// know each tool's paper representation. What it catches is the tool that
-	// checks nothing - which today places live orders under paper mode in
-	// silence.
+	// This is a backstop, not a redirect. create_order and execute_dca_order
+	// already honour paper mode and produce their own simulated output, so they
+	// are deliberately NOT listed: routing them through here would either lose
+	// their diagnostics or require this file to know each tool's paper
+	// representation. What it catches is the tool that checks nothing - which
+	// would otherwise place live orders under paper mode in silence. Options
+	// have no simulation, so option_create_order is listed.
 	RefuseUnderPaperMode bool
 
 	// RequiresApproval holds the call until the operator replies /approve with
@@ -185,6 +185,17 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 // The refusal sets ForUser as well as ForLLM: a block the operator never sees
 // is indistinguishable from the tool quietly doing nothing.
 func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
+	// The class ceiling comes first and answers one question for autonomous
+	// turns: may this turn call this tool at all? The per-tool rows below then
+	// apply to whatever the ceiling lets through, as they always did.
+	if !turnMayCall(ctx, name) {
+		return policyRefusal(name, fmt.Sprintf(
+			"tool %q is not permitted in an autonomous (%s) turn. Turns the assistant starts by itself can "+
+				"read, notify and write workspace files only; trading, funds, scheduling, system and "+
+				"MCP tools need a person to start the turn.",
+			name, describeOrigin(ToolOrigin(ctx))))
+	}
+
 	policyMu.RLock()
 	enabled, paper := policyEnabled, policyPaper
 	policy, declared := policyTable[name]
@@ -222,6 +233,50 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	}
 
 	return nil
+}
+
+// turnMayCall is the one predicate for "may the turn carried by ctx call this
+// tool". checkToolPolicy refuses on it and ToolRegistry.ToProviderDefsFor hides
+// definitions with it, so what the model is shown and what it can run cannot
+// drift apart.
+//
+// A turn that is not autonomous may call anything here; its limits are the
+// per-tool rows, paper mode and approvals. An autonomous turn may call the
+// read, notify and local-state classes, plus two exceptions that exist because
+// their jobs need them and that are bound to the job:
+//
+//   - a heartbeat may spawn (the child inherits the origin, so the same ceiling);
+//   - a "dca:" scheduled job may call execute_dca_order (the tool itself checks
+//     the plan ID against the job's).
+//
+// An untagged turn is not treated as autonomous: every production turn is tagged
+// where it starts, and the per-tool rows already fail closed on an empty origin.
+// Like the rows, the ceiling does nothing until SetPolicyConfig has armed it.
+func turnMayCall(ctx context.Context, name string) bool {
+	origin := ToolOrigin(ctx)
+	if !IsAutonomousOrigin(origin) {
+		return true
+	}
+
+	policyMu.RLock()
+	enabled := policyEnabled
+	policyMu.RUnlock()
+	if !enabled {
+		return true
+	}
+
+	switch ClassOf(name) {
+	case ClassRead, ClassNotify, ClassLocalState:
+		return true
+	}
+
+	switch origin {
+	case OriginHeartbeat:
+		return name == NameSpawn
+	case OriginCron:
+		return name == NameExecuteDCAOrder && isDCAJobScope(ctx)
+	}
+	return false
 }
 
 func describeOrigin(origin string) string {

@@ -348,7 +348,7 @@ func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
 }
 
 func (t *SubagentTool) Name() string {
-	return "subagent"
+	return NameSubagent
 }
 
 func (t *SubagentTool) Description() string {

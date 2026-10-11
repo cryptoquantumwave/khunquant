@@ -47,6 +47,16 @@ func handleDCAAutoJob(
 		return "plan not found", nil
 	}
 
+	// The job's name says which plan it is for, and the turn gets that plan's
+	// authority. Only the job the plan itself created may carry it: a job that
+	// merely has a "dca:<id>:" name (a hand-made one, or a stale one) is not run.
+	if plan.CronJobID == "" || plan.CronJobID != job.ID {
+		logger.WarnCF("dca-gate", "Job is not the plan's own cron job, skipping", map[string]any{
+			"plan_id": planID, "job": job.Name, "job_id": job.ID, "plan_job_id": plan.CronJobID,
+		})
+		return "job is not this plan's own cron job; not executed", nil
+	}
+
 	if !plan.Enabled {
 		logger.DebugCF("dca-gate", "Plan disabled, skipping", map[string]any{"plan_id": planID})
 		return "plan disabled", nil
@@ -107,5 +117,8 @@ func handleDCAAutoJob(
 	if cronTool == nil {
 		return "", fmt.Errorf("dca-gate: no cronTool configured for plan %d", planID)
 	}
+	// The turn may execute this plan and no other: execute_dca_order checks the
+	// plan_id it is given against this scope.
+	ctx = tools.WithAutomationScope(ctx, tools.AutomationScope{JobName: job.Name, DCAPlanID: planID})
 	return cronTool.ExecuteJob(ctx, job)
 }

@@ -30,6 +30,11 @@ const maxClampedText = 512
 // row whose delivered is still 0 when its send was reported failed (that marker
 // releases the row's budget and dedup reservation). Consumers must test
 // delivered, never delivered_at_ms IS NOT NULL.
+//
+// intervention_id (v2) names the message a delivered decision went out in:
+// decisions delivered together share one. It is NULL on rows from before v2 and
+// until delivery; read it as COALESCE(intervention_id, id). base_asset (v2) is
+// the upper-case base asset of the candidate, for inhibition.
 var migrations = []sqlitex.Migration{
 	{
 		Component: Component,
@@ -62,6 +67,28 @@ CREATE TABLE attention_mutes (
 	until_ms   INTEGER NOT NULL,
 	reason     TEXT NOT NULL,
 	created_ms INTEGER NOT NULL
+);`,
+	},
+	{
+		Component: Component,
+		Version:   2,
+		// Additive only: other readers (the web launcher's decisions endpoint)
+		// select from attention_decisions, so nothing is renamed or dropped.
+		SQL: `ALTER TABLE attention_decisions ADD COLUMN intervention_id TEXT;
+ALTER TABLE attention_decisions ADD COLUMN base_asset TEXT;
+CREATE INDEX idx_attention_decisions_base ON attention_decisions(base_asset, at_ms) WHERE base_asset IS NOT NULL;
+CREATE INDEX idx_attention_decisions_intervention ON attention_decisions(intervention_id) WHERE intervention_id IS NOT NULL;
+CREATE TABLE attention_digest_queue (
+	decision_id TEXT PRIMARY KEY REFERENCES attention_decisions(id) ON DELETE CASCADE,
+	enqueued_ms INTEGER NOT NULL,
+	flushed_ms  INTEGER
+);
+CREATE INDEX idx_attention_digest_queue_pending ON attention_digest_queue(flushed_ms, enqueued_ms);
+INSERT INTO attention_digest_queue (decision_id, enqueued_ms)
+	SELECT id, at_ms FROM attention_decisions WHERE disposition = 'digest' AND delivered = 0;
+CREATE TABLE attention_meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
 );`,
 	},
 }
@@ -228,31 +255,103 @@ func exists(ctx context.Context, tx *sql.Tx, q string, args ...any) (bool, error
 	return true, nil
 }
 
-// sendsToday counts the non-critical, non-protective notify/escalate decisions
-// that were delivered inside [dayStartMs, dayEndMs), plus those still in flight
-// (decided within the lease, not yet delivered or reported failed). Counting
-// in-flight decisions is what stops concurrent callers overspending the budget:
-// a decision reserves its slot when it is made and gives it back only when its
-// send is reported failed.
-func sendsToday(ctx context.Context, tx *sql.Tx, dayStartMs, dayEndMs, leaseStartMs int64) (int, error) {
-	var delivered, pending int
+// sendsToday counts the MESSAGES, not the decisions, that the non-critical,
+// non-protective notify/escalate decisions of the day amount to.
+//
+// Delivered decisions inside [dayStartMs, dayEndMs) count once per distinct
+// intervention ID (a row without one is its own message). Decisions still in
+// flight (decided within the lease, neither delivered nor reported failed) are
+// not yet in a message, so they are grouped the way the outbox will group them:
+// those decided within groupWindowMs of the oldest of the group are one pending
+// message; with no window each is its own. Counting the in-flight ones is what
+// stops concurrent callers overspending the budget: a decision reserves its
+// slot when it is made and gives it back only when its send is reported failed.
+func sendsToday(ctx context.Context, tx *sql.Tx, dayStartMs, dayEndMs, leaseStartMs, groupWindowMs, nowMs int64) (sends int, joinsPending bool, err error) {
+	var delivered int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM attention_decisions
+		`SELECT COUNT(DISTINCT COALESCE(intervention_id, id)) FROM attention_decisions
 		  WHERE delivered = 1 AND delivered_at_ms >= ? AND delivered_at_ms < ?
 		    AND disposition IN `+sentDispositions+`
 		    AND severity < ? AND reason <> ?`,
 		dayStartMs, dayEndMs, int(proactive.SeverityCritical), ReasonProtective).Scan(&delivered); err != nil {
-		return 0, fmt.Errorf("attention: count sends: %w", err)
+		return 0, false, fmt.Errorf("attention: count sends: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM attention_decisions
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT at_ms FROM attention_decisions
 		  WHERE delivered = 0 AND delivered_at_ms IS NULL AND at_ms >= ?
 		    AND disposition IN `+sentDispositions+`
-		    AND severity < ? AND reason <> ?`,
-		leaseStartMs, int(proactive.SeverityCritical), ReasonProtective).Scan(&pending); err != nil {
-		return 0, fmt.Errorf("attention: count in-flight sends: %w", err)
+		    AND severity < ? AND reason <> ?
+		  ORDER BY at_ms`,
+		leaseStartMs, int(proactive.SeverityCritical), ReasonProtective)
+	if err != nil {
+		return 0, false, fmt.Errorf("attention: count in-flight sends: %w", err)
 	}
-	return delivered + pending, nil
+	var pending []int64
+	for rows.Next() {
+		var at int64
+		if err := rows.Scan(&at); err != nil {
+			_ = rows.Close()
+			return 0, false, fmt.Errorf("attention: count in-flight sends: %w", err)
+		}
+		pending = append(pending, at)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, fmt.Errorf("attention: count in-flight sends: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, fmt.Errorf("attention: count in-flight sends: %w", err)
+	}
+	n, lastStart := pendingMessages(pending, groupWindowMs)
+	// A candidate decided now joins the newest pending message, at no extra cost,
+	// when that message is still open: the outbox takes decisions into a group
+	// until the window that the group's first decision opened has elapsed.
+	joins := n > 0 && groupWindowMs > 0 && nowMs-lastStart < groupWindowMs
+	return delivered + n, joins, nil
+}
+
+// pendingMessages is how many messages the in-flight decisions decided at
+// atMs (ascending) will become, and when the newest of them opened: a message
+// opens at its first decision and takes every decision made less than windowMs
+// after that one. With no window every decision is a message of its own.
+func pendingMessages(atMs []int64, windowMs int64) (n int, lastStart int64) {
+	for i, at := range atMs {
+		if i == 0 || windowMs <= 0 || at-lastStart >= windowMs {
+			n++
+			lastStart = at
+		}
+	}
+	return n, lastStart
+}
+
+// inhibitorKey returns the dedup key of the freshest message that explains a
+// candidate with base asset base under rule, or "" when none does. An inhibitor
+// is a notify/escalate decision whose dedup key starts with rule.WhenPrefix,
+// decided after sinceMs, that was delivered or is still in flight (decided after
+// leaseStartMs and not reported failed). A decision whose send failed has
+// delivered = 0 and delivered_at_ms set, so it matches neither arm. Prefixes are
+// compared literally (substr, not LIKE).
+func inhibitorKey(ctx context.Context, tx *sql.Tx, rule InhibitRule, base string, sinceMs, leaseStartMs int64) (string, error) {
+	q := `SELECT dedup_key FROM attention_decisions
+	       WHERE disposition IN ` + sentDispositions + `
+	         AND at_ms > ?
+	         AND substr(dedup_key, 1, length(?)) = ?
+	         AND (delivered = 1 OR (delivered = 0 AND delivered_at_ms IS NULL AND at_ms > ?))`
+	args := []any{sinceMs, rule.WhenPrefix, rule.WhenPrefix, leaseStartMs}
+	if rule.SameBaseAsset {
+		q += ` AND base_asset = ?`
+		args = append(args, base)
+	}
+	q += ` ORDER BY at_ms DESC LIMIT 1`
+	var key string
+	err := tx.QueryRowContext(ctx, q, args...).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("attention: query inhibitor: %w", err)
+	}
+	return key, nil
 }
 
 // ---- writes ----------------------------------------------------------------
@@ -262,15 +361,28 @@ func insertDecision(ctx context.Context, tx *sql.Tx, d Decision) error {
 	if d.Reason == ReasonShadow {
 		shadow = 1
 	}
+	var base any // NULL when the candidate has no base asset
+	if b := baseAsset(d.Candidate); b != "" {
+		base = b
+	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO attention_decisions
-		   (id, at_ms, dedup_key, trigger_id, severity, disposition, reason, shadow, candidate_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   (id, at_ms, dedup_key, trigger_id, severity, disposition, reason, shadow, candidate_json, base_asset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.At.UnixMilli(), d.Candidate.DedupKey, d.Candidate.TriggerID,
 		int(d.Candidate.Severity), string(d.Disposition), d.Reason, shadow,
-		encodeCandidate(d.Candidate))
+		encodeCandidate(d.Candidate), base)
 	if err != nil {
 		return fmt.Errorf("attention: record decision: %w", err)
+	}
+	if d.Disposition == proactive.DispDigest {
+		// Same transaction as the decision: a digest decision without its queue
+		// row would be told to nobody.
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO attention_digest_queue (decision_id, enqueued_ms) VALUES (?, ?)`,
+			d.ID, d.At.UnixMilli()); err != nil {
+			return fmt.Errorf("attention: queue digest item: %w", err)
+		}
 	}
 	return nil
 }

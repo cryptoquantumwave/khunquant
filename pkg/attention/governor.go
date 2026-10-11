@@ -84,9 +84,18 @@ type Decision struct {
 type Delivery struct {
 	Delivered bool
 	At        time.Time // zero = now
+	// InterventionID names the message the decision went out in; decisions
+	// delivered together share one, and the daily budget counts distinct IDs.
+	// Empty means the decision was a message of its own (its ID is used).
+	InterventionID string
 }
 
 // Decider is what the pipeline needs from the governor to decide and report.
+//
+// Deliver notify and escalate decisions through an Outbox, not one by one: the
+// budget counts in-flight decisions as the messages the outbox will make of them
+// (see sendsToday), so a caller that sends every decision as a message of its
+// own, concurrently, can exceed the daily budget.
 type Decider interface {
 	Decide(ctx context.Context, c proactive.Candidate) (Decision, error)
 	MarkDelivered(ctx context.Context, d Decision, r Delivery) error
@@ -113,6 +122,7 @@ type Governor struct {
 	cfg      config.AttentionConfig
 	mode     string
 	clock    func() time.Time
+	inhibits []InhibitRule
 
 	// tunables; fields rather than constants so tests can exercise pruning.
 	retention         time.Duration
@@ -152,6 +162,7 @@ func New(db *sql.DB, p ProfileSource, cfg config.AttentionConfig, effectiveMode 
 		cfg:               cfg,
 		mode:              effectiveMode,
 		clock:             clock,
+		inhibits:          defaultInhibits,
 		retention:         decisionRetention,
 		pendingDigestKeep: pendingDigestKeep,
 		shadowRetention:   shadowRetention,
@@ -172,6 +183,23 @@ type profileFacts struct {
 // governor must neither go silent for a protective Critical nor open the
 // floodgates, and the default 07:00-22:00 Bangkok window keeps quiet hours.
 func (g *Governor) loadProfile(ctx context.Context, now time.Time) profileFacts {
+	prof, loc := g.profile(ctx, now)
+	nl := now.In(loc)
+	start := time.Date(nl.Year(), nl.Month(), nl.Day(), 0, 0, 0, 0, loc)
+	end := time.Date(nl.Year(), nl.Month(), nl.Day()+1, 0, 0, 0, 0, loc)
+	return profileFacts{
+		inActive:   prof.InActiveHours(now),
+		budget:     max(prof.NotificationBudgetPerDay, 0),
+		dayStartMs: start.UnixMilli(),
+		dayEndMs:   end.UnixMilli(),
+	}
+}
+
+// profile fetches the owner's profile and its time zone. A source that fails
+// degrades to intent's defaults and cfg.DailyBudget (with a rate-limited WARN),
+// and a time zone that cannot be loaded to UTC (with a one-time WARN), so every
+// caller falls back the same way.
+func (g *Governor) profile(ctx context.Context, now time.Time) (intent.Profile, *time.Location) {
 	prof, err := g.profiles.Profile(ctx)
 	if err != nil {
 		g.warnProfile(now, err)
@@ -184,15 +212,7 @@ func (g *Governor) loadProfile(ctx context.Context, now time.Time) profileFacts 
 			logger.WarnCF("attention", "profile time zone cannot be loaded; using UTC", map[string]any{"timezone": prof.Timezone})
 		})
 	}
-	nl := now.In(loc)
-	start := time.Date(nl.Year(), nl.Month(), nl.Day(), 0, 0, 0, 0, loc)
-	end := time.Date(nl.Year(), nl.Month(), nl.Day()+1, 0, 0, 0, 0, loc)
-	return profileFacts{
-		inActive:   prof.InActiveHours(now),
-		budget:     max(prof.NotificationBudgetPerDay, 0),
-		dayStartMs: start.UnixMilli(),
-		dayEndMs:   end.UnixMilli(),
-	}
+	return prof, loc
 }
 
 func (g *Governor) warnProfile(now time.Time, err error) {
@@ -326,10 +346,49 @@ func (g *Governor) gather(ctx context.Context, tx *sql.Tx, c proactive.Candidate
 	if f.QueuedHit, err = queuedDigest(ctx, tx, c.DedupKey, c.Severity, now.Add(-window).UnixMilli()); err != nil {
 		return nil, err
 	}
-	if f.SendsToday, err = sendsToday(ctx, tx, pf.dayStartMs, pf.dayEndMs, leaseStart); err != nil {
+	if f.SendsToday, f.JoinsPending, err = sendsToday(ctx, tx, pf.dayStartMs, pf.dayEndMs, leaseStart, g.groupWindow().Milliseconds(), nowMs); err != nil {
 		return nil, err
 	}
+	if !isProtectiveCritical(c) {
+		if f.InhibitedBy, err = g.inhibitedBy(ctx, tx, c, now, leaseStart); err != nil {
+			return nil, err
+		}
+	}
 	return st.previous, nil
+}
+
+// groupWindow is the outbox's grouping window, which the budget needs to count
+// in-flight decisions as the messages they will become. Zero means no grouping.
+func (g *Governor) groupWindow() time.Duration {
+	return time.Duration(max(g.cfg.GroupWindowSeconds, 0)) * time.Second
+}
+
+// inhibitedBy returns the dedup key of the message that explains c under the
+// first matching inhibit rule, or "" when none does.
+func (g *Governor) inhibitedBy(ctx context.Context, tx *sql.Tx, c proactive.Candidate, now time.Time, leaseStart int64) (string, error) {
+	var base string
+	var haveBase bool
+	for _, r := range g.inhibits {
+		if r.SuppressPrefix == "" || r.WhenPrefix == "" || !strings.HasPrefix(c.DedupKey, r.SuppressPrefix) {
+			continue
+		}
+		if r.SameBaseAsset {
+			if !haveBase {
+				base, haveBase = baseAsset(c), true
+			}
+			if base == "" {
+				continue
+			}
+		}
+		key, err := inhibitorKey(ctx, tx, r, base, now.Add(-r.For).UnixMilli(), leaseStart)
+		if err != nil {
+			return "", err
+		}
+		if key != "" {
+			return key, nil
+		}
+	}
+	return "", nil
 }
 
 // MarkDelivered reports how the delivery of d went.
@@ -338,7 +397,9 @@ func (g *Governor) gather(ctx context.Context, tx *sql.Tx, c proactive.Candidate
 // situation dedups from now on) and the decision row is marked delivered, which
 // is what counts against the daily budget. The decision is looked up by d.ID and
 // read back from the database; the caller's copy of the candidate is not
-// trusted. Repeating the call for the same decision changes nothing.
+// trusted. Repeating the call for the same decision changes nothing. Decisions
+// delivered in one message should pass the same r.InterventionID: the budget
+// counts distinct IDs.
 //
 // With Delivered=false the send failed: no state is written and the decision's
 // budget and dedup reservation is released, so the situation can be retried and
@@ -362,25 +423,18 @@ func (g *Governor) MarkDelivered(ctx context.Context, d Decision, r Delivery) er
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var (
-		disp, key, js string
-		sev           int
-		delivered     int
-	)
-	err = tx.QueryRowContext(ctx,
-		`SELECT disposition, dedup_key, severity, candidate_json, delivered
-		   FROM attention_decisions WHERE id = ?`, d.ID).Scan(&disp, &key, &sev, &js, &delivered)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("attention: unknown decision %q", d.ID)
-	}
-	if err != nil {
-		return fmt.Errorf("attention: read decision: %w", err)
-	}
-	sendable := disp == string(proactive.DispNotify) || disp == string(proactive.DispEscalate)
-	digest := disp == string(proactive.DispDigest)
-
 	if !r.Delivered {
-		if sendable && delivered == 0 {
+		var disp string
+		var delivered int
+		err = tx.QueryRowContext(ctx,
+			`SELECT disposition, delivered FROM attention_decisions WHERE id = ?`, d.ID).Scan(&disp, &delivered)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w %q", errUnknownDecision, d.ID)
+		}
+		if err != nil {
+			return fmt.Errorf("attention: read decision: %w", err)
+		}
+		if (disp == string(proactive.DispNotify) || disp == string(proactive.DispEscalate)) && delivered == 0 {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE attention_decisions SET delivered_at_ms = ? WHERE id = ? AND delivered = 0`,
 				at.UnixMilli(), d.ID); err != nil {
@@ -390,15 +444,46 @@ func (g *Governor) MarkDelivered(ctx context.Context, d Decision, r Delivery) er
 		return commit(tx)
 	}
 
-	if !sendable && !digest {
-		return fmt.Errorf("attention: decision %q is %s and cannot be delivered", d.ID, disp)
+	if err := markDeliveredTx(ctx, tx, d.ID, at, r.InterventionID); err != nil {
+		return err
+	}
+	return commit(tx)
+}
+
+var errUnknownDecision = errors.New("attention: unknown decision")
+
+// markDeliveredTx records inside tx that decision id reached the owner at the
+// given time, in the message named interventionID (empty = a message of its
+// own, named after the decision). It upserts attention_state, so the situation
+// dedups from now on. A decision already delivered is left as it is.
+func markDeliveredTx(ctx context.Context, tx *sql.Tx, id string, at time.Time, interventionID string) error {
+	var (
+		disp, key, js string
+		sev           int
+		delivered     int
+	)
+	err := tx.QueryRowContext(ctx,
+		`SELECT disposition, dedup_key, severity, candidate_json, delivered
+		   FROM attention_decisions WHERE id = ?`, id).Scan(&disp, &key, &sev, &js, &delivered)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w %q", errUnknownDecision, id)
+	}
+	if err != nil {
+		return fmt.Errorf("attention: read decision: %w", err)
+	}
+	sendable := disp == string(proactive.DispNotify) || disp == string(proactive.DispEscalate)
+	if !sendable && disp != string(proactive.DispDigest) {
+		return fmt.Errorf("attention: decision %q is %s and cannot be delivered", id, disp)
 	}
 	if delivered == 1 {
 		return nil // idempotent: already counted
 	}
+	if interventionID == "" {
+		interventionID = id
+	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE attention_decisions SET delivered = 1, delivered_at_ms = ? WHERE id = ?`,
-		at.UnixMilli(), d.ID); err != nil {
+		`UPDATE attention_decisions SET delivered = 1, delivered_at_ms = ?, intervention_id = ? WHERE id = ?`,
+		at.UnixMilli(), interventionID, id); err != nil {
 		return fmt.Errorf("attention: mark delivered: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -412,7 +497,7 @@ func (g *Governor) MarkDelivered(ctx context.Context, d Decision, r Delivery) er
 		key, sev, at.UnixMilli(), js); err != nil {
 		return fmt.Errorf("attention: update state: %w", err)
 	}
-	return commit(tx)
+	return nil
 }
 
 func commit(tx *sql.Tx) error {

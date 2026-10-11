@@ -275,6 +275,11 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// both. A failure to build it leaves delivery disabled and the gateway up.
 	s.NotifyService = buildNotifyService(d, s.ChannelManager)
 
+	// Attention: the governor and the outbox that turns its decisions into
+	// messages. After notify, which it delivers through. The heartbeat handler
+	// does not use it yet; s.Attention is where it will find it.
+	s.Attention, s.attentionRun = buildAttention(d, s.NotifyService)
+
 	// Device service, on the shared state manager.
 	s.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
@@ -343,12 +348,18 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: loss guard, channels, devices, notify, heartbeat, cron, media store.
+// resources. Order: attention outbox, loss guard, channels, devices, notify,
+// heartbeat, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
 func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+
+	// The outbox goes first: its final flush delivers through the notify service
+	// and the channels, which are still up at this point.
+	s.attentionRun.stop()
+	s.attentionRun, s.Attention = nil, nil
 
 	s.LossGuard.Stop()
 	s.LossGuard = nil

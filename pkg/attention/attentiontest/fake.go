@@ -39,18 +39,69 @@ type Fake struct {
 	Script   []attention.Decision
 	// DecideErr, MarkErr and MuteErr are returned after the call is recorded.
 	DecideErr, MarkErr, MuteErr error
+	// Digest is what PendingDigest hands out next (see SetDigest); DigestErr is
+	// returned from it instead when set. MarkErr is also returned from
+	// CompleteDigest.
+	Digest    *attention.Digest
+	DigestErr error
 
-	mu         sync.Mutex
-	candidates []proactive.Candidate
-	delivered  []Delivered
-	mutes      []MuteCall
-	next       int
+	mu          sync.Mutex
+	candidates  []proactive.Candidate
+	delivered   []Delivered
+	completions []Completed
+	mutes       []MuteCall
+	next        int
+}
+
+// Completed records one CompleteDigest call.
+type Completed struct {
+	Digest   *attention.Digest
+	Delivery attention.Delivery
 }
 
 var (
 	_ attention.Decider = (*Fake)(nil)
 	_ attention.Muter   = (*Fake)(nil)
+	_ attention.Gate    = (*Fake)(nil)
 )
+
+// Deliverer is a recording attention.Deliverer. The zero value delivers every
+// message. Set Fn to script the outcome (it runs without any lock held, so it
+// may call back into the outbox), or Result and Err for a fixed one.
+type Deliverer struct {
+	Fn     func(ctx context.Context, m attention.Message) (bool, error)
+	Result *bool // nil = delivered
+	Err    error
+
+	mu   sync.Mutex
+	msgs []attention.Message
+}
+
+var _ attention.Deliverer = (*Deliverer)(nil)
+
+// Deliver records m and returns the scripted outcome.
+func (d *Deliverer) Deliver(ctx context.Context, m attention.Message) (bool, error) {
+	d.mu.Lock()
+	d.msgs = append(d.msgs, m)
+	d.mu.Unlock()
+	if d.Fn != nil {
+		return d.Fn(ctx, m)
+	}
+	if d.Err != nil {
+		return false, d.Err
+	}
+	if d.Result != nil {
+		return *d.Result, nil
+	}
+	return true, nil
+}
+
+// Messages returns the messages delivered so far, in order.
+func (d *Deliverer) Messages() []attention.Message {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]attention.Message(nil), d.msgs...)
+}
 
 // Decide records c and returns the scripted decision.
 func (f *Fake) Decide(ctx context.Context, c proactive.Candidate) (attention.Decision, error) {
@@ -99,6 +150,42 @@ func (f *Fake) Unmute(_ context.Context, keyPrefix string) error {
 	defer f.mu.Unlock()
 	f.mutes = append(f.mutes, MuteCall{Prefix: keyPrefix, Unmute: true})
 	return f.MuteErr
+}
+
+// PendingDigest returns the scripted digest: the first call after a Digest is
+// set returns it (and clears it, as a real governor stops handing out a digest
+// once it is checked out). DigestErr is returned instead when set.
+func (f *Fake) PendingDigest(context.Context) (*attention.Digest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DigestErr != nil {
+		return nil, f.DigestErr
+	}
+	dg := f.Digest
+	f.Digest = nil
+	return dg, nil
+}
+
+// CompleteDigest records the call.
+func (f *Fake) CompleteDigest(_ context.Context, dg *attention.Digest, r attention.Delivery) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.completions = append(f.completions, Completed{Digest: dg, Delivery: r})
+	return f.MarkErr
+}
+
+// SetDigest scripts the digest PendingDigest hands out next.
+func (f *Fake) SetDigest(dg *attention.Digest) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Digest = dg
+}
+
+// Completions returns the CompleteDigest calls, in order.
+func (f *Fake) Completions() []Completed {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Completed(nil), f.completions...)
 }
 
 // Candidates returns the candidates passed to Decide, in order.

@@ -3,6 +3,8 @@ package attention
 import (
 	"context"
 	"math/rand"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +16,8 @@ import (
 // decision reaches the owner (notify or escalate) while the owner's clock is
 // outside 07:00-22:00 Bangkok, unless the candidate is protective and Critical.
 // It also checks the daily cap, that protective Criticals are never silenced by
-// anything but dedup, and that every decision left a row.
+// anything but dedup, that every inhibited decision names a delivered inhibitor
+// of the right kind, asset and age, and that every decision left a row.
 func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 	const (
 		n      = 1000
@@ -26,7 +29,9 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 
 	e.clock.Set(bkkAt(-1, 0, 0)) // Monday 00:00 Bangkok
 	keys := []string{"drawdown:portfolio", "dn:1:funding", "dn:2:margin", "price:btc", "price:eth",
-		"liq:okx:btc", "concentration:eth", "news:fed", "stale:okx", "pnl:daily", "basis:sol", "rebalance"}
+		"liq:okx:btc", "concentration:eth", "news:fed", "stale:okx", "pnl:daily", "basis:sol", "rebalance",
+		"price_cross:btc", "price_cross:eth", "liquidation:okx:btc", "move:btc", "move:eth", "move:sol"}
+	subjects := []string{"BTC/USDT", "ETH/USDT", "BTC/USDT:USDT", "SOL/USDT", "portfolio"}
 
 	// independent re-statement of the rule under test: the Bangkok wall clock.
 	quiet := func(ts time.Time) bool {
@@ -40,6 +45,7 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 		at        time.Time
 	}
 	var all []outcome
+	inhibited := 0
 	ids := map[string]bool{}
 	counts := map[proactive.Disposition]int{}
 	quietSeen, protectiveQuiet := 0, 0
@@ -49,6 +55,11 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 		now := e.clock.Now()
 
 		c := cand(keys[rng.Intn(len(keys))], proactive.Severity(rng.Intn(4)))
+		c.Subject = subjects[rng.Intn(len(subjects))]
+		if strings.HasPrefix(c.DedupKey, "price_cross:") || strings.HasPrefix(c.DedupKey, "move:") ||
+			strings.HasPrefix(c.DedupKey, "liquidation:") || strings.HasPrefix(c.DedupKey, "dn:") {
+			c.DedupKey += ":" + strconv.Itoa(rng.Intn(8)) // many situations, so dedup does not hide the rule
+		}
 		c.TriggerID = "trig:" + c.DedupKey
 		c.Protective = rng.Intn(4) == 0
 		c.Shadow = rng.Intn(30) == 0
@@ -74,6 +85,34 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 		}
 		all = append(all, o)
 		ids[d.ID] = true
+
+		if by, ok := strings.CutPrefix(d.Reason, ReasonInhibitedPrefix); ok {
+			inhibited++
+			if d.Disposition != proactive.DispDrop {
+				t.Fatalf("decision %d: inhibited but %s", i, d.Disposition)
+			}
+			if c.Protective && c.Severity == critical {
+				t.Fatalf("decision %d: a protective critical was inhibited by %s", i, by)
+			}
+			// independent restatement: some earlier DELIVERED message with that key
+			// and an inhibiting prefix, of the right asset and within the rule's age.
+			found := false
+			for _, prev := range all[:len(all)-1] {
+				pc := prev.d.Candidate
+				if !prev.delivered || pc.DedupKey != by {
+					continue
+				}
+				for _, r := range defaultInhibits {
+					if strings.HasPrefix(by, r.WhenPrefix) && strings.HasPrefix(c.DedupKey, r.SuppressPrefix) &&
+						now.Sub(prev.at) < r.For && (!r.SameBaseAsset || (baseAsset(pc) != "" && baseAsset(pc) == baseAsset(c))) {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("decision %d (%s %s) inhibited by %q, which no delivered message explains", i, c.DedupKey, c.Subject, by)
+			}
+		}
 
 		protectiveCritical := c.Protective && c.Severity == critical
 		if quiet(now) {
@@ -132,6 +171,9 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 		if counts[d] == 0 {
 			t.Errorf("seed never produced a %s decision (counts %v)", d, counts)
 		}
+	}
+	if inhibited == 0 {
+		t.Errorf("seed never produced an inhibited decision (counts %v)", counts)
 	}
 	if quietSeen < n/4 || protectiveQuiet == 0 {
 		t.Errorf("weak run: %d decisions in quiet hours, %d protective criticals among them", quietSeen, protectiveQuiet)

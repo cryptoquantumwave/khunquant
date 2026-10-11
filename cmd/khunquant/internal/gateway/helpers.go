@@ -13,6 +13,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
+	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/dingtalk"
@@ -72,6 +73,8 @@ type gatewayServices struct {
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
 	NotifyService    *notify.Service // nil when proactive is off or the service could not be built; nil means delivery is disabled
+	Attention        *attention.Outbox // nil when attention mode is off or the database is unavailable; submit candidates here
+	attentionRun     *attentionRunner  // the outbox's Run loop; nil unless attention is live and can deliver
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

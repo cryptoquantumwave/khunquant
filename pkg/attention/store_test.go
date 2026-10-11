@@ -41,8 +41,8 @@ func TestNew_Validation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var v int
-	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 1 {
-		t.Fatalf("schema version = %d, err %v; want 1", v, err)
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 2 {
+		t.Fatalf("schema version = %d, err %v; want 2", v, err)
 	}
 	// an unwritable database makes New fail rather than panic.
 	closed := sqlitextest.Open(t)

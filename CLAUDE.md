@@ -82,14 +82,16 @@ make docker-run        # Run gateway in Docker
 
 ## CI and Code Quality
 
-`.github/workflows/pr.yml` runs three required checks on every pull request. All three must pass
-before merge:
+`.github/workflows/pr.yml` runs five checks on every pull request. All of them must pass before
+merge:
 
 | Check | What it runs |
 |---|---|
 | **Linter** | `go generate ./...`, then `golangci-lint` **pinned to v2.10.1** |
 | **Tests** | `go generate ./...`, then `go test ./...` (no flags) |
 | **Security Check** | `govulncheck -C . -format text ./...` (govulncheck v1.1.4) |
+| **Frontend Build** | in `web/frontend`: `pnpm install --frozen-lockfile`, `pnpm build`, a stale-`routeTree.gen.ts` diff check, `pnpm lint` |
+| **Docker Build** | builds `docker/Dockerfile` without pushing |
 
 ### `make check` does not run the linter
 
@@ -150,12 +152,12 @@ fixes the defect. Do not leave a permanently-red test in the tree.
 See SECURITY.md for the full posture. The rules that new code most often breaks:
 
 - **Every new tool must be classified in `pkg/tools/classification.go`** (`ClassOf`: read,
-  notify, local state, automation, trade, funds, system), choosing the more restrictive class when
+  notify, local state, automation, propose, trade, funds, system), choosing the more restrictive class when
   in doubt. Autonomous turns (heartbeat, scheduled jobs, and anything spawned from them) may call
   read, notify and local-state tools only; an unclassified tool — every MCP tool included — is
   denied there and hidden from its tool definitions.
   `TestClassOf_AllRegisteredToolsClassified` (and the gateway variant) fail on a registered tool
-  with no class. Exits are trade tools too: autonomous turns cannot unwind. A turn-starting call
+  with no class. Exits are trade tools too, so autonomous turns cannot call them. A turn-starting call
   site must tag its origin (`tools.WithToolOrigin`); a context built from `context.Background()`
   that runs a model-driven turn must carry the origin and `AutomationScope` over.
 - **A new workspace state directory or prompt file goes in `autonomousProtectedPaths`**
@@ -168,13 +170,31 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
 - **A tool that moves money gets a row in `defaultToolPolicies()`** (`pkg/tools/policy.go`),
   keyed by its `Name*` constant: `BlockedOrigins: {OriginCron}`, and `RefuseUnderPaperMode` unless
   the tool simulates paper mode itself. `TestPolicyCoversKnownFinancialTools` lists them
-  explicitly — add the new tool there. A tool that only *reduces* exposure gets no row.
-- **Trading tools check `CheckPermission`, `CheckRiskNotional` and `CheckDailyLoss`**, and
-  risk-increasing futures mutations `CheckLeverage(cfg, action, broker.RiskIncrease)`; exits pass
-  `broker.RiskReduce` and skip `CheckDailyLoss` — a safety brake must never block getting out of a
-  position. If an action cannot be classified before it runs, treat it as `RiskIncrease`.
-  `DefaultLimiter.Allow` goes after the dry-run return, right before the first mutation.
-  Reject non-finite numbers yourself — the generic validator does not.
+  explicitly — add the new tool there. A tool that only *reduces* exposure gets no row, so a
+  person is never gated from getting out (the class ceiling above is what keeps autonomous turns
+  away from it). `execute_dca_order` is the deliberate exception: it has no row because a `dca:`
+  job must be able to call it, and the ceiling and its own plan-ID check bound it instead.
+- **Paper mode** (`trading_risk.paper_trading_mode`): spot placement goes through
+  `broker.TradingProviderFor`, which returns a simulation in paper mode while every gate runs as
+  it does live; `execute_dca_order` simulates itself; a tool with no simulation is refused
+  (`RefuseUnderPaperMode`); exits stay real, and the close, reduce, flatten and unwind tools mark
+  their result with `markRealExit`.
+- **Trading tools check `CheckPermission`, `CheckRiskNotional` and — on a risk-increasing path
+  only — `broker.GlobalLossTracker.CheckDailyLossFor(limit, broker.AccountKey(cfg, provider,
+  account))`.** That is per account and fails closed with `ErrEquityUnknown` when the equity
+  guard is armed and the account's sample is stale. `CheckDailyLoss` is the total-only form: do
+  not call it on a new order path. In `create_order` the risk-increasing orders are buys, sells
+  of a contract symbol (`:` in the symbol) and sells carrying margin/borrow/leverage params; in
+  `execute_dca_order`, buys and sells of a contract symbol. Risk-increasing futures mutations
+  also call `CheckLeverage(cfg, action, broker.RiskIncrease)`; exits pass `broker.RiskReduce` and
+  skip the daily-loss check — a safety brake must never block getting out of a position. If an action
+  cannot be classified before it runs, treat it as `RiskIncrease`. `DefaultLimiter.Allow` goes
+  after the dry-run return, right before the first mutation. Reject non-finite numbers yourself
+  — the generic validator does not.
+- **USD caps are enforced in USD.** `max_order_value_usd` and `max_dca_amount_per_order_usd` are
+  USD, but `amount × price` is in the symbol's quote currency (THB on Bitkub). Value the order
+  with `broker.EstimateNotionalUSDWithFallback` and refuse it when the USD value is unknown while
+  a cap is set; never compare `amount × price` to a cap.
 - **A new `ToolConfig` field needs an `IsToolEnabled` switch arm**, which is default-allow for
   unknown names. `TestCatalogToolsHaveEnableArms` catches a missing arm for catalog tools.
 - **Credentials under a `yaml:"-"` subtree** (`Providers`, `Tools`, `Debug`, `Gateway`, most
@@ -205,6 +225,12 @@ Use `futuresPositionSide(positionSide string)` in `pkg/tools/futures.go` which m
 - `"short"` / `"sell"` → order side `"sell"`, position side `"short"`
 
 The `posSide` / `PositionSide` field in the order request is separate and correctly takes `"long"` / `"short"`.
+
+### A position's `Contracts` is a contract count, not a base quantity
+
+Fetched positions report `Contracts` in the same unit as the order `amount` above. Valuing one as `contracts × markPrice` is wrong by `contractSize`× (10× for CHZ/USDT:USDT on OKX, 0.01× for BTC/USDT:USDT), which understates or overstates exposure, notional caps and funding estimates.
+
+**Always use `positionNotionalUSD(contracts, contractSize, markPrice)` in `pkg/tools/futures_helpers.go`**, and get the size from a `positionContractSizeResolver` (the position's own `ContractSize`, else the market's, loaded once).
 
 ## Dependencies
 

@@ -43,6 +43,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"migrate",
 		"model",
 		"onboard",
+		"risk",
 		"skills",
 		"start",
 		"status",

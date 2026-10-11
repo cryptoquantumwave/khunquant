@@ -126,8 +126,7 @@ func NewAgentLoop(
 	// AgentLoop, so wiring it here covers all of them; left unset, the limit
 	// silently resets to zero on every restart.
 	if defaultAgent != nil && defaultAgent.Workspace != "" {
-		broker.GlobalLossTracker.SetStorePath(
-			filepath.Join(defaultAgent.Workspace, "state", "daily_loss.json"))
+		broker.GlobalLossTracker.SetStorePath(broker.LossStatePath(defaultAgent.Workspace))
 	}
 
 	armToolPolicy(cfg, msgBus)

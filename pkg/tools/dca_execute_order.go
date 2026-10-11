@@ -151,7 +151,7 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if err := broker.CheckRiskNotional(t.cfg, quoteNotional); err != nil {
 		return t.recordFailure(ctx, plan, currentPrice, err.Error())
 	}
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+	if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, plan.Provider, plan.Account)); err != nil {
 		return t.recordFailure(ctx, plan, currentPrice, err.Error())
 	}
 

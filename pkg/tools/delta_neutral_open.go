@@ -104,8 +104,14 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	}
 
 	// Gate 3: daily loss limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	lossLimit := t.cfg.TradingRisk.DailyLossLimitUSD
+	for _, key := range []string{
+		broker.AccountKey(t.cfg, plan.FuturesProvider, plan.FuturesAccount),
+		broker.AccountKey(t.cfg, plan.SpotProvider, plan.SpotAccount),
+	} {
+		if err := broker.GlobalLossTracker.CheckDailyLossFor(lossLimit, key); err != nil {
+			return ErrorResult(err.Error())
+		}
 	}
 
 	// Gate 4: per-order value cap, applied to each leg's notional. Opening adds exposure,

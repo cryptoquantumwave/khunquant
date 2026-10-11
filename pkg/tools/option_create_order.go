@@ -167,7 +167,7 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 	}
 
 	// --- Gate 1d: daily loss limit ---
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+	if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
 		return ErrorResult(err.Error())
 	}
 

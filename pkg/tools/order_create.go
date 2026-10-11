@@ -128,8 +128,15 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 
 	// --- Gate 1d: daily loss limit ---
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	// Buys, sells of a contract symbol (a ":" in the unified symbol, where a
+	// sell can open a short) and sells carrying margin / borrow / leverage
+	// params (which can open or enlarge a short on a spot symbol) add risk. A
+	// plain spot sell only reduces exposure, so a tripped limit must never stop
+	// the user getting out.
+	if !strings.EqualFold(side, "sell") || strings.Contains(symbol, ":") || orderParamsAddRisk(params) {
+		if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
+			return ErrorResult(err.Error())
+		}
 	}
 
 	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)

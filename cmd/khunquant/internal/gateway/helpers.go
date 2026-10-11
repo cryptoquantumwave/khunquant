@@ -78,6 +78,7 @@ type gatewayServices struct {
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
 	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint
+	LossGuard        *lossGuardSampler               // non-nil only while daily_loss_limit_usd > 0
 }
 
 // sandboxStateReseter wraps StateManager and Store to implement the ResetState interface.
@@ -210,6 +211,7 @@ func setupAndStartServices(
 ) (*gatewayServices, error) {
 	services := &gatewayServices{}
 	warnOpenPermissions(cfg)
+	services.LossGuard = startLossGuard(cfg)
 
 	// Setup cron tool and service
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
@@ -342,6 +344,8 @@ func stopAndCleanupServices(
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
+	services.LossGuard.Stop()
+	services.LossGuard = nil
 	if services.ChannelManager != nil {
 		services.ChannelManager.StopAll(shutdownCtx)
 	}
@@ -512,6 +516,7 @@ func restartServices(
 
 	// Get current config from agent loop (which has been updated if this is a reload)
 	cfg := al.GetConfig()
+	services.LossGuard = startLossGuard(cfg)
 
 	// Re-create and start cron service with new config
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute

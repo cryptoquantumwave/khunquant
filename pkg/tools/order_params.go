@@ -118,3 +118,18 @@ func sanitizeOrderParams(raw any, risk config.TradingRiskConfig) (map[string]int
 	}
 	return out, nil
 }
+
+// orderParamsAddRisk reports whether sanitized order params could turn a spot
+// order into a margin or leveraged one (and so a sell into a short): any margin
+// key, any borrow-related key, or any leverage / position-side key. The sanitizer
+// only lets these through when allow_margin / allow_leverage permit them, and it
+// refuses every key it does not recognise, so this list is exhaustive.
+func orderParamsAddRisk(params map[string]interface{}) bool {
+	for key := range params {
+		lower := strings.ToLower(strings.TrimSpace(key))
+		if marginParamKeys[lower] || leverageParamKeys[lower] || strings.Contains(lower, "borrow") {
+			return true
+		}
+	}
+	return false
+}

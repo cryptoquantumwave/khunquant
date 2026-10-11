@@ -257,7 +257,7 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 
 	// Step 4: daily loss limit (the rate limit is taken after the dry-run, before the first mutation)
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+	if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
 		return ErrorResult(err.Error())
 	}
 

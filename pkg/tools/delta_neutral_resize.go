@@ -112,8 +112,13 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	// Gate 3: daily loss limit — only for a resize-up. Getting smaller must stay possible
 	// after the limit trips.
 	if !isDecrease {
-		if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-			return ErrorResult(err.Error())
+		for _, key := range []string{
+			broker.AccountKey(t.cfg, plan.FuturesProvider, plan.FuturesAccount),
+			broker.AccountKey(t.cfg, plan.SpotProvider, plan.SpotAccount),
+		} {
+			if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, key); err != nil {
+				return ErrorResult(err.Error())
+			}
 		}
 	}
 

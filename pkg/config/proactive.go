@@ -380,6 +380,12 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 //	heartbeat.mode  governed -> legacy, sweep -> legacy
 //	approvals, mandates      -> off
 //
+// A governed heartbeat hands its decisions to the attention outbox, which only
+// delivers when attention is live. With attention off or shadow they would be
+// recorded and never sent, so even with a valid owner:
+//
+//	heartbeat.mode  governed -> legacy   unless the effective attention.mode is live
+//
 // off and shadow values are returned as configured, an unknown mode string
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
@@ -411,6 +417,14 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Mandates = c.Enabled && c.Mandates.Enabled
 
 	if c.Enabled && ownerOK {
+		// The owner can be reached, but a governed heartbeat still needs attention
+		// to deliver: shadow and off record decisions and send nothing, which
+		// would silently lose every heartbeat message.
+		if e.HeartbeatMode == HeartbeatModeGoverned && e.AttentionMode != ProactiveModeLive {
+			e.Downgrades = append(e.Downgrades, fmt.Sprintf(
+				"proactive: attention.mode is %s, not live; heartbeat.mode governed → legacy", e.AttentionMode))
+			e.HeartbeatMode = HeartbeatModeLegacy
+		}
 		return e
 	}
 

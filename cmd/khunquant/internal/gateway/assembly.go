@@ -143,8 +143,8 @@ func (p phase) sayf(format string, args ...any) {
 }
 
 // buildServices constructs and starts every gateway service for cfg, in this
-// order: loss guard, cron, heartbeat, media store, channel manager (and agent
-// loop wiring, voice), HTTP server, routes, channels, notify, devices.
+// order: loss guard, cron, media store, channel manager (and agent loop wiring,
+// voice), HTTP server, routes, channels, notify, attention, heartbeat, devices.
 //
 // On error it returns the services that were already started, not nil, so the
 // caller can keep tracking and later stop them.
@@ -191,20 +191,6 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		return s, fmt.Errorf("error %s cron service: %w", starting, err)
 	}
 	p.sayf("✓ Cron service %s", p.pick("started", "restarted"))
-
-	// Heartbeat.
-	s.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-		d.State,
-	)
-	s.HeartbeatService.SetBus(msgBus)
-	s.HeartbeatService.SetHandler(heartbeatHandler(al))
-	if err := s.HeartbeatService.Start(); err != nil {
-		return s, fmt.Errorf("error %s heartbeat service: %w", starting, err)
-	}
-	p.sayf("✓ Heartbeat service %s", p.pick("started", "restarted"))
 
 	// Media store for file lifecycle management with TTL cleanup.
 	s.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
@@ -276,9 +262,31 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.NotifyService = buildNotifyService(d, s.ChannelManager)
 
 	// Attention: the governor and the outbox that turns its decisions into
-	// messages. After notify, which it delivers through. The heartbeat handler
-	// does not use it yet; s.Attention is where it will find it.
+	// messages. After notify, which it delivers through.
 	s.Attention, s.attentionRun = buildAttention(d, s.NotifyService)
+
+	// Heartbeat. After attention: a governed heartbeat delivers through the
+	// outbox, so the outbox must exist (or its absence be known) before the first
+	// run is scheduled. The run time is kept in the shared state manager, so a
+	// reload does not start a heartbeat early.
+	s.HeartbeatService = heartbeat.NewHeartbeatService(
+		cfg.WorkspacePath(),
+		cfg.Heartbeat.Interval,
+		cfg.Heartbeat.Enabled,
+		d.State,
+	)
+	if contract := heartbeatContract(cfg, s); contract == heartbeat.ContractGoverned {
+		// No bus: a governed heartbeat publishes nothing itself.
+		s.HeartbeatService.SetContract(contract)
+		s.HeartbeatService.SetContextHandler(governedHeartbeatHandler(al, s.Attention, s.HeartbeatService.Interval()))
+	} else {
+		s.HeartbeatService.SetBus(msgBus)
+		s.HeartbeatService.SetHandler(heartbeatHandler(al))
+	}
+	if err := s.HeartbeatService.Start(); err != nil {
+		return s, fmt.Errorf("error %s heartbeat service: %w", starting, err)
+	}
+	p.sayf("✓ Heartbeat service %s", p.pick("started", "restarted"))
 
 	// Device service, on the shared state manager.
 	s.DeviceService = devices.NewService(devices.Config{
@@ -348,16 +356,23 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: attention outbox, loss guard, channels, devices, notify,
-// heartbeat, cron, media store.
+// resources. Order: heartbeat, attention outbox, loss guard, channels, devices,
+// notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
 func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
-	// The outbox goes first: its final flush delivers through the notify service
-	// and the channels, which are still up at this point.
+	// The heartbeat goes first: a governed run in flight hands its decisions to
+	// the outbox, which must still be accepting them, and Stop cancels that run
+	// and waits for it.
+	if s.HeartbeatService != nil {
+		s.HeartbeatService.Stop()
+	}
+
+	// Then the outbox: its final flush delivers through the notify service and
+	// the channels, which are still up at this point.
 	s.attentionRun.stop()
 	s.attentionRun, s.Attention = nil, nil
 
@@ -372,9 +387,6 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// After the device service, its last caller. Drains queued session writes.
 	stopNotifyService(s.NotifyService)
 	s.NotifyService = nil
-	if s.HeartbeatService != nil {
-		s.HeartbeatService.Stop()
-	}
 	if s.CronService != nil {
 		s.CronService.Stop()
 	}

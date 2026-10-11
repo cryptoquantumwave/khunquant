@@ -39,6 +39,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"clean",
 		"cron",
 		"gateway",
+		"heartbeat",
 		"launcher",
 		"migrate",
 		"model",

@@ -209,3 +209,53 @@ func TestEstimateFundingFee_UsesContractSize(t *testing.T) {
 		})
 	}
 }
+
+// TestFuturesRiskSummary_TotalNotionalUsesContractSize: "Total notional" in the risk summary
+// is the sum of contracts x contract size x mark. Fails on the old arithmetic (contracts x
+// mark): size 10, 136 contracts at 0.033 gave 4.49 instead of 44.88; size 0.01, 200 contracts
+// at 2000 gave 400000.00 instead of 4000.00.
+func TestFuturesRiskSummary_TotalNotionalUsesContractSize(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	tests := []struct {
+		name       string
+		contracts  float64
+		mark       float64
+		marketSize float64
+		onPosition bool
+		want       string
+	}{
+		{"size 10 from market", 136, 0.033, 10, false, "Total notional:       44.88 USD"},
+		{"size 10 on position", 136, 0.033, 10, true, "Total notional:       44.88 USD"},
+		{"size 0.01 from market", 200, 2000, 0.01, false, "Total notional:       4000.00 USD"},
+		{"size 0.01 on position", 200, 2000, 0.01, true, "Total notional:       4000.00 USD"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sym := "ABC/USDT:USDT"
+			side := "short"
+			var posSize *float64
+			if tc.onPosition {
+				posSize = f(tc.marketSize)
+			}
+			fp := &mockFuturesProvider{
+				fetchFuturesPositionsFn: func(context.Context, []string) ([]ccxt.Position, error) {
+					return []ccxt.Position{{Contracts: f(tc.contracts), MarkPrice: f(tc.mark), Symbol: &sym, Side: &side, ContractSize: posSize}}, nil
+				},
+				loadMarketsFn: func(context.Context) (map[string]ccxt.MarketInterface, error) {
+					return map[string]ccxt.MarketInterface{sym: {ContractSize: f(tc.marketSize)}}, nil
+				},
+			}
+			orig := futuresProviderFn
+			futuresProviderFn = func(context.Context, *config.Config, string, string) (broker.FuturesProvider, error) { return fp, nil }
+			t.Cleanup(func() { futuresProviderFn = orig })
+
+			res := NewFuturesRiskSummaryTool(&config.Config{}).Execute(context.Background(), map[string]any{"provider": "okx"})
+			if res.IsError {
+				t.Fatalf("unexpected error: %s", res.ForLLM)
+			}
+			if out := res.ForUser + res.ForLLM; !strings.Contains(out, tc.want) {
+				t.Errorf("want %q in:\n%s", tc.want, out)
+			}
+		})
+	}
+}

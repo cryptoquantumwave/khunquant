@@ -180,6 +180,7 @@ func (t *FuturesRiskSummaryTool) Execute(ctx context.Context, args map[string]an
 	}
 
 	var rows []posRow
+	sizes := &positionContractSizeResolver{fp: fp}
 	var totalNotional, totalUnrealPnl float64
 	var worstDist float64 = math.MaxFloat64
 	var worstMarginRatio float64
@@ -216,7 +217,10 @@ func (t *FuturesRiskSummaryTool) Execute(ctx context.Context, args map[string]an
 			row.upnl = *p.UnrealizedPnl
 		}
 		if row.mark > 0 && row.contracts != 0 {
-			totalNotional += math.Abs(row.contracts) * row.mark
+			// Contracts is a contract count: value it with the contract size (position's own,
+			// else the market's; unresolved is treated as 1 for this display-only total).
+			cs, _ := sizes.size(ctx, p, normalizeFuturesSymbol(row.sym))
+			totalNotional += positionNotionalUSD(row.contracts, cs, row.mark)
 		}
 		totalUnrealPnl += row.upnl
 		if distPct > 0 && distPct < worstDist {

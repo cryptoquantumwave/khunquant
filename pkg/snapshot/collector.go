@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,64 @@ type exchangeAccount struct {
 type CollectResult struct {
 	Snapshot *Snapshot
 	Errors   []string // per-account errors (e.g. "binance/main: connection refused")
+
+	// ErrorsByAccount attributes the failures in Errors to their account, keyed
+	// "exchange/account" (the config spelling; account names are never empty
+	// here). Several messages for one account are joined with "; ". An account
+	// listed here has an incomplete valuation, so its total must not be used.
+	ErrorsByAccount map[string]string
+
+	// AccountTotals is the value of each account that was collected without any
+	// account-level error, in the snapshot quote, keyed "exchange/account". An
+	// account with no balances is present with a total of 0. An account in
+	// ErrorsByAccount is never present.
+	AccountTotals map[string]float64
+
+	// AccountWallets lists, for each account in AccountTotals, the wallet types
+	// that were successfully read (sorted; empty wallets count). Two totals for
+	// the same account are comparable only if their wallet lists are equal: a
+	// wallet type that failed this time but not last time makes the total look
+	// like a loss.
+	AccountWallets map[string][]string
+
+	// WalletErrorsByAccount records wallet types that failed inside an
+	// otherwise successful account (also listed in Errors). Unlike
+	// ErrorsByAccount this does not exclude the account from AccountTotals; the
+	// missing wallet type is simply absent from AccountWallets.
+	WalletErrorsByAccount map[string]string
+}
+
+// addError records an account failure in both Errors and ErrorsByAccount.
+func (r *CollectResult) addError(label, msg string) {
+	r.Errors = append(r.Errors, label+": "+msg)
+	if r.ErrorsByAccount == nil {
+		r.ErrorsByAccount = make(map[string]string)
+	}
+	if prev, ok := r.ErrorsByAccount[label]; ok {
+		msg = prev + "; " + msg
+	}
+	r.ErrorsByAccount[label] = msg
+}
+
+// addWalletError records a wallet type that failed inside an account that is
+// still usable: it is listed in Errors and WalletErrorsByAccount only.
+func (r *CollectResult) addWalletError(label, msg string) {
+	r.Errors = append(r.Errors, label+": "+msg)
+	if r.WalletErrorsByAccount == nil {
+		r.WalletErrorsByAccount = make(map[string]string)
+	}
+	if prev, ok := r.WalletErrorsByAccount[label]; ok {
+		msg = prev + "; " + msg
+	}
+	r.WalletErrorsByAccount[label] = msg
+}
+
+// accountLabel is the "exchange/account" key used by Errors and the per-account maps.
+func accountLabel(exchange, account string) string {
+	if account == "" {
+		return exchange
+	}
+	return exchange + "/" + account
 }
 
 // acctEx pairs a resolved exchangeAccount with its live exchange instance.
@@ -88,11 +147,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 	for _, ea := range accounts {
 		ex, err := exchanges.CreateExchangeForAccount(ea.exchange, ea.account, cfg)
 		if err != nil {
-			acctLabel := ea.exchange
-			if ea.account != "" {
-				acctLabel += "/" + ea.account
-			}
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", acctLabel, err))
+			result.addError(accountLabel(ea.exchange, ea.account), err.Error())
 			continue
 		}
 		acctExchanges = append(acctExchanges, acctEx{ea, ex})
@@ -100,15 +155,13 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 
 	// Pass 2: collect positions, pricing each asset in the exchange's effective quote.
 	var pending []pendingPos
+	wallets := make(map[string][]string) // label -> wallet types read successfully
 
 	for _, ae := range acctExchanges {
 		ea := ae.ea
 		ex := ae.ex
 
-		acctLabel := ea.exchange
-		if ea.account != "" {
-			acctLabel += "/" + ea.account
-		}
+		acctLabel := accountLabel(ea.exchange, ea.account)
 
 		eQuote := effectiveQuote(ex, quote)
 
@@ -117,7 +170,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 			// Basic exchange: use GetBalances (no pricing support).
 			balances, err := ex.GetBalances(ctx)
 			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: get balances: %v", acctLabel, err))
+				result.addError(acctLabel, fmt.Sprintf("get balances: %v", err))
 				continue
 			}
 			for _, b := range balances {
@@ -138,6 +191,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 				}
 				pending = append(pending, pendingPos{pos, eQuote})
 			}
+			wallets[acctLabel] = []string{"spot"}
 			continue
 		}
 
@@ -148,20 +202,71 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 		var err error
 
 		if sliceContains(supportedTypes, "all") {
-			balances, err = we.GetWalletBalances(ctx, "all")
+			var failures []exchanges.WalletFailure
+			if pwe, ok := ex.(exchanges.PartialWalletExchange); ok {
+				// The plain "all" call drops a failed wallet type silently and
+				// returns what is left; the partial variant reports it, so the
+				// wallet list below says what the total really covers.
+				balances, failures, err = pwe.GetWalletBalancesPartial(ctx, "all")
+			} else {
+				balances, err = we.GetWalletBalances(ctx, "all")
+			}
 			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: get wallet balances: %v", acctLabel, err))
+				for _, f := range failures {
+					result.addError(acctLabel, fmt.Sprintf("%s wallet: %v", f.WalletType, f.Err))
+				}
+				result.addError(acctLabel, fmt.Sprintf("get wallet balances: %v", err))
 				continue
 			}
+			failed := make(map[string]bool, len(failures))
+			for _, f := range failures {
+				failed[f.WalletType] = true
+				result.addWalletError(acctLabel, fmt.Sprintf("%s wallet: %v", f.WalletType, f.Err))
+			}
+			var read []string
+			for _, wt := range supportedTypes {
+				if wt != "all" && !failed[wt] {
+					read = append(read, wt)
+				}
+			}
+			if len(read) == 0 {
+				// The exchange lists no concrete wallet types, so name the
+				// aggregate and mark what dropped out of it.
+				read = []string{"all"}
+				for _, f := range failures {
+					read = append(read, "-"+f.WalletType)
+				}
+			}
+			wallets[acctLabel] = read
 		} else {
+			type walletFailure struct {
+				wt  string
+				err error
+			}
+			var failures []walletFailure
+			var read []string
 			for _, wt := range supportedTypes {
 				wb, err := we.GetWalletBalances(ctx, wt)
 				if err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("%s: %s wallet: %v", acctLabel, wt, err))
+					failures = append(failures, walletFailure{wt, err})
 					continue
 				}
+				read = append(read, wt)
 				balances = append(balances, wb...)
 			}
+			for _, f := range failures {
+				msg := fmt.Sprintf("%s wallet: %v", f.wt, f.err)
+				if len(read) == 0 {
+					// Nothing could be read at all: the account has no usable valuation.
+					result.addError(acctLabel, msg)
+				} else {
+					result.addWalletError(acctLabel, msg)
+				}
+			}
+			if len(read) == 0 && len(failures) > 0 {
+				continue
+			}
+			wallets[acctLabel] = read
 		}
 
 		pe, canPrice := ex.(exchanges.PricedExchange)
@@ -227,8 +332,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 		}
 
 		if len(unpriced) > 0 {
-			result.Errors = append(result.Errors,
-				fmt.Sprintf("%s: could not price: %s", acctLabel, strings.Join(unpriced, ", ")))
+			result.addError(acctLabel, fmt.Sprintf("could not price: %s", strings.Join(unpriced, ", ")))
 		}
 	}
 
@@ -266,11 +370,37 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 	}
 
 	// Pass 4: accumulate TotalValue (with cross-rate conversion) and commit positions.
+	//
+	// Per-account totals are accumulated alongside. An account whose valuation
+	// is incomplete (any error above, or a quote with no conversion rate) is left
+	// out of AccountTotals rather than reported low.
+	result.AccountTotals = make(map[string]float64, len(acctExchanges))
+	result.AccountWallets = make(map[string][]string, len(acctExchanges))
+	for _, ae := range acctExchanges {
+		label := accountLabel(ae.ea.exchange, ae.ea.account)
+		if _, failed := result.ErrorsByAccount[label]; !failed {
+			result.AccountTotals[label] = 0
+			w := append([]string(nil), wallets[label]...)
+			sort.Strings(w)
+			result.AccountWallets[label] = w
+		}
+	}
 	var totalValue float64
 	for _, pp := range pending {
 		if pp.pos.Value > 0 {
+			label := accountLabel(pp.pos.Source, pp.pos.Account)
 			if rate, ok := convRates[pp.nativeQuote]; ok {
-				totalValue += pp.pos.Value * rate
+				v := pp.pos.Value * rate
+				totalValue += v
+				if _, tracked := result.AccountTotals[label]; tracked {
+					result.AccountTotals[label] += v
+				}
+			} else {
+				// The position cannot be converted, so the account's total
+				// would be silently low.
+				result.addError(label, fmt.Sprintf("no %s conversion rate for %s", quote, pp.nativeQuote))
+				delete(result.AccountTotals, label)
+				delete(result.AccountWallets, label)
 			}
 		}
 		snap.Positions = append(snap.Positions, pp.pos)

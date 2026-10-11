@@ -684,7 +684,9 @@ func DefaultConfig() *Config {
 			},
 		},
 		TradingRisk: TradingRiskConfig{
-			AllowLeverage: true,
+			AllowLeverage:       true,
+			LossDayTimezone:     "UTC",
+			EquitySampleMinutes: 5,
 		},
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,

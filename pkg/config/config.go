@@ -196,9 +196,19 @@ type TradingRiskConfig struct {
 	// 0 means no limit. Recommended: 10000.
 	MaxOrderValueUSD float64 `json:"max_order_value_usd" env:"KHUNQUANT_TRADING_MAX_ORDER_USD"`
 
-	// DailyLossLimitUSD pauses order execution when the day's realised losses
-	// exceed this value (USD). 0 means no limit.
+	// DailyLossLimitUSD pauses risk-increasing orders when the day's loss
+	// (realised losses, or equity drawdown since the start of the loss day,
+	// whichever is larger) reaches this value (USD). 0 means no limit.
 	DailyLossLimitUSD float64 `json:"daily_loss_limit_usd" env:"KHUNQUANT_TRADING_DAILY_LOSS_USD"`
+
+	// LossDayTimezone is the IANA time zone in which the loss day rolls over at
+	// local midnight (e.g. "Asia/Bangkok"). Default "UTC". An unknown zone is
+	// logged as an error and UTC is used.
+	LossDayTimezone string `json:"loss_day_timezone" env:"KHUNQUANT_TRADING_LOSS_DAY_TIMEZONE"`
+
+	// EquitySampleMinutes is how often the gateway samples account equity for
+	// the daily loss guard (only while DailyLossLimitUSD > 0). Default 5.
+	EquitySampleMinutes int `json:"equity_sample_minutes" env:"KHUNQUANT_TRADING_EQUITY_SAMPLE_MINUTES"`
 
 	// AllowMargin enables margin / cross-collateral order types.
 	// Default false — must explicitly opt-in.

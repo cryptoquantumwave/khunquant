@@ -38,6 +38,7 @@ var autonomousProtectedPaths = []struct {
 	{"memory/dca", "the DCA plan store (plans, schedules, execution history)"},
 	{"memory/delta_neutral", "the delta-neutral plan store (plans, legs, history)"},
 	{"memory/snapshots", "the portfolio snapshot store"},
+	{"memory/proactive", "the proactive-agent store (proactive.db): attention budgets, intents, proposals and the journal that gate what the agent says and does unprompted"},
 	{"sandbox", "sandbox fixtures and the stored Webull session"},
 	{"whatsapp", "the WhatsApp session store (credentials)"},
 	{"pairing", "pending channel pairing requests (pairing/requests.json): access-control state, so a background turn must not plant or alter a pairing code"},

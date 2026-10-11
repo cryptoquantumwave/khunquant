@@ -26,6 +26,7 @@ github.com/cryptoquantumwave/khunquant/pkg/migrate/internal
 github.com/cryptoquantumwave/khunquant/pkg/migrate/sources/openclaw
 github.com/cryptoquantumwave/khunquant/pkg/pairing
 github.com/cryptoquantumwave/khunquant/pkg/pid
+github.com/cryptoquantumwave/khunquant/pkg/proactive
 github.com/cryptoquantumwave/khunquant/pkg/providers
 github.com/cryptoquantumwave/khunquant/pkg/providers/broker
 github.com/cryptoquantumwave/khunquant/pkg/providers/common
@@ -34,6 +35,7 @@ github.com/cryptoquantumwave/khunquant/pkg/routing
 github.com/cryptoquantumwave/khunquant/pkg/session
 github.com/cryptoquantumwave/khunquant/pkg/skills
 github.com/cryptoquantumwave/khunquant/pkg/snapshot
+github.com/cryptoquantumwave/khunquant/pkg/sqlitex
 github.com/cryptoquantumwave/khunquant/pkg/state
 github.com/cryptoquantumwave/khunquant/pkg/ta
 github.com/cryptoquantumwave/khunquant/pkg/tokenizer

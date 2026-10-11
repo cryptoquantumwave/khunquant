@@ -310,6 +310,9 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 	}
 
 	var rows []fundingRow
+	// Contracts is a contract count; value it with the contract size (position's own,
+	// else the market's). An unresolved size is treated as 1 for this display-only estimate.
+	sizes := &positionContractSizeResolver{fp: fp}
 
 	if symbol != "" {
 		// Single symbol estimate
@@ -333,7 +336,8 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 				}
 				if p.Symbol != nil && normalizeFuturesSymbol(*p.Symbol) == symbol {
 					if p.MarkPrice != nil {
-						row.notional = math.Abs(*p.Contracts) * (*p.MarkPrice)
+						cs, _ := sizes.size(ctx, p, symbol)
+						row.notional = positionNotionalUSD(*p.Contracts, cs, *p.MarkPrice)
 					}
 					if p.Side != nil {
 						row.side = *p.Side
@@ -369,7 +373,8 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 				row.nextTime = time.UnixMilli(int64(*rate.NextFundingTimestamp)).UTC().Format(time.RFC3339)
 			}
 			if p.MarkPrice != nil {
-				row.notional = math.Abs(*p.Contracts) * (*p.MarkPrice)
+				cs, _ := sizes.size(ctx, p, sym)
+				row.notional = positionNotionalUSD(*p.Contracts, cs, *p.MarkPrice)
 			}
 			if row.notional > 0 {
 				row.estimated = row.notional * row.rate

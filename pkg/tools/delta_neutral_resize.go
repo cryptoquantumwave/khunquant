@@ -142,13 +142,19 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 			if err != nil || len(positions) == 0 {
 				baseNotional = plan.FuturesNotionalUSDT
 			} else {
+				sizes := &positionContractSizeResolver{fp: fp}
 				for _, p := range positions {
 					if p.Contracts != nil && *p.Contracts != 0 {
 						markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
 						if err == nil && markPrice > 0 {
-							// Live position notional
-							baseNotional = math.Abs(*p.Contracts) * markPrice
-							break
+							// Contracts is a contract COUNT: value it with the contract size, never
+							// guessing 1 — if the size is unknown the plan notional is used below.
+							if cs, ok := sizes.size(ctx, p, plan.FuturesSymbol); ok {
+								baseNotional = positionNotionalUSD(*p.Contracts, cs, markPrice)
+								if baseNotional > 0 {
+									break
+								}
+							}
 						}
 					}
 				}

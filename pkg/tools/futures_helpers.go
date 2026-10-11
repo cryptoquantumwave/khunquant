@@ -144,6 +144,55 @@ func contractsFromNotional(notionalUSD, markPrice, contractSize, minAmount float
 	return rounded, nil
 }
 
+// positionNotionalUSD returns the USD notional of a futures position given its
+// contract count, the base-currency size of one contract and the mark price.
+// A position's Contracts field is a CONTRACT COUNT, not a base quantity (OKX
+// CHZ/USDT:USDT is 10 CHZ per contract, BTC/USDT:USDT is 0.01 BTC), so valuing it
+// as contracts × markPrice is wrong by the contract size. A missing or non-positive
+// contractSize is treated as 1 (Binance USDT-M, where contracts are base units).
+// Returns 0 for any non-finite input or a non-positive mark price.
+func positionNotionalUSD(contracts, contractSize, markPrice float64) float64 {
+	for _, v := range []float64{contracts, contractSize, markPrice} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0
+		}
+	}
+	if markPrice <= 0 {
+		return 0
+	}
+	if contractSize <= 0 {
+		contractSize = 1
+	}
+	return math.Abs(contracts) * contractSize * markPrice
+}
+
+// positionContractSizeResolver finds the contract size of futures positions: the
+// position's own ContractSize when present and positive, otherwise the market's. The
+// market catalogue is loaded at most once, and only if some position needs it.
+type positionContractSizeResolver struct {
+	fp      broker.FuturesProvider
+	markets map[string]ccxt.MarketInterface
+	loaded  bool
+}
+
+// size returns (contractSize, true) when it can be determined, else (0, false).
+// symbol is the CCXT market symbol used for the catalogue lookup.
+func (r *positionContractSizeResolver) size(ctx context.Context, p ccxt.Position, symbol string) (float64, bool) {
+	if p.ContractSize != nil && *p.ContractSize > 0 && !math.IsInf(*p.ContractSize, 0) {
+		return *p.ContractSize, true
+	}
+	if !r.loaded {
+		r.loaded = true
+		if m, err := r.fp.LoadFuturesMarkets(ctx); err == nil {
+			r.markets = m
+		}
+	}
+	if m, ok := r.markets[symbol]; ok && m.ContractSize != nil && *m.ContractSize > 0 && !math.IsInf(*m.ContractSize, 0) {
+		return *m.ContractSize, true
+	}
+	return 0, false
+}
+
 // verifyFuturesFill re-fetches a futures order to detect partial fills.
 // Returns (filled, status, isPartial, err).
 func verifyFuturesFill(ctx context.Context, fp broker.FuturesProvider, id, symbol string, requestedAmount float64) (float64, string, bool, error) {

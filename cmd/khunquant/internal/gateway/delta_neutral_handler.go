@@ -326,8 +326,10 @@ func handleDeltaNeutralMonitorJob(
 		fundingInfo.Available = true
 		if futureFundingRate.FundingRate != nil {
 			fundingInfo.CurrentRate = *futureFundingRate.FundingRate
-			// Estimate next funding payment: contracts * mark_price * funding_rate.
-			fundingInfo.EstimatedNextUSDT = futuresState.Contracts * futuresState.MarkPrice * *futureFundingRate.FundingRate
+			// Estimate next funding payment: position notional * funding_rate. Contracts is a
+			// contract COUNT, so the notional (contracts * contract size * mark) is used, not
+			// contracts * mark. NotionalUSDT stays 0 when the contract size is unknown.
+			fundingInfo.EstimatedNextUSDT = futuresState.NotionalUSDT * *futureFundingRate.FundingRate
 		}
 		if futureFundingRate.FundingTimestamp != nil {
 			fundingInfo.NextFundingTime = time.UnixMilli(int64(*futureFundingRate.FundingTimestamp)).UTC()

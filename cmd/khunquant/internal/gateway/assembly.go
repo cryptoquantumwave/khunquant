@@ -278,10 +278,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	if contract := heartbeatContract(cfg, s); contract == heartbeat.ContractGoverned {
 		// No bus: a governed heartbeat publishes nothing itself.
 		s.HeartbeatService.SetContract(contract)
-		// The tier is read here, from the config this generation was built from, so
-		// a reload that changes proactive.heartbeat.model builds a handler with it.
+		// The tier and the tool subset are read here, from the config this
+		// generation was built from, so a reload that changes
+		// proactive.heartbeat.model or .tools builds a handler with it.
+		eff := cfg.Proactive.Effective()
 		s.HeartbeatService.SetContextHandler(newGovernedHandler(
-			al, s.Attention, s.HeartbeatService.Interval(), cfg.Proactive.Effective().HeartbeatModel))
+			al, s.Attention, s.HeartbeatService.Interval(), eff.HeartbeatModel, eff.HeartbeatTools))
 	} else {
 		s.HeartbeatService.SetBus(msgBus)
 		s.HeartbeatService.SetHandler(heartbeatHandler(al))

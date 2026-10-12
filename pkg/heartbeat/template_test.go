@@ -110,6 +110,18 @@ func TestBuildPrompt_WrapperByContract(t *testing.T) {
 	if strings.Contains(got, "HEARTBEAT_OK") || strings.Contains(got, "execute any necessary actions") {
 		t.Errorf("governed prompt still carries the legacy wrapper:\n%s", got)
 	}
+
+	// The wrapper is one function, so the size of a governed turn can be measured
+	// on the real text (pkg/agent budget tests); it must be what the service sends.
+	wantGoverned := "# Heartbeat Check\n\nCurrent time: 2026-07-13 09:00:00\n\n" +
+		"This is a scheduled heartbeat check. Review the following tasks, look at the data\n" +
+		"with your read tools, and report through respond_proactive.\n\n- check SOL\n\n"
+	if got != wantGoverned {
+		t.Fatalf("governed prompt changed:\n%q\nwant\n%q", got, wantGoverned)
+	}
+	if exported := GovernedPrompt("2026-07-13 09:00:00", "- check SOL\n"); exported != got {
+		t.Fatalf("GovernedPrompt differs from what the service builds:\n%q\n%q", exported, got)
+	}
 }
 
 func TestTemplateAdvisory(t *testing.T) {

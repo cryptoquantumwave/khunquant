@@ -73,7 +73,7 @@ type processOptions struct {
 	SenderDisplayName       string              // Current sender display name for dynamic context
 	UserMessage             string              // User message content (may include prefix)
 	ForcedSkills            []string            // Skills to carry in full in a light prompt (PromptFull already has them all)
-	PromptMode              PromptMode          // PromptFull (default: user turns) or PromptLight (background turns)
+	PromptMode              PromptMode          // PromptFull (default: user turns), PromptLight (background turns) or PromptProactive
 	SystemPromptOverride    string              // Override the default system prompt (Used by SubTurns)
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -92,6 +92,14 @@ type processOptions struct {
 	// ExtraTools are registered for this turn only, on a clone of the agent's
 	// registry. Every registry use of the turn goes through the clone.
 	ExtraTools []tools.Tool
+	// ToolFilter, when set, limits the turn's registry clone to the tools it
+	// returns true for, applied before ExtraTools are added. A tool it rejects
+	// is absent from the turn, not just from its definitions: calling it by
+	// name is "tool not found". It narrows only; the turn's origin policy is
+	// checked as for any turn. nil means every tool of the agent.
+	ToolFilter func(name string) bool
+	// OfferLoadSkill is BuildOptions.OfferLoadSkill for a PromptProactive turn.
+	OfferLoadSkill bool
 	// ModelOverride pins the model tier for every iteration of the turn,
 	// instead of letting the router score the message.
 	ModelOverride modelOverride
@@ -118,7 +126,7 @@ const (
 // check must use the same value, or an estimate based on one prompt would be
 // compared against a request built with another.
 func (o processOptions) promptBuildOptions() BuildOptions {
-	return BuildOptions{Mode: o.PromptMode, ForcedSkills: o.ForcedSkills}
+	return BuildOptions{Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill}
 }
 
 type continuationTarget struct {
@@ -1391,9 +1399,9 @@ func (al *AgentLoop) runAgentLoop(
 	// sees them, and every agent.Tools use below - definitions, execution, the
 	// TTL tick, the context estimate - reaches the clone without a parameter
 	// having to be threaded through.
-	if len(opts.ExtraTools) > 0 {
+	if len(opts.ExtraTools) > 0 || opts.ToolFilter != nil {
 		turnAgent := *agent
-		turnAgent.Tools = agent.Tools.Clone()
+		turnAgent.Tools = agent.Tools.CloneFiltered(opts.ToolFilter)
 		for _, tool := range opts.ExtraTools {
 			turnAgent.Tools.Register(tool)
 		}

@@ -36,7 +36,7 @@ func TestHeartbeatGoverned_TurnGetsTheIntervalDeadline(t *testing.T) {
 		r := &fakeRunner{res: agent.ProactiveTurnResult{
 			Decisions: []proactive.Decision{{Kind: proactive.DecideSilent}},
 		}}
-		governedHeartbeatHandler(r, &fakeSubmitter{}, interval, proactive.ModelTierPrimary)(context.Background(), "p", "", "")
+		governedHeartbeatHandler(r, &fakeSubmitter{}, interval, proactive.ModelTierPrimary, nil)(context.Background(), "p", "", "")
 		reqs := r.requests()
 		if len(reqs) != 1 || reqs[0].Deadline != want {
 			t.Errorf("interval %v: turn deadline = %+v, want %v", interval, reqs, want)

@@ -70,6 +70,14 @@ type ProactiveHeartbeatConfig struct {
 	// (the normal model, the default) or light (the cheap one, when the agent has
 	// one). It has no effect on the legacy heartbeat.
 	Model string `json:"model" env:"KHUNQUANT_PROACTIVE_HEARTBEAT_MODEL"` // primary | light
+	// Tools names the tools a governed heartbeat's turn is offered, so that each
+	// run does not pay for the definitions of tools it will not use. Empty is the
+	// built-in portfolio-check set; ["*"] is every tool a proactive turn may call.
+	// The list can only narrow what the turn's ceiling allows: naming a tool the
+	// ceiling denies (message, create_order) offers nothing. Unknown names are
+	// warned about and ignored. It has no effect on the legacy heartbeat. From
+	// the environment it is a comma-separated list.
+	Tools []string `json:"tools,omitempty" env:"KHUNQUANT_PROACTIVE_HEARTBEAT_TOOLS" envSeparator:","`
 }
 
 // AttentionConfig governs how much proactive output reaches the owner.
@@ -373,6 +381,12 @@ type EffectiveModes struct {
 	// unknown value is primary, never light.
 	HeartbeatModel proactive.ModelTier
 
+	// HeartbeatTools is proactive.heartbeat.tools, cleaned: names trimmed,
+	// de-duplicated and, when a tool-name checker is registered
+	// (SetToolNameChecker), stripped of names no tool has. Empty means the
+	// built-in default set for the turn; a lone "*" means every permitted tool.
+	HeartbeatTools []string
+
 	Approvals  bool
 	Mandates   bool
 	Intents    bool
@@ -424,6 +438,7 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 
 	e.HeartbeatMode, _ = modeOrDefault(c.Heartbeat.Mode, HeartbeatModeLegacy, heartbeatModes...)
 	e.HeartbeatModel = heartbeatTierOrDefault(c.Heartbeat.Model)
+	e.HeartbeatTools, _ = cleanToolNames(c.Heartbeat.Tools)
 	e.AttentionMode, _ = modeOrDefault(c.Attention.Mode, ProactiveModeShadow, tieredModes...)
 	e.TriggersMode, _ = modeOrDefault(c.Triggers.Mode, ProactiveModeOff, tieredModes...)
 	e.PolicyMode, _ = modeOrDefault(c.Policy.Mode, ProactiveModeOff, tieredModes...)
@@ -520,6 +535,10 @@ func LogProactiveDowngrades(c ProactiveConfig) {
 // fixed. The error text names fields and values of the offending settings, but
 // never an owner ID.
 func reportProactive(c ProactiveConfig) {
+	if _, unknown := cleanToolNames(c.Heartbeat.Tools); len(unknown) > 0 {
+		logProactiveOnce(proactiveWarnLog, fmt.Sprintf(
+			"proactive.heartbeat.tools: ignoring unknown tool name(s) %s", strings.Join(unknown, ", ")))
+	}
 	if err := ValidateProactive(c); err != nil {
 		logProactiveOnce(proactiveErrorLog,
 			"proactive: invalid config, treating as no owner and disabling delivering modes: "+
@@ -531,6 +550,51 @@ func reportProactive(c ProactiveConfig) {
 		logProactiveOnce(proactiveWarnLog, "proactive: owner not configured; proactive delivery disabled")
 	}
 	LogProactiveDowngrades(c)
+}
+
+// AllToolsName in proactive.heartbeat.tools stands for every tool a proactive
+// turn is permitted to call.
+const AllToolsName = "*"
+
+var (
+	toolNameCheckerMu sync.RWMutex
+	toolNameChecker   func(name string) bool
+)
+
+// SetToolNameChecker registers the predicate that says whether a name is a
+// known tool. The tools package cannot be imported here (it imports this
+// package), so it registers itself when it is linked in; a binary without it
+// simply cannot tell, and then no name is judged unknown. nil unregisters.
+func SetToolNameChecker(f func(name string) bool) {
+	toolNameCheckerMu.Lock()
+	defer toolNameCheckerMu.Unlock()
+	toolNameChecker = f
+}
+
+// cleanToolNames trims, drops empties and de-duplicates a tool list, keeping
+// the first occurrence's order. A name the registered checker does not know is
+// returned in unknown instead of in names; AllToolsName is always kept. A list
+// whose every name is unknown comes back empty, which means "the default set":
+// a typo must not leave a heartbeat with no tools to read the portfolio with.
+func cleanToolNames(raw []string) (names, unknown []string) {
+	toolNameCheckerMu.RLock()
+	known := toolNameChecker
+	toolNameCheckerMu.RUnlock()
+
+	seen := make(map[string]bool, len(raw))
+	for _, n := range raw {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		if n != AllToolsName && known != nil && !known(n) {
+			unknown = append(unknown, n)
+			continue
+		}
+		names = append(names, n)
+	}
+	return names, unknown
 }
 
 // redactOwnerValues removes the owner's IDs from s. The validation messages are

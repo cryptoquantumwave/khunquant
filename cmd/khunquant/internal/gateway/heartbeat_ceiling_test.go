@@ -74,7 +74,7 @@ func TestHeartbeatGoverned_NoMessageTool(t *testing.T) {
 	}
 
 	sub := &fakeSubmitter{}
-	res := governedHeartbeatHandler(f.al, sub, 30*time.Minute, proactive.ModelTierPrimary)(context.Background(), "heartbeat prompt", "", "")
+	res := governedHeartbeatHandler(f.al, sub, 30*time.Minute, proactive.ModelTierPrimary, nil)(context.Background(), "heartbeat prompt", "", "")
 	if res == nil || res.IsError {
 		t.Fatalf("handler result = %+v", res)
 	}

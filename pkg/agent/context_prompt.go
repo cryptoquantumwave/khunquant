@@ -25,6 +25,13 @@ const (
 	// to the load_skill tool, and caps memory. It is for background turns
 	// (sub-turns, proactive turns) where the full prompt is mostly dead weight.
 	PromptLight
+	// PromptProactive is for proactive turns (a governed heartbeat, a wake-up
+	// about candidates). It is a light prompt cut down further: no guidance on
+	// replying to a person, formatting for chat, writing memory or discovering
+	// tools, no bootstrap file that only matters in conversation, and a skills
+	// index of one line per skill (only when load_skill is offered). See
+	// buildProactiveSystemPrompt.
+	PromptProactive
 )
 
 // DefaultLightMemoryCapBytes is the memory budget of a light prompt when the
@@ -47,6 +54,11 @@ type BuildOptions struct {
 	// MemoryCapBytes caps the # Memory section of a light prompt (0 means
 	// DefaultLightMemoryCapBytes). Ignored in PromptFull.
 	MemoryCapBytes int
+	// OfferLoadSkill says the turn has the load_skill tool. Only PromptProactive
+	// reads it: with the tool, the prompt lists skills by name and description;
+	// without it a listing would be a list of things the turn cannot open, so
+	// the listing is left out.
+	OfferLoadSkill bool
 }
 
 // promptCacheKey identifies one cached system prompt. ForcedSkills is the
@@ -55,12 +67,13 @@ type promptCacheKey struct {
 	mode   PromptMode
 	forced string
 	memCap int
+	skills bool // OfferLoadSkill, PromptProactive only
 }
 
 // normalize reduces options to the fields that affect the prompt for the mode,
 // and returns the canonical (sorted, de-duplicated) forced-skill list.
 func (o BuildOptions) normalize() (BuildOptions, promptCacheKey) {
-	if o.Mode != PromptLight {
+	if o.Mode != PromptLight && o.Mode != PromptProactive {
 		// A full prompt carries every skill and uncapped memory already, so
 		// the other fields cannot change it: do not let them split the cache.
 		return BuildOptions{Mode: PromptFull}, promptCacheKey{mode: PromptFull}
@@ -80,8 +93,13 @@ func (o BuildOptions) normalize() (BuildOptions, promptCacheKey) {
 		memCap = DefaultLightMemoryCapBytes
 	}
 
-	norm := BuildOptions{Mode: PromptLight, ForcedSkills: forced, MemoryCapBytes: memCap}
-	return norm, promptCacheKey{mode: PromptLight, forced: strings.Join(forced, "\x00"), memCap: memCap}
+	norm := BuildOptions{Mode: o.Mode, ForcedSkills: forced, MemoryCapBytes: memCap}
+	key := promptCacheKey{mode: o.Mode, forced: strings.Join(forced, "\x00"), memCap: memCap}
+	if o.Mode == PromptProactive {
+		norm.OfferLoadSkill = o.OfferLoadSkill
+		key.skills = o.OfferLoadSkill
+	}
+	return norm, key
 }
 
 // promptCacheEntry is one cached prompt together with the baseline it was
@@ -140,9 +158,12 @@ func (cb *ContextBuilder) BuildSystemPromptFor(o BuildOptions) string {
 	// baseline, making the staleness invisible.
 	baseline := cb.buildCacheBaseline()
 	var prompt string
-	if norm.Mode == PromptLight {
+	switch norm.Mode {
+	case PromptLight:
 		prompt = cb.buildLightSystemPrompt(norm)
-	} else {
+	case PromptProactive:
+		prompt = cb.buildProactiveSystemPrompt(norm)
+	default:
 		prompt = cb.BuildSystemPrompt()
 	}
 
@@ -318,9 +339,9 @@ func (cb *ContextBuilder) EstimateSystemTokensFor(o BuildOptions, summary string
 
 	// The full-mode estimate has always added the installed skills' text a
 	// second time on top of the static prompt (which already embeds it), and is
-	// kept as it was so user-turn numbers do not move. A light prompt carries
-	// no skill bodies, so it adds nothing here.
-	if o.Mode != PromptLight {
+	// kept as it was so user-turn numbers do not move. A light or proactive
+	// prompt carries no skill bodies, so it adds nothing here.
+	if o.Mode != PromptLight && o.Mode != PromptProactive {
 		if skillsText := cb.buildActiveSkillsContext(nil); skillsText != "" {
 			totalChars += utf8.RuneCountInString(skillsText)
 			totalChars += 7 // separator \n\n---\n\n

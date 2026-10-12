@@ -303,6 +303,14 @@ func turnMayCall(ctx context.Context, name string) bool {
 	return false
 }
 
+// TurnMayCall reports whether the turn ctx describes may call the named tool:
+// the predicate ExecuteWithContext enforces and ToProviderDefsFor shows
+// definitions by. It lets a caller that narrows a turn's registry ask what the
+// ceiling would have allowed.
+func TurnMayCall(ctx context.Context, name string) bool {
+	return turnMayCall(ctx, name)
+}
+
 // proactiveTurnMayCall is the ceiling of a proactive turn: every read-class tool
 // (bar web_fetch and the two discovery tools, below) and respond_proactive,
 // nothing else. No notify tool (the runtime delivers, the

@@ -511,6 +511,23 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.logInfof("Heartbeat completed: %s", result.ForLLM)
 }
 
+// GovernedPrompt is the prompt a governed heartbeat gives its proactive turn:
+// the time and HEARTBEAT.md's content, with no request for HEARTBEAT_OK or for
+// actions, because the proactive turn puts its own contract (respond_proactive,
+// silence by default) ahead of it. now is formatted by the caller. It is
+// exported so that the size of a governed turn can be measured on the real text.
+func GovernedPrompt(now, content string) string {
+	return fmt.Sprintf(`# Heartbeat Check
+
+Current time: %s
+
+This is a scheduled heartbeat check. Review the following tasks, look at the data
+with your read tools, and report through respond_proactive.
+
+%s
+`, now, content)
+}
+
 // buildPrompt builds the heartbeat prompt from HEARTBEAT.md
 func (hs *HeartbeatService) buildPrompt() string {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
@@ -539,15 +556,7 @@ func (hs *HeartbeatService) buildPrompt() string {
 		// The proactive turn puts its own contract (respond_proactive, silence
 		// by default) ahead of this text, so it must not ask for HEARTBEAT_OK or
 		// for actions.
-		return fmt.Sprintf(`# Heartbeat Check
-
-Current time: %s
-
-This is a scheduled heartbeat check. Review the following tasks, look at the data
-with your read tools, and report through respond_proactive.
-
-%s
-`, now, content)
+		return GovernedPrompt(now, content)
 	}
 	return fmt.Sprintf(`# Heartbeat Check
 

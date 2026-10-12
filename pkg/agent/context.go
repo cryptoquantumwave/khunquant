@@ -333,13 +333,12 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
-	bootstrapFiles := []string{
-		"AGENTS.md",
-		"SOUL.md",
-		"USER.md",
-		"IDENTITY.md",
-	}
+	return cb.loadBootstrapFiles("AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md")
+}
 
+// loadBootstrapFiles renders the named workspace files, in the order given,
+// each under a "## name" heading; a file that is missing is skipped.
+func (cb *ContextBuilder) loadBootstrapFiles(bootstrapFiles ...string) string {
 	var sb strings.Builder
 	for _, filename := range bootstrapFiles {
 		filePath := filepath.Join(cb.workspace, filename)

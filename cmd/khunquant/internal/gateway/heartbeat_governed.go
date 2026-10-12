@@ -103,11 +103,16 @@ var newGovernedHandler = governedHeartbeatHandler
 // tier is the model the judgement runs on, fixed when the handler is built from
 // proactive.heartbeat.model (primary by default). A config reload builds a new
 // handler, which is how a changed tier applies.
+//
+// toolNames is proactive.heartbeat.tools as Effective cleaned it, fixed the same
+// way: empty is the turn's built-in default set, "*" every tool the ceiling
+// allows. Offering fewer tools is what keeps each wake-up's first call small.
 func governedHeartbeatHandler(
 	run proactiveRunner,
 	out attentionSubmitter,
 	interval time.Duration,
 	tier proactive.ModelTier,
+	toolNames []string,
 ) heartbeat.ContextHandler {
 	deadline := heartbeatDeadline(interval)
 	return func(ctx context.Context, prompt, _, _ string) *tools.ToolResult {
@@ -121,6 +126,8 @@ func governedHeartbeatHandler(
 			// light one (which the turn serves with the normal model when the
 			// agent has none).
 			Model: tier,
+			// The configured tool subset (the default one when none is set).
+			Tools: toolNames,
 		})
 		if err != nil {
 			logger.WarnCF("heartbeat", "Governed heartbeat turn failed; nothing delivered",

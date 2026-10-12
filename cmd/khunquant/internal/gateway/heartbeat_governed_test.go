@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,7 +86,7 @@ func captureLogs(t *testing.T) *plainLogSink {
 
 func runHandler(t *testing.T, r *fakeRunner, s *fakeSubmitter) {
 	t.Helper()
-	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(context.Background(), "the prompt", "", "")
+	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary, nil)(context.Background(), "the prompt", "", "")
 	if res == nil || res.IsError {
 		t.Fatalf("handler result = %+v", res)
 	}
@@ -270,7 +271,7 @@ func TestHeartbeatGoverned_PassesTheTierItWasBuiltWith(t *testing.T) {
 	for _, tier := range []proactive.ModelTier{proactive.ModelTierPrimary, proactive.ModelTierLight} {
 		logs := captureLogs(t)
 		r := &fakeRunner{res: agent.ProactiveTurnResult{Model: "answering-model"}}
-		res := governedHeartbeatHandler(r, &fakeSubmitter{}, 30*time.Minute, tier)(
+		res := governedHeartbeatHandler(r, &fakeSubmitter{}, 30*time.Minute, tier, nil)(
 			context.Background(), "p", "", "")
 		if res == nil || res.IsError {
 			t.Fatalf("tier %q: result %+v", tier, res)
@@ -286,6 +287,27 @@ func TestHeartbeatGoverned_PassesTheTierItWasBuiltWith(t *testing.T) {
 	}
 }
 
+// The handler asks for exactly the tool list it was built with (nil: the turn's
+// own default), and only for a heartbeat-kind turn.
+func TestHeartbeatGoverned_PassesTheToolListItWasBuiltWith(t *testing.T) {
+	for name, list := range map[string][]string{
+		"default":  nil,
+		"explicit": {"get_ticker", "web_search"},
+		"all":      {"*"},
+	} {
+		r := &fakeRunner{}
+		res := governedHeartbeatHandler(r, &fakeSubmitter{}, 30*time.Minute, proactive.ModelTierPrimary, list)(
+			context.Background(), "p", "", "")
+		if res == nil || res.IsError {
+			t.Fatalf("%s: result %+v", name, res)
+		}
+		reqs := r.requests()
+		if len(reqs) != 1 || fmt.Sprint(reqs[0].Tools) != fmt.Sprint(list) || reqs[0].Kind != proactive.TurnHeartbeatLegacy {
+			t.Fatalf("%s: requests %+v, want tools %v", name, reqs, list)
+		}
+	}
+}
+
 func TestHeartbeatGoverned_TurnErrorDeliversNothing(t *testing.T) {
 	logs := captureLogs(t)
 	for name, err := range map[string]error{
@@ -297,7 +319,7 @@ func TestHeartbeatGoverned_TurnErrorDeliversNothing(t *testing.T) {
 			// Whatever came back alongside an error is not a decision.
 			Decisions: []proactive.Decision{{Kind: proactive.DecideNotify, Text: "must not be sent"}},
 		}}
-		res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(context.Background(), "p", "", "")
+		res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary, nil)(context.Background(), "p", "", "")
 		if res == nil || !res.IsError {
 			t.Fatalf("%s: result = %+v, want an error result so the service logs it", name, res)
 		}
@@ -356,7 +378,7 @@ func TestHeartbeatGoverned_LateDecisionsAreDroppedAfterStop(t *testing.T) {
 		}},
 		block: func(context.Context) { cancel() }, // the stop arrives as the turn ends
 	}
-	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(ctx, "p", "", "")
+	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary, nil)(ctx, "p", "", "")
 	if res == nil || res.IsError {
 		t.Fatalf("result = %+v", res)
 	}
@@ -394,7 +416,7 @@ func TestHeartbeatGoverned_OverARealOutbox_NothingOnTheBusNothingToLastChat(t *t
 	hs.SetContract(heartbeat.ContractGoverned)
 	hs.SetBus(mb)
 	var seenChannel, seenChat string
-	inner := governedHeartbeatHandler(r, ob, 30*time.Minute, proactive.ModelTierPrimary)
+	inner := governedHeartbeatHandler(r, ob, 30*time.Minute, proactive.ModelTierPrimary, nil)
 	var seen sync.Mutex
 	hs.SetContextHandler(func(ctx context.Context, prompt, ch, chat string) *tools.ToolResult {
 		seen.Lock()

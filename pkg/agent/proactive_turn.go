@@ -75,6 +75,18 @@ type ProactiveTurnRequest struct {
 	// has one and on the normal model when it does not. An unknown tier is an
 	// error, not a default.
 	Model proactive.ModelTier
+	// Tools names the tools the turn is offered; respond_proactive is always
+	// there as well. The turn gets those of them that its ceiling allows
+	// (proactiveTurnMayCall) and that are registered: the list can only narrow
+	// the ceiling, never widen it, and a name the ceiling denies (message,
+	// create_order) is silently not offered and, if the model calls it anyway,
+	// refused as before. A tool the ceiling allows but the list leaves out is
+	// absent from the turn, not only hidden: calling it is "tool not found".
+	// Empty means the built-in default for the Kind (heartbeatTools,
+	// candidateTools); AllProactiveTools ("*") means everything the ceiling
+	// allows. Definitions are most of what a turn's first call carries besides
+	// its prompt, so a short list is the main lever on its size.
+	Tools []string
 }
 
 // ProactiveTurnResult is what a proactive turn decided. Nothing in it has been
@@ -202,6 +214,24 @@ func (al *AgentLoop) RunProactiveTurn(
 	block, refs := renderCandidates(req.Candidates, nonce)
 	respond := tools.NewRespondProactiveTool(refs, eff.Approvals)
 
+	// The tools of the turn: its subset, narrowed further by the ceiling at
+	// definition and execution time. The skills listing is only worth its bytes
+	// when the turn can load a skill, so it follows load_skill.
+	subset := proactiveToolFilter(req.Kind, req.Tools)
+	offerSkills := false
+	if subset == nil || subset(tools.NameLoadSkill) {
+		_, offerSkills = agent.Tools.Get(tools.NameLoadSkill)
+	}
+	// A tool leaves the turn's registry only when the ceiling would have allowed
+	// it and the subset does not name it. One the ceiling denies stays, so that a
+	// model that calls it anyway is told it is not permitted in a proactive turn,
+	// as before, rather than that it does not exist; it is neither defined nor
+	// callable either way.
+	var keep func(name string) bool
+	if subset != nil {
+		keep = func(name string) bool { return subset(name) || !tools.TurnMayCall(ctx, name) }
+	}
+
 	report := &turnReport{}
 	sessionKey := sessionKeyAgentPrefix + agent.ID + ":proactive"
 
@@ -211,7 +241,9 @@ func (al *AgentLoop) RunProactiveTurn(
 		ChatID:               chatID,
 		UserMessage:          buildProactiveUserMessage(req.Prompt, block),
 		ForcedSkills:         req.ForcedSkills,
-		PromptMode:           PromptLight,
+		PromptMode:           PromptProactive,
+		OfferLoadSkill:       offerSkills,
+		ToolFilter:           keep,
 		DefaultResponse:      "", // an empty answer is an empty answer, not text to deliver
 		EnableSummary:        false,
 		SendResponse:         false,

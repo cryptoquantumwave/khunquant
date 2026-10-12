@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,11 +79,12 @@ func recordGovernedTiers(t *testing.T) func() []proactive.ModelTier {
 	orig := newGovernedHandler
 	newGovernedHandler = func(
 		run proactiveRunner, out attentionSubmitter, interval time.Duration, tier proactive.ModelTier,
+		toolNames []string,
 	) heartbeat.ContextHandler {
 		mu.Lock()
 		seen = append(seen, tier)
 		mu.Unlock()
-		return orig(run, out, interval, tier)
+		return orig(run, out, interval, tier, toolNames)
 	}
 	t.Cleanup(func() { newGovernedHandler = orig })
 	return func() []proactive.ModelTier {
@@ -259,4 +261,68 @@ func TestStopServices_HeartbeatStopsBeforeTheOutbox(t *testing.T) {
 	if s.Attention != nil || s.attentionRun != nil {
 		t.Fatal("stopServices left the outbox set")
 	}
+}
+
+func withHeartbeatTools(names ...string) func(*config.Config) {
+	return func(c *config.Config) { c.Proactive.Heartbeat.Tools = names }
+}
+
+// recordGovernedTools swaps the handler factory for one that records the tool
+// list the assembly gave it, and returns the lists seen so far.
+func recordGovernedTools(t *testing.T) func() [][]string {
+	t.Helper()
+	var mu sync.Mutex
+	var seen [][]string
+	orig := newGovernedHandler
+	newGovernedHandler = func(
+		run proactiveRunner, out attentionSubmitter, interval time.Duration, tier proactive.ModelTier,
+		toolNames []string,
+	) heartbeat.ContextHandler {
+		mu.Lock()
+		seen = append(seen, append([]string(nil), toolNames...))
+		mu.Unlock()
+		return orig(run, out, interval, tier, toolNames)
+	}
+	t.Cleanup(func() { newGovernedHandler = orig })
+	return func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([][]string(nil), seen...)
+	}
+}
+
+// The governed handler is built with proactive.heartbeat.tools as Effective
+// cleans it (empty by default: the turn's own default subset), and a reload that
+// changes the list builds a handler with the new one.
+func TestHeartbeatAssembly_ToolsFollowConfigAndReload(t *testing.T) {
+	seen := recordGovernedTools(t)
+	governed := func(names ...string) func(*config.Config) {
+		return compose(withOwner("1001"), withAttentionMode(config.ProactiveModeLive),
+			withHeartbeat(config.HeartbeatModeGoverned), withHeartbeatTools(names...))
+	}
+	want := func(label string, wantLists ...[]string) {
+		t.Helper()
+		got := seen()
+		if fmt.Sprintf("%q", got) != fmt.Sprintf("%q", wantLists) {
+			t.Fatalf("%s: handler built with tool lists %q, want %q", label, got, wantLists)
+		}
+	}
+
+	f := newAssemblyFixture(t, governed())
+	want("default", []string{})
+
+	if err := f.reload(governed(" get_ticker ", "get_ticker", "web_search")); err != nil {
+		t.Fatal(err)
+	}
+	want("reload to an explicit list (trimmed, de-duplicated)", []string{}, []string{"get_ticker", "web_search"})
+
+	if err := f.reload(governed("*")); err != nil {
+		t.Fatal(err)
+	}
+	want("reload to all", []string{}, []string{"get_ticker", "web_search"}, []string{"*"})
+
+	if err := f.reload(governed()); err != nil {
+		t.Fatal(err)
+	}
+	want("reload back to the default", []string{}, []string{"get_ticker", "web_search"}, []string{"*"}, []string{})
 }

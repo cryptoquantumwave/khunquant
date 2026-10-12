@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -191,7 +192,17 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	// H-9: arguments are model-written and can carry anything - a pasted key,
+	// a command with a token in it, a message body. Info (the default level,
+	// and what the dashboard shows) gets the argument names and a short
+	// redacted preview; the full arguments are Debug only.
 	logger.InfoCF("tool", "Tool execution started",
+		map[string]any{
+			"tool":         name,
+			"arg_keys":     sortedArgKeys(args),
+			"args_preview": argsPreview(args),
+		})
+	logger.DebugCF("tool", "Tool execution arguments",
 		map[string]any{
 			"tool": name,
 			"args": args,
@@ -220,6 +231,20 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).
 	// Always inject — tools validate what they require.
 	ctx = WithToolContext(ctx, channel, chatID)
+
+	// C-2: enforce per-tool policy here rather than inside each tool. This is
+	// the single funnel for LLM-driven calls — Execute delegates to it — so a
+	// tool cannot be reached without passing this, and a new tool inherits its
+	// declared policy without having to remember anything.
+	//
+	// It does NOT cover callers that construct a tool and invoke Execute
+	// directly, such as the launcher's delta-neutral force-unwind. Those need
+	// their own guard; see the paper-mode refusal in agent_delta_neutral.go.
+	if refusal := checkToolPolicy(ctx, name, args); refusal != nil {
+		logger.WarnCF("tool", "Tool call refused by policy",
+			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
+		return refusal
+	}
 
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
@@ -331,15 +356,33 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
+	return r.toProviderDefs(nil)
+}
+
+// ToProviderDefsFor is ToProviderDefs for one turn: the same definitions in the
+// same order, minus the tools the turn's origin and automation scope may not
+// call. It uses turnMayCall, the predicate ExecuteWithContext enforces, so an
+// autonomous turn is never shown a tool it would be refused; a turn a person
+// started gets exactly what ToProviderDefs returns.
+func (r *ToolRegistry) ToProviderDefsFor(ctx context.Context) []providers.ToolDefinition {
+	return r.toProviderDefs(func(name string) bool { return turnMayCall(ctx, name) })
+}
+
+// toProviderDefs builds the definition list; visible, when non-nil, is asked
+// about each registered name (the key ExecuteWithContext looks tools up by).
+func (r *ToolRegistry) toProviderDefs(visible func(name string) bool) []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
-	for _, name := range sorted {
-		entry := r.tools[name]
+	for _, registered := range sorted {
+		entry := r.tools[registered]
 
 		if !entry.IsCore && entry.TTL <= 0 {
+			continue
+		}
+		if visible != nil && !visible(registered) {
 			continue
 		}
 
@@ -442,4 +485,29 @@ func (r *ToolRegistry) GetAll() []Tool {
 		}
 	}
 	return tools
+}
+
+const argsPreviewLen = 200
+
+func sortedArgKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// argsPreview is a redacted, truncated rendering of args. Redaction runs
+// before truncation, so a secret cut in half at the boundary is still caught.
+func argsPreview(args map[string]any) string {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return "(unprintable)"
+	}
+	s := logger.Redact(string(raw))
+	if len(s) > argsPreviewLen {
+		s = s[:argsPreviewLen] + "…"
+	}
+	return s
 }

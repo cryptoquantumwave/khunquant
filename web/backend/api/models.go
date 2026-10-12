@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // fetchableProviders lists providers that support OpenAI-compatible /models listing.
@@ -366,8 +370,28 @@ func maskAPIKey(key string) string {
 
 // handleFetchModels fetches available models from an upstream provider.
 //
+// SSRF policy (T6-1): api_base is caller-supplied, so a request could point
+// it at loopback, an RFC1918/link-local address, or the cloud metadata IP to
+// probe or read from the local network. But a legitimate operator does
+// exactly this on purpose to point at a LAN Ollama/LM Studio/vLLM instance,
+// so private/loopback targets are not blanket-blocked. Instead:
+//   - A private/loopback host is only reachable when its hostname already
+//     appears as an api_base somewhere in the saved config (providers.* or
+//     model_list) — i.e. an operator previously chose it through the config
+//     path — or when the request sets allow_private_hosts:true for that same
+//     host. Either way the request must also pass the CSRF gate below.
+//   - Link-local addresses (169.254.0.0/16, fe80::/10) and the cloud
+//     metadata IP are never reachable, regardless of allowlist or opt-in.
+//   - The check runs at connect time against the resolved IP (see
+//     utils.NewSafeDialContext), not just against the parsed URL, so DNS
+//     rebinding between validation and connection cannot bypass it.
+//
 //	POST /api/models/fetch
 func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -376,10 +400,11 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req struct {
-		Provider   string `json:"provider"`
-		APIKey     string `json:"api_key"`
-		APIBase    string `json:"api_base"`
-		ModelIndex *int   `json:"model_index,omitempty"`
+		Provider          string `json:"provider"`
+		APIKey            string `json:"api_key"`
+		APIBase           string `json:"api_base"`
+		ModelIndex        *int   `json:"model_index,omitempty"`
+		AllowPrivateHosts bool   `json:"allow_private_hosts,omitempty"`
 	}
 	if err = json.Unmarshal(body, &req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
@@ -415,12 +440,22 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client := h.safeUpstreamHTTPClient(10*time.Second, apiBase, req.AllowPrivateHosts)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	models, err := fetchUpstreamModels(ctx, req.Provider, apiBase, apiKey)
+	models, err := fetchUpstreamModels(ctx, req.Provider, apiBase, apiKey, client)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to fetch models: %v", err), http.StatusBadGateway)
+		if errors.Is(err, utils.ErrRestrictedTarget) {
+			http.Error(w, "api_base points to a restricted or private network address", http.StatusBadRequest)
+			return
+		}
+		logger.DebugF("model fetch upstream error", map[string]any{
+			"provider": req.Provider,
+			"error":    err.Error(),
+		})
+		http.Error(w, "Failed to fetch models from upstream", http.StatusBadGateway)
 		return
 	}
 
@@ -439,6 +474,88 @@ func (h *Handler) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 		"models": models,
 		"total":  len(models),
 	})
+}
+
+// safeUpstreamDialPolicy builds the SSRF policy documented on
+// handleFetchModels: a private/loopback target is only reachable when its
+// host already appears in the saved config, or when allowPrivateOptIn is true
+// and the target host matches requestedAPIBase exactly (the opt-in permits
+// the one host the caller asked for, not an open allowlist a redirect could
+// exploit). Link-local/metadata addresses are never permitted regardless —
+// see utils.IsLinkLocalOrMetadataIP, applied unconditionally by the dialer
+// built from this policy.
+func (h *Handler) safeUpstreamDialPolicy(requestedAPIBase string, allowPrivateOptIn bool) utils.SafeDialPolicy {
+	allowedHosts := map[string]bool{}
+	if cfg, err := config.LoadConfig(h.configPath); err == nil {
+		allowedHosts = allowedPrivateHosts(cfg)
+	}
+	requestedHost := configuredHost(requestedAPIBase)
+
+	return utils.SafeDialPolicy{
+		AllowHost: func(host string) bool {
+			host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+			if allowedHosts[host] {
+				return true
+			}
+			return allowPrivateOptIn && host == requestedHost
+		},
+	}
+}
+
+// safeUpstreamHTTPClient builds an http.Client for reaching a caller-supplied
+// api_base, per safeUpstreamDialPolicy.
+func (h *Handler) safeUpstreamHTTPClient(timeout time.Duration, requestedAPIBase string, allowPrivateOptIn bool) *http.Client {
+	return utils.NewPolicyHTTPClient(timeout, h.safeUpstreamDialPolicy(requestedAPIBase, allowPrivateOptIn))
+}
+
+// configuredHost extracts the lowercase hostname (no port) from a raw API
+// base URL, tolerating a bare "host:port" with no scheme.
+func configuredHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		u, err = url.Parse("//" + raw)
+		if err != nil || u.Hostname() == "" {
+			return ""
+		}
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// allowedPrivateHosts returns the set of hostnames that already appear as an
+// api_base in the saved configuration — either the legacy providers.*
+// section or model_list. A private/loopback target is only ever safe to
+// reach automatically because an operator already pointed some saved config
+// entry at that same host through the config-editing path, never merely
+// because the current request says so.
+func allowedPrivateHosts(cfg *config.Config) map[string]bool {
+	hosts := make(map[string]bool)
+	add := func(raw string) {
+		if h := configuredHost(raw); h != "" {
+			hosts[h] = true
+		}
+	}
+
+	for _, m := range cfg.ModelList {
+		add(m.APIBase)
+	}
+
+	rv := reflect.ValueOf(cfg.Providers)
+	for i := 0; i < rv.NumField(); i++ {
+		field := rv.Field(i)
+		if field.Kind() != reflect.Struct {
+			continue
+		}
+		apiBaseField := field.FieldByName("APIBase")
+		if apiBaseField.IsValid() && apiBaseField.Kind() == reflect.String {
+			add(apiBaseField.String())
+		}
+	}
+
+	return hosts
 }
 
 func (h *Handler) lookupStoredAPIKey(index int, reqProvider, reqAPIBase string) string {
@@ -492,7 +609,13 @@ type upstreamModel struct {
 	OwnedBy string `json:"owned_by,omitempty"`
 }
 
-func fetchUpstreamModels(ctx context.Context, provider, apiBase, apiKey string) ([]upstreamModel, error) {
+// maxUpstreamModelListBytes caps how much of an upstream /models (or Ollama
+// /api/tags) response body is read. A restricted or misconfigured api_base
+// should not let an attacker force this process to buffer an unbounded
+// response.
+const maxUpstreamModelListBytes = 4 << 20 // 4 MiB
+
+func fetchUpstreamModels(ctx context.Context, provider, apiBase, apiKey string, client *http.Client) ([]upstreamModel, error) {
 	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
 
 	var fetchURL string
@@ -505,15 +628,15 @@ func fetchUpstreamModels(ctx context.Context, provider, apiBase, apiKey string) 
 		}
 		root = strings.TrimRight(root, "/")
 		fetchURL = root + "/api/tags"
-		return fetchOllamaModels(ctx, fetchURL)
+		return fetchOllamaModels(ctx, fetchURL, client)
 	default:
 		// OpenAI-compatible: /v1/models
 		fetchURL = apiBase + "/models"
-		return fetchOpenAICompatibleModels(ctx, fetchURL, apiKey)
+		return fetchOpenAICompatibleModels(ctx, fetchURL, apiKey, client)
 	}
 }
 
-func fetchOpenAICompatibleModels(ctx context.Context, fetchURL, apiKey string) ([]upstreamModel, error) {
+func fetchOpenAICompatibleModels(ctx context.Context, fetchURL, apiKey string, client *http.Client) ([]upstreamModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
 	if err != nil {
 		return nil, err
@@ -522,7 +645,10 @@ func fetchOpenAICompatibleModels(ctx context.Context, fetchURL, apiKey string) (
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +658,7 @@ func fetchOpenAICompatibleModels(ctx context.Context, fetchURL, apiKey string) (
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamModelListBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -571,20 +697,29 @@ func fetchOpenAICompatibleModels(ctx context.Context, fetchURL, apiKey string) (
 		return models, nil
 	}
 
+	// Do not echo the upstream body back to the caller: it may contain
+	// credentials or other sensitive content the upstream leaked in an error
+	// page. Log a capped preview server-side at debug level instead.
 	preview := body
 	if len(preview) > 256 {
 		preview = preview[:256]
 	}
-	return nil, fmt.Errorf("decode response: unrecognized shape: %s", strings.TrimSpace(string(preview)))
+	logger.DebugF("model fetch: unrecognized upstream response shape", map[string]any{
+		"preview": strings.TrimSpace(string(preview)),
+	})
+	return nil, errors.New("decode response: unrecognized shape")
 }
 
-func fetchOllamaModels(ctx context.Context, fetchURL string) ([]upstreamModel, error) {
+func fetchOllamaModels(ctx context.Context, fetchURL string, client *http.Client) ([]upstreamModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -600,8 +735,9 @@ func fetchOllamaModels(ctx context.Context, fetchURL string) ([]upstreamModel, e
 			Model string `json:"model"`
 		} `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxUpstreamModelListBytes)).Decode(&parsed); err != nil {
+		logger.DebugF("model fetch: failed to decode ollama response", map[string]any{"error": err.Error()})
+		return nil, errors.New("decode response: unrecognized shape")
 	}
 
 	models := make([]upstreamModel, 0, len(parsed.Models))
@@ -665,8 +801,15 @@ func (h *Handler) handleTestModel(w http.ResponseWriter, r *http.Request) {
 // Unlike handleTestModel which only checks saved config, this endpoint performs
 // a real network probe (e.g. GET /models) to verify the endpoint is reachable.
 //
+// api_base here is just as caller-supplied as handleFetchModels', so it is
+// subject to the same SSRF policy — see the comment on handleFetchModels.
+//
 //	POST /api/models/test-inline
 func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -675,12 +818,13 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 	defer r.Body.Close()
 
 	var req struct {
-		Provider   string `json:"provider"`
-		Model      string `json:"model"`
-		APIBase    string `json:"api_base"`
-		APIKey     string `json:"api_key"`
-		AuthMethod string `json:"auth_method"`
-		ModelIndex *int   `json:"model_index"`
+		Provider          string `json:"provider"`
+		Model             string `json:"model"`
+		APIBase           string `json:"api_base"`
+		APIKey            string `json:"api_key"`
+		AuthMethod        string `json:"auth_method"`
+		ModelIndex        *int   `json:"model_index"`
+		AllowPrivateHosts bool   `json:"allow_private_hosts,omitempty"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -748,9 +892,15 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Perform a real network probe
+	// Perform a real network probe, through the same SSRF-guarded dial policy
+	// used by handleFetchModels (see its policy comment). The policy backs
+	// both the HTTP client (openai-compatible / ollama probes) and the raw
+	// TCP dial (github-copilot probe) so every branch is covered.
+	policy := h.safeUpstreamDialPolicy(m.APIBase, req.AllowPrivateHosts)
+	client := utils.NewPolicyHTTPClient(modelProbeTimeout, policy)
+	dial := utils.NewSafeDialContext(&net.Dialer{Timeout: modelProbeTimeout}, policy)
 	start := time.Now()
-	available := probeModelConnectivity(m)
+	available := probeModelConnectivity(m, client, dial)
 	latency := time.Since(start).Milliseconds()
 
 	result := map[string]any{
@@ -768,18 +918,22 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(result)
 }
 
-// probeModelConnectivity performs a real network probe to verify model endpoint reachability.
-func probeModelConnectivity(m *config.ModelConfig) bool {
+// probeModelConnectivity performs a real network probe to verify model
+// endpoint reachability. client and dial must come from the same
+// SSRF-guarded policy (see (*Handler).safeUpstreamDialPolicy) since apiBase
+// is caller-supplied (test-inline); dial backs the raw-TCP (copilot) probe
+// so that branch is subject to the same policy as the HTTP probes.
+func probeModelConnectivity(m *config.ModelConfig, client *http.Client, dial safeDialContextFunc) bool {
 	apiBase := modelProbeAPIBase(*m)
 	protocol, modelID := splitModel(m.Model)
 
 	switch protocol {
 	case "ollama":
-		return probeOllamaModelFunc(apiBase, modelID)
+		return probeOllamaModelWithClient(client, apiBase, modelID)
 	case "vllm", "lmstudio":
-		return probeOpenAICompatibleModelFunc(apiBase, modelID, m.APIKey.String())
+		return probeOpenAICompatibleModelWithClient(client, apiBase, modelID, m.APIKey.String())
 	case "github-copilot", "copilot":
-		return probeTCPServiceFunc(apiBase)
+		return probeTCPServiceWithDial(dial, apiBase)
 	case "claude-cli", "claudecli", "codex-cli", "codexcli":
 		// CLI-based providers are always reachable if installed
 		return true
@@ -787,7 +941,7 @@ func probeModelConnectivity(m *config.ModelConfig) bool {
 		// For remote providers (OpenAI, Anthropic, Gemini, DeepSeek, etc.),
 		// make a real GET /models request to verify connectivity and credentials.
 		if apiBase != "" {
-			return probeOpenAICompatibleModelFunc(apiBase, modelID, m.APIKey.String())
+			return probeOpenAICompatibleModelWithClient(client, apiBase, modelID, m.APIKey.String())
 		}
 		return false
 	}

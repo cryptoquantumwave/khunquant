@@ -60,42 +60,29 @@ func TestExecuteDCAOrder_ExpiredPlan(t *testing.T) {
 	}
 }
 
+// TestExecuteDCAOrder_GuardrailExceeded drives the tool through the period
+// cap. MR-006: the cap used to skip silently with no row; it now stays a
+// silent result for the agent but leaves a "skipped" row behind.
 func TestExecuteDCAOrder_GuardrailExceeded(t *testing.T) {
-	store := newTestDCAStore(t)
-	planID := seedPlan(t, store, "GuardrailPlan", true)
+	store, mock, planID := newDCAGateFixture(t, "dca-guardrail")
+	now := fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+	setDCAPlan(t, store, planID, func(p *dca.Plan) {
+		p.MaxExecPerPeriod = 1
+		p.ExecPeriod = "day"
+	})
+	seedDCARow(t, store, planID, "completed", "", now.Add(-time.Hour))
 
-	plan, _ := store.GetPlan(context.Background(), planID)
-	plan.MaxExecPerPeriod = 1
-	plan.ExecPeriod = "day"
-	if err := store.UpdatePlan(context.Background(), plan); err != nil {
-		t.Fatalf("UpdatePlan: %v", err)
-	}
+	result := NewExecuteDCAOrderTool(config.DefaultConfig(), store).Execute(testCtx(), map[string]any{"plan_id": float64(planID)})
 
-	// Insert one execution in the current day to trip the guardrail.
-	// Use local time so CountExecutionsInPeriod's local-midnight "since" string-compares correctly.
-	now := time.Now()
-	exec := &dca.Execution{
-		PlanID:      planID,
-		ExecutedAt:  now,
-		Symbol:      "BTC/THB",
-		Provider:    "bitkub",
-		AmountQuote: 100,
-		Status:      "completed",
-		CreatedAt:   now,
+	if result.IsError || !result.Silent {
+		t.Fatalf("expected a silent skip, got %+v", result)
 	}
-	if _, err := store.SaveExecution(context.Background(), exec); err != nil {
-		t.Fatalf("SaveExecution: %v", err)
+	if mock.ordered {
+		t.Error("an order was placed past the period cap")
 	}
-
-	// The execute tool hits CheckPermission before guardrail, so we use a real
-	// config that will fail permission (no API keys). The guardrail would kick
-	// in after the permission gate — verify via CountExecutionsInPeriod directly.
-	count, err := store.CountExecutionsInPeriod(context.Background(), planID, "day")
-	if err != nil {
-		t.Fatalf("CountExecutionsInPeriod: %v", err)
-	}
-	if count < plan.MaxExecPerPeriod {
-		t.Errorf("expected count >= %d, got %d", plan.MaxExecPerPeriod, count)
+	rows := dcaRows(t, store, planID)
+	if len(rows) != 2 {
+		t.Fatalf("expected the seeded row plus one skipped row, got %d", len(rows))
 	}
 }
 

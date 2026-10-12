@@ -44,6 +44,13 @@ func (t *OptionCancelOrderTool) Execute(ctx context.Context, args map[string]any
 		return ErrorResult("provider and id are required")
 	}
 
+	// Permission only. Cancelling reduces exposure, so no risk gates apply
+	// (see riskReducingTools), but the account must still be one the operator
+	// allowed to trade, and the check runs before any provider call.
+	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
+		return ErrorResult(err.Error())
+	}
+
 	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))

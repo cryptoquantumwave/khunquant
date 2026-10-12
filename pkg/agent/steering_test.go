@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
@@ -174,6 +175,46 @@ func TestAgentLoop_RequeueInboundMessage_NilBus(t *testing.T) {
 	err := al.requeueInboundMessage(bus.InboundMessage{Channel: "telegram", Content: "hi"})
 	if err != nil {
 		t.Errorf("requeueInboundMessage nil bus should return nil, got %v", err)
+	}
+}
+
+// A requeued message is one to be processed later, as a turn of its own. It
+// has to go back on the inbound bus, whole. It used to be published outbound,
+// which sent the user's own words back to them as if the agent had said them,
+// and the message was never processed at all.
+func TestRequeueInbound_GoesInbound(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	al := &AgentLoop{bus: msgBus}
+
+	msg := bus.InboundMessage{
+		Channel:    "telegram",
+		SenderID:   "user-7",
+		ChatID:     "chat-9",
+		Content:    "process me later",
+		Media:      []string{"media://abc"},
+		SessionKey: "agent:main:requeue",
+		MessageID:  "m-42",
+		Metadata:   map[string]string{"account_id": "acct-1"},
+	}
+	if err := al.requeueInboundMessage(msg); err != nil {
+		t.Fatalf("requeueInboundMessage: %v", err)
+	}
+
+	// requeueInboundMessage publishes before it returns and the bus is
+	// buffered, so both channels can be read without waiting.
+	select {
+	case got := <-msgBus.InboundChan():
+		if !reflect.DeepEqual(got, msg) {
+			t.Errorf("requeued message was altered on the way:\n got %+v\nwant %+v", got, msg)
+		}
+	default:
+		t.Fatal("the requeued message is not on the inbound bus")
+	}
+
+	select {
+	case echoed := <-msgBus.OutboundChan():
+		t.Fatalf("the requeued message was sent to the user as an agent reply: %+v", echoed)
+	default:
 	}
 }
 

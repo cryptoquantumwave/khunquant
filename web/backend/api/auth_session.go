@@ -57,12 +57,19 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Checked before bcrypt, so a locked-out address costs no hashing.
+	if allowed, retry := middleware.DefaultAuthLimiter.Allow(r); !allowed {
+		middleware.RejectTooManyAttempts(w, retry)
+		return
+	}
 	if !middleware.VerifyDashboardPassword(h.dashboardPasswordHash, req.Password) {
+		middleware.DefaultAuthLimiter.Fail(r)
 		// Deliberately identical to the "no password supplied" case: the
 		// response must not distinguish a wrong password from a malformed one.
 		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	middleware.DefaultAuthLimiter.Succeed(r)
 
 	middleware.IssueSessionFor(w, r, h.sessions)
 	w.Header().Set("Content-Type", "application/json")

@@ -368,6 +368,18 @@ func TestExecutionStateMachineTransitions(t *testing.T) {
 			allowed: true,
 		},
 		{
+			name:    "unwinding_to_recovery_required",
+			from:    deltaneutral.ExecutionStateUnwinding,
+			to:      deltaneutral.ExecutionStateRecoveryRequired,
+			allowed: true,
+		},
+		{
+			name:    "unwinding_to_failed",
+			from:    deltaneutral.ExecutionStateUnwinding,
+			to:      deltaneutral.ExecutionStateFailed,
+			allowed: true,
+		},
+		{
 			name:    "both_legs_filled_is_terminal",
 			from:    deltaneutral.ExecutionStateBothLegsFilled,
 			to:      deltaneutral.ExecutionStateUnwinding,

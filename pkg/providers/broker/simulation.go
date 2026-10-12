@@ -2,7 +2,9 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
@@ -13,13 +15,13 @@ import (
 // It fully satisfies all 4 broker interfaces — reads are delegated to the
 // underlying provider unchanged.
 //
-// Enable globally via config.TradingRiskConfig.PaperTradingMode = true,
-// or per-tool by wrapping any provider:
-//
-//	sim := broker.NewSimulationProvider(realProvider)
+// Production code does not construct it directly: TradingProviderFor wraps the
+// real provider when config.TradingRiskConfig.PaperTradingMode is on.
 type SimulationProvider struct {
-	inner    Provider
-	orderSeq int64
+	inner Provider
+	// orderSeq numbers simulated orders; it is advanced atomically because one
+	// provider instance is shared by concurrent tool calls.
+	orderSeq atomic.Int64
 }
 
 // NewSimulationProvider wraps inner so that order-mutating calls are simulated.
@@ -114,10 +116,25 @@ func (s *SimulationProvider) LoadMarkets(ctx context.Context) (map[string]ccxt.M
 
 // --- TradingProvider (simulated) ---
 
-// CreateOrder simulates an order fill using the live ticker price.
-// Market orders fill immediately at last price.
-// Limit orders fill immediately if price is marketable (buy <= ask, sell >= bid),
-// otherwise they are returned as "open" (partial simulation).
+// PaperOrderIDPrefix starts every simulated order ID, so a simulated order can
+// never be mistaken for a real exchange ID (and vice versa) in logs, history
+// or a follow-up cancel.
+const PaperOrderIDPrefix = "paper-"
+
+// CreateOrder simulates an order. Nothing reaches the exchange; only the
+// ticker is read.
+//
+// A market order fills at the price a real one would be valued at: the ask for
+// a buy, the bid for a sell, the last price when the ticker has no usable edge
+// (resolveOrderPrice, the same rule the order-value cap uses). If no price can
+// be determined the order is refused rather than "filled" at zero.
+//
+// A limit order fills immediately, at its limit price, when it is marketable
+// against that same edge; otherwise it is returned "open". Stop and take-profit
+// orders are returned "open": there is no trigger engine behind them.
+//
+// Average, Remaining, Fee and Cost are always set (zero when nothing filled),
+// so downstream code that dereferences them behaves as it does for a real fill.
 func (s *SimulationProvider) CreateOrder(
 	ctx context.Context,
 	symbol, orderType, side string,
@@ -125,45 +142,46 @@ func (s *SimulationProvider) CreateOrder(
 	price *float64,
 	_ map[string]interface{},
 ) (ccxt.Order, error) {
-	s.orderSeq++
-	id := fmt.Sprintf("sim-%d-%d", time.Now().UnixMilli(), s.orderSeq)
+	if !isPositiveFinite(amount) {
+		return ccxt.Order{}, errors.New("simulation: amount must be a positive, finite number")
+	}
+	seq := s.orderSeq.Add(1)
 	nowMs := time.Now().UnixMilli()
+	id := fmt.Sprintf("%s%d-%d", PaperOrderIDPrefix, nowMs, seq)
+
+	md, _ := s.inner.(MarketDataProvider)
+	marketPx, _, pxErr := resolveOrderPrice(ctx, md, symbol, side, nil)
 
 	var fillPrice float64
 	status := "open"
-
-	// Fetch live price for realistic simulation
-	if md, ok := s.inner.(MarketDataProvider); ok {
-		if ticker, err := md.FetchTicker(ctx, symbol); err == nil {
-			if ticker.Last != nil {
-				fillPrice = *ticker.Last
-			}
-			// Market orders always fill at last price
-			if orderType == "market" {
+	switch orderType {
+	case "market":
+		if pxErr != nil {
+			return ccxt.Order{}, fmt.Errorf("simulation: cannot price a market order for %s: %w", symbol, pxErr)
+		}
+		fillPrice, status = marketPx, "closed"
+	case "limit":
+		if price == nil || !isPositiveFinite(*price) {
+			return ccxt.Order{}, errors.New("simulation: a limit order needs a positive, finite price")
+		}
+		fillPrice = *price
+		if pxErr == nil {
+			if (side == "buy" && *price >= marketPx) || (side == "sell" && *price <= marketPx) {
 				status = "closed"
 			}
-			// Limit orders: fill if marketable
-			if orderType == "limit" && price != nil {
-				if side == "buy" && *price >= fillPrice {
-					status = "closed"
-					fillPrice = *price
-				} else if side == "sell" && *price <= fillPrice {
-					status = "closed"
-					fillPrice = *price
-				}
-			}
+		}
+	default:
+		if price != nil {
+			fillPrice = *price
 		}
 	}
-	if fillPrice == 0 && price != nil {
-		fillPrice = *price
-	}
 
-	filled := 0.0
-	cost := 0.0
+	filled, remaining, cost, average := 0.0, amount, 0.0, 0.0
 	if status == "closed" {
-		filled = amount
+		filled, remaining, average = amount, 0, fillPrice
 		cost = amount * fillPrice
 	}
+	zeroFee := 0.0
 
 	order := ccxt.Order{
 		Id:        &id,
@@ -172,9 +190,12 @@ func (s *SimulationProvider) CreateOrder(
 		Side:      &side,
 		Amount:    &amount,
 		Price:     &fillPrice,
+		Average:   &average,
 		Filled:    &filled,
+		Remaining: &remaining,
 		Cost:      &cost,
 		Status:    &status,
+		Fee:       ccxt.Fee{Cost: &zeroFee},
 		Datetime:  ptr(time.Now().UTC().Format(time.RFC3339)),
 		Timestamp: &nowMs,
 	}
@@ -218,7 +239,7 @@ func (s *SimulationProvider) FetchMyTrades(_ context.Context, _ string, _ *int64
 // --- TransferProvider (simulated) ---
 
 func (s *SimulationProvider) Transfer(_ context.Context, asset string, amount float64, from, to string) (ccxt.TransferEntry, error) {
-	id := fmt.Sprintf("sim-transfer-%d", time.Now().UnixMilli())
+	id := fmt.Sprintf("paper-transfer-%d", time.Now().UnixMilli())
 	return ccxt.TransferEntry{
 		Id:          &id,
 		Currency:    &asset,

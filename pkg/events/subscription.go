@@ -228,11 +228,21 @@ func (s *eventSubscription) dispatch(ctx context.Context, evt Event) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("events: subscriber %q goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
-				}
-			}()
+			// invokeHandler already recovers (and counts) every panic when
+			// PanicPolicy != Crash, so this wrapper only ever sees a panic
+			// reach it when PanicPolicy == Crash — in which case no recover
+			// is installed at all, so the panic propagates out of this
+			// goroutine and crashes the process, per the documented policy.
+			// The recover below is defensive: if it is ever reached anyway,
+			// it still logs and counts instead of silently swallowing it.
+			if s.opts.PanicPolicy != Crash {
+				defer func() {
+					if r := recover(); r != nil {
+						s.counters.panicked.Add(1)
+						log.Printf("events: subscriber %q goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
+					}
+				}()
+			}
 			s.handle(ctx, evt)
 		}()
 	case Keyed:
@@ -259,12 +269,22 @@ func (s *eventSubscription) handle(ctx context.Context, evt Event) {
 
 	done := make(chan handlerResult, 1)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("events: subscriber %q timeout-handler goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
-				done <- handlerResult{panicked: true}
-			}
-		}()
+		// Same reasoning as the Concurrent-dispatch wrapper in dispatch:
+		// invokeHandler already recovers (and counts) every panic when
+		// PanicPolicy != Crash, so a panic only reaches here when
+		// PanicPolicy == Crash — in which case no recover is installed, and
+		// the panic propagates out of this goroutine and crashes the
+		// process. The recover below is defensive: if it is ever reached
+		// anyway, it still logs and counts instead of silently swallowing it.
+		if s.opts.PanicPolicy != Crash {
+			defer func() {
+				if r := recover(); r != nil {
+					s.counters.panicked.Add(1)
+					log.Printf("events: subscriber %q timeout-handler goroutine panic recovered: %v\n%s", s.name, r, debug.Stack())
+					done <- handlerResult{panicked: true}
+				}
+			}()
+		}
 		done <- s.invokeHandler(ctx, evt)
 	}()
 

@@ -102,8 +102,9 @@
     },
     "maixcam": {
       "enabled": false,
-      "host": "0.0.0.0",
-      "port": 18790,
+      "host": "127.0.0.1",
+      "port": 18791,
+      "token": "",
       "allow_from": [],
       "reasoning_channel_id": ""
     },
@@ -363,7 +364,10 @@
     },
     "cron": {
       "enabled": true,
-      "exec_timeout_minutes": 5
+      "exec_timeout_minutes": 5,
+      "workers": 4,
+      "misfire_grace_minutes": 60,
+      "job_timeout_minutes": 10
     },
     "mcp": {
       "enabled": false,

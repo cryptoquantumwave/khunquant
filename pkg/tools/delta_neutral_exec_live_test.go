@@ -22,6 +22,14 @@ type dnFakeSpot struct {
 	tickerErr bool
 	orderErr  bool
 	baseFree  float64 // balance of the base asset for sell paths
+
+	orders []dnFakeSpotOrder // every CreateOrder call that was accepted, in order
+}
+
+// dnFakeSpotOrder records one accepted spot order.
+type dnFakeSpotOrder struct {
+	side   string
+	amount float64
 }
 
 func (f *dnFakeSpot) ID() string                     { return f.id }
@@ -52,10 +60,11 @@ func (f *dnFakeSpot) LoadMarkets(_ context.Context) (map[string]ccxt.MarketInter
 }
 
 // TradingProvider
-func (f *dnFakeSpot) CreateOrder(_ context.Context, _, _, _ string, _ float64, _ *float64, _ map[string]interface{}) (ccxt.Order, error) {
+func (f *dnFakeSpot) CreateOrder(_ context.Context, _, _, side string, amount float64, _ *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	if f.orderErr {
 		return ccxt.Order{}, context.DeadlineExceeded
 	}
+	f.orders = append(f.orders, dnFakeSpotOrder{side: side, amount: amount})
 	id := "spot-order-1"
 	return ccxt.Order{Id: &id}, nil
 }
@@ -88,7 +97,11 @@ func (f *dnFakeSpot) SupportedWalletTypes() []string                            
 // dnFakeFutures is a FuturesProvider for the futures leg (injected via futuresProviderFn).
 type dnFakeFutures struct {
 	*mockFuturesProvider
-	orderErr bool
+	orderErr   bool
+	pnl        *float64 // unrealised PnL reported on the live position
+	noPosition bool // FetchFuturesPositions reports no live position (liquidated / closed by hand)
+
+	orders []broker.FuturesOrderRequest // every CreateFuturesOrder call that was accepted
 }
 
 func (m *dnFakeFutures) FetchFuturesMarkPrice(_ context.Context, _ string) (float64, error) {
@@ -116,17 +129,21 @@ func (m *dnFakeFutures) LoadFuturesMarkets(_ context.Context) (map[string]ccxt.M
 		},
 	}, nil
 }
-func (m *dnFakeFutures) CreateFuturesOrder(_ context.Context, _ broker.FuturesOrderRequest) (ccxt.Order, error) {
+func (m *dnFakeFutures) CreateFuturesOrder(_ context.Context, req broker.FuturesOrderRequest) (ccxt.Order, error) {
 	if m.orderErr {
 		return ccxt.Order{}, context.DeadlineExceeded
 	}
+	m.orders = append(m.orders, req)
 	id := "fut-order-1"
 	return ccxt.Order{Id: &id}, nil
 }
 func (m *dnFakeFutures) FetchFuturesPositions(_ context.Context, _ []string) ([]ccxt.Position, error) {
+	if m.noPosition {
+		return nil, nil
+	}
 	c := 50.0
 	sym := "BTC/USDT:USDT"
-	return []ccxt.Position{{Contracts: &c, Symbol: &sym}}, nil
+	return []ccxt.Position{{Contracts: &c, Symbol: &sym, UnrealizedPnl: m.pnl}}, nil
 }
 
 // installDNFakes registers the fake spot provider and wires the futures seam.
@@ -226,6 +243,8 @@ func TestUnwindDeltaNeutralPosition_LiveSuccess(t *testing.T) {
 	defer store.Close()
 	installDNFakes(t, &dnFakeSpot{id: "dnfake", baseFree: 10}, &dnFakeFutures{mockFuturesProvider: &mockFuturesProvider{}})
 	id := seedDNFakePlan(t, store, "unwind-live", "active")
+	// Unwind sizes only from the plan's recorded legs (no whole-account fallback).
+	seedDNOpenLegs(t, store, id, deltaneutral.ExecutionStateBothLegsFilled, 10, 10)
 
 	res := NewUnwindDeltaNeutralPositionTool(leverageOnCfg(), store).
 		Execute(context.Background(), map[string]any{"plan_id": float64(id), "confirm": true})

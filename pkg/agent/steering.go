@@ -195,27 +195,16 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 // dequeuePendingSubTurnResults polls the SubTurn result channel for the given
 // session and returns all available results without blocking.
 // Returns nil if no active turn state exists for this session.
+//
+// A running turn drains its own turnState directly (drainPendingResults); a
+// session can have more than one registered turn, so a lookup by session key
+// is only right for callers that have nothing but the key.
 func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*tools.ToolResult {
-	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
-	if !ok {
+	ts := al.activeTurnStates.activeForSession(sessionKey)
+	if ts == nil {
 		return nil
 	}
-	ts, ok := tsInterface.(*turnState)
-	if !ok {
-		return nil
-	}
-
-	var results []*tools.ToolResult
-	for {
-		select {
-		case result := <-ts.pendingResults:
-			if result != nil {
-				results = append(results, result)
-			}
-		default:
-			return results
-		}
-	}
+	return ts.drainPendingResults()
 }
 
 // ====================== Hard Abort ======================
@@ -227,52 +216,114 @@ func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*tools.To
 // Use this when the user explicitly requests immediate termination (e.g., "stop now", "abort").
 // For graceful interruption that allows the agent to finish the current tool and summarize,
 // use Steer() instead.
+//
+// HardAbort is CancelTurnsForSession plus a rollback: the messages the aborted
+// turn added to the session are removed, and nothing that was there before the
+// turn is touched. Every root turn registered for the session is aborted - the
+// running one and any still waiting for the session lock. Only the running one
+// has added anything, so only it is rolled back. Sub-turns left running by a
+// turn of this session that has already returned are cancelled too; that turn
+// finished normally, and what it wrote stays.
 func (al *AgentLoop) HardAbort(sessionKey string) error {
-	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
-	if !ok {
+	turns, orphaned := al.activeTurnStates.cancelTargets(sessionKey, false)
+	if len(turns) == 0 && len(orphaned) == 0 {
 		return fmt.Errorf("no active turn state found for session %s", sessionKey)
 	}
 
-	ts, ok := tsInterface.(*turnState)
-	if !ok {
-		return fmt.Errorf("invalid turn state type for session %s", sessionKey)
-	}
+	for _, ts := range turns {
+		logger.InfoCF("agent", "Hard abort triggered", map[string]any{
+			"session_key": sessionKey,
+			"turn_id":     ts.turnID,
+			"depth":       ts.depth,
+		})
 
-	logger.InfoCF("agent", "Hard abort triggered", map[string]any{
-		"session_key":            sessionKey,
-		"turn_id":                ts.turnID,
-		"depth":                  ts.depth,
-		"initial_history_length": ts.initialHistoryLength,
-	})
+		// A turn's goroutine does not stop the instant its context is
+		// cancelled: a tool call in flight still returns, and its result is
+		// still appended to the session. Ask each turn to roll back again on
+		// its way out, while it holds the session lock, so the rollback below
+		// cannot be undone by a late write. Set before the cancellation, so a
+		// turn that exits because of it is sure to see the request.
+		ts.mu.Lock()
+		ts.rollbackOnExit = true
+		ts.mu.Unlock()
+	}
 
 	// IMPORTANT: Trigger cascading cancellation FIRST to stop all child SubTurns
 	// from adding more messages to the session. This prevents race conditions
 	// where rollback happens while children are still writing.
-	ts.Finish(true)
+	abortTurns(turns, orphaned)
 
-	// Rollback session history to the state before this turn started.
-	// This must happen AFTER Finish() to ensure no child turns are still writing.
-	if ts.session != nil {
-		currentHistory := ts.session.GetHistory("")
-		if len(currentHistory) > ts.initialHistoryLength {
-			logger.InfoCF("agent", "Rolling back session history", map[string]any{
-				"from": len(currentHistory),
-				"to":   ts.initialHistoryLength,
-			})
-			// SetHistory with the truncated slice to rollback
-			ts.session.SetHistory("", currentHistory[:ts.initialHistoryLength])
-		}
-	}
-
-	// Roll back session history to the state before the turn started.
-	if ts.session != nil {
-		history := ts.session.GetHistory(sessionKey)
-		if ts.initialHistoryLength < len(history) {
-			ts.session.SetHistory(sessionKey, history[:ts.initialHistoryLength])
-		}
+	// Roll back session history to the state before each turn started.
+	for _, ts := range turns {
+		ts.rollbackHistory()
 	}
 
 	return nil
+}
+
+// abortTurns hard-aborts turn trees: registered root turns (running or
+// queued) and orphaned ones (returned, with sub-turns still running). Aborting
+// a root cancels every sub-turn under it and refuses any spawned afterwards.
+//
+// Among the registered turns, the ones still waiting for their session lock
+// go first. Cancelled in that order, a queued turn cannot inherit the session
+// from the running one in the instant between the two cancellations and start
+// work that is about to be cancelled anyway.
+func abortTurns(registered, orphaned []*turnState) {
+	for _, ts := range registered {
+		if !ts.hasStarted() {
+			ts.Finish(true)
+		}
+	}
+	for _, ts := range registered {
+		ts.Finish(true) // idempotent for the ones already aborted above
+	}
+	for _, ts := range orphaned {
+		ts.Finish(true)
+	}
+}
+
+// ====================== Turn Cancellation ======================
+
+// CancelTurnsForSession cancels every turn of the session, together with its
+// sub-turns, and returns how many turns it stopped. That covers:
+//
+//   - the root turn that is running and any waiting for the session lock;
+//   - turns that have already returned but left async sub-turns running. The
+//     sub-turns are what is cancelled; each such turn counts once.
+//
+// It returns without waiting for anything to stop. A cancelled turn returns
+// from its provider or tool call with context.Canceled and releases the
+// session lock on its way out. Session history is left as it is; use HardAbort
+// to also roll back what the turn wrote.
+func (al *AgentLoop) CancelTurnsForSession(sessionKey string) int {
+	turns, orphaned := al.activeTurnStates.cancelTargets(sessionKey, false)
+	abortTurns(turns, orphaned)
+	stopped := len(turns) + len(orphaned)
+	if stopped > 0 {
+		logger.InfoCF("agent", "Cancelled turns for session", map[string]any{
+			"session_key": sessionKey,
+			"turns":       len(turns),
+			"orphaned":    len(orphaned),
+		})
+	}
+	return stopped
+}
+
+// CancelAllTurns is CancelTurnsForSession for every session at once: every
+// running or queued root turn, and the sub-turns still running under turns
+// that have already returned. It returns how many turns it stopped, counted
+// the same way. reason is recorded in the log. It does not wait and does not
+// roll back.
+func (al *AgentLoop) CancelAllTurns(reason string) int {
+	turns, orphaned := al.activeTurnStates.cancelTargets("", true)
+	abortTurns(turns, orphaned)
+	logger.InfoCF("agent", "Cancelled all turns", map[string]any{
+		"reason":   reason,
+		"turns":    len(turns),
+		"orphaned": len(orphaned),
+	})
+	return len(turns) + len(orphaned)
 }
 
 // ====================== Follow-Up Injection ======================
@@ -351,17 +402,19 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 	return resolveScopeKey(route, msg.SessionKey), agent.ID, true
 }
 
-// requeueInboundMessage publishes an inbound message back to the outbound bus
-// so it can be processed in a later turn.
+// requeueInboundMessage puts an inbound message back on the inbound bus so it
+// is processed as a turn of its own later. The message goes back whole - sender,
+// session key, media and metadata included - because that later turn routes on
+// them.
+//
+// It must be the inbound bus. Publishing outbound, as this once did, sends the
+// user's own message back to them as if the agent had said it, and the message
+// is never processed.
 func (al *AgentLoop) requeueInboundMessage(msg bus.InboundMessage) error {
 	if al.bus == nil {
 		return nil
 	}
 	pubCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Channel: msg.Channel,
-		ChatID:  msg.ChatID,
-		Content: msg.Content,
-	})
+	return al.bus.PublishInbound(pubCtx, msg)
 }

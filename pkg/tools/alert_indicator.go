@@ -11,20 +11,6 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
-// indicatorAlertPayload is encoded as JSON in CronPayload.Message.
-type indicatorAlertPayload struct {
-	ProviderID string  `json:"provider"`
-	Account    string  `json:"account"`
-	Symbol     string  `json:"symbol"`
-	Timeframe  string  `json:"timeframe"`
-	Indicator  string  `json:"indicator"` // RSI | MACD | SMA | EMA (legacy SMA20/EMA9 accepted)
-	Period     int     `json:"period"`    // lookback period; 0 = use default
-	Condition  string  `json:"condition"` // "above" | "below"
-	Threshold  float64 `json:"threshold"`
-	AlertMsg   string  `json:"alert_msg"`
-	Recurring  bool    `json:"recurring"`
-}
-
 // SetIndicatorAlertTool manages indicator-based alerts backed by the cron scheduler.
 type SetIndicatorAlertTool struct {
 	cfg         *config.Config
@@ -102,6 +88,13 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 	if providerID == "" || symbol == "" || indicator == "" || condition == "" {
 		return ErrorResult("provider, symbol, indicator, and condition are required for create")
 	}
+	if !ValidAlertCondition(condition) {
+		return ErrorResult(fmt.Sprintf("invalid condition %q; allowed values: above, below", condition))
+	}
+	cooldown, err := parseAlertCooldown(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 	if timeframe == "" {
 		timeframe = "1h"
 	}
@@ -109,6 +102,10 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 	// Normalize indicator: uppercase and strip any trailing digits
 	// so the LLM can pass "SMA20", "EMA9", "SMA200", etc. and they map correctly.
 	ind := strings.ToUpper(strings.TrimRightFunc(indicator, unicode.IsDigit))
+
+	if !ValidAlertIndicatorFamily(ind) {
+		return ErrorResult(fmt.Sprintf("unknown indicator %q; allowed values: RSI, MACD, SMA, EMA", indicator))
+	}
 
 	// Extract period from arg first; fall back to the digits stripped from indicator string.
 	period := 0
@@ -145,7 +142,7 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 		}
 	}
 
-	payload := indicatorAlertPayload{
+	payload := IndicatorAlertPayload{
 		ProviderID: providerID,
 		Account:    account,
 		Symbol:     symbol,
@@ -156,6 +153,8 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 		Threshold:  threshold,
 		AlertMsg:   message,
 		Recurring:  recurring,
+
+		CooldownMinutes: cooldown,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

@@ -110,3 +110,21 @@ func TestNormalizeCIDRs(t *testing.T) {
 		}
 	}
 }
+
+// M-15: /0 trusts X-Forwarded-For from every peer.
+func TestValidateRejectsCatchAllTrustedProxy(t *testing.T) {
+	base := Default()
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		cfg := base
+		cfg.TrustedProxyCIDRs = []string{cidr}
+		if err := Validate(cfg); err == nil {
+			t.Errorf("trusted proxy %q accepted", cidr)
+		}
+	}
+	// Control: a real proxy range is fine.
+	cfg := base
+	cfg.TrustedProxyCIDRs = []string{"10.0.0.0/8", "fd00::/8"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("a normal trusted proxy range was rejected: %v", err)
+	}
+}

@@ -113,7 +113,7 @@ git clone https://github.com/cryptoquantumwave/khunquant
 make install
 ```
 
-Requires Go 1.22+. Installs the khunquant binary to `/usr/local/bin`.
+Requires Go 1.26.9+. Installs the khunquant binary to `/usr/local/bin`.
 
 **02 — Run onboarding**
 
@@ -156,7 +156,7 @@ khunquant --version
 
 ### Build from Source
 
-**Requirements:** Go 1.22+, `make`
+**Requirements:** Go 1.26.9+, `make`
 
 ```bash
 git clone https://github.com/cryptoquantumwave/khunquant.git

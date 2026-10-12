@@ -325,9 +325,8 @@ func (c *WeComAIBotChannel) handleVerification(
 	echostr := r.URL.Query().Get("echostr")
 
 	logger.DebugCF("wecom_aibot", "URL verification request", map[string]any{
-		"msg_signature": msgSignature,
-		"timestamp":     timestamp,
-		"nonce":         nonce,
+		"timestamp": timestamp,
+		"nonce":     nonce,
 	})
 
 	// Verify signature
@@ -389,9 +388,11 @@ func (c *WeComAIBotChannel) handleMessageCallback(
 		Encrypt string `json:"encrypt"`
 	}
 	if unmarshalErr := json.Unmarshal(body, &encryptedMsg); unmarshalErr != nil {
+		// The body is attacker-controlled and carries the encrypted payload, so
+		// log its size rather than its content.
 		logger.ErrorCF("wecom_aibot", "Failed to parse JSON body", map[string]any{
-			"error": unmarshalErr,
-			"body":  string(body),
+			"error":     unmarshalErr,
+			"body_size": len(body),
 		})
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return

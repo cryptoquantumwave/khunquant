@@ -500,7 +500,7 @@ func TestFetchOpenAICompatibleModels_ResponseShapes(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", tt.apiKey)
+			models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", tt.apiKey, http.DefaultClient)
 			if err != nil {
 				t.Fatalf("error = %v", err)
 			}
@@ -524,7 +524,7 @@ func TestFetchOpenAICompatibleModels_EmptyEnvelopeReturnsEmptySlice(t *testing.T
 	}))
 	defer srv.Close()
 
-	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k", http.DefaultClient)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -540,7 +540,7 @@ func TestFetchOpenAICompatibleModels_EmptyBareArrayReturnsEmptySlice(t *testing.
 	}))
 	defer srv.Close()
 
-	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k", http.DefaultClient)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -556,7 +556,7 @@ func TestFetchOpenAICompatibleModels_UnrecognizedShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	_, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k", http.DefaultClient)
 	if err == nil {
 		t.Fatal("error = nil, want unrecognized shape error")
 	}
@@ -575,7 +575,7 @@ func TestFetchOpenAICompatibleModels_FiltersEmptyIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k")
+	models, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "k", http.DefaultClient)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -599,7 +599,7 @@ func TestFetchOpenAICompatibleModels_SetsAuthorizationHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "my-secret-key"); err != nil {
+	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "my-secret-key", http.DefaultClient); err != nil {
 		t.Fatalf("error = %v", err)
 	}
 	if gotAuth != "Bearer my-secret-key" {
@@ -616,7 +616,7 @@ func TestFetchOpenAICompatibleModels_NoAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", ""); err != nil {
+	if _, err := fetchOpenAICompatibleModels(t.Context(), srv.URL+"/models", "", http.DefaultClient); err != nil {
 		t.Fatalf("error = %v", err)
 	}
 	if gotAuth != "" {
@@ -661,6 +661,7 @@ func TestHandleFetchModels_ModelIndexUsesStoredKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -715,10 +716,16 @@ func TestHandleFetchModels_ModelIndexProviderMismatchRejectsKey(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := fmt.Sprintf(`{"provider":"groq","api_base":"%s","model_index":0}`, srv.URL)
+	// This test's target is the httptest server itself (a loopback address not
+	// present in the saved config, since the saved model points at
+	// api.openai.com), so it needs the opt-in to reach it at all — the point
+	// of the test is what happens to the key once the fetch is reachable, not
+	// the SSRF gate itself.
+	body := fmt.Sprintf(`{"provider":"groq","api_base":"%s","model_index":0,"allow_private_hosts":true}`, srv.URL)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -727,5 +734,325 @@ func TestHandleFetchModels_ModelIndexProviderMismatchRejectsKey(t *testing.T) {
 
 	if requestReceivedWithAuth {
 		t.Fatal("stored openai key should NOT be sent to mismatched provider (groq)")
+	}
+}
+
+// --- T6-1/T6-2 SSRF and CSRF coverage for POST /api/models/fetch ---
+
+func TestHandleFetchModels_BlocksLoopbackWithoutAllowlistOrOptIn(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m1"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s"}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Fatalf("status = %d, want 4xx, body=%s", rec.Code, rec.Body.String())
+	}
+	if hit {
+		t.Fatal("upstream received a request that should have been blocked before connecting")
+	}
+
+	catalogPath := filepath.Join(config.HomeDir(), "model_catalogs.json")
+	if _, err := os.Stat(catalogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected nothing persisted, but %s exists (stat err = %v)", catalogPath, err)
+	}
+}
+
+func TestHandleFetchModels_AllowPrivateHostsOptInSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m1"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s","allow_private_hosts":true}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFetchModels_AllowsHostAlreadyInSavedConfigWithoutOptIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m1"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.ModelList = append(cfg.ModelList, config.ModelConfig{
+		ModelName: "already-saved",
+		Model:     "openai/gpt-4o",
+		APIBase:   srv.URL,
+	})
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	// No allow_private_hosts opt-in: the host is already saved in config,
+	// which is enough on its own.
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s"}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFetchModels_RejectsMetadataAddressEvenWithOptIn(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"provider":"openai","api_base":"http://169.254.169.254/","allow_private_hosts":true}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Fatalf("status = %d, want 4xx, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFetchModels_DoesNotLeakUpstreamBodyInError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"AccessKeyId":"AKIAABCDEFGHIJKLMNOP","SecretAccessKey":"do-not-leak-me"}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s","allow_private_hosts":true}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected a non-200 status for an unrecognized upstream shape, got 200: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "AKIA") {
+		t.Fatalf("client-facing error leaked upstream body content: %s", rec.Body.String())
+	}
+}
+
+func TestHandleFetchModels_RequiresCSRFBeforeOutboundRequest(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	// allow_private_hosts is set so that, absent the CSRF gate, the request
+	// would otherwise be permitted to reach the upstream.
+	body := fmt.Sprintf(`{"provider":"openai","api_base":"%s","allow_private_hosts":true}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/fetch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately no Sec-Fetch-Site/Origin/Referer.
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body=%s", rec.Code, rec.Body.String())
+	}
+	if hit {
+		t.Fatal("upstream received a request despite the request failing the CSRF check")
+	}
+}
+
+// --- T6-1/T6-3 SSRF and CSRF coverage for POST /api/models/test-inline ---
+
+func TestHandleTestInlineModel_BlocksLoopbackWithoutAllowlistOrOptIn(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","model":"gpt-4o","api_base":"%s","api_key":"sk-x"}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/test-inline", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (test-inline reports reachability in the body), body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if resp.Success {
+		t.Fatalf("expected success=false for a blocked loopback target, got %+v, body=%s", resp, rec.Body.String())
+	}
+	if hit {
+		t.Fatal("upstream received a request that should have been blocked before connecting")
+	}
+}
+
+func TestHandleTestInlineModel_AllowPrivateHostsOptInSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","model":"gpt-4o","api_base":"%s","api_key":"sk-x","allow_private_hosts":true}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/test-inline", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected success=true with allow_private_hosts opt-in, got %+v, body=%s", resp, rec.Body.String())
+	}
+}
+
+func TestHandleTestInlineModel_RejectsMetadataAddressEvenWithOptIn(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"provider":"openai","model":"gpt-4o","api_base":"http://169.254.169.254/","api_key":"sk-x","allow_private_hosts":true}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/test-inline", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if resp.Success {
+		t.Fatalf("expected success=false for a metadata-address target even with opt-in, got %+v", resp)
+	}
+}
+
+func TestHandleTestInlineModel_RequiresCSRFBeforeOutboundRequest(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+	}))
+	defer srv.Close()
+
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := fmt.Sprintf(`{"provider":"openai","model":"gpt-4o","api_base":"%s","api_key":"sk-x","allow_private_hosts":true}`, srv.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/test-inline", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately no Sec-Fetch-Site/Origin/Referer.
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body=%s", rec.Code, rec.Body.String())
+	}
+	if hit {
+		t.Fatal("upstream received a request despite the request failing the CSRF check")
 	}
 }

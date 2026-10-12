@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/tokenizer"
 )
@@ -16,6 +18,14 @@ import (
 //
 // Returns nil when the agent or session is unavailable.
 func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUsage {
+	return computeContextUsageFor(context.Background(), agent, sessionKey)
+}
+
+// computeContextUsageFor is computeContextUsage for a running turn: the tool
+// definitions it counts are the ones that turn is shown (see
+// ToolRegistry.ToProviderDefsFor), so an autonomous turn's usage does not
+// include tools it cannot see.
+func computeContextUsageFor(ctx context.Context, agent *AgentInstance, sessionKey string) *bus.ContextUsage {
 	if agent == nil || agent.Sessions == nil {
 		return nil
 	}
@@ -46,7 +56,7 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	// Tool definition tokens
 	toolTokens := 0
 	if agent.Tools != nil {
-		toolTokens = tokenizer.EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
+		toolTokens = tokenizer.EstimateToolDefsTokens(agent.Tools.ToProviderDefsFor(ctx))
 	}
 
 	// Used = history + system (includes summary) + tools

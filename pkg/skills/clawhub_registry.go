@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
@@ -28,6 +29,7 @@ type ClawHubRegistry struct {
 	downloadPath    string // For fetching ZIP files for download
 	maxZipSize      int
 	maxResponseSize int
+	allowUnverified bool
 	client          *http.Client
 }
 
@@ -73,6 +75,7 @@ func NewClawHubRegistry(cfg ClawHubConfig) *ClawHubRegistry {
 		downloadPath:    downloadPath,
 		maxZipSize:      maxZip,
 		maxResponseSize: maxResp,
+		allowUnverified: cfg.AllowUnverified,
 		client: &http.Client{
 			Timeout: timeout,
 			Transport: &http.Transport{
@@ -222,18 +225,30 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 		return nil, fmt.Errorf("invalid slug %q: error: %s", slug, err.Error())
 	}
 
-	// Step 1: Fetch metadata (with fallback).
+	// Step 1: Fetch moderation metadata. Fail closed: without it there is no
+	// malware verdict, and "could not check" must not install as "clean".
 	result := &InstallResult{}
 	meta, err := c.GetSkillMeta(ctx, slug)
 	if err != nil {
-		// Fallback: proceed without metadata.
+		if !c.allowUnverified {
+			return nil, fmt.Errorf(
+				"cannot verify %q: moderation metadata unavailable (%v). Refusing to install "+
+					"unreviewed code; set tools.skills.registries.clawhub.allow_unverified to override",
+				slug, err)
+		}
 		meta = nil
+		result.Unverified = true
 	}
 
 	if meta != nil {
 		result.IsMalwareBlocked = meta.IsMalwareBlocked
 		result.IsSuspicious = meta.IsSuspicious
 		result.Summary = meta.Summary
+		// Decide before downloading anything. Callers already refuse a
+		// blocked result, and now there is nothing on disk to clean up.
+		if meta.IsMalwareBlocked {
+			return result, nil
+		}
 	}
 
 	// Step 2: Resolve version.
@@ -265,9 +280,25 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 	}
 	defer os.Remove(tmpPath)
 
-	// Step 4: Extract from file on disk.
-	if err := utils.ExtractZipFile(tmpPath, targetDir); err != nil {
+	// Step 4: Extract into a staging directory beside the target, then rename
+	// it into place, so the skills loader never sees a half-extracted skill.
+	// The staging name is dot-prefixed, which the loader skips. Same parent,
+	// so the rename cannot cross filesystems.
+	staging, err := os.MkdirTemp(filepath.Dir(targetDir), "."+filepath.Base(targetDir)+".installing-")
+	if err != nil {
+		return nil, fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging) // no-op once renamed
+
+	if err := utils.ExtractZipFile(tmpPath, staging); err != nil {
 		return nil, err
+	}
+	// MkdirTemp creates 0700; match what a direct extraction produced.
+	if err := os.Chmod(staging, 0o755); err != nil {
+		return nil, fmt.Errorf("set skill directory permissions: %w", err)
+	}
+	if err := os.Rename(staging, targetDir); err != nil {
+		return nil, fmt.Errorf("move skill into place: %w", err)
 	}
 
 	return result, nil

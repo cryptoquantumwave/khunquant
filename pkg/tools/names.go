@@ -17,6 +17,7 @@ const (
 	NameInstallSkill    = "install_skill"
 	NameSpawn           = "spawn"
 	NameDelegate        = "delegate"
+	NameSubagent        = "subagent"
 	NameGetAssetsList   = "get_assets_list"
 	NameGetTotalValue   = "get_total_value"
 	NameListPortfolios  = "list_portfolios"

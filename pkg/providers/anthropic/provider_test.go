@@ -412,8 +412,10 @@ func TestBuildParams_ToolCallMessage_RoundTripRecovery(t *testing.T) {
 	}
 }
 
-func TestBuildParams_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
-	// Both Name and Function.Name empty => should skip the tool call
+func TestBuildParams_ToolCallMessage_BothNamesEmptyPlaceholder(t *testing.T) {
+	// Both Name and Function.Name empty => the tool_use block must NOT be
+	// dropped (T5-2): it gets the "unknown_tool" placeholder name instead,
+	// so a paired tool_result for the same ID isn't left orphaned.
 	messages := []Message{
 		{Role: "user", Content: "Call the tool"},
 		{
@@ -446,15 +448,18 @@ func TestBuildParams_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
 		t.Fatalf("len(Messages) = %d, want 2", len(params.Messages))
 	}
 
-	// Verify only the valid tool call is included
+	// Verify both tool calls are included, the empty-named one under the placeholder.
 	msgJSON, err := json.Marshal(params.Messages[1])
 	if err != nil {
 		t.Fatalf("failed to marshal message: %v", err)
 	}
 
 	msgStr := string(msgJSON)
-	if strings.Contains(msgStr, "call_empty") {
-		t.Errorf("empty-named tool call should have been skipped: %s", msgStr)
+	if !strings.Contains(msgStr, "call_empty") {
+		t.Errorf("empty-named tool call's ID must still be present (not dropped): %s", msgStr)
+	}
+	if !strings.Contains(msgStr, "unknown_tool") {
+		t.Errorf("empty-named tool call should use the unknown_tool placeholder: %s", msgStr)
 	}
 	if !strings.Contains(msgStr, "valid_tool") {
 		t.Errorf("valid_tool not found in message: %s", msgStr)
@@ -462,6 +467,57 @@ func TestBuildParams_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
 	// Message content should be included
 	if !strings.Contains(msgStr, "Using a tool") {
 		t.Errorf("text content not found in message: %s", msgStr)
+	}
+}
+
+func TestBuildParams_OrphanedToolResult_Paired(t *testing.T) {
+	// T5-2: an assistant ToolCall with empty Name and nil Function, paired
+	// with a "tool"-role message carrying the same ID, must produce exactly
+	// one tool_use and one tool_result block with matching IDs — never an
+	// orphaned tool_result that the Anthropic API would reject with 400.
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{ID: "call_orphan", Name: "", Arguments: nil, Function: nil},
+			},
+		},
+		{Role: "tool", ToolCallID: "call_orphan", Content: "result"},
+	}
+	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+	if len(params.Messages) != 2 {
+		t.Fatalf("len(Messages) = %d, want 2", len(params.Messages))
+	}
+
+	assistantJSON, err := json.Marshal(params.Messages[0])
+	if err != nil {
+		t.Fatalf("failed to marshal assistant message: %v", err)
+	}
+	toolJSON, err := json.Marshal(params.Messages[1])
+	if err != nil {
+		t.Fatalf("failed to marshal tool message: %v", err)
+	}
+
+	assistantStr := string(assistantJSON)
+	toolStr := string(toolJSON)
+
+	if got := strings.Count(assistantStr, `"type":"tool_use"`); got != 1 {
+		t.Errorf("expected exactly one tool_use block, got %d in %s", got, assistantStr)
+	}
+	if got := strings.Count(toolStr, `"type":"tool_result"`); got != 1 {
+		t.Errorf("expected exactly one tool_result block, got %d in %s", got, toolStr)
+	}
+	if !strings.Contains(assistantStr, "call_orphan") {
+		t.Errorf("tool_use block missing matching ID call_orphan: %s", assistantStr)
+	}
+	if !strings.Contains(toolStr, "call_orphan") {
+		t.Errorf("tool_result block missing matching ID call_orphan: %s", toolStr)
+	}
+	if !strings.Contains(assistantStr, "unknown_tool") {
+		t.Errorf("tool_use block should use the unknown_tool placeholder: %s", assistantStr)
 	}
 }
 

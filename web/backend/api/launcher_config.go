@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 )
@@ -21,7 +22,8 @@ type launcherConfigUpdatePayload struct {
 	Public               bool     `json:"public"`
 	AllowedCIDRs         []string `json:"allowed_cidrs"`
 	AllowLocalhostBypass *bool    `json:"allow_localhost_bypass"`
-	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs"`
+	// TrustedProxyCIDRs is read-only over the API; see handleUpdateLauncherConfig.
+	TrustedProxyCIDRs *[]string `json:"trusted_proxy_cidrs"`
 }
 
 func (h *Handler) registerLauncherConfigRoutes(mux *http.ServeMux) {
@@ -90,7 +92,18 @@ func (h *Handler) handleUpdateLauncherConfig(w http.ResponseWriter, r *http.Requ
 	if payload.AllowLocalhostBypass != nil {
 		cfg.AllowLocalhostBypass = *payload.AllowLocalhostBypass
 	}
-	cfg.TrustedProxyCIDRs = append([]string(nil), payload.TrustedProxyCIDRs...)
+	// M-15: trusted_proxy_cidrs decides whose X-Forwarded-For is believed,
+	// i.e. who may claim to be any client IP. A dashboard session must not be
+	// able to widen it, so the API only accepts it unchanged; edit the launcher
+	// config file to change it. Omitting the field keeps the saved value - the
+	// dashboard never sends it, and this handler used to overwrite it with nil,
+	// silently wiping the configured proxies on every save.
+	if payload.TrustedProxyCIDRs != nil &&
+		!slices.Equal(launcherconfig.NormalizeCIDRs(*payload.TrustedProxyCIDRs), cfg.TrustedProxyCIDRs) {
+		http.Error(w, "trusted_proxy_cidrs cannot be changed from the dashboard; "+
+			"edit the launcher config file and restart", http.StatusForbidden)
+		return
+	}
 	if err := launcherconfig.Validate(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

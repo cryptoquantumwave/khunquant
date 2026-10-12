@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -595,51 +596,144 @@ func (s *Store) ActivePlansForFuturesSymbol(ctx context.Context, provider, symbo
 	return ids, rows.Err()
 }
 
-// PlanOpenQuantities returns the net open base-currency quantities for this plan based on
-// execution history, summing across all both_legs_filled executions (which includes resizes):
-//
-//	futuresBase = SUM(futures sell legs) - SUM(futures buy legs)  → positive = net short open
-//	spotQty     = SUM(spot    buy  legs) - SUM(spot    sell legs) → positive = net long open
-//
-// Divide futuresBase by contractSize to get contracts for a close order.
-// Returns (0, 0, nil) when no filled executions exist (nothing to close).
-func (s *Store) PlanOpenQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+// Open-exposure tolerances. A fully successful unwind of a plan can leave a small
+// residual on the spot leg: spot buy legs record the GROSS filled quantity, but the
+// exchange deducts the taker fee from the received base asset, so the later sell is
+// capped at the (smaller) free balance. Treat a net below openExposureDustFraction of
+// the gross entry-side volume (or below openExposureEpsilon, for float noise) as flat.
+const (
+	openExposureEpsilon      = 1e-9
+	openExposureDustFraction = 0.01
+)
+
+// LegExposure is a plan's recorded net open exposure, derived from filled legs.
+type LegExposure struct {
+	// FuturesBase is the net futures base-currency quantity: SUM(sell) - SUM(buy)
+	// (positive = net short open). Divide by contractSize to get contracts.
+	FuturesBase float64
+	// SpotQty is the net spot quantity: SUM(buy) - SUM(sell) (positive = net long open).
+	SpotQty float64
+	// FuturesOpen / SpotOpen report whether the corresponding net is material, i.e.
+	// larger than the dust tolerance (see openExposureDustFraction).
+	FuturesOpen bool
+	SpotOpen    bool
+	// UnrecordedFills holds the error_msg of every execution whose leg row could not
+	// be saved after an order went through (see UnrecordedFillMarker). Such fills are
+	// invisible to the quantities above, so the plan must be reconciled manually.
+	UnrecordedFills []string
+}
+
+// HasExposure reports whether the plan has any open exposure, recorded or not.
+func (e LegExposure) HasExposure() bool {
+	return e.FuturesOpen || e.SpotOpen || len(e.UnrecordedFills) > 0
+}
+
+// OpenLegExposure computes the plan's net open exposure from ALL filled legs, by side,
+// regardless of the state of the execution they belong to. Unwind and resize-down legs
+// are stored as filled legs on the opposite side, so they net against the entry legs.
+func (s *Store) OpenLegExposure(ctx context.Context, planID int64) (LegExposure, error) {
+	var exp LegExposure
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT l.leg_type, l.side, COALESCE(SUM(l.filled_quantity), 0)
 		 FROM delta_neutral_execution_legs l
 		 JOIN delta_neutral_executions e ON l.execution_id = e.id
 		 WHERE e.plan_id = ?
-		   AND e.state = 'both_legs_filled'
 		   AND l.state = 'filled'
 		 GROUP BY l.leg_type, l.side`,
 		planID,
 	)
 	if err != nil {
-		return 0, 0, err
+		return exp, err
 	}
-	defer rows.Close()
+	var futuresGross, spotGross float64
 	for rows.Next() {
 		var legType, side string
 		var qty float64
 		if err := rows.Scan(&legType, &side, &qty); err != nil {
-			return 0, 0, err
+			rows.Close()
+			return LegExposure{}, err
 		}
 		switch legType {
 		case string(LegTypeFutures):
 			if side == "sell" {
-				futuresBase += qty
+				exp.FuturesBase += qty
+				futuresGross += qty
 			} else {
-				futuresBase -= qty // resize decrease subtracts
+				exp.FuturesBase -= qty // close / resize decrease subtracts
 			}
 		case string(LegTypeSpot):
 			if side == "buy" {
-				spotQty += qty
+				exp.SpotQty += qty
+				spotGross += qty
 			} else {
-				spotQty -= qty // resize decrease subtracts
+				exp.SpotQty -= qty // sell / resize decrease subtracts
 			}
 		}
 	}
-	return futuresBase, spotQty, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return LegExposure{}, err
+	}
+	rows.Close()
+
+	exp.FuturesOpen = math.Abs(exp.FuturesBase) > math.Max(openExposureEpsilon, openExposureDustFraction*futuresGross)
+	exp.SpotOpen = math.Abs(exp.SpotQty) > math.Max(openExposureEpsilon, openExposureDustFraction*spotGross)
+
+	urows, err := s.db.QueryContext(ctx,
+		`SELECT error_msg FROM delta_neutral_executions
+		 WHERE plan_id = ? AND instr(error_msg, ?) > 0
+		 ORDER BY id`,
+		planID, UnrecordedFillMarker,
+	)
+	if err != nil {
+		return LegExposure{}, err
+	}
+	defer urows.Close()
+	for urows.Next() {
+		var msg string
+		if err := urows.Scan(&msg); err != nil {
+			return LegExposure{}, err
+		}
+		exp.UnrecordedFills = append(exp.UnrecordedFills, msg)
+	}
+	if err := urows.Err(); err != nil {
+		return LegExposure{}, err
+	}
+	return exp, nil
+}
+
+// OpenLegQuantities returns the net open base-currency quantities for this plan, netted
+// over ALL filled legs by side regardless of execution state:
+//
+//	futuresBase = SUM(futures sell legs) - SUM(futures buy legs)  -> positive = net short open
+//	spotQty     = SUM(spot    buy  legs) - SUM(spot    sell legs) -> positive = net long open
+//
+// Divide futuresBase by contractSize to get contracts for a close order.
+// Returns (0, 0, nil) when no filled legs exist (nothing recorded to close).
+func (s *Store) OpenLegQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+	exp, err := s.OpenLegExposure(ctx, planID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return exp.FuturesBase, exp.SpotQty, nil
+}
+
+// PlanOpenQuantities is retained for compatibility; it is a thin wrapper over
+// OpenLegQuantities.
+func (s *Store) PlanOpenQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+	return s.OpenLegQuantities(ctx, planID)
+}
+
+// HasOpenExposure reports whether the plan still has a material recorded open position
+// on either leg (see LegExposure for the dust tolerance), or an order that went through
+// but whose leg row was never saved (UnrecordedFillMarker). A plan with open exposure
+// must not be re-opened or deleted.
+func (s *Store) HasOpenExposure(ctx context.Context, planID int64) (bool, error) {
+	exp, err := s.OpenLegExposure(ctx, planID)
+	if err != nil {
+		return false, err
+	}
+	return exp.HasExposure(), nil
 }
 
 // DeletePlan removes a plan and cascades delete its snapshots, alerts, and executions.

@@ -84,9 +84,12 @@ func DefaultConfig() *Config {
 				MentionOnly: false,
 			},
 			MaixCam: MaixCamConfig{
-				Enabled:   false,
-				Host:      "0.0.0.0",
-				Port:      18790,
+				Enabled: false,
+				// H-12: loopback by default, and not the gateway's port (18790),
+				// which it previously shared. Listening on the network also
+				// requires a token; see MaixCamChannel.Start.
+				Host:      "127.0.0.1",
+				Port:      18791,
 				AllowFrom: FlexibleStringSlice{},
 			},
 			QQ: QQConfig{
@@ -109,7 +112,11 @@ func DefaultConfig() *Config {
 				Homeserver:   "https://matrix.org",
 				UserID:       "",
 				DeviceID:     "",
-				JoinOnInvite: true,
+				// H-11: off for fresh configs. With an empty allow_from, joining
+				// every room the bot is invited to makes it answer anyone who
+				// invites it. Existing configs are unaffected: SaveConfig writes
+				// every field, so theirs already carry an explicit value.
+				JoinOnInvite: false,
 				AllowFrom:    FlexibleStringSlice{},
 				GroupTrigger: GroupTriggerConfig{
 					MentionOnly: true,
@@ -136,7 +143,6 @@ func DefaultConfig() *Config {
 			},
 			WeCom: WeComConfig{
 				Enabled:      false,
-				WebhookURL:   "",
 				WebhookHost:  "0.0.0.0",
 				WebhookPort:  18793,
 				WebhookPath:  "/webhook/wecom",
@@ -425,7 +431,10 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				ExecTimeoutMinutes: 5,
+				ExecTimeoutMinutes:  5,
+				Workers:             4,
+				MisfireGraceMinutes: 60,
+				JobTimeoutMinutes:   10,
 			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
@@ -593,6 +602,24 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 
+			// Options (Track B3) — order placement disabled by default, matching
+			// create_order and futures_open_position. Reads stay on.
+			OptionQuote: ToolConfig{
+				Enabled: true,
+			},
+			OptionCreateOrder: ToolConfig{
+				Enabled: false,
+			},
+			OptionCancelOrder: ToolConfig{
+				Enabled: true,
+			},
+			OptionGetOrder: ToolConfig{
+				Enabled: true,
+			},
+			OptionOpenOrders: ToolConfig{
+				Enabled: true,
+			},
+
 			// Technical analysis tools (Track C)
 			CalculateIndicators: ToolConfig{
 				Enabled: true,
@@ -657,7 +684,9 @@ func DefaultConfig() *Config {
 			},
 		},
 		TradingRisk: TradingRiskConfig{
-			AllowLeverage: true,
+			AllowLeverage:       true,
+			LossDayTimezone:     "UTC",
+			EquitySampleMinutes: 5,
 		},
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,

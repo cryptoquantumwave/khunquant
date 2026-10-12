@@ -1,9 +1,9 @@
 # ============================================================
 # Stage 1: Build the khunquant binary
 # ============================================================
-# Go version pinned to match go.mod (1.26.7) for reproducible builds.
+# Go version pinned to match go.mod (1.26.9) for reproducible builds.
 # This ensures the builder uses exactly what CI tests.
-FROM golang:1.26.7-alpine AS builder
+FROM golang:1.26.9-alpine AS builder
 
 RUN apk add --no-cache git make
 
@@ -30,6 +30,13 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Copy binary
 COPY --from=builder /src/build/khunquant /usr/local/bin/khunquant
+
+# Run as a non-root user. alpine has no user at UID 1000, so this only creates
+# one - unlike Dockerfile.heavy, which must first remove the node base image's.
+RUN addgroup -g 1000 khunquant && \
+    adduser -D -u 1000 -G khunquant -h /home/khunquant khunquant
+
+USER khunquant
 
 # Run onboard to create initial directories and config
 # --yes is required, not a convenience: onboard prompts for terms acceptance

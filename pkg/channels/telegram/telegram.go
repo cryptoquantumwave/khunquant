@@ -232,24 +232,37 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Send implements channels.Channel. It delegates to SendWithIDs so there is a
+// single send path.
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	_, err := c.SendWithIDs(ctx, msg)
+	return err
+}
+
+// SendWithIDs implements channels.IDReportingSender. It returns the Bot API
+// message ID (as a decimal string) of every message it created, in send order:
+// one per chunk, more than one when HTML expansion forces a re-split. If a
+// later chunk fails, the IDs of the earlier ones are still returned.
+func (c *TelegramChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
-		return channels.ErrNotRunning
+		return nil, channels.ErrNotRunning
 	}
 
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
-		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
+		return nil, fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
 	}
 
 	if msg.Content == "" {
-		return nil
+		return nil, nil
 	}
 
 	// The Manager already splits messages to ≤4000 chars (WithMaxMessageLength),
 	// so msg.Content is guaranteed to be within that limit. We still need to
 	// check if HTML expansion pushes it beyond Telegram's 4096-char API limit.
 	replyToID := msg.ReplyToMessageID
+	silent := msg.DisableNotification
+	var ids []string
 	queue := []string{msg.Content}
 	for len(queue) > 0 {
 		chunk := queue[0]
@@ -268,8 +281,12 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 			}
 
 			if smallerLen <= 0 {
-				if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
-					return err
+				id, err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID, silent)
+				if err != nil {
+					return ids, err
+				}
+				if id != "" {
+					ids = append(ids, id)
 				}
 				replyToID = ""
 				continue
@@ -299,24 +316,31 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 			continue
 		}
 
-		if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
-			return err
+		id, err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID, silent)
+		if err != nil {
+			return ids, err
+		}
+		if id != "" {
+			ids = append(ids, id)
 		}
 		// Only the first chunk should be a reply; subsequent chunks are normal messages.
 		replyToID = ""
 	}
 
-	return nil
+	return ids, nil
 }
 
 // sendHTMLChunk sends a single HTML message, falling back to the original
 // markdown as plain text on parse failure so users never see raw HTML tags.
+// It returns the ID of the message that was actually created (the plain-text
+// fallback when the HTML attempt was rejected), as a decimal string.
 func (c *TelegramChannel) sendHTMLChunk(
-	ctx context.Context, chatID int64, threadID int, htmlContent, mdFallback string, replyToID string,
-) error {
+	ctx context.Context, chatID int64, threadID int, htmlContent, mdFallback string, replyToID string, silent bool,
+) (string, error) {
 	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
 	tgMsg.ParseMode = telego.ModeHTML
 	tgMsg.MessageThreadID = threadID
+	tgMsg.DisableNotification = silent
 
 	if replyToID != "" {
 		if mid, parseErr := strconv.Atoi(replyToID); parseErr == nil {
@@ -326,17 +350,21 @@ func (c *TelegramChannel) sendHTMLChunk(
 		}
 	}
 
-	if _, err := c.bot.SendMessage(ctx, tgMsg); err != nil {
+	sent, err := c.bot.SendMessage(ctx, tgMsg)
+	if err != nil {
 		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]any{
 			"error": err.Error(),
 		})
 		tgMsg.Text = mdFallback
 		tgMsg.ParseMode = ""
-		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-			return fmt.Errorf("telegram send: %w", channels.ErrTemporary)
+		if sent, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
+			return "", fmt.Errorf("telegram send: %w", channels.ErrTemporary)
 		}
 	}
-	return nil
+	if sent == nil {
+		return "", nil
+	}
+	return strconv.Itoa(sent.MessageID), nil
 }
 
 // maxTypingDuration limits how long the typing indicator can run.

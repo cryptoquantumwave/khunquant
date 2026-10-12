@@ -232,11 +232,11 @@ func TestExplicitInvalidateCache(t *testing.T) {
 		t.Error("prompt should be identical after invalidate+rebuild when files unchanged")
 	}
 
-	// Verify cachedAt was reset
+	// Verify every cached entry was dropped
 	cb.InvalidateCache()
 	cb.systemPromptMutex.RLock()
-	if !cb.cachedAt.IsZero() {
-		t.Error("cachedAt should be zero after InvalidateCache()")
+	if len(cb.promptCache) != 0 {
+		t.Error("prompt cache should be empty after InvalidateCache()")
 	}
 	cb.systemPromptMutex.RUnlock()
 }

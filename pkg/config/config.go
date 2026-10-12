@@ -122,6 +122,7 @@ type Config struct {
 	Exchanges   ExchangesConfig   `json:"exchanges"             yaml:"exchanges,omitempty"`
 	TradingRisk TradingRiskConfig `json:"trading_risk,omitempty" yaml:"-"`
 	Heartbeat   HeartbeatConfig   `json:"heartbeat"             yaml:"-"`
+	Proactive   ProactiveConfig   `json:"proactive"             yaml:"-"`
 	Devices     DevicesConfig     `json:"devices"               yaml:"-"`
 	Debug       DebugConfig       `json:"debug"                 yaml:"-"`
 	Voice       VoiceConfig       `json:"voice"                 yaml:"-"`
@@ -1175,6 +1176,7 @@ type ToolsConfig struct {
 	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"KHUNQUANT_TOOLS_FIND_SKILLS_"`
 	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"KHUNQUANT_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"KHUNQUANT_TOOLS_INSTALL_SKILL_"`
+	LoadSkill       ToolConfig         `json:"load_skill"                                               envPrefix:"KHUNQUANT_TOOLS_LOAD_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"KHUNQUANT_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"                                                  envPrefix:"KHUNQUANT_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"KHUNQUANT_TOOLS_READ_FILE_"`
@@ -1279,6 +1281,10 @@ type ToolsConfig struct {
 	// PnL — Profit and Loss (Track F)
 	GetPnLSummary ToolConfig `json:"get_pnl_summary" envPrefix:"KHUNQUANT_TOOLS_GET_PNL_SUMMARY_"`
 	GetPnLDetail  ToolConfig `json:"get_pnl_detail"  envPrefix:"KHUNQUANT_TOOLS_GET_PNL_DETAIL_"`
+
+	// User profile (typed preferences)
+	GetProfile    ToolConfig `json:"get_profile"    envPrefix:"KHUNQUANT_TOOLS_GET_PROFILE_"`
+	UpdateProfile ToolConfig `json:"update_profile" envPrefix:"KHUNQUANT_TOOLS_UPDATE_PROFILE_"`
 
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
@@ -1455,6 +1461,9 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Never fails the load; see reportProactive.
+	reportProactive(cfg.Proactive)
+
 	// Migrate legacy channel config fields to new unified structures.
 	// Still unconditional: these are idempotent and predate versioning, and
 	// are deliberately not step-gated (see migration.go).
@@ -1531,6 +1540,8 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
 		return nil, err
 	}
+
+	reportProactive(cfg.Proactive)
 
 	cfg.migrateChannelConfigs()
 
@@ -1782,6 +1793,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.I2C.Enabled
 	case "install_skill":
 		return t.InstallSkill.Enabled
+	case "load_skill":
+		return t.LoadSkill.Enabled
 	case "list_dir":
 		return t.ListDir.Enabled
 	case "message":
@@ -1944,6 +1957,10 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.GetPnLSummary.Enabled
 	case "get_pnl_detail":
 		return t.GetPnLDetail.Enabled
+	case "get_profile":
+		return t.GetProfile.Enabled
+	case "update_profile":
+		return t.UpdateProfile.Enabled
 	default:
 		return true
 	}

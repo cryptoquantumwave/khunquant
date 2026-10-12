@@ -22,7 +22,11 @@ type MessageBus struct {
 	closeOnce sync.Once
 	done      chan struct{}
 	closed    atomic.Bool
-	wg        sync.WaitGroup
+	// pubMu is read-locked by every in-flight publish and write-locked by Close
+	// while it closes the channels, so a send can never reach a closed channel.
+	// (A WaitGroup cannot do this job: Add racing Wait on a zero counter is a
+	// documented misuse, and let a publisher slip in after Wait returned.)
+	pubMu sync.RWMutex
 }
 
 func NewMessageBus() *MessageBus {
@@ -35,12 +39,14 @@ func NewMessageBus() *MessageBus {
 }
 
 func publish[T any](ctx context.Context, mb *MessageBus, ch chan T, msg T) error {
-	// check bus closed before acquiring wg, to avoid unnecessary wg.Add and potential deadlock
+	mb.pubMu.RLock()
+	defer mb.pubMu.RUnlock()
+
+	// Checked under the read lock: Close cannot be closing the channels now.
 	if mb.closed.Load() {
 		return ErrBusClosed
 	}
 
-	// check again,before sending message, to avoid sending to closed channel
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -48,9 +54,6 @@ func publish[T any](ctx context.Context, mb *MessageBus, ch chan T, msg T) error
 		return ErrBusClosed
 	default:
 	}
-
-	mb.wg.Add(1)
-	defer mb.wg.Done()
 
 	select {
 	case ch <- msg:
@@ -90,13 +93,12 @@ func (mb *MessageBus) Close() {
 	mb.closeOnce.Do(func() {
 		// notify all blocked publishers to exit
 		close(mb.done)
-
-		// because every publisher will check mb.closed before acquiring wg
-		// so we can be sure that new publishers will not be added new messages after this point
 		mb.closed.Store(true)
 
-		// wait for all ongoing Publish calls to finish, ensuring all messages have been sent to channels or exited
-		mb.wg.Wait()
+		// wait for all ongoing Publish calls to finish, ensuring all messages have been sent to channels or exited;
+		// publishers arriving afterwards see closed under the read lock and return ErrBusClosed
+		mb.pubMu.Lock()
+		defer mb.pubMu.Unlock()
 
 		// close channels safely
 		close(mb.inbound)

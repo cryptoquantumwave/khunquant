@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 )
 
@@ -49,4 +50,25 @@ type PlaceholderRecorder interface {
 // Channels that do not support platform-level command menus can ignore it.
 type CommandRegistrarCapable interface {
 	RegisterCommands(ctx context.Context, defs []commands.Definition) error
+}
+
+// IDReportingSender — channels that can report the platform IDs of the messages
+// they sent. SendWithIDs does everything Send does and additionally returns one
+// ID per platform message created, in send order (one Send can create several
+// when the adapter re-splits internally). When an existing message was edited
+// instead of sending a new one, the edited message's ID is reported.
+//
+// A channel implementing this interface should make Send delegate to
+// SendWithIDs so there is a single code path. The Manager calls exactly one of
+// the two per attempt, never both. IDs may accompany a non-nil error when part
+// of a message was sent before the failure.
+type IDReportingSender interface {
+	SendWithIDs(ctx context.Context, msg bus.OutboundMessage) ([]string, error)
+}
+
+// ActionRenderer — channels that can render bus.Action buttons natively.
+// While SupportsActions is false (or the interface is absent) the Manager adds
+// a text footer carrying each action's TextCommand instead.
+type ActionRenderer interface {
+	SupportsActions() bool
 }

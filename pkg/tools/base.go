@@ -44,13 +44,18 @@ const (
 	// OriginHeartbeat is a periodic wake-up the assistant starts by itself: no
 	// human is present either, and the prompt is a file the assistant can edit.
 	OriginHeartbeat = "heartbeat"
+	// OriginProactive is a turn started by the proactive pipeline to decide what
+	// to tell the owner (agent.RunProactiveTurn). It is autonomous, and the most
+	// restricted origin there is: it reads, and declares a decision through
+	// respond_proactive. See proactiveTurnMayCall in policy.go.
+	OriginProactive = "proactive"
 )
 
 // IsAutonomousOrigin reports whether a turn with this origin was started by the
 // assistant's own machinery rather than by a person. Autonomous turns run under
 // the class ceiling in classification.go.
 func IsAutonomousOrigin(origin string) bool {
-	return origin == OriginCron || origin == OriginHeartbeat
+	return origin == OriginCron || origin == OriginHeartbeat || origin == OriginProactive
 }
 
 // WithToolOrigin returns a child context tagged with the origin of the turn.

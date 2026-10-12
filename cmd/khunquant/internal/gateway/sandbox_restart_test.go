@@ -29,7 +29,7 @@ func TestStartAndRegisterSandboxStopsPreviousServer(t *testing.T) {
 	}
 	services := &gatewayServices{ChannelManager: manager}
 
-	if err := startAndRegisterSandbox(cfg, services); err != nil {
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
 		t.Fatalf("first start failed: %v", err)
 	}
 	first := services.SandboxServer
@@ -38,7 +38,7 @@ func TestStartAndRegisterSandboxStopsPreviousServer(t *testing.T) {
 	}
 	firstAddr := first.Addr()
 
-	if err := startAndRegisterSandbox(cfg, services); err != nil {
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
 		t.Fatalf("second start failed: %v", err)
 	}
 	t.Cleanup(func() { services.SandboxServer.Stop() })
@@ -72,7 +72,7 @@ func TestStartAndRegisterSandboxWithoutFixtures(t *testing.T) {
 	}
 	services := &gatewayServices{ChannelManager: manager}
 
-	if err := startAndRegisterSandbox(cfg, services); err != nil {
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
 		t.Fatalf("start with no fixtures should succeed, got: %v", err)
 	}
 	t.Cleanup(func() { services.SandboxServer.Stop() })

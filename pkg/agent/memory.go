@@ -41,6 +41,27 @@ func NewMemoryStore(workspace string) *MemoryStore {
 	}
 }
 
+// recentDailyNoteDays is how many days of daily notes GetMemoryContext puts in
+// the system prompt (today and the days before it).
+const recentDailyNoteDays = 3
+
+// dailyNotePath returns the daily note file for the date.
+func (ms *MemoryStore) dailyNotePath(date time.Time) string {
+	dateStr := date.Format("20060102") // YYYYMMDD
+	return filepath.Join(ms.memoryDir, dateStr[:6], dateStr+".md")
+}
+
+// recentDailyNotePaths returns the daily note files GetMemoryContext reads, so
+// the prompt cache can watch them.
+func (ms *MemoryStore) recentDailyNotePaths() []string {
+	now := time.Now()
+	paths := make([]string, 0, recentDailyNoteDays)
+	for i := range recentDailyNoteDays {
+		paths = append(paths, ms.dailyNotePath(now.AddDate(0, 0, -i)))
+	}
+	return paths
+}
+
 // getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
 func (ms *MemoryStore) getTodayFile() string {
 	today := time.Now().Format("20060102") // YYYYMMDD
@@ -133,7 +154,7 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 // Includes long-term memory and recent daily notes.
 func (ms *MemoryStore) GetMemoryContext() string {
 	longTerm := ms.ReadLongTerm()
-	recentNotes := ms.GetRecentDailyNotes(3)
+	recentNotes := ms.GetRecentDailyNotes(recentDailyNoteDays)
 
 	if longTerm == "" && recentNotes == "" {
 		return ""

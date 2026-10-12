@@ -562,6 +562,14 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 		}
 		toolRegistry.Register(t)
 	}
+	// A child gets the light prompt: skills are listed by name and read through
+	// load_skill. Keep that tool in the child whichever way its tools were
+	// chosen, or the index would name skills the child cannot open.
+	if _, ok := toolRegistry.Get(tools.NameLoadSkill); !ok {
+		if t, ok := parentAgent.Tools.Get(tools.NameLoadSkill); ok {
+			toolRegistry.Register(t)
+		}
+	}
 
 	childAgent := &AgentInstance{
 		ID:                        ts.turnID,
@@ -646,6 +654,9 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 			EnableSummary:      false,
 			SendResponse:       false,
 			SkipAddUserMessage: promptAlreadyAdded,
+			// Background work: the light prompt is a fraction of the full
+			// one, and a child that needs a skill loads it by name.
+			PromptMode: PromptLight,
 		})
 
 		// Mark the prompt as added so subsequent truncation retries

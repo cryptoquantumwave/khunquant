@@ -20,10 +20,12 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/clean"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/cron"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/gateway"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/launcher"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/migrate"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/model"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/onboard"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/owner"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/risk"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
@@ -52,6 +54,7 @@ func NewKhunquantCommand() *cobra.Command {
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),
 		gateway.NewGatewayCommand(),
+		heartbeat.NewHeartbeatCommand(),
 		launcher.NewLauncherCommand(),
 		status.NewStatusCommand(),
 		cron.NewCronCommand(),
@@ -60,6 +63,7 @@ func NewKhunquantCommand() *cobra.Command {
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),
 		risk.NewRiskCommand(),
+		owner.NewOwnerCommand(),
 		uninstall.NewUninstallCommand(),
 		update.NewUpdateCommand(),
 		version.NewVersionCommand(),

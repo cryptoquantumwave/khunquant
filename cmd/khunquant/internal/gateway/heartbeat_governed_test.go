@@ -85,7 +85,7 @@ func captureLogs(t *testing.T) *plainLogSink {
 
 func runHandler(t *testing.T, r *fakeRunner, s *fakeSubmitter) {
 	t.Helper()
-	res := governedHeartbeatHandler(r, s, 30*time.Minute)(context.Background(), "the prompt", "", "")
+	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(context.Background(), "the prompt", "", "")
 	if res == nil || res.IsError {
 		t.Fatalf("handler result = %+v", res)
 	}
@@ -117,7 +117,7 @@ func TestHeartbeatGoverned_DecisionsGoThroughAttention(t *testing.T) {
 	}
 	got := reqs[0]
 	if got.Kind != proactive.TurnHeartbeatLegacy || got.Prompt != "the prompt" || got.ForcedSkills != nil ||
-		!got.UseLightModel || got.Deadline != 5*time.Minute || got.Candidates != nil {
+		got.Model != proactive.ModelTierPrimary || got.Deadline != 5*time.Minute || got.Candidates != nil {
 		t.Fatalf("turn request = %+v", got)
 	}
 
@@ -264,6 +264,28 @@ func TestHeartbeatGoverned_ContractViolationIsDeliveredAndCounted(t *testing.T) 
 	}
 }
 
+// The handler asks for exactly the tier it was built with, and says which tier
+// that was next to the model that answered.
+func TestHeartbeatGoverned_PassesTheTierItWasBuiltWith(t *testing.T) {
+	for _, tier := range []proactive.ModelTier{proactive.ModelTierPrimary, proactive.ModelTierLight} {
+		logs := captureLogs(t)
+		r := &fakeRunner{res: agent.ProactiveTurnResult{Model: "answering-model"}}
+		res := governedHeartbeatHandler(r, &fakeSubmitter{}, 30*time.Minute, tier)(
+			context.Background(), "p", "", "")
+		if res == nil || res.IsError {
+			t.Fatalf("tier %q: result %+v", tier, res)
+		}
+		reqs := r.requests()
+		if len(reqs) != 1 || reqs[0].Model != tier {
+			t.Fatalf("tier %q: requests %+v", tier, reqs)
+		}
+		out := logs.String()
+		if !strings.Contains(out, "model_tier="+string(tier)) || !strings.Contains(out, "model=answering-model") {
+			t.Errorf("tier %q: the summary line does not carry the tier and the model:\n%s", tier, out)
+		}
+	}
+}
+
 func TestHeartbeatGoverned_TurnErrorDeliversNothing(t *testing.T) {
 	logs := captureLogs(t)
 	for name, err := range map[string]error{
@@ -275,7 +297,7 @@ func TestHeartbeatGoverned_TurnErrorDeliversNothing(t *testing.T) {
 			// Whatever came back alongside an error is not a decision.
 			Decisions: []proactive.Decision{{Kind: proactive.DecideNotify, Text: "must not be sent"}},
 		}}
-		res := governedHeartbeatHandler(r, s, 30*time.Minute)(context.Background(), "p", "", "")
+		res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(context.Background(), "p", "", "")
 		if res == nil || !res.IsError {
 			t.Fatalf("%s: result = %+v, want an error result so the service logs it", name, res)
 		}
@@ -334,7 +356,7 @@ func TestHeartbeatGoverned_LateDecisionsAreDroppedAfterStop(t *testing.T) {
 		}},
 		block: func(context.Context) { cancel() }, // the stop arrives as the turn ends
 	}
-	res := governedHeartbeatHandler(r, s, 30*time.Minute)(ctx, "p", "", "")
+	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary)(ctx, "p", "", "")
 	if res == nil || res.IsError {
 		t.Fatalf("result = %+v", res)
 	}
@@ -372,7 +394,7 @@ func TestHeartbeatGoverned_OverARealOutbox_NothingOnTheBusNothingToLastChat(t *t
 	hs.SetContract(heartbeat.ContractGoverned)
 	hs.SetBus(mb)
 	var seenChannel, seenChat string
-	inner := governedHeartbeatHandler(r, ob, 30*time.Minute)
+	inner := governedHeartbeatHandler(r, ob, 30*time.Minute, proactive.ModelTierPrimary)
 	var seen sync.Mutex
 	hs.SetContextHandler(func(ctx context.Context, prompt, ch, chat string) *tools.ToolResult {
 		seen.Lock()

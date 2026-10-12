@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/attention/attentiontest"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
 func withHeartbeat(mode string) func(*config.Config) {
@@ -60,6 +62,90 @@ func TestHeartbeatAssembly_ModeFollowsEffectiveAndReload(t *testing.T) {
 	}
 	if f.services.Attention == nil || f.services.attentionRun == nil {
 		t.Fatal("a governed heartbeat is running without a live outbox")
+	}
+}
+
+func withHeartbeatModel(tier string) func(*config.Config) {
+	return func(c *config.Config) { c.Proactive.Heartbeat.Model = tier }
+}
+
+// recordGovernedTiers swaps the handler factory for one that records the tier the
+// assembly gave it, and returns the tiers seen so far.
+func recordGovernedTiers(t *testing.T) func() []proactive.ModelTier {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []proactive.ModelTier
+	orig := newGovernedHandler
+	newGovernedHandler = func(
+		run proactiveRunner, out attentionSubmitter, interval time.Duration, tier proactive.ModelTier,
+	) heartbeat.ContextHandler {
+		mu.Lock()
+		seen = append(seen, tier)
+		mu.Unlock()
+		return orig(run, out, interval, tier)
+	}
+	t.Cleanup(func() { newGovernedHandler = orig })
+	return func() []proactive.ModelTier {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]proactive.ModelTier(nil), seen...)
+	}
+}
+
+// The governed handler is built with proactive.heartbeat.model as Effective
+// resolves it: primary by default, light only when asked for, and a reload that changes it builds a handler with the new one.
+func TestHeartbeatAssembly_TierFollowsConfigAndReload(t *testing.T) {
+	tiers := recordGovernedTiers(t)
+	governed := func(model string) func(*config.Config) {
+		return compose(withOwner("1001"), withAttentionMode(config.ProactiveModeLive),
+			withHeartbeat(config.HeartbeatModeGoverned), withHeartbeatModel(model))
+	}
+	want := func(label string, wantTiers ...proactive.ModelTier) {
+		t.Helper()
+		got := tiers()
+		if len(got) != len(wantTiers) {
+			t.Fatalf("%s: handler built with tiers %v, want %v", label, got, wantTiers)
+		}
+		for i := range got {
+			if got[i] != wantTiers[i] {
+				t.Fatalf("%s: handler built with tiers %v, want %v", label, got, wantTiers)
+			}
+		}
+	}
+
+	// Nothing says otherwise: the normal model.
+	f := newAssemblyFixture(t, compose(withOwner("1001"), withAttentionMode(config.ProactiveModeLive),
+		withHeartbeat(config.HeartbeatModeGoverned)))
+	want("default", proactive.ModelTierPrimary)
+
+	if err := f.reload(governed("light")); err != nil {
+		t.Fatal(err)
+	}
+	want("reload to light", proactive.ModelTierPrimary, proactive.ModelTierLight)
+
+	if err := f.reload(governed("primary")); err != nil {
+		t.Fatal(err)
+	}
+	want("reload back to primary", proactive.ModelTierPrimary, proactive.ModelTierLight, proactive.ModelTierPrimary)
+
+	// A typo makes the section invalid, which Effective treats as no owner: the
+	// heartbeat goes back to legacy rather than running governed on any model.
+	if err := f.reload(governed("lite")); err != nil {
+		t.Fatal(err)
+	}
+	want("reload to an unknown tier", proactive.ModelTierPrimary, proactive.ModelTierLight, proactive.ModelTierPrimary)
+	if got := f.services.HeartbeatService.Contract(); got != heartbeat.ContractLegacy {
+		t.Fatalf("an unknown tier: contract = %s, want legacy", got)
+	}
+
+	// A legacy heartbeat builds no governed handler, whatever the tier says.
+	before := len(tiers())
+	if err := f.reload(compose(withOwner("1001"), withAttentionMode(config.ProactiveModeLive),
+		withHeartbeat(config.HeartbeatModeLegacy), withHeartbeatModel("light"))); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(tiers()); n != before {
+		t.Fatalf("a legacy heartbeat built a governed handler (%d -> %d)", before, n)
 	}
 }
 

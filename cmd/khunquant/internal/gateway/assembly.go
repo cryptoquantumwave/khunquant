@@ -278,7 +278,10 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	if contract := heartbeatContract(cfg, s); contract == heartbeat.ContractGoverned {
 		// No bus: a governed heartbeat publishes nothing itself.
 		s.HeartbeatService.SetContract(contract)
-		s.HeartbeatService.SetContextHandler(governedHeartbeatHandler(al, s.Attention, s.HeartbeatService.Interval()))
+		// The tier is read here, from the config this generation was built from, so
+		// a reload that changes proactive.heartbeat.model builds a handler with it.
+		s.HeartbeatService.SetContextHandler(newGovernedHandler(
+			al, s.Attention, s.HeartbeatService.Interval(), cfg.Proactive.Effective().HeartbeatModel))
 	} else {
 		s.HeartbeatService.SetBus(msgBus)
 		s.HeartbeatService.SetHandler(heartbeatHandler(al))

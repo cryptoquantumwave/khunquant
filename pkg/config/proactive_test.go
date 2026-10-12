@@ -26,7 +26,7 @@ func liveProactive() ProactiveConfig {
 
 func TestProactiveDefaults(t *testing.T) {
 	want := ProactiveConfig{
-		Heartbeat: ProactiveHeartbeatConfig{Mode: "legacy"},
+		Heartbeat: ProactiveHeartbeatConfig{Mode: "legacy", Model: "primary"},
 		Attention: AttentionConfig{
 			Mode: "shadow", DailyBudget: 3, DedupWindowHours: 24, GroupWindowSeconds: 60, Digest: true,
 		},
@@ -144,6 +144,7 @@ func TestValidateProactive_PlatformMismatch(t *testing.T) {
 func TestValidateProactive_UnknownModes(t *testing.T) {
 	cases := map[string]func(*ProactiveConfig){
 		"heartbeat.mode":      func(c *ProactiveConfig) { c.Heartbeat.Mode = "live" },
+		"heartbeat.model":     func(c *ProactiveConfig) { c.Heartbeat.Model = "fast" },
 		"attention.mode":      func(c *ProactiveConfig) { c.Attention.Mode = "sweep" },
 		"triggers.mode":       func(c *ProactiveConfig) { c.Triggers.Mode = "loud" },
 		"policy.mode":         func(c *ProactiveConfig) { c.Policy.Mode = "governed" },
@@ -448,6 +449,7 @@ func TestProactive_EnvOverride(t *testing.T) {
 	t.Setenv("KHUNQUANT_PROACTIVE_NEWS_ENABLED", "true")
 	t.Setenv("KHUNQUANT_PROACTIVE_LEARNING_HOLDOUT_RATE", "0.2")
 	t.Setenv("KHUNQUANT_PROACTIVE_OWNER_CHANNEL", "telegram")
+	t.Setenv("KHUNQUANT_PROACTIVE_HEARTBEAT_MODEL", "light")
 
 	cfg, err := LoadConfig(writeRawConfig(t, `{"proactive": {"attention": {"daily_budget": 1}}}`))
 	if err != nil {
@@ -455,7 +457,8 @@ func TestProactive_EnvOverride(t *testing.T) {
 	}
 	p := cfg.Proactive
 	if !p.Enabled || p.Attention.DailyBudget != 9 || p.Triggers.Mode != "shadow" ||
-		!p.News.Enabled || p.Learning.HoldoutRate != 0.2 || p.Owner.Channel != "telegram" {
+		!p.News.Enabled || p.Learning.HoldoutRate != 0.2 || p.Owner.Channel != "telegram" ||
+		p.Heartbeat.Model != "light" {
 		t.Fatalf("env overrides not applied: %+v", p)
 	}
 	// Untouched fields keep their defaults.

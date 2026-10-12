@@ -82,6 +82,11 @@ func heartbeatDeadline(interval time.Duration) time.Duration {
 	return max(heartbeatDeadlineMin, min(heartbeatDeadlineMax, interval/2))
 }
 
+// newGovernedHandler builds the governed handler for a generation of services.
+// It is a variable only so that an assembly test can see the tier the assembly
+// chose; production never reassigns it.
+var newGovernedHandler = governedHeartbeatHandler
+
 // governedHeartbeatHandler runs a heartbeat as a proactive turn and hands what it
 // decided to attention. It is the whole delivery path of a governed heartbeat:
 //
@@ -94,10 +99,15 @@ func heartbeatDeadline(interval time.Duration) time.Duration {
 // A turn that fails or times out delivers nothing and the next tick runs as
 // usual; there is deliberately no fallback to the legacy path inside a tick,
 // which would deliver a second, ungoverned answer for the same wake-up.
+//
+// tier is the model the judgement runs on, fixed when the handler is built from
+// proactive.heartbeat.model (primary by default). A config reload builds a new
+// handler, which is how a changed tier applies.
 func governedHeartbeatHandler(
 	run proactiveRunner,
 	out attentionSubmitter,
 	interval time.Duration,
+	tier proactive.ModelTier,
 ) heartbeat.ContextHandler {
 	deadline := heartbeatDeadline(interval)
 	return func(ctx context.Context, prompt, _, _ string) *tools.ToolResult {
@@ -107,22 +117,28 @@ func governedHeartbeatHandler(
 			ForcedSkills: nil,
 			// Bounded by the turn, and ended earlier by the service's context on Stop.
 			Deadline: deadline,
-			// The cheap model when the agent has one configured (routing with a
-			// light model); otherwise the normal model.
-			UseLightModel: true,
+			// The configured tier: the normal model unless the owner asked for the
+			// light one (which the turn serves with the normal model when the
+			// agent has none).
+			Model: tier,
 		})
 		if err != nil {
 			logger.WarnCF("heartbeat", "Governed heartbeat turn failed; nothing delivered",
 				map[string]any{"error": err.Error()})
 			return tools.ErrorResult(fmt.Sprintf("Heartbeat turn failed: %v", err))
 		}
-		return tools.SilentResult(submitHeartbeatDecisions(ctx, out, res))
+		return tools.SilentResult(submitHeartbeatDecisions(ctx, out, res, tier))
 	}
 }
 
 // submitHeartbeatDecisions hands the turn's decisions to attention, one item per
 // notify or ask, and returns a one-line summary for the heartbeat log.
-func submitHeartbeatDecisions(ctx context.Context, out attentionSubmitter, res agent.ProactiveTurnResult) string {
+func submitHeartbeatDecisions(
+	ctx context.Context,
+	out attentionSubmitter,
+	res agent.ProactiveTurnResult,
+	tier proactive.ModelTier,
+) string {
 	var submitted, silent, skipped, failed, dropped int
 
 	if res.ContractViolated {
@@ -170,6 +186,7 @@ func submitHeartbeatDecisions(ctx context.Context, out attentionSubmitter, res a
 		"input_tokens":      res.InputTokens,
 		"output_tokens":     res.OutputTokens,
 		"model":             res.Model,
+		"model_tier":        tier.String(),
 	})
 	return fmt.Sprintf("governed: %d decision(s), %d submitted, %d silent, %d skipped, %d failed, %d dropped",
 		len(res.Decisions), submitted, silent, skipped, failed, dropped)

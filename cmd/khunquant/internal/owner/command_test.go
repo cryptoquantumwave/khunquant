@@ -101,7 +101,7 @@ func TestOwnerSetCommand_PreservesOtherConfig(t *testing.T) {
 	seed.ModelList = config.SecureModelList{{
 		ModelName: "m1", Model: "openai/gpt-4o", APIKey: *config.NewSecureString("MODEL-KEY-should-survive"),
 	}}
-	seed.Exchanges.Binance.Accounts =[]config.ExchangeAccount{{
+	seed.Exchanges.Binance.Accounts = []config.ExchangeAccount{{
 		Name:   "main",
 		APIKey: *config.NewSecureString("KEY-should-survive"),
 		Secret: *config.NewSecureString("SECRET-should-survive"),
@@ -148,6 +148,7 @@ func TestOwnerShowCommand(t *testing.T) {
 	assert.Contains(t, out, "owner.channel:   (not set)")
 	assert.Contains(t, out, "owner configured: no")
 	assert.Contains(t, out, "heartbeat: legacy")
+	assert.Contains(t, out, "heartbeat model: primary", "the normal model unless the config says light")
 	assert.NotContains(t, out, "downgrade:", "a clean config has nothing downgraded")
 
 	// A live request with no owner shows its downgrades.
@@ -155,9 +156,11 @@ func TestOwnerShowCommand(t *testing.T) {
 	cfg.Proactive.Enabled = true
 	cfg.Proactive.Attention.Mode = "live"
 	cfg.Proactive.Heartbeat.Mode = "sweep"
+	cfg.Proactive.Heartbeat.Model = "light"
 	d2, _ := fileDeps(t, cfg)
 	out, err = run(t, d2, "show")
 	require.NoError(t, err)
+	assert.Contains(t, out, "heartbeat model: light")
 	assert.Contains(t, out, "attention: shadow")
 	assert.Contains(t, out, "downgrade: proactive: owner not configured; attention.mode live")
 	assert.Contains(t, out, "downgrade: proactive: owner not configured; heartbeat.mode sweep")

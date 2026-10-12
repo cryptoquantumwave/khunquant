@@ -355,7 +355,7 @@ func TestProactiveTurn_UsesLightModelWhenConfigured(t *testing.T) {
 	agent.Router = routing.New(routing.RouterConfig{LightModel: "light-model", Threshold: 0.99})
 
 	req := proactiveReq(cand("c1", proactive.SeverityNotice, false))
-	req.UseLightModel = true
+	req.Model = proactive.ModelTierLight
 	res := mustRun(t, al, req)
 	if res.Model != "light-model" {
 		t.Errorf("Model = %q, want light-model", res.Model)
@@ -367,17 +367,40 @@ func TestProactiveTurn_UsesLightModelWhenConfigured(t *testing.T) {
 		t.Errorf("the provider was asked for model %q", lightModel)
 	}
 
-	req.UseLightModel = false
-	res = mustRun(t, al, req)
-	if res.Model != "char-model" || mainProv.callCount() != 2 || lightProv.callCount() != 2 {
-		t.Errorf("without UseLightModel: Model %q, main %d, light %d", res.Model, mainProv.callCount(), lightProv.callCount())
+	// The zero tier and an explicit primary are the normal model, whatever the
+	// router would say and although a light model exists.
+	for _, tier := range []proactive.ModelTier{"", proactive.ModelTierPrimary} {
+		before := mainProv.callCount()
+		req.Model = tier
+		res = mustRun(t, al, req)
+		if res.Model != "char-model" || mainProv.callCount() != before+2 || lightProv.callCount() != 2 {
+			t.Errorf("tier %q: Model %q, main %d, light %d", tier, res.Model, mainProv.callCount(), lightProv.callCount())
+		}
 	}
 
 	// No light model configured: the request is served by the normal one.
 	agent.LightCandidates, agent.LightProvider, agent.Router = nil, nil, nil
-	req.UseLightModel = true
-	if res = mustRun(t, al, req); res.Model != "char-model" || mainProv.callCount() != 4 {
-		t.Errorf("no light model: Model %q, main calls %d", res.Model, mainProv.callCount())
+	req.Model = proactive.ModelTierLight
+	before := mainProv.callCount()
+	if res = mustRun(t, al, req); res.Model != "char-model" || mainProv.callCount() != before+2 {
+		t.Errorf("no light model: Model %q, main calls %d (was %d)", res.Model, mainProv.callCount(), before)
+	}
+}
+
+// An unknown tier is refused before anything runs: it is not quietly served by
+// either model.
+func TestProactiveTurn_UnknownModelTierIsAnError(t *testing.T) {
+	prov := script(respondResponse(map[string]any{"decision": "silent"}))
+	al := proactiveLoop(t, prov)
+
+	req := proactiveReq(cand("c1", proactive.SeverityNotice, false))
+	req.Model = "turbo"
+	_, err := al.RunProactiveTurn(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "turbo") {
+		t.Fatalf("err = %v, want it to name the unknown tier", err)
+	}
+	if prov.callCount() != 0 {
+		t.Errorf("a turn ran on an unknown tier (%d provider calls)", prov.callCount())
 	}
 }
 

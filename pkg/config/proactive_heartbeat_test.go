@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
 // A governed heartbeat delivers through attention. With attention off or shadow
@@ -55,5 +57,83 @@ func TestEffective_GovernedHeartbeatNeedsLiveAttention(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("heartbeat downgrade listed %d times without an owner, want 1", n)
+	}
+}
+
+// proactive.heartbeat.model: primary by default, light only when asked for, and
+// never light by accident.
+func TestHeartbeatModel_DefaultsToPrimary(t *testing.T) {
+	if got := DefaultConfig().Proactive.Heartbeat.Model; got != "primary" {
+		t.Fatalf("default model = %q, want primary", got)
+	}
+	if got := DefaultConfig().Proactive.Effective().HeartbeatModel; got != proactive.ModelTierPrimary {
+		t.Fatalf("default effective tier = %q, want primary", got)
+	}
+	// A config file written before the key existed, and one that leaves it empty.
+	for name, body := range map[string]string{
+		"no proactive key": `{}`,
+		"no model key":     `{"proactive": {"heartbeat": {"mode": "governed"}}}`,
+		"empty model":      `{"proactive": {"heartbeat": {"model": ""}}}`,
+	} {
+		cfg, err := LoadConfig(writeRawConfig(t, body))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := cfg.Proactive.Effective().HeartbeatModel; got != proactive.ModelTierPrimary {
+			t.Errorf("%s: effective tier = %q, want primary", name, got)
+		}
+	}
+}
+
+func TestHeartbeatModel_ValidationAndEffective(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want proactive.ModelTier
+	}{
+		{"primary", proactive.ModelTierPrimary},
+		{"light", proactive.ModelTierLight},
+		{" LIGHT ", proactive.ModelTierLight},
+		{"", proactive.ModelTierPrimary},
+	} {
+		c := liveProactive()
+		c.Heartbeat.Mode = HeartbeatModeGoverned
+		c.Heartbeat.Model = tc.raw
+		if err := ValidateProactive(c); err != nil {
+			t.Errorf("model %q refused: %v", tc.raw, err)
+		}
+		if got := c.Effective().HeartbeatModel; got != tc.want {
+			t.Errorf("model %q: effective tier = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+
+	// A bad value is an error that names the key and the allowed values, and it
+	// resolves to primary: a typo must not move the heartbeat to the cheap model.
+	c := liveProactive()
+	c.Heartbeat.Model = "lite"
+	err := ValidateProactive(c)
+	if err == nil || !strings.Contains(err.Error(), "proactive.heartbeat.model") ||
+		!strings.Contains(err.Error(), "primary|light") {
+		t.Fatalf("bad model: err = %v", err)
+	}
+	if got := c.Effective().HeartbeatModel; got != proactive.ModelTierPrimary {
+		t.Errorf("bad model: effective tier = %q, want primary", got)
+	}
+	if c.Effective().OwnerConfigured {
+		t.Error("an invalid section must still count as no owner")
+	}
+}
+
+// The tier is read from the config as written, whatever the downgrades do to the
+// mode: it describes the model, not whether the heartbeat is governed.
+func TestHeartbeatModel_IndependentOfDowngrades(t *testing.T) {
+	c := defaultProactiveConfig() // proactive disabled: governed would be downgraded
+	c.Heartbeat.Mode = HeartbeatModeGoverned
+	c.Heartbeat.Model = "light"
+	e := c.Effective()
+	if e.HeartbeatMode != HeartbeatModeLegacy {
+		t.Fatalf("mode = %q, want the downgrade to legacy", e.HeartbeatMode)
+	}
+	if e.HeartbeatModel != proactive.ModelTierLight {
+		t.Errorf("tier = %q, want light as configured", e.HeartbeatModel)
 	}
 }

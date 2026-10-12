@@ -175,8 +175,8 @@ func printOwner(w io.Writer, p config.ProactiveConfig) {
 	fmt.Fprintf(w, "owner configured: %s\n", yesNo(e.OwnerConfigured))
 	fmt.Fprintf(w, "proactive.enabled: %s\n", onOff(e.Enabled))
 	fmt.Fprintln(w, "effective modes:")
-	fmt.Fprintf(w, "  heartbeat: %s\n  attention: %s\n  triggers:  %s\n  policy:    %s\n",
-		e.HeartbeatMode, e.AttentionMode, e.TriggersMode, e.PolicyMode)
+	fmt.Fprintf(w, "  heartbeat: %s\n  heartbeat model: %s\n  attention: %s\n  triggers:  %s\n  policy:    %s\n",
+		e.HeartbeatMode, e.HeartbeatModel, e.AttentionMode, e.TriggersMode, e.PolicyMode)
 	fmt.Fprintf(w, "  approvals: %s  mandates: %s  intents: %s  news: %s\n",
 		onOff(e.Approvals), onOff(e.Mandates), onOff(e.Intents), onOff(e.News))
 	fmt.Fprintf(w, "  perception: %s  cognition: %s  reflection: %s  learning: %s\n",

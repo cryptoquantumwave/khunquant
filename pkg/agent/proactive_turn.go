@@ -70,10 +70,11 @@ type ProactiveTurnRequest struct {
 	// Deadline bounds the whole turn, including waiting for its session; zero
 	// means DefaultProactiveDeadline.
 	Deadline time.Duration
-	// UseLightModel runs the turn on the agent's light model when it has one.
-	// The zero value is the normal model: callers that want the cheap model say
-	// so (the proactive pipeline does).
-	UseLightModel bool
+	// Model is the model tier the turn runs on. The zero value is the normal
+	// model; proactive.ModelTierLight runs it on the agent's light model when it
+	// has one and on the normal model when it does not. An unknown tier is an
+	// error, not a default.
+	Model proactive.ModelTier
 }
 
 // ProactiveTurnResult is what a proactive turn decided. Nothing in it has been
@@ -119,6 +120,19 @@ func (r *turnReport) snapshot() (input, output int, model string) {
 	return r.input, r.output, r.model
 }
 
+// modelForTier maps a proactive model tier onto the loop's model override. The
+// zero tier is the normal model; an unknown tier is an error rather than
+// whichever model happens to be the default.
+func modelForTier(t proactive.ModelTier) (modelOverride, error) {
+	switch t {
+	case "", proactive.ModelTierPrimary:
+		return modelPrimary, nil
+	case proactive.ModelTierLight:
+		return modelLight, nil
+	}
+	return modelRouted, fmt.Errorf("unknown model tier %q", string(t))
+}
+
 // RunProactiveTurn asks the default agent's model what to tell the owner and
 // returns its decisions. It delivers nothing: no message, file, media, tool
 // feedback or reasoning is published whatever the model or a tool does, and the
@@ -144,6 +158,10 @@ func (al *AgentLoop) RunProactiveTurn(
 	}
 	if turnStateFromContext(ctx) != nil {
 		return res, errors.New("proactive turn: cannot be started from inside another turn")
+	}
+	model, err := modelForTier(req.Model)
+	if err != nil {
+		return res, fmt.Errorf("proactive turn: %w", err)
 	}
 	registry := al.GetRegistry()
 	if registry == nil {
@@ -184,10 +202,6 @@ func (al *AgentLoop) RunProactiveTurn(
 	block, refs := renderCandidates(req.Candidates, nonce)
 	respond := tools.NewRespondProactiveTool(refs, eff.Approvals)
 
-	model := modelPrimary
-	if req.UseLightModel {
-		model = modelLight
-	}
 	report := &turnReport{}
 	sessionKey := sessionKeyAgentPrefix + agent.ID + ":proactive"
 

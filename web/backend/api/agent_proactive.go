@@ -329,10 +329,14 @@ type proactiveOwnerView struct {
 
 type proactiveEffectiveView struct {
 	HeartbeatMode string `json:"heartbeat_mode"`
-	AttentionMode string `json:"attention_mode"`
-	TriggersMode  string `json:"triggers_mode"`
-	PolicyMode    string `json:"policy_mode"`
-	CanDeliver    bool   `json:"can_deliver"`
+	// HeartbeatModel is the model tier (primary | light) a governed heartbeat
+	// runs on. Read-only: it is set in the config file, not through the modes
+	// endpoint.
+	HeartbeatModel string `json:"heartbeat_model"`
+	AttentionMode  string `json:"attention_mode"`
+	TriggersMode   string `json:"triggers_mode"`
+	PolicyMode     string `json:"policy_mode"`
+	CanDeliver     bool   `json:"can_deliver"`
 }
 
 type proactiveConfiguredView struct {
@@ -373,11 +377,12 @@ func buildProactiveStatus(p config.ProactiveConfig) proactiveStatusResponse {
 			SenderIDMasked: maskID(p.Owner.SenderID),
 		},
 		Effective: proactiveEffectiveView{
-			HeartbeatMode: eff.HeartbeatMode,
-			AttentionMode: eff.AttentionMode,
-			TriggersMode:  eff.TriggersMode,
-			PolicyMode:    eff.PolicyMode,
-			CanDeliver:    eff.CanDeliver(),
+			HeartbeatMode:  eff.HeartbeatMode,
+			HeartbeatModel: eff.HeartbeatModel.String(),
+			AttentionMode:  eff.AttentionMode,
+			TriggersMode:   eff.TriggersMode,
+			PolicyMode:     eff.PolicyMode,
+			CanDeliver:     eff.CanDeliver(),
 		},
 		Configured: proactiveConfiguredView{
 			HeartbeatMode: modeOr(p.Heartbeat.Mode, config.HeartbeatModeLegacy),

@@ -377,6 +377,12 @@ func TestProactiveStatus_MasksIDs(t *testing.T) {
 	if st.Configured.AttentionMode != "live" || st.Configured.HeartbeatMode != "legacy" {
 		t.Errorf("configured = %+v", st.Configured)
 	}
+	if st.Effective.HeartbeatModel != "primary" {
+		t.Errorf("effective heartbeat_model = %q, want primary by default", st.Effective.HeartbeatModel)
+	}
+	if !strings.Contains(get.Body.String(), `"heartbeat_model":"primary"`) {
+		t.Errorf("the status JSON has no heartbeat_model: %s", get.Body.String())
+	}
 
 	// An owner that fails validation is reported without echoing the IDs, and
 	// the live mode shows up as a downgrade.
@@ -490,6 +496,48 @@ func TestProactiveModesPut_Validated(t *testing.T) {
 	}
 }
 
+// The heartbeat model tier is reported (effective, normalised, never an
+// invalid value) and survives a modes update, but the endpoint cannot set it.
+func TestProactiveStatus_ReportsHeartbeatModel(t *testing.T) {
+	e := newProactiveEnv(t)
+	status := func() proactiveStatusResponse {
+		t.Helper()
+		rec := e.mustDo(t, http.MethodGet, "/api/agent/proactive/status", "", http.StatusOK)
+		var st proactiveStatusResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	setModel := func(m string) {
+		t.Helper()
+		cfg := e.loadCfg(t)
+		cfg.Proactive.Heartbeat.Model = m
+		if err := config.SaveConfig(e.cfgPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := status().Effective.HeartbeatModel; got != "primary" {
+		t.Errorf("fresh install: heartbeat_model = %q, want primary", got)
+	}
+	setModel("light")
+	if got := status().Effective.HeartbeatModel; got != "light" {
+		t.Errorf("configured light: heartbeat_model = %q", got)
+	}
+	// An update through the modes endpoint leaves the tier alone.
+	e.mustDo(t, http.MethodPut, "/api/agent/proactive/modes", `{"digest":false}`, http.StatusOK)
+	if got := e.loadCfg(t).Proactive.Heartbeat.Model; got != "light" {
+		t.Errorf("the modes endpoint changed heartbeat.model to %q", got)
+	}
+	// A value that fails validation is reported as primary, with the error shown.
+	setModel("lite")
+	st := status()
+	if st.Effective.HeartbeatModel != "primary" || !strings.Contains(st.ValidationError, "proactive.heartbeat.model") {
+		t.Errorf("invalid model: heartbeat_model %q, validation_error %q", st.Effective.HeartbeatModel, st.ValidationError)
+	}
+}
+
 func TestProactiveModesPut_CannotTouchOtherConfig(t *testing.T) {
 	e := newProactiveEnv(t)
 	before := e.loadCfg(t)
@@ -501,6 +549,7 @@ func TestProactiveModesPut_CannotTouchOtherConfig(t *testing.T) {
 		`{"enabled":true,"approvals":{"enabled":true}}`,
 		`{"enabled":true,"mandates":{"enabled":true}}`,
 		`{"proactive":{"enabled":true}}`,
+		`{"enabled":true,"heartbeat_model":"light"}`, // the tier is read-only here
 		`{"agents":{"defaults":{"workspace":"/tmp/elsewhere"}}}`,
 	} {
 		if rec := e.do(t, http.MethodPut, "/api/agent/proactive/modes", body, true); rec.Code != http.StatusBadRequest {

@@ -66,6 +66,10 @@ type OwnerConfig struct {
 // ProactiveHeartbeatConfig selects how the heartbeat behaves.
 type ProactiveHeartbeatConfig struct {
 	Mode string `json:"mode" env:"KHUNQUANT_PROACTIVE_HEARTBEAT_MODE"` // legacy | governed | sweep
+	// Model is the model tier a governed heartbeat's judgement runs on: primary
+	// (the normal model, the default) or light (the cheap one, when the agent has
+	// one). It has no effect on the legacy heartbeat.
+	Model string `json:"model" env:"KHUNQUANT_PROACTIVE_HEARTBEAT_MODEL"` // primary | light
 }
 
 // AttentionConfig governs how much proactive output reaches the owner.
@@ -127,7 +131,7 @@ type ToggleConfig struct {
 func defaultProactiveConfig() ProactiveConfig {
 	return ProactiveConfig{
 		Enabled:   false,
-		Heartbeat: ProactiveHeartbeatConfig{Mode: HeartbeatModeLegacy},
+		Heartbeat: ProactiveHeartbeatConfig{Mode: HeartbeatModeLegacy, Model: string(proactive.ModelTierPrimary)},
 		Attention: AttentionConfig{
 			Mode:               ProactiveModeShadow,
 			DailyBudget:        3,
@@ -168,8 +172,19 @@ func modeOrDefault(raw, def string, allowed ...string) (mode string, ok bool) {
 	return def, false
 }
 
+// heartbeatTierOrDefault resolves proactive.heartbeat.model: empty or unknown is
+// primary, so a typo can never move the heartbeat to the cheap model.
+func heartbeatTierOrDefault(raw string) proactive.ModelTier {
+	tier, err := proactive.ParseModelTier(raw)
+	if err != nil {
+		return proactive.ModelTierPrimary
+	}
+	return tier
+}
+
 var (
 	heartbeatModes = []string{HeartbeatModeLegacy, HeartbeatModeGoverned, HeartbeatModeSweep}
+	heartbeatTiers = []string{string(proactive.ModelTierPrimary), string(proactive.ModelTierLight)}
 	tieredModes    = []string{ProactiveModeOff, ProactiveModeShadow, ProactiveModeLive}
 )
 
@@ -237,6 +252,7 @@ func ValidateProactive(c ProactiveConfig) error {
 		}
 	}
 	checkMode("proactive.heartbeat.mode", c.Heartbeat.Mode, heartbeatModes)
+	checkMode("proactive.heartbeat.model", c.Heartbeat.Model, heartbeatTiers)
 	checkMode("proactive.attention.mode", c.Attention.Mode, tieredModes)
 	checkMode("proactive.triggers.mode", c.Triggers.Mode, tieredModes)
 	checkMode("proactive.policy.mode", c.Policy.Mode, tieredModes)
@@ -353,6 +369,10 @@ type EffectiveModes struct {
 	TriggersMode  string // off | shadow | live
 	PolicyMode    string // off | shadow | live
 
+	// HeartbeatModel is the tier a governed heartbeat's turn runs on. An empty or
+	// unknown value is primary, never light.
+	HeartbeatModel proactive.ModelTier
+
 	Approvals  bool
 	Mandates   bool
 	Intents    bool
@@ -403,6 +423,7 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	}
 
 	e.HeartbeatMode, _ = modeOrDefault(c.Heartbeat.Mode, HeartbeatModeLegacy, heartbeatModes...)
+	e.HeartbeatModel = heartbeatTierOrDefault(c.Heartbeat.Model)
 	e.AttentionMode, _ = modeOrDefault(c.Attention.Mode, ProactiveModeShadow, tieredModes...)
 	e.TriggersMode, _ = modeOrDefault(c.Triggers.Mode, ProactiveModeOff, tieredModes...)
 	e.PolicyMode, _ = modeOrDefault(c.Policy.Mode, ProactiveModeOff, tieredModes...)

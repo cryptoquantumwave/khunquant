@@ -5,7 +5,7 @@ import "sync/atomic"
 type counters struct {
 	evaluated, candidates, errors, panics       atomic.Uint64
 	invalidCandidates, invalidState             atomic.Uint64
-	autoDisabled, discarded                     atomic.Uint64
+	autoDisabled, discarded, turnedOff          atomic.Uint64
 	stateSaved, saveFailures                    atomic.Uint64
 	stateLoadFailures, stateDiscarded, unusable atomic.Uint64
 }
@@ -19,6 +19,7 @@ type Stats struct {
 	InvalidCandidates uint64 // evaluations refused for a malformed or too many candidates
 	InvalidState      uint64 // evaluations refused for a state over its limit or not JSON
 	AutoDisabled      uint64 // specs switched off after repeated errors
+	TurnedOff         uint64 // one-shot specs switched off after their last candidate was decided
 	Discarded         uint64 // evaluations whose changes were dropped because attention had not decided them
 	StateSaved        uint64
 	SaveFailures      uint64
@@ -35,9 +36,32 @@ func (r *Registry) Stats() Stats {
 	return Stats{
 		Evaluated: c.evaluated.Load(), Candidates: c.candidates.Load(), Errors: c.errors.Load(),
 		Panics: c.panics.Load(), InvalidCandidates: c.invalidCandidates.Load(), InvalidState: c.invalidState.Load(),
-		AutoDisabled: c.autoDisabled.Load(), Discarded: c.discarded.Load(), StateSaved: c.stateSaved.Load(),
+		AutoDisabled: c.autoDisabled.Load(), TurnedOff: c.turnedOff.Load(), Discarded: c.discarded.Load(), StateSaved: c.stateSaved.Load(),
 		SaveFailures: c.saveFailures.Load(), StateLoadFailures: c.stateLoadFailures.Load(),
 		StateDiscarded: c.stateDiscarded.Load(), Unusable: c.unusable.Load(),
 		Specs: len(r.snap.Load().ordered),
 	}
+}
+
+// noteShadow counts a candidate that was marked Shadow, by the kind of its spec.
+func (r *Registry) noteShadow(kind string) {
+	r.shadowMu.Lock()
+	if r.shadowByKind == nil {
+		r.shadowByKind = map[string]uint64{}
+	}
+	r.shadowByKind[kind]++
+	r.shadowMu.Unlock()
+}
+
+// ShadowCandidates is how many candidates of the given spec kinds have been marked
+// Shadow (logged by attention, never delivered) since the registry was built. A
+// migration compares it with what the cron path really delivered.
+func (r *Registry) ShadowCandidates(kinds ...string) uint64 {
+	r.shadowMu.Lock()
+	defer r.shadowMu.Unlock()
+	var n uint64
+	for _, k := range kinds {
+		n += r.shadowByKind[k]
+	}
+	return n
 }

@@ -126,6 +126,21 @@ type MarketCandleClosed struct {
 	At        time.Time `json:"at"`
 }
 
+// CandleClose implements perception.CandlePayload, so that a trigger can read the
+// closes without importing this package. The closes are capped at MaxLookback.
+func (c MarketCandleClosed) CandleClose() perception.CandleClose {
+	closes := c.Closes
+	if len(closes) > MaxLookback {
+		closes = closes[len(closes)-MaxLookback:]
+	}
+	return perception.CandleClose{
+		Provider: c.Provider, Symbol: c.Symbol, Timeframe: c.Timeframe,
+		BarOpen: time.UnixMilli(c.Bar.OpenTime), Closes: closes, At: c.At,
+	}
+}
+
+var _ perception.CandlePayload = MarketCandleClosed{}
+
 // MarketHealth is the Payload of a perception.source.health event.
 type MarketHealth struct {
 	Source   string `json:"source"`

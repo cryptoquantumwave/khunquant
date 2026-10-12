@@ -77,6 +77,7 @@ type gatewayServices struct {
 	Attention        *attention.Outbox                  // nil when attention mode is off or the database is unavailable; submit candidates here
 	attentionRun     *attentionRunner                   // the outbox's Run loop; nil unless attention is live and can deliver
 	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
+	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
 	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
@@ -559,6 +560,7 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
+	alertRoute ...tools.AlertTriggersFunc,
 ) (*cron.CronService, *deltaneutral.Store) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
@@ -630,11 +632,17 @@ func setupCronTool(
 	})
 
 	// Alert tools (Track D) — require cron service, registered after it is created.
+	// The tools write to the trigger registry only while one is live (decided on every
+	// call, see tools.AlertTriggers); otherwise they are the cron tools they always were.
+	var route tools.AlertTriggersFunc
+	if len(alertRoute) > 0 {
+		route = alertRoute[0]
+	}
 	if cfg.Tools.IsToolEnabled("set_price_alert") {
-		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService).WithTriggers(route))
 	}
 	if cfg.Tools.IsToolEnabled("set_indicator_alert") {
-		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService).WithTriggers(route))
 	}
 
 	// DCA tools (Track E) — require cron service + the store opened above.

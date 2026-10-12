@@ -145,10 +145,11 @@ func TestTriggers_BuiltWhenOnAndTheMarketSourceReadsItsDemands(t *testing.T) {
 	}
 }
 
-// Production registers no trigger kind.
-func TestTriggerFactories_ProductionRegistersNone(t *testing.T) {
-	if n := len(triggerFactories(assemblyDeps{})); n != 0 {
-		t.Fatalf("production registers %d trigger kinds", n)
+// Production registers the two crossing kinds and nothing else.
+func TestTriggerFactories_ProductionRegistersTheCrossingKinds(t *testing.T) {
+	got := triggerFactories(assemblyDeps{})
+	if len(got) != 2 || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil {
+		t.Fatalf("production registers %d trigger kinds: %v", len(got), got)
 	}
 }
 

@@ -56,6 +56,7 @@ func (s *Store) Apply(_ context.Context, ev events.Event) (d Diff, err error) {
 		err = s.applyDayStart(ev)
 	default:
 		s.c.ignored.Add(1)
+		d.Payload = ev.Payload // for the trigger that handles this kind; see Diff.Payload
 		return d, nil
 	}
 	if errors.Is(err, errNonFinite) {

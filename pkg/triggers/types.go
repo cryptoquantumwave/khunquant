@@ -113,6 +113,13 @@ type Trigger interface {
 type State struct {
 	Raw   json.RawMessage
 	Dirty bool
+	// TurnOff asks the registry to switch the spec off (mode "off") once attention
+	// has recorded its decision for every candidate this evaluation returned: a
+	// one-shot trigger that has done its job. Like a change of Raw it is held back
+	// until then, so a refused or crashed delivery leaves the spec on and the alert
+	// fires again. It takes effect only for a spec whose effective mode is live: a
+	// shadow rehearsal never uses a one-shot up.
+	TurnOff bool
 }
 
 // Spec is the stored definition of one trigger.

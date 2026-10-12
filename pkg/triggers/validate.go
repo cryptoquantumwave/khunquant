@@ -164,6 +164,9 @@ func checkCandidate(kind string, c proactive.Candidate) error {
 	if len(c.Subject) > MaxSubjectBytes || !utf8.ValidString(c.Subject) {
 		return fmt.Errorf("subject is over %d bytes", MaxSubjectBytes)
 	}
+	if err := checkDetail(c.Detail); err != nil {
+		return err
+	}
 	if len(c.ForcedSkills) > MaxForcedSkills {
 		return fmt.Errorf("%d forced skills, the limit is %d", len(c.ForcedSkills), MaxForcedSkills)
 	}
@@ -177,6 +180,25 @@ func checkCandidate(kind string, c proactive.Candidate) error {
 		if len(b) > MaxEvidenceBytes {
 			return fmt.Errorf("evidence is %d bytes, the limit is %d", len(b), MaxEvidenceBytes)
 		}
+	}
+	return nil
+}
+
+// checkDetail refuses a Detail over the bounds attention renders: at most
+// proactive.MaxDetailRunes characters in at most proactive.MaxDetailLines lines.
+// It is text built by code, so it must be valid text.
+func checkDetail(d string) error {
+	if d == "" {
+		return nil
+	}
+	if !utf8.ValidString(d) {
+		return fmt.Errorf("detail is not valid text")
+	}
+	if n := utf8.RuneCountInString(d); n > proactive.MaxDetailRunes {
+		return fmt.Errorf("detail is %d characters, the limit is %d", n, proactive.MaxDetailRunes)
+	}
+	if n := strings.Count(strings.TrimRight(d, "\n"), "\n") + 1; n > proactive.MaxDetailLines {
+		return fmt.Errorf("detail is %d lines, the limit is %d", n, proactive.MaxDetailLines)
 	}
 	return nil
 }

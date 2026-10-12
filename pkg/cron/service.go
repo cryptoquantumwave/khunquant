@@ -68,6 +68,26 @@ type CronJobState struct {
 	// tool ceiling was sent for this job. Like the other runtime state it stays
 	// with the stored job when UpdateJob replaces the editable parts.
 	NotifiedCeilingV1 bool `json:"notifiedCeilingV1,omitempty"`
+	// Migrated is set while a migration to another mechanism (the trigger
+	// registry) has the job switched off. It travels with the job in the store, so a
+	// later generation that does not run the new mechanism can still find the jobs it
+	// has to switch back on. Only DisableMigrated sets it and RestoreMigrated clears
+	// it; like the other runtime state it stays with the stored job when UpdateJob
+	// replaces the editable parts.
+	Migrated *CronMigration `json:"migrated,omitempty"`
+	// StandInFor is the ID of the trigger spec this job delivers for while the trigger
+	// registry is not live (see AddStandInJob). Empty for every other job.
+	StandInFor string `json:"standInFor,omitempty"`
+}
+
+// CronMigration says who switched a job off and what the job looked like then.
+type CronMigration struct {
+	// Target names what took the job over (a trigger spec ID).
+	Target string `json:"target"`
+	// Fingerprint is the migrator's digest of the fields a user can edit, taken when
+	// the job was switched off. RestoreMigrated hands the job back to the migrator
+	// to compare, so a job the user has changed since is left as the user left it.
+	Fingerprint string `json:"fingerprint"`
 }
 
 type CronJob struct {
@@ -878,6 +898,114 @@ func (cs *CronService) MarkCeilingNotified(jobID string) error {
 	return fmt.Errorf("job not found")
 }
 
+// DisableMigrated switches a job off and records, in the same save, that a
+// migration did it. The job is kept, not deleted. It is an error if the job is
+// gone; on a failed save nothing changes. It is idempotent: a job that is already
+// off and marked just gets the new marker.
+func (cs *CronService) DisableMigrated(jobID string, m CronMigration) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID != jobID {
+			continue
+		}
+		stored := &cs.store.Jobs[i]
+		prev := stored.clone()
+		stored.Enabled = false
+		stored.State.NextRunAtMS = nil
+		stored.State.Migrated = &CronMigration{Target: m.Target, Fingerprint: m.Fingerprint}
+		stored.UpdatedAtMS = cs.nowMS()
+		if err := cs.saveStoreUnsafe(); err != nil {
+			*stored = prev
+			return err
+		}
+		return nil
+	}
+	return ErrJobNotFound
+}
+
+// AddStandInJob creates an enabled job that delivers, on the old path, for a trigger
+// spec that has nothing delivering it (the registry is not live), and records the
+// spec's ID on the job in the same save. The job is scheduled like the legacy
+// alerts and is routed to channel/to. The caller removes it when the spec is live
+// again.
+func (cs *CronService) AddStandInJob(name string, schedule CronSchedule, message, channel, to, specID string) (*CronJob, error) {
+	if err := validateSchedule(schedule); err != nil {
+		return nil, err
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	now := cs.nowMS()
+	job := CronJob{
+		ID: generateID(), Name: name, Enabled: true, Schedule: schedule,
+		Payload: CronPayload{Kind: "agent_turn", Message: message, Channel: channel, To: to, NoHistory: true},
+		State: CronJobState{
+			NextRunAtMS: cs.computeNextRun(&schedule, now), NotifiedCeilingV1: true, StandInFor: specID,
+		},
+		CreatedAtMS: now, UpdatedAtMS: now,
+	}
+	cs.store.Jobs = append(cs.store.Jobs, job)
+	if err := cs.saveStoreUnsafe(); err != nil {
+		cs.store.Jobs = cs.store.Jobs[:len(cs.store.Jobs)-1]
+		return nil, err
+	}
+	out := job.clone()
+	return &out, nil
+}
+
+// RestoreOutcome is what RestoreMigrated did.
+type RestoreOutcome int
+
+const (
+	// RestoreNone: no such job, or it carries no migration marker. Nothing changed.
+	RestoreNone RestoreOutcome = iota
+	// RestoreEnabled: the job was switched back on and the marker cleared.
+	RestoreEnabled
+	// RestoreLeft: the marker was cleared and the job left as it is, because it was
+	// changed since the migration switched it off (or was switched on again).
+	RestoreLeft
+)
+
+// RestoreMigrated hands a migrated job back. Under the service's lock it calls
+// unchanged with the job as stored; if that says the job is as the migration left
+// it, the job is switched on again (its next run recomputed) and the marker
+// cleared, in one save. If not, only the marker is cleared and the job stays as it
+// is: a job the user edited in between is left as the user left it. unchanged must
+// not call back into the service.
+func (cs *CronService) RestoreMigrated(jobID string, unchanged func(CronJob) bool) (RestoreOutcome, error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID != jobID {
+			continue
+		}
+		stored := &cs.store.Jobs[i]
+		if stored.State.Migrated == nil {
+			return RestoreNone, nil
+		}
+		prev := stored.clone()
+		out := RestoreLeft
+		if !stored.Enabled && unchanged(stored.clone()) {
+			stored.Enabled = true
+			if stored.State.NextRunAtMS == nil {
+				stored.State.NextRunAtMS = cs.computeNextRun(&stored.Schedule, cs.nowMS())
+			}
+			stored.UpdatedAtMS = cs.nowMS()
+			out = RestoreEnabled
+		}
+		stored.State.Migrated = nil
+		if err := cs.saveStoreUnsafe(); err != nil {
+			*stored = prev
+			return RestoreNone, err
+		}
+		return out, nil
+	}
+	return RestoreNone, nil
+}
+
 func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -1022,6 +1150,10 @@ func cloneInt64Ptr(p *int64) *int64 {
 func (s CronJobState) clone() CronJobState {
 	s.NextRunAtMS = cloneInt64Ptr(s.NextRunAtMS)
 	s.LastRunAtMS = cloneInt64Ptr(s.LastRunAtMS)
+	if s.Migrated != nil {
+		m := *s.Migrated
+		s.Migrated = &m
+	}
 	return s
 }
 

@@ -17,7 +17,7 @@ import (
 // indicator crossings, delta-neutral health, move-versus-volatility, ...), so a
 // spec found in the table is, for now, an unknown kind: kept, listed and skipped.
 // Production never reassigns it.
-var triggerFactories = func(assemblyDeps) map[string]triggers.Factory { return nil }
+var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory { return alertTriggerFactories(d) }
 
 // triggerBuildTimeout bounds the one-off work of opening the registry.
 const triggerBuildTimeout = 30 * time.Second

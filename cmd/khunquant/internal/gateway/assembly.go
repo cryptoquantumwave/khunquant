@@ -130,6 +130,11 @@ type assemblyDeps struct {
 	// (so a failed reload cannot strand its listener) and the dev-MCP debug tap.
 	Prev *gatewayServices
 
+	// Alerts is the alert side of this generation (alerts_wiring.go): buildServices
+	// makes it before the tools are registered and sets it on its own copy of the
+	// deps; the caller of buildServices never sets it.
+	Alerts *alertRuntime
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -194,6 +199,11 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 
 	s.LossGuard = lossGuardStarter(cfg)
 
+	// The alert side: the late-bound route from the alert tools to the trigger
+	// registry (which does not exist yet), and the migration of the cron alerts.
+	s.Alerts = newAlertRuntime(d)
+	d.Alerts = s.Alerts
+
 	// Cron tool and service.
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	s.CronService, s.DNStore = setupCronTool(
@@ -203,6 +213,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		cfg.Agents.Defaults.RestrictToWorkspace,
 		execTimeout,
 		cfg,
+		s.Alerts.resolver(),
 	)
 	if err := s.CronService.Start(); err != nil {
 		return s, fmt.Errorf("error %s cron service: %w", starting, err)
@@ -287,6 +298,11 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// built unless perception is effectively on and that outbox exists.
 	s.Perception = buildPerception(d, s.Attention)
 	s.perceptionLive.Store(s.Perception)
+
+	// Alerts: with a registry, import and (when live) promote the cron alerts; without
+	// one, hand back any job a promotion had switched off. After perception, which
+	// builds the registry, and after the cron service started.
+	s.Alerts.attach(d, s.CronService, s.Perception)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -411,6 +427,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// which hands its decisions to the outbox. The outbox must still be accepting
 	// them, so it stops after, never before. (The heartbeat is already stopped, so
 	// no second producer is left.)
+	s.Alerts.stop() // before the registry's pipeline goes: it writes to the registry and the cron store
+	s.Alerts = nil
 	s.Perception.stop()
 	if s.perceptionLive != nil {
 		s.perceptionLive.Store(nil)

@@ -107,6 +107,14 @@ type Diff struct {
 	// log: what is returned is what is still there, and earlier changes are gone
 	// (pruned after seven days, or dropped when the log's memory bound was hit).
 	Truncated bool `json:"truncated,omitempty"`
+	// Payload is the untracked event's own payload, for the trigger that handles
+	// that kind; never serialised, never logged, never on the bus. Apply sets it only
+	// for an event of a kind the model does not track (see Tracks), so a tracked
+	// payload such as a portfolio of 200 positions is never carried; such a Diff has
+	// no change and no signal, so it is Empty and the pipeline does not publish it.
+	// The text in it comes from outside: a trigger type-asserts it and treats
+	// anything it does not recognise as not its own.
+	Payload any `json:"-"`
 }
 
 // Empty reports whether the diff carries nothing: no change and no signal.

@@ -420,6 +420,13 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 //
 //	heartbeat.mode  governed -> legacy   unless the effective attention.mode is live
 //
+// Live triggers deliver the same way: a candidate is decided by attention, and with
+// attention off or shadow the decision is logged and nothing is sent. A live
+// trigger would take its alerts off the paths that do deliver (the migration
+// switches the cron alert jobs off) and then lose them, so even with a valid owner:
+//
+//	triggers.mode   live     -> shadow   unless the effective attention.mode is live
+//
 // off and shadow values are returned as configured, an unknown mode string
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
@@ -460,6 +467,11 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 			e.Downgrades = append(e.Downgrades, fmt.Sprintf(
 				"proactive: attention.mode is %s, not live; heartbeat.mode governed → legacy", e.AttentionMode))
 			e.HeartbeatMode = HeartbeatModeLegacy
+		}
+		if e.TriggersMode == ProactiveModeLive && e.AttentionMode != ProactiveModeLive {
+			e.Downgrades = append(e.Downgrades, fmt.Sprintf(
+				"proactive: attention.mode is %s, not live; triggers.mode live → shadow", e.AttentionMode))
+			e.TriggersMode = ProactiveModeShadow
 		}
 		return e
 	}

@@ -90,6 +90,9 @@ type Registry struct {
 	warnMu sync.Mutex
 	warned map[string]time.Time
 
+	shadowMu     sync.Mutex
+	shadowByKind map[string]uint64
+
 	c counters
 }
 
@@ -330,6 +333,19 @@ func (r *Registry) Add(ctx context.Context, s Spec) (Spec, error) {
 // Update was called may lose its state change; the trigger then re-evaluates from
 // the older state and attention's dedup absorbs the repeat.
 func (r *Registry) Update(ctx context.Context, s Spec) error {
+	return r.update(ctx, s, false)
+}
+
+// UpdateFresh is Update that always starts from nothing: the spec's state is
+// cleared even when its kind and parameters did not change. It is how a spec
+// leaves a shadow rehearsal for live (or goes back): what a trigger learned while
+// its candidates were only logged, such as "already fired" or "on the far side
+// of the line", must not decide what it does when they are delivered.
+func (r *Registry) UpdateFresh(ctx context.Context, s Spec) error {
+	return r.update(ctx, s, true)
+}
+
+func (r *Registry) update(ctx context.Context, s Spec, fresh bool) error {
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 
@@ -360,7 +376,7 @@ func (r *Registry) Update(ctx context.Context, s Spec) error {
 	if err != nil {
 		return err
 	}
-	keep := s.Kind == prev.Kind && bytes.Equal(s.Params, prev.Params)
+	keep := !fresh && s.Kind == prev.Kind && bytes.Equal(s.Params, prev.Params)
 	if keep {
 		e.stateLoaded, e.state = prevLoaded, bytes.Clone(prevState)
 	}
@@ -480,6 +496,81 @@ func demandLess(a, b perception.Demand) bool {
 }
 
 var _ perception.DemandSource = (*Registry)(nil)
+
+// GlobalMode is the global triggers mode as the registry reads it now: "off",
+// "shadow" or "live", with anything else reported as "off", as evaluation counts
+// it. A caller that must act differently when triggers deliver (the alert tools)
+// asks the registry rather than the configuration, so that "live" means a live
+// registry is actually running.
+func (r *Registry) GlobalMode() string {
+	switch globalRank(r.globalMode()) {
+	case 2:
+		return ModeLive
+	case 1:
+		return ModeShadow
+	}
+	return ModeOff
+}
+
+// SetStoredMode switches the stored spec id to mode without a registry: for a
+// generation that has none and must still stop an earlier one's spec from being
+// taken for active (see migrate). It changes the mode and the stamp and nothing else,
+// reports whether a row was written, and never creates a table.
+func SetStoredMode(ctx context.Context, db *sql.DB, id, mode string) (bool, error) {
+	if _, ok := modeRank(mode); !ok {
+		return false, fmt.Errorf("%w: mode %q", ErrInvalidSpec, mode)
+	}
+	if db == nil {
+		return false, nil
+	}
+	res, err := db.ExecContext(ctx, `UPDATE triggers SET mode = ?, updated_ms = max(updated_ms + 1, ?) WHERE id = ?`,
+		mode, time.Now().UnixMilli(), id)
+	if err != nil {
+		return false, fmt.Errorf("triggers: set mode: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// DeleteStored removes the stored spec id without a registry; see SetStoredMode.
+func DeleteStored(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	return deleteSpec(ctx, db, id)
+}
+
+// ReadSpecs lists the specs stored in db that match f, without a registry: it opens
+// nothing, creates nothing and reads nothing but the specs, so it is safe to call
+// in a generation that did not build a registry, to learn what an earlier one left.
+// It returns nil when the triggers table does not exist.
+func ReadSpecs(ctx context.Context, db *sql.DB, f ListFilter) ([]Spec, error) {
+	if db == nil {
+		return nil, nil
+	}
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`).Scan(&n); err != nil {
+		return nil, fmt.Errorf("triggers: read: %w", err)
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	rows, _, err := loadRows(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	var out []Spec
+	for _, row := range rows {
+		s := row.spec
+		if f.Kind != "" && s.Kind != f.Kind || f.Mode != "" && s.Mode != f.Mode ||
+			f.IntentID != "" && s.IntentID != f.IntentID || !strings.HasPrefix(s.Origin, f.Origin) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
 
 // warn logs msg at most once per warnEvery for each key.
 func (r *Registry) warn(key, msg string, fields map[string]any) {

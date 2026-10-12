@@ -24,6 +24,10 @@ type pending struct {
 	// disable: the evaluation was the tenth error in a row and the candidate in ids is
 	// the notice. Only once the notice is decided is the spec switched off.
 	disable bool
+	// turnOff: the trigger asked to be switched off (State.TurnOff) and its effective
+	// mode was live. It takes effect when the candidates are decided, like disable,
+	// but is no failure: the error count is left alone.
+	turnOff bool
 }
 
 // Evaluate routes d to the triggers that list the kind of its event, in spec ID
@@ -98,6 +102,7 @@ func (r *Registry) evaluateOne(ctx context.Context, e *entry, g int, v worldmode
 	if st.Dirty && !bytes.Equal(st.Raw, oldState) {
 		p.state, p.stateDirty = st.Raw, true
 	}
+	p.turnOff = st.TurnOff && eff == 2
 	out := make([]proactive.Candidate, 0, len(cands))
 	for _, c := range cands {
 		c.ID = r.newID()
@@ -105,6 +110,9 @@ func (r *Registry) evaluateOne(ctx context.Context, e *entry, g int, v worldmode
 		c.IntentID = spec.IntentID
 		c.Trust = proactive.MinTrust(c.Trust, d.Event.TrustLevel())
 		c.Shadow = c.Shadow || eff != 2
+		if c.Shadow {
+			r.noteShadow(spec.Kind)
+		}
 		if c.At.IsZero() {
 			c.At = v.Now()
 		}
@@ -118,7 +126,7 @@ func (r *Registry) evaluateOne(ctx context.Context, e *entry, g int, v worldmode
 	e.errs = 0 // a success ends the streak, whatever happens to its candidates
 	needWrite := p.stateDirty || e.unsaved || e.persistedEr != 0
 	e.mu.Unlock()
-	if len(p.ids) > 0 || needWrite || hadErrors {
+	if len(p.ids) > 0 || needWrite || hadErrors || p.turnOff {
 		r.addPending(p)
 	}
 	return out
@@ -322,7 +330,7 @@ func (r *Registry) apply(ctx context.Context, p *pending) {
 		u.errors = &errs
 	}
 	guard := e.updatedMs
-	if p.disable {
+	if p.disable || p.turnOff {
 		u.disable = true
 		u.newStamp = max(r.stamp().UnixMilli(), guard+1)
 		e.spec.Mode = ModeOff // takes effect now, in memory; the table follows
@@ -353,7 +361,11 @@ func (r *Registry) apply(ctx context.Context, p *pending) {
 	if u.disable {
 		e.updatedMs = u.newStamp
 		e.spec.UpdatedAt = time.UnixMilli(u.newStamp)
-		r.c.autoDisabled.Add(1)
+		if p.disable {
+			r.c.autoDisabled.Add(1)
+		} else {
+			r.c.turnedOff.Add(1)
+		}
 	}
 	e.mu.Unlock()
 }

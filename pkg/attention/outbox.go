@@ -55,6 +55,9 @@ const (
 
 	maxLineRunes  = 200
 	maxProseRunes = 300
+	// maxDetailLineRunes is longer than a title line: a detail line may quote an
+	// alert's own message, which a trigger caps at 300 characters.
+	maxDetailLineRunes = 320
 )
 
 // Item is a candidate to put in front of the owner, with optional model text.
@@ -484,7 +487,7 @@ func renderGroup(items []Item) Message {
 
 	if len(items) == 1 {
 		m.Title = itemTitle(items[0].Candidate)
-		m.Body = strings.TrimSpace(items[0].Prose)
+		m.Body = joinBlocks(detailBlock(items[0].Candidate), strings.TrimSpace(items[0].Prose))
 		return m
 	}
 	m.Title = strconv.Itoa(len(items)) + " updates"
@@ -494,12 +497,48 @@ func renderGroup(items []Item) Message {
 			b.WriteString("\n")
 		}
 		b.WriteString("• " + itemTitle(it.Candidate))
+		if l := detailLines(it.Candidate.Detail, 1); len(l) > 0 {
+			b.WriteString("\n  " + l[0])
+		}
 		if p := oneLine(it.Prose, maxProseRunes); p != "" {
 			b.WriteString("\n  " + p)
 		}
 	}
 	m.Body = b.String()
 	return m
+}
+
+// detailLines cleans a candidate's Detail into at most max single lines, each cut
+// at maxDetailLineRunes. The Detail is built by code, but it may quote text from outside
+// (an alert's own message), so each line goes through the same cleaning as a
+// title: no control character survives and a newline cannot pass for another line.
+func detailLines(detail string, max int) []string {
+	var out []string
+	for _, raw := range strings.Split(detail, "\n") {
+		if len(out) >= max {
+			break
+		}
+		if l := oneLine(raw, maxDetailLineRunes); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// detailBlock is the lines of a single message's Detail, one per line.
+func detailBlock(c proactive.Candidate) string {
+	return strings.Join(detailLines(c.Detail, proactive.MaxDetailLines), "\n")
+}
+
+// joinBlocks puts the non-empty blocks of a message body one blank line apart.
+func joinBlocks(blocks ...string) string {
+	var out []string
+	for _, b := range blocks {
+		if b != "" {
+			out = append(out, b)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func itemTitle(c proactive.Candidate) string {

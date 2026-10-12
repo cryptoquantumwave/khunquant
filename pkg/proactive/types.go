@@ -269,17 +269,28 @@ func (c *ComposeMode) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Bounds on Candidate.Detail. The trigger registry refuses a candidate over them,
+// and attention renders at most MaxDetailLines lines of it.
+const (
+	MaxDetailRunes = 600
+	MaxDetailLines = 6
+)
+
 // Candidate is "something might deserve attention", produced by triggers (or,
 // in Phase 1, by a heartbeat turn's respond_proactive call).
 type Candidate struct {
-	ID          string // ULID
-	TriggerID   string // "price_cross:<id>", "dn:12", "heartbeat"
-	DedupKey    string // stable per situation, e.g. "drawdown:portfolio:tier2"
-	Severity    Severity
-	Protective  bool           // margin / liquidation / stop-loss
-	Salience    float64        // 0..1
-	Subject     string         // "BTC/USDT", "plan:12", "portfolio"
-	Title       string         // template-rendered headline (no LLM)
+	ID         string // ULID
+	TriggerID  string // "price_cross:<id>", "dn:12", "heartbeat"
+	DedupKey   string // stable per situation, e.g. "drawdown:portfolio:tier2"
+	Severity   Severity
+	Protective bool    // margin / liquidation / stop-loss
+	Salience   float64 // 0..1
+	Subject    string  // "BTC/USDT", "plan:12", "portfolio"
+	Title      string  // template-rendered headline (no LLM)
+	// Detail is template-rendered evidence lines built by code, never model text.
+	// Attention puts it under the title (see attention.renderGroup); the trigger
+	// registry refuses more than MaxDetailRunes characters or MaxDetailLines lines.
+	Detail      string
 	Evidence    map[string]any // numbers for templates; never restated by the LLM
 	IntentID    string
 	Trust       Trust

@@ -64,6 +64,12 @@ func render(severity proactive.Severity, interventionID, title, body string) (re
 		out.WriteString(body)
 	}
 
+	return rendered{Outbound: out.String(), Session: sessionCopy(severity, interventionID, title, body)}, true
+}
+
+// sessionCopy is the text written into the owner's session for a message: the
+// proactive header line, then the (already cleaned) title and body.
+func sessionCopy(severity proactive.Severity, interventionID, title, body string) string {
 	var sess strings.Builder
 	sess.WriteString(headerPrefix + " · " + severity.String() + " · " + interventionID + "]")
 	if title != "" {
@@ -72,7 +78,7 @@ func render(severity proactive.Severity, interventionID, title, body string) (re
 	if body != "" {
 		sess.WriteString("\n" + body)
 	}
-	return rendered{Outbound: out.String(), Session: sess.String()}, true
+	return sess.String()
 }
 
 // cleanTitle returns a single line of at most maxTitleRunes runes.

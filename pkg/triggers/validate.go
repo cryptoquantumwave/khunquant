@@ -164,6 +164,9 @@ func checkCandidate(kind string, c proactive.Candidate) error {
 	if len(c.Subject) > MaxSubjectBytes || !utf8.ValidString(c.Subject) {
 		return fmt.Errorf("subject is over %d bytes", MaxSubjectBytes)
 	}
+	if err := checkQuote(c.Quote); err != nil {
+		return err
+	}
 	if err := checkDetail(c.Detail); err != nil {
 		return err
 	}
@@ -199,6 +202,32 @@ func checkDetail(d string) error {
 	}
 	if n := strings.Count(strings.TrimRight(d, "\n"), "\n") + 1; n > proactive.MaxDetailLines {
 		return fmt.Errorf("detail is %d lines, the limit is %d", n, proactive.MaxDetailLines)
+	}
+	return nil
+}
+
+// checkQuote refuses a Quote over the bounds attention renders (at most
+// proactive.MaxQuoteRunes characters in at most proactive.MaxQuoteLines lines) and
+// any character that could pass for markup of the message around it: control
+// characters other than the line break, and bidirectional controls. The quote is text
+// from outside, so the trigger must have cleaned it; this is the second lock.
+func checkQuote(q string) error {
+	if q == "" {
+		return nil
+	}
+	if !utf8.ValidString(q) {
+		return fmt.Errorf("quote is not valid text")
+	}
+	for _, r := range q {
+		if r != '\n' && unicode.IsControl(r) || perception.IsBidiControl(r) {
+			return fmt.Errorf("quote holds a control character")
+		}
+	}
+	if n := utf8.RuneCountInString(q); n > proactive.MaxQuoteRunes {
+		return fmt.Errorf("quote is %d characters, the limit is %d", n, proactive.MaxQuoteRunes)
+	}
+	if n := strings.Count(strings.TrimRight(q, "\n"), "\n") + 1; n > proactive.MaxQuoteLines {
+		return fmt.Errorf("quote is %d lines, the limit is %d", n, proactive.MaxQuoteLines)
 	}
 	return nil
 }

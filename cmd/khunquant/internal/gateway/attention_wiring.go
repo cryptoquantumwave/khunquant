@@ -37,6 +37,12 @@ func (a attentionDeliverer) Deliver(ctx context.Context, m attention.Message) (b
 		InterventionID:      m.InterventionID,
 		DisableNotification: m.Silent,
 	}
+	if m.SessionRestricted {
+		// The owner is sent the message as it is; the session, which the model reads
+		// on the owner's next turn, gets the form without text from outside.
+		sb := m.SessionBody
+		n.SessionBody = &sb
+	}
 	if len(m.Decisions) > 0 {
 		c := m.Decisions[0].Candidate
 		n.Candidate = &c

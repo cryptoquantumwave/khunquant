@@ -86,6 +86,22 @@ type Message struct {
 	Digest bool
 	// Decisions are the decisions that make up the message, ranked as rendered.
 	Decisions []Decision
+	// SessionRestricted says that some member's Quote is not to be kept in the owner's
+	// session (see SessionWithheld): the session copy then carries SessionBody in
+	// place of Body. When it is false the session copy carries Body, as it always did.
+	SessionRestricted bool
+	SessionBody       string
+}
+
+// SessionWithheld stands in the owner's session for the quoted text of a message.
+// The session is what the model reads on the owner's next turn, a turn with the
+// owner's own tools, so text that did not originate in this process (see
+// proactive.Candidate.Quote) is shown to the owner in the chat and not kept there.
+const SessionWithheld = "(quoted text was shown to you in the message and is not kept in this conversation)"
+
+// hasQuote reports whether a member carries quoted text.
+func hasQuote(c proactive.Candidate) bool {
+	return strings.TrimSpace(c.Quote) != ""
 }
 
 // Deliverer sends one message to the owner. delivered=false with a nil error
@@ -374,6 +390,14 @@ func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) 
 		} else {
 			composed.InterventionID, composed.Decisions = m.InterventionID, m.Decisions
 			composed.Digest = false
+			// The session copy of a restricted message keeps its withheld form; the
+			// composer's prose is added to it only when it is, as it is meant to be,
+			// text appended to the template body (a composer that rewrote anything
+			// else leaves the session with the template alone).
+			composed.SessionRestricted, composed.SessionBody = m.SessionRestricted, m.SessionBody
+			if m.SessionRestricted && strings.HasPrefix(composed.Body, m.Body) {
+				composed.SessionBody = m.SessionBody + composed.Body[len(m.Body):]
+			}
 			m = composed
 		}
 	}
@@ -471,14 +495,21 @@ func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
 }
 
 // renderGroup renders ranked items as one message. One item keeps its own
-// title and prose; several get a headline with the count and one line per item
-// (a prose, when present, follows its line, indented). Severity is the highest in
-// the group. Every title is reduced to a single clean line here, so a newline in
-// one cannot pass for another item.
+// title, Detail, Quote (as "> " lines) and prose; several get a headline with the
+// count and one line per item (its first Detail line, or when it has none the first
+// line of its Quote, and a prose, when present, follow its line, indented). Severity
+// is the highest in the group. Every title is reduced to a single clean line here, so
+// a newline in one cannot pass for another item.
+//
+// The Quote is text from outside, shown to the owner here and not kept in the
+// session the model reads: when any member has one, the message also carries the
+// session form of its body, in which the quoted lines are replaced by one
+// SessionWithheld sentence. A message with no Quote is not restricted at all.
 func renderGroup(items []Item) Message {
 	m := Message{}
 	for _, it := range items {
 		m.Severity = max(m.Severity, it.Candidate.Severity)
+		m.SessionRestricted = m.SessionRestricted || hasQuote(it.Candidate)
 	}
 	if len(items) == 0 {
 		return m
@@ -486,26 +517,62 @@ func renderGroup(items []Item) Message {
 	m.DedupKey = items[0].Candidate.DedupKey
 
 	if len(items) == 1 {
-		m.Title = itemTitle(items[0].Candidate)
-		m.Body = joinBlocks(detailBlock(items[0].Candidate), strings.TrimSpace(items[0].Prose))
+		c := items[0].Candidate
+		prose := strings.TrimSpace(items[0].Prose)
+		m.Title = itemTitle(c)
+		m.Body = joinBlocks(detailBlock(c), quoteBlock(c), prose)
+		if m.SessionRestricted {
+			m.SessionBody = joinBlocks(detailBlock(c), SessionWithheld, prose)
+		}
 		return m
 	}
 	m.Title = strconv.Itoa(len(items)) + " updates"
-	var b strings.Builder
+	var b, sb strings.Builder
 	for i, it := range items {
 		if i > 0 {
 			b.WriteString("\n")
+			sb.WriteString("\n")
 		}
-		b.WriteString("• " + itemTitle(it.Candidate))
+		head := "• " + itemTitle(it.Candidate)
+		b.WriteString(head)
+		sb.WriteString(head)
 		if l := detailLines(it.Candidate.Detail, 1); len(l) > 0 {
+			b.WriteString("\n  " + l[0])
+			sb.WriteString("\n  " + l[0])
+		} else if l := quoteLines(it.Candidate, 1); len(l) > 0 {
 			b.WriteString("\n  " + l[0])
 		}
 		if p := oneLine(it.Prose, maxProseRunes); p != "" {
 			b.WriteString("\n  " + p)
+			sb.WriteString("\n  " + p)
 		}
 	}
 	m.Body = b.String()
+	if m.SessionRestricted {
+		m.SessionBody = sb.String() + "\n" + SessionWithheld
+	}
 	return m
+}
+
+// quoteLines cleans a candidate's Quote into at most max "> " lines, each cut at
+// maxDetailLineRunes. The trigger has cleaned it already; it is text from outside, so
+// each line goes through the same cleaning as a title all the same.
+func quoteLines(c proactive.Candidate, max int) []string {
+	var out []string
+	for _, raw := range strings.Split(c.Quote, "\n") {
+		if len(out) >= max {
+			break
+		}
+		if l := oneLine(raw, maxDetailLineRunes); l != "" {
+			out = append(out, "> "+l)
+		}
+	}
+	return out
+}
+
+// quoteBlock is the lines of a single message's Quote, one per line.
+func quoteBlock(c proactive.Candidate) string {
+	return strings.Join(quoteLines(c, proactive.MaxQuoteLines), "\n")
 }
 
 // detailLines cleans a candidate's Detail into at most max single lines, each cut

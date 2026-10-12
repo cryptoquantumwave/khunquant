@@ -13,11 +13,15 @@ import (
 )
 
 // triggerFactories is the set of trigger kinds this build can run. It is a seam:
-// production registers none until the changes that add concrete kinds (price and
-// indicator crossings, delta-neutral health, move-versus-volatility, ...), so a
-// spec found in the table is, for now, an unknown kind: kept, listed and skipped.
-// Production never reassigns it.
-var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory { return alertTriggerFactories(d) }
+// production registers the price and indicator crossings and the external kind;
+// the kinds that later changes add (delta-neutral health, move-versus-volatility,
+// ...) join them, and a spec of any other kind found in the table is an unknown
+// kind: kept, listed and skipped. Production never reassigns it.
+var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory {
+	f := alertTriggerFactories(d)
+	f[triggers.KindExternal] = triggers.ExternalFactory
+	return f
+}
 
 // triggerBuildTimeout bounds the one-off work of opening the registry.
 const triggerBuildTimeout = 30 * time.Second
@@ -90,6 +94,9 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 		return
 	}
 	rt.triggers = reg
+	if triggerFactories(*d)[triggers.KindExternal] != nil {
+		ensureExternalSpec(ctx, reg)
+	}
 	opts.Evaluator = triggerStage{r: reg}
 	d.Demands = reg
 }

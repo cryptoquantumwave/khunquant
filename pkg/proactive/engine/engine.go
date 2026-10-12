@@ -416,6 +416,11 @@ func (e *Engine) publish(evt events.Event) {
 	if e.bus == nil {
 		return
 	}
+	// Text from outside that only the trigger handling its kind may read goes onto
+	// the bus as its envelope alone.
+	if _, private := evt.Payload.(perception.PrivatePayload); private {
+		evt.Payload, evt.Attrs = nil, nil
+	}
 	if r := e.bus.PublishNonBlocking(evt); r.Dropped > 0 {
 		e.c.busDropped.Add(uint64(r.Dropped))
 	}

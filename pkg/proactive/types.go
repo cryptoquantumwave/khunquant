@@ -276,6 +276,13 @@ const (
 	MaxDetailLines = 6
 )
 
+// Bounds on Candidate.Quote, next to Detail's. The trigger registry refuses a
+// candidate over them.
+const (
+	MaxQuoteRunes = 600
+	MaxQuoteLines = 6
+)
+
 // Candidate is "something might deserve attention", produced by triggers (or,
 // in Phase 1, by a heartbeat turn's respond_proactive call).
 type Candidate struct {
@@ -290,7 +297,13 @@ type Candidate struct {
 	// Detail is template-rendered evidence lines built by code, never model text.
 	// Attention puts it under the title (see attention.renderGroup); the trigger
 	// registry refuses more than MaxDetailRunes characters or MaxDetailLines lines.
-	Detail      string
+	Detail string
+	// Quote is text that did not originate in this process (an external trigger's
+	// message, the note of an alert), already cleaned by the trigger to plain lines.
+	// It is shown to the owner under Detail as quoted lines; it is NEVER written into
+	// the owner's session and never given to a model. The registry refuses more than
+	// MaxQuoteRunes characters or MaxQuoteLines lines, and control characters.
+	Quote       string
 	Evidence    map[string]any // numbers for templates; never restated by the LLM
 	IntentID    string
 	Trust       Trust

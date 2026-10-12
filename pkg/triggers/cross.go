@@ -281,7 +281,7 @@ func validTimeframe(tf string) bool {
 // CleanAlertMessage makes an alert's own message safe to carry: it is outside text
 // (the model wrote it from what a user said), so it is reduced to one line of
 // printable characters, with no double quote to break a quotation, and cut at
-// MaxAlertMessageRunes. It is Evidence and a quoted detail line, never part of a
+// MaxAlertMessageRunes. It is Evidence and the candidate's Quote, never part of a
 // title, a subject or a dedup key.
 func CleanAlertMessage(s string) string {
 	s = strings.ToValidUTF8(s, "")
@@ -362,23 +362,14 @@ func crossTitle(thai bool, subject string, above bool, threshold, now string) st
 	return subject + " fell below " + threshold + " — now " + now
 }
 
-// crossDetail is the evidence lines of an alert: where it was seen and, quoted, the
-// message the alert was set with.
-func crossDetail(thai bool, source, threshold, now, message string) string {
-	var b strings.Builder
+// crossDetail is the evidence line of an alert: where it was seen and the numbers.
+// The message the alert was set with is outside text and goes in the Quote, never
+// here.
+func crossDetail(thai bool, source, threshold, now string) string {
 	if thai {
-		b.WriteString(source + " · เส้น " + threshold + " · ตอนนี้ " + now)
-	} else {
-		b.WriteString(source + " · line " + threshold + " · now " + now)
+		return source + " · เส้น " + threshold + " · ตอนนี้ " + now
 	}
-	if message != "" {
-		if thai {
-			b.WriteString("\nโน้ตของคุณ: \"" + message + "\"")
-		} else {
-			b.WriteString("\nYour note: \"" + message + "\"")
-		}
-	}
-	return b.String()
+	return source + " · line " + threshold + " · now " + now
 }
 
 func dedupWindow(cooldownMin int) time.Duration {
@@ -388,7 +379,7 @@ func dedupWindow(cooldownMin int) time.Duration {
 	return max(w, time.Minute)
 }
 
-func crossCandidate(key, subject, title, detail string, evidence map[string]any, trust proactive.Trust,
+func crossCandidate(key, subject, title, detail, quote string, evidence map[string]any, trust proactive.Trust,
 	cooldownMin int, at time.Time) proactive.Candidate {
 	return proactive.Candidate{
 		DedupKey:    key,
@@ -397,6 +388,7 @@ func crossCandidate(key, subject, title, detail string, evidence map[string]any,
 		Subject:     subject,
 		Title:       title,
 		Detail:      detail,
+		Quote:       quote,
 		Evidence:    evidence,
 		Trust:       trust,
 		Compose:     proactive.ComposeTemplate,

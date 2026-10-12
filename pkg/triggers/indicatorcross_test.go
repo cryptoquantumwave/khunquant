@@ -343,11 +343,14 @@ func TestCleanAlertMessage(t *testing.T) {
 			t.Errorf("CleanAlertMessage(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if err := checkDetail(crossDetail(false, "okx", "60000", "61000", CleanAlertMessage(long))); err != nil {
+	if err := checkDetail(crossDetail(false, "okx", "60000", "61000")); err != nil {
 		t.Fatalf("a maximal detail is refused by the registry check: %v", err)
 	}
-	if err := checkDetail(crossDetail(true, strings.Repeat("p", 64), "60000.12345678", "61000.12345678", CleanAlertMessage(long))); err != nil {
+	if err := checkDetail(crossDetail(true, strings.Repeat("p", 64), "60000.12345678", "61000.12345678")); err != nil {
 		t.Fatalf("a maximal Thai detail is refused by the registry check: %v", err)
+	}
+	if err := checkQuote(CleanAlertMessage(long)); err != nil {
+		t.Fatalf("a maximal note is refused by the registry check: %v", err)
 	}
 }
 

@@ -71,6 +71,10 @@ type sharedResources struct {
 	mu      sync.Mutex
 	closers []namedCloser
 	closed  bool
+
+	// triggerLim is the external trigger route's rate limit, per process: a reload
+	// keeps it (see trigger_api.go).
+	triggerLim *triggerLimiter
 }
 
 type namedCloser struct {
@@ -391,6 +395,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken, perceptionStatsFn(s.perceptionLive))
+	registerTriggerAPIFor(mux, s, d)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)

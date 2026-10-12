@@ -313,7 +313,7 @@ func TestAlerts_LiveEndToEndFromAGroupChat(t *testing.T) {
 			t.Fatalf("the candidate carries a route (%q): %s", leak, cand)
 		}
 	}
-	if !strings.Contains(cand, "BTC/USDT crossed above 60000") || !strings.Contains(cand, "Your note") {
+	if !strings.Contains(cand, "BTC/USDT crossed above 60000") || !strings.Contains(cand, `"Quote"`) {
 		t.Fatalf("candidate = %s", cand)
 	}
 	// Staying above does not repeat it.
@@ -425,7 +425,8 @@ func TestAlertBackend_ListsStoredSpecsWithoutARegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := f.services.Alerts.resolver()()
-	specs, err := b.List(context.Background(), triggers.ListFilter{})
+	// (The builtin external spec is in the table too; the alert tools filter by kind.)
+	specs, err := b.List(context.Background(), triggers.ListFilter{Kind: triggers.KindPriceCross})
 	if err != nil || len(specs) != 1 {
 		t.Fatalf("specs = %v, %v", specs, err)
 	}

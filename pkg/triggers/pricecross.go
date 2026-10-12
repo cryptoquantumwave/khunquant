@@ -172,6 +172,6 @@ func (t *priceCross) candidate(price float64, trust proactive.Trust, v worldmode
 		fmt.Sprintf("%s:%s:%s:%s:%s", KindPriceCross, t.p.Provider, t.p.Symbol, t.p.Direction, thr),
 		t.p.Symbol,
 		crossTitle(thai, t.p.Symbol, t.p.Direction == DirAbove, thr, now),
-		crossDetail(thai, t.p.Provider, thr, now, msg),
+		crossDetail(thai, t.p.Provider, thr, now), msg,
 		ev, trust, t.p.CooldownMin, v.Now())
 }

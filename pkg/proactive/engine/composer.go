@@ -133,6 +133,10 @@ func (c *Composer) Compose(ctx context.Context, m attention.Message, items []att
 	cands := make([]proactive.Candidate, len(items))
 	for i, it := range items {
 		cands[i] = it.Candidate
+		// Quoted text did not originate here and is never given to a model: the
+		// turn's candidate list carries ids, titles and the like, and the request
+		// does not carry the quote at all.
+		cands[i].Quote = ""
 	}
 	res, err := c.run.RunProactiveTurn(ctx, TurnRequest{
 		Kind:         proactive.TurnProactive,

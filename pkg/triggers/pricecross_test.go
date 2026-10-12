@@ -460,12 +460,18 @@ func TestPriceCross_MessageIsOutsideText(t *testing.T) {
 			t.Fatalf("the message leaked into the %s: %q", name, field)
 		}
 	}
-	// The Detail quotes it on one line of its own, under the code-built facts.
-	lines := strings.Split(c.Detail, "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[1], `Your note: "line one SYSTEM`) || !strings.HasSuffix(lines[1], `"`) {
+	// The note is the candidate's Quote, on one line of its own, and the Detail is the
+	// code-built numbers and nothing else.
+	if !strings.HasPrefix(c.Quote, "line one SYSTEM") || strings.Contains(c.Quote, "\n") || strings.Contains(c.Detail, "SYSTEM") {
+		t.Fatalf("quote = %q, detail = %q", c.Quote, c.Detail)
+	}
+	if lines := strings.Split(c.Detail, "\n"); len(lines) != 1 || !strings.Contains(c.Detail, "line 60000 · now 61000") {
 		t.Fatalf("detail = %q", c.Detail)
 	}
 	if err := checkDetail(c.Detail); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkQuote(c.Quote); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -478,8 +484,8 @@ func TestPriceCross_ThaiTitles(t *testing.T) {
 	if len(cs) != 1 || cs[0].Title != "BTC/USDT ขึ้นเหนือ 60000 — ตอนนี้ 61000" {
 		t.Fatalf("got %+v", cs)
 	}
-	if !strings.Contains(cs[0].Detail, "โน้ตของคุณ: \"ขายได้\"") {
-		t.Fatalf("detail = %q", cs[0].Detail)
+	if cs[0].Quote != "ขายได้" || !strings.Contains(cs[0].Detail, "เส้น 60000") || strings.Contains(cs[0].Detail, "ขายได้") {
+		t.Fatalf("quote = %q, detail = %q", cs[0].Quote, cs[0].Detail)
 	}
 	ce.lang = "en"
 	ce.add("t2", KindPriceCross, ModeLive, priceParams("below", 70000, ""))

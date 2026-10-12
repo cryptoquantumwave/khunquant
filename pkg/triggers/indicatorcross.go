@@ -293,6 +293,6 @@ func (t *indicatorCross) candidate(value float64, trust proactive.Trust, v world
 		t.p.Indicator, t.p.Period, t.p.Direction, thr)
 	return crossCandidate(key, t.p.Symbol,
 		crossTitle(thai, t.p.Symbol+" "+t.p.label(), t.p.Direction == DirAbove, thr, now),
-		crossDetail(thai, t.p.Provider, thr, now, msg),
+		crossDetail(thai, t.p.Provider, thr, now), msg,
 		ev, trust, t.p.CooldownMin, v.Now())
 }

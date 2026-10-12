@@ -10,6 +10,7 @@ import (
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -349,6 +350,13 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(fmt.Sprintf("entry order failed: %v", err)).WithError(err)
 	}
 	entryID := orderID(entry)
+	// Report the accepted entry order to the perception order feed (the amount is a
+	// contract count; the notional is the one estimated above).
+	publishOrder(ctx, orderReport{
+		tool: NameFuturesOpenPosition, provider: providerID, account: account, symbol: symbol,
+		side: entrySide, kind: orderType, amount: amount, unit: orderfeed.UnitContracts, order: entry,
+		notionalUSD: notional, notionalKnown: true,
+	})
 
 	// Step 10: verify fill and detect partial fills
 	protectionAmount := amount

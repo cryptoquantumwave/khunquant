@@ -22,6 +22,11 @@ type Boundary struct {
 	// Forbidden are packages that nothing in Root's import closure may be, matched
 	// by path prefix so subpackages are covered ("pkg/agent" forbids "pkg/agent/x").
 	Forbidden []string
+	// Permit are exact package paths that are exempt from Forbidden, for a single
+	// package inside a forbidden tree ("pkg/providers/broker" inside "pkg/providers").
+	// Only the package itself is exempt, not its subpackages, and listing one here
+	// does not add it to Allowed.
+	Permit []string
 }
 
 // ImportGraph maps a module-relative package path to its module-relative imports
@@ -74,6 +79,11 @@ func (b Boundary) Violations(g ImportGraph) []string {
 }
 
 func (b Boundary) forbidden(p string) (string, bool) {
+	for _, ok := range b.Permit {
+		if p == ok {
+			return "", false
+		}
+	}
 	for _, f := range b.Forbidden {
 		if p == f || strings.HasPrefix(p, f+"/") {
 			return f, true

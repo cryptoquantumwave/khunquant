@@ -111,6 +111,10 @@ type perceptionRuntime struct {
 	// device service must not be started.
 	devicesTakenOver bool
 
+	// finance is the portfolio and futures sources and the order feed
+	// (perception_finance_wiring.go).
+	finance financeRuntime
+
 	mgrCancel context.CancelFunc
 	engCancel context.CancelFunc
 	engDone   chan struct{}
@@ -146,6 +150,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 			rt.clock = cs
 		}
 	}
+	rt.attachFinance(d)
 
 	engCtx, engCancel := context.WithCancel(context.Background())
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
@@ -195,6 +200,7 @@ type perceptionStatsResponse struct {
 	Sources  map[string]perceptionSourceStats `json:"sources"`
 	Market   *perceptionMarketStats           `json:"market,omitempty"`
 	Clock    *perceptionClockStats            `json:"clock,omitempty"`
+	Finance  financeStats                     `json:"finance"`
 	Dispatch struct {
 		Buffered uint64 `json:"buffered"`
 		Queued   uint64 `json:"queued"`
@@ -251,6 +257,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 
 	out.Market = rt.marketStats()
 	out.Clock = rt.clockStats()
+	rt.fillFinanceStats(&out.Finance)
 
 	ds := rt.dispatch.Stats()
 	out.Dispatch.Buffered, out.Dispatch.Queued, out.Dispatch.Ignored, out.Dispatch.Rejected = ds.Buffered, ds.Queued, ds.Ignored, ds.Rejected
@@ -281,12 +288,14 @@ func (rt *perceptionRuntime) stop() {
 	if rt == nil {
 		return
 	}
+	rt.stopFinanceFeed() // no new orders reach an engine that is stopping
 	ctx, cancel := context.WithTimeout(context.Background(), perceptionSourcesStopTimeout)
 	rt.mgrCancel()
 	if err := rt.manager.Stop(ctx); err != nil {
 		logger.WarnCF("perception", "Sources did not stop in time", map[string]any{"error": err.Error()})
 	}
 	cancel()
+	rt.closeFinance()
 
 	rt.engCancel()
 	select {

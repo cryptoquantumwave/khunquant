@@ -38,6 +38,31 @@ func TestBoundary_CheckerCatchesBreaches(t *testing.T) {
 	}
 }
 
+func TestBoundary_PermitExemptsOnlyTheExactPackage(t *testing.T) {
+	b := Boundary{
+		Root:      "pkg/x",
+		Allowed:   []string{"pkg/providers/broker"},
+		Forbidden: []string{"pkg/providers"},
+		Permit:    []string{"pkg/providers/broker"},
+	}
+	ok := ImportGraph{"pkg/x": {"pkg/providers/broker"}, "pkg/providers/broker": {"pkg/config"}}
+	if v := b.Violations(ok); len(v) != 0 {
+		t.Fatalf("the permitted package was flagged: %v", v)
+	}
+	sibling := ImportGraph{"pkg/x": {"pkg/providers/broker"}, "pkg/providers/broker": {"pkg/providers/openai"}}
+	if v := b.Violations(sibling); len(v) == 0 {
+		t.Fatal("a package that the permitted one reaches was not flagged")
+	}
+	direct := ImportGraph{"pkg/x": {"pkg/providers/openai"}}
+	if v := b.Violations(direct); len(v) == 0 {
+		t.Fatal("a sibling of the permitted package was not flagged")
+	}
+	sub := ImportGraph{"pkg/x": {"pkg/providers/broker/sub"}}
+	if v := b.Violations(sub); len(v) == 0 {
+		t.Fatal("a subpackage of the permitted package was exempted too")
+	}
+}
+
 func TestClock_FiresOnAdvance(t *testing.T) {
 	c := NewClock(time.Unix(0, 0))
 	ch := c.After(time.Second)

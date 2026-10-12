@@ -7,12 +7,16 @@
 //
 // # Time zones
 //
-// The binary does not embed the time zone database (no time/tzdata import), so
-// time.LoadLocation relies on the host: $ZONEINFO, the system zoneinfo
-// directories, or the Go toolchain's zoneinfo.zip. A host without any of them
-// (a minimal container, a bare embedded image) cannot load "Asia/Bangkok", and
-// Validate then reports an error naming the zone instead of silently using
-// another one. Profile.Location falls back to UTC with ok=false in that case.
+// This package does not embed the time zone database itself: the khunquant and
+// khunquant-launcher binaries do, by importing time/tzdata (see their tzdata.go),
+// so there time.LoadLocation falls back to the embedded copy on a host with no
+// zoneinfo (a minimal container, a bare embedded image). In any other program
+// that links this package without that import (a test binary, a tool),
+// LoadLocation relies on the host: $ZONEINFO, the system zoneinfo directories,
+// or the Go toolchain's zoneinfo.zip. Without any of them "Asia/Bangkok" cannot
+// be loaded, and Validate then reports an error naming the zone instead of
+// silently using another one. Profile.Location falls back to UTC with ok=false
+// in that case.
 //
 // # Zero versus unset
 //

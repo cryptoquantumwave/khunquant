@@ -276,6 +276,10 @@ func (al *AgentLoop) RunProactiveTurn(
 		return res, errors.New("proactive turn: ended at max_tool_iterations without a decision")
 	}
 
+	// The turn completed with a decision: whatever the background section showed it
+	// has been seen.
+	al.background.turnCompleted(ctx)
+
 	logger.InfoCF("agent", "Proactive turn finished", map[string]any{
 		"kind":              string(req.Kind),
 		"decisions":         len(res.Decisions),

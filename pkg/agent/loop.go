@@ -64,6 +64,11 @@ type AgentLoop struct {
 	// eventSink is where sub-turn lifecycle events go; nil means nowhere. It is
 	// per loop, never package state. See eventsink.go and SetEventBus.
 	eventSink atomic.Pointer[sinkHolder]
+
+	// background is the section background turns carry (see background_sections.go).
+	// It is created with the loop and handed to the context builder of every agent
+	// whenever a registry is installed, so a reload keeps it.
+	background *backgroundSections
 }
 
 // processOptions configures how a message is processed
@@ -187,6 +192,7 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(SteeringOneAtATime),
+		background:  &backgroundSections{},
 	}
 
 	// Register shared tools to all agents (needs al for SubTurnSpawner)
@@ -232,6 +238,8 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 ) {
+	al.attachBackgroundSections(registry)
+
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// The profile tools share one store (the user has one profile) and are

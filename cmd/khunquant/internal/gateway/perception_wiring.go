@@ -115,6 +115,10 @@ type perceptionRuntime struct {
 	// (perception_finance_wiring.go).
 	finance financeRuntime
 
+	// worldModel is the belief store the pipeline applies events to; nil when it
+	// could not be built (worldmodel_wiring.go).
+	worldModel *worldModelRuntime
+
 	mgrCancel context.CancelFunc
 	engCancel context.CancelFunc
 	engDone   chan struct{}
@@ -136,6 +140,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	if bus := d.Shared.eventBus(); bus != nil {
 		opts.Bus = bus
 	}
+	rt.attachWorldModel(d, &opts)
 	rt.engine = engine.New(opts)
 	rt.manager = perception.NewManager(rt.engine.Emitter())
 
@@ -197,11 +202,13 @@ type perceptionStatsResponse struct {
 		Panics   uint64 `json:"panics"`
 		Errors   uint64 `json:"errors"`
 	} `json:"manager"`
-	Sources  map[string]perceptionSourceStats `json:"sources"`
-	Market   *perceptionMarketStats           `json:"market,omitempty"`
-	Clock    *perceptionClockStats            `json:"clock,omitempty"`
-	Finance  financeStats                     `json:"finance"`
-	Dispatch struct {
+	Sources map[string]perceptionSourceStats `json:"sources"`
+	// WorldModel is present only while the world model is running.
+	WorldModel *worldModelStats       `json:"worldmodel,omitempty"`
+	Market     *perceptionMarketStats `json:"market,omitempty"`
+	Clock      *perceptionClockStats  `json:"clock,omitempty"`
+	Finance    financeStats           `json:"finance"`
+	Dispatch   struct {
 		Buffered uint64 `json:"buffered"`
 		Queued   uint64 `json:"queued"`
 		Ignored  uint64 `json:"ignored"`
@@ -255,6 +262,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 		out.Sources[name] = perceptionSourceStats{ConsecutiveErrors: h.ConsecutiveErrors, HasEmitted: !h.LastEventAt.IsZero()}
 	}
 
+	out.WorldModel = rt.worldModelStats()
 	out.Market = rt.marketStats()
 	out.Clock = rt.clockStats()
 	rt.fillFinanceStats(&out.Finance)
@@ -303,4 +311,7 @@ func (rt *perceptionRuntime) stop() {
 	case <-time.After(perceptionEngineStopTimeout):
 		logger.WarnCF("perception", "Pipeline engine did not stop in time", nil)
 	}
+	// After the drain: every event the pipeline held is in the model now, and the
+	// final checkpoint writes it.
+	rt.stopWorldModel()
 }

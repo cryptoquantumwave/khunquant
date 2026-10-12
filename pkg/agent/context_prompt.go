@@ -336,6 +336,9 @@ func (cb *ContextBuilder) EstimateSystemTokensFor(o BuildOptions, summary string
 	const dynamicContextChars = 800
 
 	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
+	if (o.Mode == PromptLight || o.Mode == PromptProactive) && cb.background.attached() {
+		totalChars += backgroundSectionChars // the section a background turn carries, at its cap
+	}
 
 	// The full-mode estimate has always added the installed skills' text a
 	// second time on top of the static prompt (which already embeds it), and is

@@ -34,6 +34,7 @@ var perceptionTakesOverDevices = false
 // service is not started. It is a seam: production never reassigns it.
 var perceptionSources = func(d assemblyDeps) (srcs []perception.Source, devicesTakenOver bool) {
 	srcs = append(srcs, marketSourcesFor(d)...)
+	srcs = append(srcs, clockSourcesFor(d)...)
 	if !perceptionTakesOverDevices {
 		return srcs, false
 	}
@@ -103,6 +104,9 @@ type perceptionRuntime struct {
 	// counters).
 	market *sources.MarketSource
 
+	// clock is the clock source, when it is among the sources (for its counters).
+	clock *sources.ClockSource
+
 	// devicesTakenOver: the device adapter is among the sources, so the legacy
 	// device service must not be started.
 	devicesTakenOver bool
@@ -137,6 +141,9 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 		rt.manager.Add(s)
 		if ms, ok := s.(*sources.MarketSource); ok {
 			rt.market = ms
+		}
+		if cs, ok := s.(*sources.ClockSource); ok {
+			rt.clock = cs
 		}
 	}
 
@@ -187,6 +194,7 @@ type perceptionStatsResponse struct {
 	} `json:"manager"`
 	Sources  map[string]perceptionSourceStats `json:"sources"`
 	Market   *perceptionMarketStats           `json:"market,omitempty"`
+	Clock    *perceptionClockStats            `json:"clock,omitempty"`
 	Dispatch struct {
 		Buffered uint64 `json:"buffered"`
 		Queued   uint64 `json:"queued"`
@@ -242,6 +250,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	}
 
 	out.Market = rt.marketStats()
+	out.Clock = rt.clockStats()
 
 	ds := rt.dispatch.Stats()
 	out.Dispatch.Buffered, out.Dispatch.Queued, out.Dispatch.Ignored, out.Dispatch.Rejected = ds.Buffered, ds.Queued, ds.Ignored, ds.Rejected

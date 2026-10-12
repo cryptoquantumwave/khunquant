@@ -24,7 +24,7 @@ func TestPerception_ImportBoundary(t *testing.T) {
 func TestPerceptionSources_ImportBoundary(t *testing.T) {
 	perceptiontest.AssertImports(t, perceptiontest.Boundary{
 		Root:      "pkg/perception/sources",
-		Allowed:   []string{"pkg/perception", "pkg/events", "pkg/proactive", "pkg/logger", "pkg/devices/events"},
+		Allowed:   []string{"pkg/perception", "pkg/perception/calendar", "pkg/events", "pkg/proactive", "pkg/logger", "pkg/devices/events"},
 		Forbidden: forbidden,
 	})
 }

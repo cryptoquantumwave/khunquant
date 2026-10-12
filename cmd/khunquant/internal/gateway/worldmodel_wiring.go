@@ -22,25 +22,26 @@ const worldModelStopTimeout = 10 * time.Second
 // them once, in its own adapter, and hands its triggers a typed worldmodel.View and
 // worldmodel.Diff.
 //
-//	engine.Diff is a worldmodel.Diff (a value) or nil;
+//	engine.Diff is a worldmodel.Diff (a value);
 //	engine.View is a worldmodel.View.
 //
-// Apply returns a nil Diff only when the model tracks the event's kind and the event
-// changed nothing (a tick inside an open bucket, a snapshot that moved nothing), so
-// the engine does not publish an empty worldmodel.diff for every tick. An event of a
-// kind the model does not track (a session boundary, a device, an external trigger,
-// a placed order) is passed on as an envelope-only Diff, so that the evaluator is
-// still told it happened; the Diff carries its kind, source, time and trust, not its
-// payload.
+// Apply returns the Diff of every event it applied without error, the empty one
+// included (the event's envelope and time, no change, no signal): a trigger is
+// evaluated for every event of a kind it lists, changed or not, because a fact it
+// acts on can move in the View without a Change (the last price inside an open
+// minute bucket; the mark and liquidation prices of a futures position whose
+// contract count did not change). The engine does not publish an empty Diff on the
+// bus (Diff.Empty), so this costs the bus nothing. An event of a kind the model
+// does not track (a session boundary, a device, an external trigger, a placed
+// order) is passed on the same way, as an envelope-only Diff, so that the
+// evaluator is told it happened; the Diff carries its kind, source, time and
+// trust, not its payload. Apply returns a nil Diff only together with an error.
 type worldModelStage struct{ s *worldmodel.Store }
 
 func (w worldModelStage) Apply(ctx context.Context, ev events.Event) (engine.Diff, error) {
 	d, err := w.s.Apply(ctx, ev)
 	if err != nil {
 		return nil, err
-	}
-	if d.Empty() && worldmodel.Tracks(ev.Kind) {
-		return nil, nil
 	}
 	return d, nil
 }

@@ -58,8 +58,18 @@ const (
 
 // Diff is what the world model reports about an event: the change it caused. The
 // engine only carries it from WorldModel to Evaluator and onto the bus; the
-// concrete type arrives with pkg/worldmodel (MR-207).
+// concrete type arrives with pkg/worldmodel (MR-207). A non-nil Diff always goes to
+// the Evaluator. One that implements `Empty() bool` and reports true (nothing
+// changed) is not published on the bus, so that an event per tick does not become a
+// bus event per tick; any other Diff is published.
 type Diff any
+
+// emptyDiff reports whether d says, through an Empty method, that it carries no
+// change.
+func emptyDiff(d Diff) bool {
+	e, ok := d.(interface{ Empty() bool })
+	return ok && e.Empty()
+}
 
 // View is the world model's current state as the Evaluator reads it. Like Diff
 // its concrete type arrives with pkg/worldmodel.
@@ -87,6 +97,20 @@ type Attention interface {
 // it runs on the pipeline goroutine.
 type Dispatcher interface {
 	Dispatch(ctx context.Context, ds []attention.Decision) error
+}
+
+// Committer is optionally implemented by an Evaluator that must not make a change
+// final until attention has recorded its decision (the trigger registry keeps its
+// triggers' state this way). After the candidates of an event have been through
+// Attention, the engine calls Committed with the IDs of those whose Decide returned
+// without an error or a panic. A candidate missing from ids was not decided, and the
+// evaluator must behave as if it had never produced it. Committed is called for
+// every event whose Evaluate succeeded, with an empty ids when nothing was decided
+// (also when there is no Attention stage: nothing records a decision then), so that
+// an evaluation that returned no candidate can still settle. It is not called when
+// Evaluate failed. It runs on the pipeline goroutine and must be quick and local.
+type Committer interface {
+	Committed(ctx context.Context, ids []string)
 }
 
 // Housekeeper is optionally implemented by a stage that wants a call every
@@ -137,6 +161,7 @@ type Stats struct {
 	Decisions          uint64
 	DispatchFailures   uint64
 	BusDropped         uint64 // bus deliveries refused by a full subscriber
+	EmptyDiffs         uint64 // diffs that reported Empty(): evaluated, not published on the bus
 	QueueDepth         int
 	QueueHighWater     int
 }
@@ -147,6 +172,7 @@ type counters struct {
 	droppedClosed, droppedCanceled                   atomic.Uint64
 	stagePanics, stageErrors                         atomic.Uint64
 	candidates, decisions, dispatchFails, busDropped atomic.Uint64
+	emptyDiffs                                       atomic.Uint64
 }
 
 // Engine is the pipeline. Build it with New, give its Emitter to the sources and
@@ -201,7 +227,7 @@ func (e *Engine) Stats() Stats {
 		DroppedClosed: c.droppedClosed.Load(), DroppedCanceled: c.droppedCanceled.Load(),
 		StagePanics: c.stagePanics.Load(), StageErrors: c.stageErrors.Load(),
 		Candidates: c.candidates.Load(), Decisions: c.decisions.Load(),
-		DispatchFailures: c.dispatchFails.Load(), BusDropped: c.busDropped.Load(),
+		DispatchFailures: c.dispatchFails.Load(), BusDropped: c.busDropped.Load(), EmptyDiffs: c.emptyDiffs.Load(),
 		QueueDepth: e.in.depth(), QueueHighWater: int(e.in.highWater.Load()),
 	}
 }
@@ -284,7 +310,11 @@ func (e *Engine) process(ctx context.Context, ev events.Event) {
 			return
 		}
 		if diff != nil {
-			e.publish(stageEvent(events.KindWorldModelDiff, ev, diff, ev.Severity))
+			if emptyDiff(diff) {
+				e.c.emptyDiffs.Add(1)
+			} else {
+				e.publish(stageEvent(events.KindWorldModelDiff, ev, diff, ev.Severity))
+			}
 		}
 	}
 	if e.ev == nil {
@@ -302,6 +332,7 @@ func (e *Engine) process(ctx context.Context, ev events.Event) {
 	// event whose source did not say counts as untrusted.
 	evTrust := ev.TrustLevel()
 	var decisions []attention.Decision
+	var decided []string
 	for _, c := range cands {
 		c.Trust = proactive.MinTrust(c.Trust, evTrust)
 		e.c.candidates.Add(1)
@@ -317,6 +348,14 @@ func (e *Engine) process(ctx context.Context, ev events.Event) {
 		e.c.decisions.Add(1)
 		e.publish(stageEvent(events.KindAttentionDecision, ev, d, ev.Severity))
 		decisions = append(decisions, d)
+		if c.ID != "" {
+			decided = append(decided, c.ID)
+		}
+	}
+	if cm, ok := e.ev.(Committer); ok {
+		// Before the hand-over: the decisions are recorded, whatever becomes of the
+		// delivery.
+		e.stage("evaluator", func() { cm.Committed(ctx, decided) })
 	}
 	if len(decisions) == 0 || e.disp == nil {
 		return

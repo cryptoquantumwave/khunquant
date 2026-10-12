@@ -20,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -128,6 +129,11 @@ type assemblyDeps struct {
 	// carries only what must outlive a rebuild: the running sandbox server
 	// (so a failed reload cannot strand its listener) and the dev-MCP debug tap.
 	Prev *gatewayServices
+
+	// Demands is what the market source reads. buildPerception sets it on its own
+	// copy of the deps when the triggers registry is built; it is never set by
+	// the caller of buildServices.
+	Demands perception.DemandSource
 
 	// Reload selects wording of console and log lines ("restarted" vs "started").
 	// It must never change what is built.

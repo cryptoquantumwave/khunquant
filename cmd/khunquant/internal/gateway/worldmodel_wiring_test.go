@@ -187,8 +187,8 @@ func TestWorldModel_StageAdapterBoxesDiffsAndForwardsHousekeeping(t *testing.T) 
 	stage := worldModelStage{s: store}
 	now := time.Now().UTC()
 
-	// A tracked event that changes nothing gives a nil Diff (the engine publishes
-	// nothing for it).
+	// A tracked event that changes nothing still gives a Diff, an empty one (the
+	// engine does not publish it, and the evaluator is told the event happened).
 	tick := events.Event{Kind: events.KindPerceptionMarketTick, Time: now,
 		Payload: sources.MarketTick{Provider: "binance", Symbol: "BTC/USDT", Last: 1, At: now}}
 	if _, err := stage.Apply(context.Background(), tick); err != nil {
@@ -196,8 +196,8 @@ func TestWorldModel_StageAdapterBoxesDiffsAndForwardsHousekeeping(t *testing.T) 
 	}
 	tick.Time = now.Add(time.Second)
 	d, err := stage.Apply(context.Background(), tick)
-	if err != nil || d != nil {
-		t.Fatalf("a tick inside a bucket: %v %v", d, err)
+	if wd, ok := d.(worldmodel.Diff); err != nil || !ok || !wd.Empty() || wd.Event.Kind != events.KindPerceptionMarketTick {
+		t.Fatalf("a tick inside a bucket: %T %+v %v", d, d, err)
 	}
 	// An event of a kind the model does not track is still passed on, as an
 	// envelope, so the evaluator is told it happened.

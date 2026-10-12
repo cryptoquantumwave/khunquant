@@ -12,6 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/sources"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 const (
@@ -22,11 +23,12 @@ const (
 )
 
 // perceptionTakesOverDevices says whether the perception device adapter replaces
-// the legacy device service when perception is on. It is false until a stage of
-// the pipeline turns perception.device events into candidates (a trigger,
-// MR-208): until then the adapter would feed events nobody reads and the legacy
-// service would be switched off, silently ending the owner's USB notices. It is a
-// variable only so that a test can exercise the take-over.
+// the legacy device service when perception is on. It is false until a trigger
+// kind turns perception.device events into candidates (the registry of MR-208
+// routes them, but no such kind exists yet): until then the adapter would feed
+// events nobody reads and the legacy service would be switched off, silently
+// ending the owner's USB notices. It is a variable only so that a test can
+// exercise the take-over.
 var perceptionTakesOverDevices = false
 
 // perceptionSources returns the sources the manager runs for this generation and
@@ -119,6 +121,11 @@ type perceptionRuntime struct {
 	// could not be built (worldmodel_wiring.go).
 	worldModel *worldModelRuntime
 
+	// triggers is the trigger registry, the pipeline's evaluator and the market
+	// source's demand source; nil unless triggers are effectively on and the world
+	// model exists (triggers_wiring.go).
+	triggers *triggers.Registry
+
 	mgrCancel context.CancelFunc
 	engCancel context.CancelFunc
 	engDone   chan struct{}
@@ -141,6 +148,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 		opts.Bus = bus
 	}
 	rt.attachWorldModel(d, &opts)
+	rt.attachTriggers(&d, &opts) // before the sources: the market source reads d.Demands
 	rt.engine = engine.New(opts)
 	rt.manager = perception.NewManager(rt.engine.Emitter())
 
@@ -193,6 +201,7 @@ type perceptionStatsResponse struct {
 		Decisions          uint64 `json:"decisions"`
 		DispatchFailures   uint64 `json:"dispatch_failures"`
 		BusDropped         uint64 `json:"bus_dropped"`
+		EmptyDiffs         uint64 `json:"empty_diffs"`
 		QueueDepth         int    `json:"queue_depth"`
 		QueueHighWater     int    `json:"queue_high_water"`
 	} `json:"engine"`
@@ -206,9 +215,11 @@ type perceptionStatsResponse struct {
 	// WorldModel is present only while the world model is running.
 	WorldModel *worldModelStats       `json:"worldmodel,omitempty"`
 	Market     *perceptionMarketStats `json:"market,omitempty"`
-	Clock      *perceptionClockStats  `json:"clock,omitempty"`
-	Finance    financeStats           `json:"finance"`
-	Dispatch   struct {
+	// Triggers is present only while the trigger registry is running.
+	Triggers *triggerStats         `json:"triggers,omitempty"`
+	Clock    *perceptionClockStats `json:"clock,omitempty"`
+	Finance  financeStats          `json:"finance"`
+	Dispatch struct {
 		Buffered uint64 `json:"buffered"`
 		Queued   uint64 `json:"queued"`
 		Ignored  uint64 `json:"ignored"`
@@ -254,6 +265,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	out.Engine.StagePanics, out.Engine.StageErrors = e.StagePanics, e.StageErrors
 	out.Engine.Candidates, out.Engine.Decisions = e.Candidates, e.Decisions
 	out.Engine.DispatchFailures, out.Engine.BusDropped = e.DispatchFailures, e.BusDropped
+	out.Engine.EmptyDiffs = e.EmptyDiffs
 	out.Engine.QueueDepth, out.Engine.QueueHighWater = e.QueueDepth, e.QueueHighWater
 
 	m := rt.manager.Stats()
@@ -264,6 +276,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 
 	out.WorldModel = rt.worldModelStats()
 	out.Market = rt.marketStats()
+	out.Triggers = rt.triggerStats()
 	out.Clock = rt.clockStats()
 	rt.fillFinanceStats(&out.Finance)
 

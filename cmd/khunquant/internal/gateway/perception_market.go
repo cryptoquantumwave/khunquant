@@ -16,10 +16,14 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
-// perceptionDemandSource is where the market source learns what to read. It is a
-// seam: until the triggers registry exists (MR-208) it is empty, so the source
-// makes no request at all. Production never reassigns it.
-var perceptionDemandSource = func(assemblyDeps) perception.DemandSource {
+// perceptionDemandSource is where the market source learns what to read: the
+// triggers registry when it is built (assemblyDeps.Demands, set by
+// buildPerception), otherwise an empty source, so the source makes no request at
+// all. It is a seam; production never reassigns it.
+var perceptionDemandSource = func(d assemblyDeps) perception.DemandSource {
+	if d.Demands != nil {
+		return d.Demands
+	}
 	return perception.NewStaticDemands()
 }
 

@@ -151,7 +151,7 @@ func (p phase) sayf(format string, args ...any) {
 
 // buildServices constructs and starts every gateway service for cfg, in this
 // order: loss guard, cron, media store, channel manager (and agent loop wiring,
-// voice), HTTP server, routes, channels, notify, attention, heartbeat, devices.
+// voice), HTTP server, routes, channels, notify, attention, perception, heartbeat, devices.
 //
 // On error it returns the services that were already started, not nil, so the
 // caller can keep tracking and later stop them.
@@ -159,7 +159,7 @@ func (p phase) sayf(format string, args ...any) {
 // ctx only bounds construction. Long-lived services (channels, devices) run on
 // context.Background() on purpose: they must outlive this call.
 func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
-	s := &gatewayServices{}
+	s := &gatewayServices{perceptionLive: newPerceptionHolder()}
 	if prev := d.Prev; prev != nil {
 		s.SandboxServer = prev.SandboxServer
 		s.SandboxToken = prev.SandboxToken
@@ -276,6 +276,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// messages. After notify, which it delivers through.
 	s.Attention, s.attentionRun = buildAttention(d, s.NotifyService)
 
+	// Perception: the sources, the manager and the pipeline engine. After
+	// attention, whose outbox it decides through and hands over to; nothing is
+	// built unless perception is effectively on and that outbox exists.
+	s.Perception = buildPerception(d, s.Attention)
+	s.perceptionLive.Store(s.Perception)
+
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
 	// run is scheduled. The run time is kept in the shared state manager, so a
@@ -304,7 +310,13 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	}
 	p.sayf("✓ Heartbeat service %s", p.pick("started", "restarted"))
 
-	// Device service, on the shared state manager.
+	// Device service, on the shared state manager. When the perception device
+	// adapter has taken the monitors over, it is not started: two readers of the
+	// same hardware would report every plug twice.
+	if s.Perception != nil && s.Perception.devicesTakenOver {
+		p.sayf("✓ Device events go through the perception pipeline")
+		return s, nil
+	}
 	s.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
@@ -356,7 +368,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
-	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken)
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken, perceptionStatsFn(s.perceptionLive))
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -373,7 +385,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: heartbeat, attention outbox, loss guard, channels, devices,
+// resources. Order: heartbeat, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
 // notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
@@ -387,6 +399,17 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// Then perception, before the outbox: the sources stop first so that nothing
+	// new arrives, then the engine drains what its inbox holds through the pipeline,
+	// which hands its decisions to the outbox. The outbox must still be accepting
+	// them, so it stops after, never before. (The heartbeat is already stopped, so
+	// no second producer is left.)
+	s.Perception.stop()
+	if s.perceptionLive != nil {
+		s.perceptionLive.Store(nil)
+	}
+	s.Perception = nil
 
 	// Then the outbox: its final flush delivers through the notify service and
 	// the channels, which are still up at this point.

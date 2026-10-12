@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
@@ -72,9 +73,11 @@ type gatewayServices struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
-	NotifyService    *notify.Service // nil when proactive is off or the service could not be built; nil means delivery is disabled
-	Attention        *attention.Outbox // nil when attention mode is off or the database is unavailable; submit candidates here
-	attentionRun     *attentionRunner  // the outbox's Run loop; nil unless attention is live and can deliver
+	NotifyService    *notify.Service                    // nil when proactive is off or the service could not be built; nil means delivery is disabled
+	Attention        *attention.Outbox                  // nil when attention mode is off or the database is unavailable; submit candidates here
+	attentionRun     *attentionRunner                   // the outbox's Run loop; nil unless attention is live and can deliver
+	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
+	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

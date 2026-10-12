@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 )
 
 // attentionStopTimeout bounds how long stopServices waits for the outbox's final
@@ -120,6 +121,12 @@ func buildAttention(d assemblyDeps, svc *notify.Service) (*attention.Outbox, *at
 	}
 	window := time.Duration(max(acfg.GroupWindowSeconds, 0)) * time.Second
 	ob := attention.NewOutbox(gov, attentionDeliverer{svc: svc}, window, nil)
+	// The composer for escalated groups exists only when the perception pipeline
+	// does (nothing else produces an escalate), and is set here, before the Run
+	// loop below starts, because the field is read by it.
+	if eff.Perception && d.AgentLoop != nil {
+		ob.Composer = engine.NewComposer(agentTurnRunner{run: d.AgentLoop})
+	}
 
 	if !live {
 		return ob, nil

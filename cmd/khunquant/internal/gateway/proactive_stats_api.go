@@ -21,6 +21,11 @@ type busStatsResponse struct {
 	Subscribers int    `json:"subscribers"`
 
 	SubscriberStats []subscriberStatsResponse `json:"subscriber_stats"`
+
+	// Perception is present only while the perception pipeline runs. Its counters
+	// are those of the current generation of services: a config reload rebuilds the
+	// pipeline and they start again from zero (the bus counters above do not).
+	Perception *perceptionStatsResponse `json:"perception,omitempty"`
 }
 
 type subscriberStatsResponse struct {
@@ -57,12 +62,22 @@ func newBusStatsResponse(s events.Stats) busStatsResponse {
 //
 // The handler reads the bus it was given at registration, and the shared bus is
 // the same one across reloads, so the counts do not reset when the config does.
-func registerProactiveStatsAPI(mux handleMux, bus *events.EventBus, token string) {
+//
+// perception, when given, supplies the perception pipeline's counters (nil while it
+// is not running). It is a function because the route is registered before the
+// pipeline is built.
+func registerProactiveStatsAPI(mux handleMux, bus *events.EventBus, token string, perception ...func() *perceptionStatsResponse) {
 	mux = &guardedMux{inner: mux, token: token}
 
 	mux.Handle("GET /api/proactive/stats", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(newBusStatsResponse(bus.Stats()))
+		out := newBusStatsResponse(bus.Stats())
+		for _, p := range perception {
+			if p != nil {
+				out.Perception = p()
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	})))
 }

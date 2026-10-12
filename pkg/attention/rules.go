@@ -22,6 +22,10 @@ const (
 	ReasonBudget       = "budget"
 	ReasonComposeLLM   = "compose_llm"
 	ReasonTemplate     = "template"
+	// ReasonDeferred marks a notify or escalate decision the outbox could not
+	// hand over in time (its lane was full, or it waited past its lease) and moved
+	// to the digest instead.
+	ReasonDeferred = "deferred_to_digest"
 
 	// ReasonInhibitedPrefix starts the reason of an inhibited candidate; the
 	// dedup key of the inhibitor follows it ("inhibited_by:dn:12:margin").

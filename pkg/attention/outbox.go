@@ -111,6 +111,12 @@ var _ Gate = (*Governor)(nil)
 // Compose receives the template message m and the items in the order of
 // m.Decisions, and returns the message to send in its place. The outbox keeps
 // the intervention ID and the decisions of m whatever the result says.
+//
+// The Composer is never consulted for a message that has a protective Critical
+// among its decisions, even though attention decides such a candidate "escalate"
+// when it asks for composition: that message is delivered with the template
+// rendering at once, and no explanation follows (one breach, one message). It also
+// runs under composeTimeout, and a panic in it is an error.
 type Composer interface {
 	Compose(ctx context.Context, m Message, items []Item) (Message, error)
 }
@@ -138,6 +144,12 @@ type Outbox struct {
 	lastDigestMin int64
 	digestBusy    bool
 	lastTickWarn  time.Time
+
+	// The hand-over side (Accept and the delivery lanes; see handoff.go). All of
+	// it is guarded by mu.
+	tickEvery time.Duration
+	ordSlots  int
+	hand      *handoffState
 }
 
 // NewOutbox builds an outbox over g and d. A groupWindow of zero or less means
@@ -148,7 +160,10 @@ func NewOutbox(g Gate, d Deliverer, groupWindow time.Duration, clock func() time
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Outbox{g: g, d: d, window: groupWindow, clock: clock, lastDigestMin: -1}
+	return &Outbox{
+		g: g, d: d, window: groupWindow, clock: clock, lastDigestMin: -1,
+		tickEvery: tickEvery, ordSlots: ordinaryLaneSlots, hand: newHandoffState(),
+	}
 }
 
 // Submit asks the governor to decide it and, for a notify or escalate decision,
@@ -210,7 +225,15 @@ func (o *Outbox) takeLocked() []buffered {
 // Tick flushes the buffer when its window has elapsed and sends the daily digest
 // when one is due. The window opens at the first buffered decision and later
 // ones do not extend it. It is safe to call concurrently with Submit and itself.
-func (o *Outbox) Tick(ctx context.Context) error {
+//
+// Tick delivers on the caller's goroutine. Run does not use it: it hands the
+// same work to the delivery lanes (see handoff.go), so that its own goroutine
+// never waits on a channel.
+func (o *Outbox) Tick(ctx context.Context) error { return o.tick(ctx, false) }
+
+// tick is Tick, or with handOver its non-blocking form: a due group and the
+// digest are queued for the delivery lanes instead of being delivered here.
+func (o *Outbox) tick(ctx context.Context, handOver bool) error {
 	now := o.clock()
 	var out []buffered
 	o.mu.Lock()
@@ -221,42 +244,44 @@ func (o *Outbox) Tick(ctx context.Context) error {
 
 	var errs []error
 	if out != nil {
-		errs = append(errs, o.flush(ctx, out))
+		if handOver {
+			o.handOverOrdinary(out)
+		} else {
+			errs = append(errs, o.flush(ctx, out))
+		}
 	}
-	errs = append(errs, o.tickDigest(ctx, now))
+	errs = append(errs, o.processDeferrals(ctx))
+	if handOver {
+		errs = append(errs, o.handOverDigest(ctx, now))
+	} else {
+		errs = append(errs, o.tickDigest(ctx, now))
+	}
 	return errors.Join(errs...)
 }
 
-// Run calls Tick every second until ctx ends, then flushes what is buffered once,
-// with a short timeout of its own. It returns after that flush.
+// Run drives the outbox until ctx ends: it starts the delivery lanes (one
+// ordinary worker, one protective worker), calls tick every tick interval (one
+// second unless SetTickInterval changed it) and, when ctx ends, delivers what is
+// buffered and queued once, with a short timeout of its own. It returns after
+// that, and only once both workers have exited (or, for a deliverer that ignores
+// its context, after a bounded wait).
 func (o *Outbox) Run(ctx context.Context) {
-	t := time.NewTicker(tickEvery)
+	o.mu.Lock()
+	every := o.tickEvery
+	o.mu.Unlock()
+	lanes := o.startLanes()
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			o.shutdown(ctx)
+			o.shutdown(ctx, lanes)
 			return
 		case <-t.C:
-			if err := o.Tick(ctx); err != nil && ctx.Err() == nil {
+			if err := o.tick(ctx, true); err != nil && ctx.Err() == nil {
 				o.warnTick(err)
 			}
 		}
-	}
-}
-
-func (o *Outbox) shutdown(ctx context.Context) {
-	o.mu.Lock()
-	o.closed = true
-	out := o.takeLocked()
-	o.mu.Unlock()
-	if out == nil {
-		return
-	}
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownFlushTimeout)
-	defer cancel()
-	if err := o.flush(fctx, out); err != nil {
-		logger.WarnCF("attention", "final flush failed", map[string]any{"error": err.Error()})
 	}
 }
 
@@ -277,19 +302,50 @@ func (o *Outbox) warnTick(err error) {
 
 // deliver calls the deliverer under deliverTimeout and folds its two failure
 // shapes into one.
-func (o *Outbox) deliver(ctx context.Context, m Message) (bool, error) {
+func (o *Outbox) deliver(ctx context.Context, m Message) (ok bool, err error) {
+	// A deliverer that panics has not delivered: the members are released like
+	// for any other failure, and the process survives.
+	defer func() {
+		if r := recover(); r != nil {
+			o.notePanic("deliverer", r)
+			ok, err = false, fmt.Errorf("deliverer panicked: %v", r)
+		}
+	}()
 	dctx, cancel := context.WithTimeout(ctx, deliverTimeout)
 	defer cancel()
-	ok, err := o.d.Deliver(dctx, m)
+	ok, err = o.d.Deliver(dctx, m)
 	if err != nil {
 		return false, err
 	}
 	return ok, nil
 }
 
+// compose calls the Composer under composeTimeout. A composer that panics is an
+// error like any other, so the template message goes out.
+func (o *Outbox) compose(ctx context.Context, m Message, items []Item) (out Message, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.notePanic("composer", r)
+			err = fmt.Errorf("composer panicked: %v", r)
+		}
+	}()
+	// Bounded here, whatever the Composer does: a queued message must still be
+	// inside its lease when it is delivered (see maxQueueAge).
+	cctx, cancel := context.WithTimeout(ctx, composeTimeout)
+	defer cancel()
+	return o.Composer.Compose(cctx, m, items)
+}
+
 // flush renders group as one message, delivers it and reports the outcome for
 // every member, whatever it was.
 func (o *Outbox) flush(ctx context.Context, group []buffered) error {
+	return o.flushWith(ctx, group, true)
+}
+
+// flushWith is flush; compose says whether the Composer may be consulted. The
+// protective lane passes false: a model turn must never stand between a
+// protective Critical and the owner.
+func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) error {
 	sort.SliceStable(group, func(i, j int) bool { return ranksBefore(group[i].dec, group[j].dec) })
 
 	items := make([]Item, len(group))
@@ -298,13 +354,18 @@ func (o *Outbox) flush(ctx context.Context, group []buffered) error {
 	for i, b := range group {
 		items[i], decs[i] = b.item, b.dec
 		escalate = escalate || b.dec.Disposition == proactive.DispEscalate
+		// A message with a protective Critical in it is never held for the
+		// composer, whichever path flushes it: attention's rule 4 turns a protective
+		// Critical that asks for composition into an escalate, and a liquidation-class
+		// alert must not wait on a model call. It goes out as the template, once.
+		compose = compose && !isProtectiveCritical(b.dec.Candidate)
 	}
 	m := renderGroup(items)
 	m.InterventionID = proactive.NewID()
 	m.Decisions = decs
 
-	if escalate && o.Composer != nil {
-		composed, err := o.Composer.Compose(ctx, m, items)
+	if escalate && compose && o.Composer != nil {
+		composed, err := o.compose(ctx, m, items)
 		if err != nil {
 			logger.WarnCF("attention", "composer failed; delivering the template message", map[string]any{"error": err.Error()})
 		} else {
@@ -338,31 +399,50 @@ func (o *Outbox) flush(ctx context.Context, group []buffered) error {
 // most once per clock minute (a digest time has minute granularity) and never
 // from two goroutines at once.
 func (o *Outbox) tickDigest(ctx context.Context, now time.Time) error {
+	dg, err := o.pendingDigest(ctx, now)
+	if err != nil || dg == nil {
+		return err
+	}
+	defer o.digestDone()
+	return o.sendDigest(ctx, dg)
+}
+
+// pendingDigest asks the governor whether a digest is due. A nil digest with a
+// nil error means none is due (or one is already being sent). A non-nil digest
+// leaves the outbox busy: the caller must call digestDone once it has sent it.
+func (o *Outbox) pendingDigest(ctx context.Context, now time.Time) (*Digest, error) {
 	minute := now.Unix() / 60
 	o.mu.Lock()
 	if o.digestBusy || minute == o.lastDigestMin {
 		o.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	o.lastDigestMin, o.digestBusy = minute, true
 	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		o.digestBusy = false
-		o.mu.Unlock()
-	}()
 
 	dg, err := o.g.PendingDigest(ctx)
 	if err != nil {
 		o.mu.Lock()
 		o.lastDigestMin = -1 // a failed check is retried on the next tick
+		o.digestBusy = false
 		o.mu.Unlock()
-		return err
+		return nil, err
 	}
 	if dg == nil {
-		return nil
+		o.digestDone()
+		return nil, nil
 	}
+	return dg, nil
+}
 
+func (o *Outbox) digestDone() {
+	o.mu.Lock()
+	o.digestBusy = false
+	o.mu.Unlock()
+}
+
+// sendDigest delivers dg and reports the outcome to the governor.
+func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
 	title, body := RenderDigest(dg.Items)
 	m := Message{
 		InterventionID: proactive.NewID(),

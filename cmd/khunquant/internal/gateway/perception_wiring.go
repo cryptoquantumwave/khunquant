@@ -33,8 +33,9 @@ var perceptionTakesOverDevices = false
 // whether they include the device adapter, in which case the legacy device
 // service is not started. It is a seam: production never reassigns it.
 var perceptionSources = func(d assemblyDeps) (srcs []perception.Source, devicesTakenOver bool) {
+	srcs = append(srcs, marketSourcesFor(d)...)
 	if !perceptionTakesOverDevices {
-		return nil, false
+		return srcs, false
 	}
 	for _, m := range devices.SourcesFor(devices.Config{
 		Enabled: d.Cfg.Devices.Enabled, MonitorUSB: d.Cfg.Devices.MonitorUSB,
@@ -98,6 +99,10 @@ type perceptionRuntime struct {
 	dispatch *engine.DefaultDispatcher
 	composer *engine.Composer // nil when there is no agent loop
 
+	// market is the market-data source, when it is among the sources (for its
+	// counters).
+	market *sources.MarketSource
+
 	// devicesTakenOver: the device adapter is among the sources, so the legacy
 	// device service must not be started.
 	devicesTakenOver bool
@@ -130,6 +135,9 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	rt.devicesTakenOver = taken
 	for _, s := range srcs {
 		rt.manager.Add(s)
+		if ms, ok := s.(*sources.MarketSource); ok {
+			rt.market = ms
+		}
 	}
 
 	engCtx, engCancel := context.WithCancel(context.Background())
@@ -178,6 +186,7 @@ type perceptionStatsResponse struct {
 		Errors   uint64 `json:"errors"`
 	} `json:"manager"`
 	Sources  map[string]perceptionSourceStats `json:"sources"`
+	Market   *perceptionMarketStats           `json:"market,omitempty"`
 	Dispatch struct {
 		Buffered uint64 `json:"buffered"`
 		Queued   uint64 `json:"queued"`
@@ -231,6 +240,8 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	for name, h := range rt.manager.Health() {
 		out.Sources[name] = perceptionSourceStats{ConsecutiveErrors: h.ConsecutiveErrors, HasEmitted: !h.LastEventAt.IsZero()}
 	}
+
+	out.Market = rt.marketStats()
 
 	ds := rt.dispatch.Stats()
 	out.Dispatch.Buffered, out.Dispatch.Queued, out.Dispatch.Ignored, out.Dispatch.Rejected = ds.Buffered, ds.Queued, ds.Ignored, ds.Rejected

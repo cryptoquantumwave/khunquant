@@ -17,14 +17,19 @@ import (
 
 // ====================== Test Helper: Event Collector ======================
 type eventCollector struct {
+	mu     sync.Mutex
 	events []any
 }
 
 func (c *eventCollector) collect(e any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.events = append(c.events, e)
 }
 
 func (c *eventCollector) hasEventOfType(typ any) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	targetType := reflect.TypeOf(typ)
 	for _, e := range c.events {
 		if reflect.TypeOf(e) == targetType {
@@ -109,9 +114,8 @@ func TestSpawnSubTurn(t *testing.T) {
 
 			// Replace mock with test collector
 			collector := &eventCollector{}
-			originalEmit := MockEventBus.Emit
-			MockEventBus.Emit = collector.collect
-			defer func() { MockEventBus.Emit = originalEmit }()
+			al.setEventSink(eventSinkFunc(collector.collect))
+			defer al.setEventSink(nil)
 
 			// Execute spawnSubTurn
 			result, err := spawnSubTurn(context.Background(), al, parent, tt.config)
@@ -262,15 +266,12 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 	}
 
 	collector := &eventCollector{}
-	originalEmit := MockEventBus.Emit
-	MockEventBus.Emit = collector.collect
-	defer func() { MockEventBus.Emit = originalEmit }()
 
 	// Simulate parent finishing before child delivers result
 	parent.Finish(false)
 
 	// Call deliverSubTurnResult directly to simulate a delayed child
-	deliverSubTurnResult(parent, "delayed-child", &tools.ToolResult{ForLLM: "late result"})
+	deliverSubTurnResult(eventSinkFunc(collector.collect), parent, "delayed-child", &tools.ToolResult{ForLLM: "late result"})
 
 	// Verify Orphan event is emitted
 	if !collector.hasEventOfType(SubTurnOrphanResultEvent{}) {
@@ -550,11 +551,8 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 	var spawnedTurns []turnInfo
 	var mu sync.Mutex
 
-	// Override MockEventBus to capture spawn events
-	originalEmit := MockEventBus.Emit
-	defer func() { MockEventBus.Emit = originalEmit }()
-
-	MockEventBus.Emit = func(event any) {
+	// Capture spawn events on this loop's sink
+	al.setEventSink(eventSinkFunc(func(event any) {
 		if spawnEvent, ok := event.(SubTurnSpawnEvent); ok {
 			mu.Lock()
 			// Extract depth from context (we'll verify this matches expected depth)
@@ -564,7 +562,7 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 			})
 			mu.Unlock()
 		}
-	}
+	}))
 
 	// Create a root turn
 	rootSession := &ephemeralSessionStore{}
@@ -622,7 +620,7 @@ func TestDeliverSubTurnResultNoDeadlock(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			result := &tools.ToolResult{ForLLM: fmt.Sprintf("result-%d", id)}
-			deliverSubTurnResult(parent, fmt.Sprintf("child-%d", id), result)
+			deliverSubTurnResult(noopSink{}, parent, fmt.Sprintf("child-%d", id), result)
 		}(i)
 	}
 
@@ -752,7 +750,7 @@ func TestFinishedChannelClosedState(t *testing.T) {
 
 	// Verify deliverSubTurnResult correctly uses Finished() channel and treats as orphan
 	result := &tools.ToolResult{ForLLM: "late result"}
-	deliverSubTurnResult(ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
+	deliverSubTurnResult(noopSink{}, ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
 }
 
 // TestFinalPollCapturesLateResults verifies that the final poll before Finish()
@@ -817,9 +815,7 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 	}
 
 	collector := &eventCollector{}
-	originalEmit := MockEventBus.Emit
-	MockEventBus.Emit = collector.collect
-	defer func() { MockEventBus.Emit = originalEmit }()
+	al.setEventSink(eventSinkFunc(collector.collect))
 
 	// Test async call - result should still be delivered via channel
 	asyncCfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true}
@@ -1180,16 +1176,10 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 // TestDeliverSubTurnResult_RaceWithFinish verifies that deliverSubTurnResult handles
 // the race condition where Finish() is called while results are being delivered.
 func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
-	// Save original MockEventBus.Emit
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
-
 	// Collect events
 	var mu sync.Mutex
 	var deliveredCount, orphanCount int
-	MockEventBus.Emit = func(e any) {
+	sink := eventSinkFunc(func(e any) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch e.(type) {
@@ -1198,7 +1188,7 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 		case SubTurnOrphanResultEvent:
 			orphanCount++
 		}
-	}
+	})
 
 	ctx := context.Background()
 	parentTS := &turnState{
@@ -1230,7 +1220,7 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 				ForLLM: fmt.Sprintf("result-%d", id),
 			}
 			// This should not panic, even if Finish() is called concurrently
-			deliverSubTurnResult(parentTS, fmt.Sprintf("child-%d", id), result)
+			deliverSubTurnResult(sink, parentTS, fmt.Sprintf("child-%d", id), result)
 		}(i)
 	}
 
@@ -1745,19 +1735,13 @@ func (m *slowMockProvider) GetDefaultModel() string {
 // 2. Parent finishes quickly
 // 3. SubTurn should be canceled with context canceled error
 func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
-	// Save original MockEventBus.Emit to capture events
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
-
 	var mu sync.Mutex
 	var events []any
-	MockEventBus.Emit = func(e any) {
+	sink := eventSinkFunc(func(e any) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, e)
-	}
+	})
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1769,6 +1753,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &slowMockProvider{delay: 5 * time.Second} // SubTurn takes 5 seconds
 	al := NewAgentLoop(cfg, msgBus, provider)
+	al.setEventSink(sink)
 
 	ctx := context.Background()
 	parentTS := &turnState{

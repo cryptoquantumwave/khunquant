@@ -60,6 +60,10 @@ type AgentLoop struct {
 	// Track active requests for safe provider cleanup
 	activeRequests sync.WaitGroup
 	debugTap       *debugtap.Store // nil when dev-mcp is disabled; set via SetDebugTap
+
+	// eventSink is where sub-turn lifecycle events go; nil means nowhere. It is
+	// per loop, never package state. See eventsink.go and SetEventBus.
+	eventSink atomic.Pointer[sinkHolder]
 }
 
 // processOptions configures how a message is processed

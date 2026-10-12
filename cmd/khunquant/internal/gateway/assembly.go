@@ -15,6 +15,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
 	"github.com/cryptoquantumwave/khunquant/pkg/devices"
+	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -53,14 +54,18 @@ type handleMux interface {
 // shutdown. Anything that must restart with new config (the loss-guard sampler,
 // the cron service, the channel manager, ...) belongs on gatewayServices instead.
 //
-// Later changes add a database handle and an event bus: register each with
-// add so Close releases it.
+// The proactive database handle and the event bus live here; register anything
+// further with add so Close releases it.
 type sharedResources struct {
 	// LogBuf is the dev-MCP log ring buffer. It is created the first time
 	// dev-MCP is enabled, kept across reloads so history survives them, and
 	// dropped (and the logger hook removed) when dev-MCP is switched off. It is
 	// touched only by the single goroutine that builds services.
 	LogBuf *debugtap.LogBuffer
+
+	// Events is the gateway's one event bus (see event_bus.go). It is made with
+	// the resources and closed by Close, never by a reload.
+	Events *events.EventBus
 
 	mu      sync.Mutex
 	closers []namedCloser
@@ -73,7 +78,9 @@ type namedCloser struct {
 }
 
 func newSharedResources() *sharedResources {
-	return &sharedResources{}
+	r := &sharedResources{Events: events.NewBus()}
+	r.add(eventBusResource, r.Events)
+	return r
 }
 
 // add registers a resource for Close. Resources close in reverse order of
@@ -174,6 +181,10 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		logger.ErrorCF("gateway", "Shared proactive database unavailable",
 			map[string]any{"error": err.Error()})
 	}
+
+	// Sub-turn events go to the shared event bus, on a first start and on every
+	// reload (the agent loop outlives both).
+	wireEventBus(d)
 
 	s.LossGuard = lossGuardStarter(cfg)
 
@@ -345,6 +356,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)

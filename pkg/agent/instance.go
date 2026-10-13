@@ -181,13 +181,15 @@ func NewAgentInstance(
 	// Financial context collector — injects portfolio/DCA/DN summary into dynamic prompt.
 	var financialCollector *FinancialContextCollector
 	if defaults.InjectFinancialContext {
+		profileStore := openProfileStore(cfg)
 		contributors := buildFinancialContributors(
 			workspace,
 			defaults.MaxContextAssets,
 			defaults.MaxContextDCAPlans,
 			defaults.MaxContextDNPlans,
-			openProfileStore(cfg),
+			profileStore,
 		)
+		contributors = withIntentsContributor(cfg, contributors, profileStore)
 		if len(contributors) > 0 {
 			ttl := time.Duration(defaults.FinancialContextTTLMinutes) * time.Minute
 			financialCollector = NewFinancialContextCollector(contributors, ttl)

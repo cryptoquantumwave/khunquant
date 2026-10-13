@@ -250,7 +250,12 @@ func registerSharedTools(
 	// The profile tools share one store (the user has one profile) and are
 	// built once here, so they reach both the CLI agent and the gateway and are
 	// rebuilt with the new config on every reload. See profile_wiring.go.
-	profile := profileTools(cfg, openProfileStore(cfg))
+	profileStore := openProfileStore(cfg)
+	profile := profileTools(cfg, profileStore)
+	// The intent tools share that store and exist only while the intent ledger is
+	// on (proactive.enabled and proactive.intents.enabled); a reload builds them
+	// afresh, so switching it on or off takes effect without a restart.
+	profile = append(profile, intentTools(cfg, profileStore)...)
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)

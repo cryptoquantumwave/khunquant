@@ -43,6 +43,45 @@ var migrations = []sqlitex.Migration{
 	trust         INTEGER NOT NULL
 )`,
 	},
+	{
+		// The intent ledger. Timestamps are unix milliseconds; JSON columns hold ''
+		// when the field is absent. Rows are never deleted.
+		Component: Component,
+		Version:   2,
+		SQL: `CREATE TABLE intents (
+	id              TEXT    PRIMARY KEY,
+	type            TEXT    NOT NULL,
+	title           TEXT    NOT NULL,
+	params_json     TEXT    NOT NULL DEFAULT '',
+	trigger_json    TEXT    NOT NULL DEFAULT '',
+	expected_json   TEXT    NOT NULL DEFAULT '',
+	mandate_id      TEXT    NOT NULL DEFAULT '',
+	status          TEXT    NOT NULL,
+	source          TEXT    NOT NULL,
+	provenance_json TEXT    NOT NULL,
+	fire_budget     INTEGER NOT NULL DEFAULT 0,
+	fires_used      INTEGER NOT NULL DEFAULT 0,
+	cooldown_ms     INTEGER NOT NULL DEFAULT 0,
+	lifetime_ms     INTEGER NOT NULL DEFAULT 0,
+	expires_at_ms   INTEGER,
+	valid_from_ms   INTEGER NOT NULL,
+	invalid_at_ms   INTEGER,
+	superseded_by   TEXT    NOT NULL DEFAULT '',
+	created_at_ms   INTEGER NOT NULL,
+	updated_at_ms   INTEGER NOT NULL
+);
+CREATE INDEX idx_intents_status ON intents (status, created_at_ms);
+CREATE TABLE intent_events (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	intent_id   TEXT    NOT NULL,
+	at_ms       INTEGER NOT NULL,
+	from_status TEXT    NOT NULL,
+	to_status   TEXT    NOT NULL,
+	by_sender   TEXT    NOT NULL,
+	reason      TEXT    NOT NULL
+);
+CREATE INDEX idx_intent_events_intent ON intent_events (intent_id, id)`,
+	},
 }
 
 // ProfileVersion is one stored version of the profile. Provenance is the trust
@@ -55,9 +94,12 @@ type ProfileVersion struct {
 	Provenance proactive.Trust
 }
 
-// Store keeps the owner's profile in the shared proactive database. It does not
+// Store keeps the owner's profile and the intent ledger in the shared proactive database. It does not
 // own db: close it through sqlitex.CloseShared, never through the Store.
-type Store struct{ db *sql.DB }
+type Store struct {
+	db  *sql.DB
+	now func() time.Time // nil = time.Now; SetClock sets it
+}
 
 // NewStore migrates the intent tables on db and returns a Store over it. It
 // does not import USER.md; see ImportIfEmpty.

@@ -164,6 +164,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	}
 	rt.attachWorldModel(d, &opts)
 	rt.attachTriggers(&d, &opts) // before the sources: the market source reads d.Demands
+	rt.attachIntents(d, &opts)
 	rt.engine = engine.New(opts)
 	rt.manager = perception.NewManager(rt.engine.Emitter())
 

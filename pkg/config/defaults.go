@@ -685,6 +685,19 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 
+			// Intents. On by default, but the tools are only registered while
+			// proactive.intents is effectively on (off by default): the owner
+			// rule, not these switches, decides who activates what.
+			CreateIntent: ToolConfig{
+				Enabled: true,
+			},
+			ListIntents: ToolConfig{
+				Enabled: true,
+			},
+			UpdateIntent: ToolConfig{
+				Enabled: true,
+			},
+
 			// Security tools — disabled by default; opt-in for agent access to secrets
 			ConfigEncryptKeys: ToolConfig{
 				Enabled: false,

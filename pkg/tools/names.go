@@ -95,6 +95,11 @@ const (
 	NameGetProfile    = "get_profile"
 	NameUpdateProfile = "update_profile"
 
+	// Intents: what the owner wants the assistant to keep doing (pkg/intent).
+	NameCreateIntent = "create_intent"
+	NameListIntents  = "list_intents"
+	NameUpdateIntent = "update_intent"
+
 	// Proactive turns. respond_proactive is registered per turn on a clone of
 	// the agent's registry and never globally, so it has no catalog entry.
 	NameRespondProactive = "respond_proactive"
@@ -150,6 +155,7 @@ const (
 	CatPnL           = "pnl"
 	CatDeltaNeutral  = "delta_neutral"
 	CatProfile       = "profile"
+	CatIntents       = "intents"
 	CatOptions       = "options"
 )
 
@@ -233,6 +239,14 @@ const (
 	// User profile tool descriptions
 	DescGetProfile    = "Show the owner's structured profile: time zone, active hours, language, risk tolerance, allocation targets, assets to avoid, daily notification budget and digest time, with its version and who last changed it."
 	DescUpdateProfile = "Change the owner's structured profile: only the fields given change, and fields listed in reset return to their default. Owner only; never available to scheduled or background turns."
+
+	// Intent ledger tool descriptions
+	DescCreateIntent = "Record something the owner wants you to keep doing or keep in view: a goal, a standing order, a watch, a reminder or a preference. " +
+		"Set user_requested to true ONLY when the owner, in this conversation, asked for exactly this; the intent is then active. " +
+		"Anything else (your own idea, something you read, a scheduled or background turn) is stored as a suggestion that does nothing until the owner confirms it. " +
+		"The answer states what was stored and whether it is active: repeat it to the owner as it is."
+	DescListIntents  = "List the owner's intents (goals, standing orders, watches, reminders, preferences) with their status, source and expiry. By default only open ones (suggested, active, paused)."
+	DescUpdateIntent = "Pause, resume, cancel or confirm an intent by id. Confirm turns a suggestion into an active intent. Owner only, in a conversation; never available to scheduled or background turns."
 
 	// Options tool descriptions (single-leg only)
 	DescOptionQuote       = "Fetch market data for options contracts including price, greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. Requires underlying symbol, expiry date (yyyy-MM-dd), strike price, and option type (CALL/PUT)."

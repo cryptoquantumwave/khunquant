@@ -82,6 +82,45 @@ func openProfileStore(cfg *config.Config) *intent.Store {
 	return store
 }
 
+// intentsEnabled reports whether the intent ledger is effectively on: both
+// proactive.enabled and proactive.intents.enabled. It is the one switch for the
+// intent tools and the intents digest, so they exist together or not at all.
+func intentsEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.Proactive.Effective().Intents
+}
+
+// intentTools builds the enabled intent tools over store: none unless the intent
+// ledger is on, or when the store is missing. create_intent is registered like any
+// tool, and is kept out of autonomous turns by its class (propose), not by being
+// absent here.
+func intentTools(cfg *config.Config, store *intent.Store) []tools.Tool {
+	if store == nil || !intentsEnabled(cfg) {
+		return nil
+	}
+	var out []tools.Tool
+	if cfg.Tools.IsToolEnabled(tools.NameCreateIntent) {
+		out = append(out, tools.NewCreateIntentTool(store, cfg))
+	}
+	if cfg.Tools.IsToolEnabled(tools.NameListIntents) {
+		out = append(out, tools.NewListIntentsTool(store, cfg))
+	}
+	if cfg.Tools.IsToolEnabled(tools.NameUpdateIntent) {
+		out = append(out, tools.NewUpdateIntentTool(store, cfg))
+	}
+	return out
+}
+
+// withIntentsContributor adds the intents digest to the financial context when
+// the ledger is on and its store opened. With the default config it returns
+// contributors untouched, so every prompt is byte-identical to one built before
+// the ledger existed.
+func withIntentsContributor(cfg *config.Config, contributors []FinancialContributor, store *intent.Store) []FinancialContributor {
+	if store == nil || !intentsEnabled(cfg) {
+		return contributors
+	}
+	return append(contributors, &intentsContributor{store: store})
+}
+
 // profileTools builds the enabled profile tools over store, or none when the
 // store is missing.
 func profileTools(cfg *config.Config, store *intent.Store) []tools.Tool {

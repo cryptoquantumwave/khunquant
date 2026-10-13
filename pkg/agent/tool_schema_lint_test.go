@@ -86,6 +86,10 @@ func TestRegisteredTools_SchemasFullyTyped(t *testing.T) {
 		},
 	}}
 	enableEveryTool(cfg)
+	// The intent ledger is off by default and registers its tools only when on; this
+	// is the guard for them, so it turns the ledger on.
+	cfg.Proactive.Enabled = true
+	cfg.Proactive.Intents.Enabled = true
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &charScriptedProvider{})
 	t.Cleanup(al.Close)
 
@@ -94,7 +98,7 @@ func TestRegisteredTools_SchemasFullyTyped(t *testing.T) {
 	if len(names) < 60 {
 		t.Fatalf("only %d tools registered; the fixture is not enabling them", len(names))
 	}
-	for _, want := range []string{"get_profile", "update_profile"} {
+	for _, want := range []string{"get_profile", "update_profile", "create_intent", "list_intents", "update_intent"} {
 		if _, ok := reg.Get(want); !ok {
 			t.Fatalf("%s missing from the registry fixture", want)
 		}

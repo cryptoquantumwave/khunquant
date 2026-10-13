@@ -585,6 +585,10 @@ func TestClassOf_AllRegisteredToolsClassified(t *testing.T) {
 		},
 	}}
 	enableEveryTool(cfg)
+	// The intent ledger is off by default and registers its tools only when on; this
+	// is the guard for them, so it turns the ledger on.
+	cfg.Proactive.Enabled = true
+	cfg.Proactive.Intents.Enabled = true
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &charScriptedProvider{})
 	t.Cleanup(al.Close)
 
@@ -598,7 +602,8 @@ func TestClassOf_AllRegisteredToolsClassified(t *testing.T) {
 		}
 	}
 	// Spot-check that the dangerous half is really in the fixture.
-	for _, name := range []string{tools.NameCreateOrder, tools.NameTransferFunds, tools.NameFuturesEmergencyFlatten, tools.NameExec, tools.NameSpawn} {
+	for _, name := range []string{tools.NameCreateOrder, tools.NameTransferFunds, tools.NameFuturesEmergencyFlatten, tools.NameExec, tools.NameSpawn,
+		tools.NameCreateIntent, tools.NameListIntents, tools.NameUpdateIntent} {
 		if !hasName(registered, name) {
 			t.Errorf("fixture is missing %s", name)
 		}

@@ -27,8 +27,11 @@ const (
 	// ClassAutomation creates or changes things that will run later: cron jobs,
 	// alerts, DCA and delta-neutral plans.
 	ClassAutomation
-	// ClassPropose is reserved for tools that queue a proposal for a person to
-	// approve. None exist yet.
+	// ClassPropose is for tools that queue a proposal for a person to approve.
+	// create_intent is the first: what it stores from any turn but the owner's own
+	// is a suggestion that does nothing until the owner confirms it. Autonomous
+	// turns may not call this class yet: opening it to them is designed once, with
+	// propose_order.
 	ClassPropose
 	// ClassTrade places, cancels or modifies orders or positions. Exits are
 	// trade tools too: an autonomous turn does not get to unwind by itself.
@@ -131,6 +134,7 @@ var toolClasses = map[string]Class{
 	NameGetDCASummary:                 ClassRead,
 	NameListDeltaNeutralPlans:         ClassRead,
 	NameGetProfile:                    ClassRead,
+	NameListIntents:                   ClassRead,
 	NameGetDeltaNeutralPlan:           ClassRead,
 	NameGetDeltaNeutralSummary:        ClassRead,
 	NameGetDeltaNeutralHistory:        ClassRead,
@@ -154,6 +158,11 @@ var toolClasses = map[string]Class{
 	NameEditFile:     ClassLocalState,
 	NameAppendFile:   ClassLocalState,
 	NameTakeSnapshot: ClassLocalState,
+	// update_intent writes one ledger row. It is local state by class, but it
+	// refuses every turn that is not the owner's own conversation (the same
+	// helper update_profile uses), so the class does not let a background turn
+	// pause, cancel or confirm anything.
+	NameUpdateIntent: ClassLocalState,
 
 	// Things that run later. update_profile is here although it only writes a
 	// row: the profile sets the quiet hours and notification budget that govern
@@ -170,6 +179,11 @@ var toolClasses = map[string]Class{
 	NameUpdateDeltaNeutralPlan:  ClassAutomation,
 	NameDeleteDeltaNeutralPlan:  ClassAutomation,
 	NamePrepareDeltaNeutralPlan: ClassAutomation,
+
+	// Proposals. create_intent stores a suggestion unless the owner asked for the
+	// intent in their own conversation; the autonomous ceiling does not admit this
+	// class, so a background turn cannot even suggest one yet.
+	NameCreateIntent: ClassPropose,
 
 	// Orders and positions. Every exit is here as well: the previous rule that
 	// exits are never gated holds for turns a person started, not for these.

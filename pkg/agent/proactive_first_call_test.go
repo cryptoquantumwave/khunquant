@@ -156,10 +156,10 @@ func candidateTurnRequest() ProactiveTurnRequest {
 	return req
 }
 
-func runAndMeasure(t *testing.T, req ProactiveTurnRequest) firstCall {
+func runAndMeasure(t *testing.T, req ProactiveTurnRequest, fixtures ...budgetFixture) firstCall {
 	t.Helper()
 	prov := script(respondResponse(map[string]any{"decision": "silent"}))
-	al, _ := defaultWorkspaceLoop(t, prov)
+	al, _ := defaultWorkspaceLoopWith(t, prov, fixtures...)
 	registerGatewayReadTools(al)
 	mustRun(t, al, req)
 	return measureFirstCall(t, prov)

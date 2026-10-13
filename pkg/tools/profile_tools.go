@@ -258,7 +258,7 @@ func (t *UpdateProfileTool) Execute(ctx context.Context, args map[string]any) *T
 // authorize decides whether this turn may change the profile. It returns the
 // name to record as the author, or a refusal message for the model.
 func (t *UpdateProfileTool) authorize(ctx context.Context) (by, refusal string) {
-	by, verdict := checkOwnerTurn(ctx, t.cfg, false)
+	by, verdict := checkOwnerTurn(ctx, t.cfg, true)
 	switch verdict {
 	case ownerYes:
 		return by, ""
@@ -266,6 +266,8 @@ func (t *UpdateProfileTool) authorize(ctx context.Context) (by, refusal string) 
 		return "", "update_profile is not available in background or scheduled turns: only the owner, in a conversation, can change the profile"
 	case ownerAutomated:
 		return "", "update_profile can only be used by the owner in a chat or at the command line, not from an automated turn"
+	case ownerSubTurn:
+		return "", "update_profile can only be used by the owner in their own message, not by a delegated task (a subagent): the profile can only be changed by the owner in their own chat or at the command line"
 	case ownerNoConfig:
 		return "", ownerSetupHint
 	case ownerNoOwner:

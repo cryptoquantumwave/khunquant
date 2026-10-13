@@ -49,9 +49,9 @@ const (
 // rootOnly additionally refuses a sub-turn: a context tagged by WithSubTurn, or a
 // remote turn with no channel. A sub-turn (spawn, delegate, subagent) keeps the
 // origin and sender of the turn that started it (see subturn.go), and its task
-// text was written by a model that may have read a web page. update_profile has
-// always accepted such a turn; the intent tools do not, because what they store
-// outlives the turn. (The SubTurnSpawner's children run without a channel, the
+// text was written by a model that may have read a web page. Every caller asks
+// for root turns only (update_profile, create_intent, update_intent), because
+// what they change outlives the turn. (The SubTurnSpawner's children run without a channel, the
 // SubagentManager's with their parent's; the tag covers both, and the empty
 // channel stays as a second line.)
 func checkOwnerTurn(ctx context.Context, cfg *config.Config, rootOnly bool) (by string, v ownerVerdict) {

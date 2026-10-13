@@ -102,10 +102,16 @@ func TestDNSync_ChangingTheIntervalReplacesTheJobAndThePassPromotesTheNewOne(t *
 	if exists, _, _ := jobState(f, oldJob); exists {
 		t.Fatal("the old job is still there")
 	}
-	specs := dnSpecs(t, f)
-	if len(specs) != 1 || specs[0].Mode != triggers.ModeLive || specs[0].Origin != "migration:cron:"+newJob {
-		t.Fatalf("specs = %+v, want one live spec for the new job", specs)
+	// One pass does two things: it promotes the new job's spec and it drops the old
+	// job's spec, in the order of the job ids, so the new job can be promoted while the
+	// old spec is still to be dropped (about half the time). Two specs for one plan
+	// repeat one dedup key, which attention coalesces. Wait for the end of the pass,
+	// one live spec for the new job.
+	oneLiveSpecForTheNewJob := func() bool {
+		specs := dnSpecs(t, f)
+		return len(specs) == 1 && specs[0].Mode == triggers.ModeLive && specs[0].Origin == "migration:cron:"+newJob
 	}
+	waitUntil(t, "one live spec for the new job", oneLiveSpecForTheNewJob)
 }
 
 func TestDNSync_DeletingThePlanDropsItsSpec(t *testing.T) {
@@ -130,24 +136,30 @@ func TestDNSync_DeletingThePlanDropsItsSpec(t *testing.T) {
 	}
 }
 
-// Many edits in a row cost one pass.
+// Many edits in a row cost one pass per debounce window, not one per edit. A window
+// opens at the first request after a pass and the pass comes a debounce later, so the
+// passes of a burst that lasted d are at most d/debounce + 1: exactly one for a burst
+// shorter than the debounce, however slow the machine is for a longer one.
 func TestDNSync_ABurstOfEditsIsOnePass(t *testing.T) {
 	f, planID, job := linkedDNPlan(t, alertsMode(config.ProactiveModeLive))
-	f.services.Alerts.dn.debounce = 500 * time.Millisecond
+	const debounce = 500 * time.Millisecond
+	f.services.Alerts.dn.debounce = debounce
 	before := f.services.Alerts.dn.passes.Load()
 
-	for i := 0; i < 6; i++ {
+	const edits = 7
+	started := time.Now()
+	for i := 0; i < edits-1; i++ {
 		runDNTool(t, f, tools.NameUpdateDeltaNeutralPlan, map[string]any{"plan_id": float64(planID), "enabled": i%2 == 0})
 	}
 	runDNTool(t, f, tools.NameUpdateDeltaNeutralPlan, map[string]any{"plan_id": float64(planID), "enabled": true})
+	burst := time.Since(started)
 	waitUntil(t, "the pass", func() bool { return f.services.Alerts.dn.passes.Load() > before })
 	time.Sleep(700 * time.Millisecond) // a second pass would have come by now
-	if n := f.services.Alerts.dn.passes.Load() - before; n != 1 {
-		t.Fatalf("%d passes for a burst of edits, want 1", n)
+	n := f.services.Alerts.dn.passes.Load() - before
+	if bound := uint64(burst/debounce) + 1; n > bound || n >= edits {
+		t.Fatalf("%d passes for a burst of %d edits lasting %v, want at most %d", n, edits, burst, bound)
 	}
-	if _, enabled, marked := jobState(f, job); enabled || !marked {
-		t.Fatalf("job enabled=%v marked=%v after the pass", enabled, marked)
-	}
+	waitUntil(t, "the job taken over after the pass", func() bool { _, enabled, marked := jobState(f, job); return !enabled && marked })
 }
 
 // Without a registry the hook is a no-op: nothing is signalled and the job stays as

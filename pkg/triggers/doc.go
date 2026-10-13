@@ -28,5 +28,12 @@
 //     goes only with Critical, evidence is finite and capped. The registry sets
 //     ID, TriggerID, IntentID and Shadow, and caps the trust at the event's.
 //
+// The portfolio kinds (portfolio.go) watch what the owner holds: move_vs_vol,
+// drawdown, allocation_drift, liquidation_distance and data_stale. They read the
+// portfolio snapshot, the futures positions and the health of the sources from the
+// view, test the age and trust of every fact they act on, and fire nothing on input
+// that is stale, restored, partial or unknown; a protective Critical is a template
+// message built here from numbers. They notify and never act.
+//
 // Nothing here places an order or calls a tool, and nothing starts a goroutine.
 package triggers

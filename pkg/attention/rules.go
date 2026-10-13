@@ -56,8 +56,14 @@ var defaultInhibits = []InhibitRule{
 	// The delta-neutral health trigger's dedup keys start with its kind, dn_health:
 	// (the registry requires the kind as the prefix of every key).
 	{WhenPrefix: "dn_health:", SuppressPrefix: "price_cross:", SameBaseAsset: true, For: time.Hour},
-	{WhenPrefix: "liquidation:", SuppressPrefix: "move:", SameBaseAsset: true, For: time.Hour},
-	{WhenPrefix: "drawdown:portfolio", SuppressPrefix: "move:", SameBaseAsset: false, For: 30 * time.Minute},
+	// The portfolio triggers' keys start with their kind (the registry requires it):
+	// liquidation_distance:… explains a move_vs_vol:… of the same base asset, and
+	// drawdown:portfolio:… (the kind drawdown, subject portfolio) explains any move.
+	// TestInhibit_RowsAreNamed pins these rows, so a renamed kind fails there, loudly.
+	// (The older liquidation: and move: rows were removed: no key the registry accepts
+	// can carry those prefixes.)
+	{WhenPrefix: "liquidation_distance:", SuppressPrefix: "move_vs_vol:", SameBaseAsset: true, For: time.Hour},
+	{WhenPrefix: "drawdown:portfolio", SuppressPrefix: "move_vs_vol:", SameBaseAsset: false, For: 30 * time.Minute},
 }
 
 // knownQuotes are the quote currencies a Subject must end in to be read as a

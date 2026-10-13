@@ -129,6 +129,8 @@ type perceptionRuntime struct {
 	// source's demand source; nil unless triggers are effectively on and the world
 	// model exists (triggers_wiring.go).
 	triggers *triggers.Registry
+	// portfolioStats are the portfolio triggers' counters (per process).
+	portfolioStats *triggers.PortfolioStats
 
 	// dca is the DCA due source, its plan store and the daily shadow comparison; nil
 	// unless triggers are on (dca_due_wiring.go).

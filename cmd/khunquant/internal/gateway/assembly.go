@@ -82,6 +82,10 @@ type sharedResources struct {
 	// per process, so that a reload keeps the day's record (dca_due_wiring.go).
 	dcaStats    *triggers.DCAStats
 	dcaOutcomes *triggers.DCAOutcomes
+
+	// portfolioStats are the portfolio triggers' counters, per process
+	// (portfolio_triggers_wiring.go).
+	portfolioStats *triggers.PortfolioStats
 }
 
 type namedCloser struct {

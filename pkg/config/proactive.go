@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -44,7 +45,7 @@ type ProactiveConfig struct {
 	Heartbeat  ProactiveHeartbeatConfig `json:"heartbeat"`
 	Attention  AttentionConfig          `json:"attention"`
 	Perception PerceptionConfig         `json:"perception"`
-	Triggers   ModeConfig               `json:"triggers"   envPrefix:"KHUNQUANT_PROACTIVE_TRIGGERS_"`
+	Triggers   TriggersConfig           `json:"triggers"   envPrefix:"KHUNQUANT_PROACTIVE_TRIGGERS_"`
 	Intents    ToggleConfig             `json:"intents"    envPrefix:"KHUNQUANT_PROACTIVE_INTENTS_"`
 	Approvals  ApprovalsConfig          `json:"approvals"`
 	Mandates   ToggleConfig             `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
@@ -140,6 +141,22 @@ type ModeConfig struct {
 	Mode string `json:"mode" env:"MODE"`
 }
 
+// TriggersConfig is the "proactive.triggers" section: the mode, and the owner's
+// parameters for the built-in portfolio triggers.
+//
+// Params maps a trigger kind (move_vs_vol, drawdown, allocation_drift,
+// liquidation_distance, data_stale) to a JSON object that overrides that kind's
+// defaults. It is checked when the triggers are built, not here (this package may not
+// import the triggers): a block that does not validate is logged and the kind runs on
+// its defaults, so a typo never switches an alert off.
+type TriggersConfig struct {
+	Mode   string                     `json:"mode"             env:"MODE"`
+	Params map[string]json.RawMessage `json:"params,omitempty"`
+}
+
+// MaxTriggerParamBytes bounds one kind's parameter block in the config.
+const MaxTriggerParamBytes = 4 << 10
+
 // ToggleConfig is a single on/off switch.
 type ToggleConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
@@ -166,7 +183,7 @@ func defaultProactiveConfig() ProactiveConfig {
 			ReadsPerMinuteLimit: 30,
 			SnapshotMinutes:     15,
 		},
-		Triggers:   ModeConfig{Mode: ProactiveModeOff},
+		Triggers:   TriggersConfig{Mode: ProactiveModeOff},
 		Approvals:  ApprovalsConfig{Enabled: false, ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: ProactiveModeOff},
@@ -302,6 +319,14 @@ func ValidateProactive(c ProactiveConfig) error {
 	if m := c.Attention.CriticalRepeatMinutes; m > MaxCriticalRepeatMinutes {
 		errs = append(errs, fmt.Errorf("proactive.attention.critical_repeat_minutes must be at most %d (got %d)",
 			MaxCriticalRepeatMinutes, m))
+	}
+
+	for kind, raw := range c.Triggers.Params {
+		var obj map[string]json.RawMessage
+		if len(raw) > MaxTriggerParamBytes || json.Unmarshal(raw, &obj) != nil || obj == nil {
+			errs = append(errs, fmt.Errorf("proactive.triggers.params.%q must be a JSON object of at most %d bytes",
+				kind, MaxTriggerParamBytes))
+		}
 	}
 
 	if r := c.Learning.HoldoutRate; math.IsNaN(r) || r < 0 || r > 1 {

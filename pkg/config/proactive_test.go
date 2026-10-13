@@ -32,7 +32,7 @@ func TestProactiveDefaults(t *testing.T) {
 			CriticalRepeatMinutes: 30,
 		},
 		Perception: PerceptionConfig{MarketPollSeconds: 60, ReadsPerMinuteLimit: 30, SnapshotMinutes: 15},
-		Triggers:   ModeConfig{Mode: "off"},
+		Triggers:   TriggersConfig{Mode: "off"},
 		Approvals:  ApprovalsConfig{ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: "off"},

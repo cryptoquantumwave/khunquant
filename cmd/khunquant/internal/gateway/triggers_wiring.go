@@ -22,6 +22,9 @@ var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory {
 	f[triggers.KindExternal] = triggers.ExternalFactory
 	f[triggers.KindDCADue] = dcaDueFactory(d)
 	f[triggers.KindDNHealth] = dnHealthFactory(d)
+	for kind, fac := range portfolioTriggerFactories(d) {
+		f[kind] = fac
+	}
 	return f
 }
 
@@ -96,9 +99,12 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 		return
 	}
 	rt.triggers = reg
-	if triggerFactories(*d)[triggers.KindExternal] != nil {
+	rt.portfolioStats = d.Shared.portfolioShared()
+	have := triggerFactories(*d)
+	if have[triggers.KindExternal] != nil {
 		ensureExternalSpec(ctx, reg)
 	}
+	ensurePortfolioSpecs(ctx, reg, cfg, have)
 	opts.Evaluator = triggerStage{r: reg}
 	d.Demands = reg
 }
@@ -119,6 +125,8 @@ type triggerStats struct {
 	StateDiscarded    uint64 `json:"state_discarded"`
 	Unusable          uint64 `json:"unusable"`
 	Specs             int    `json:"specs"`
+	// Portfolio counts what the portfolio triggers did not act on, by reason.
+	Portfolio map[string]uint64 `json:"portfolio,omitempty"`
 }
 
 func (rt *perceptionRuntime) triggerStats() *triggerStats {
@@ -131,6 +139,6 @@ func (rt *perceptionRuntime) triggerStats() *triggerStats {
 		InvalidCandidates: s.InvalidCandidates, InvalidState: s.InvalidState, AutoDisabled: s.AutoDisabled,
 		Discarded: s.Discarded, StateSaved: s.StateSaved, SaveFailures: s.SaveFailures,
 		StateLoadFailures: s.StateLoadFailures, StateDiscarded: s.StateDiscarded, Unusable: s.Unusable,
-		Specs: s.Specs,
+		Specs: s.Specs, Portfolio: rt.portfolioStats.Snapshot(),
 	}
 }

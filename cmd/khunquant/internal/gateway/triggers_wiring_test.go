@@ -149,9 +149,14 @@ func TestTriggers_BuiltWhenOnAndTheMarketSourceReadsItsDemands(t *testing.T) {
 // the delta-neutral health kind, and nothing else.
 func TestTriggerFactories_ProductionRegistersTheCrossingKinds(t *testing.T) {
 	got := triggerFactories(assemblyDeps{})
-	if len(got) != 5 || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
+	if len(got) != 10 || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
 		got[triggers.KindExternal] == nil || got[triggers.KindDCADue] == nil || got[triggers.KindDNHealth] == nil {
 		t.Fatalf("production registers %d trigger kinds: %v", len(got), got)
+	}
+	for _, k := range triggers.PortfolioKinds {
+		if got[k] == nil {
+			t.Errorf("production does not register the portfolio kind %s", k)
+		}
 	}
 }
 

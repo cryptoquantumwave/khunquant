@@ -16,7 +16,7 @@ func TestTriggers_ImportBoundary(t *testing.T) {
 	perceptiontest.AssertImports(t, perceptiontest.Boundary{
 		Root: "pkg/triggers",
 		Allowed: []string{
-			"pkg/events", "pkg/logger", "pkg/perception", "pkg/proactive", "pkg/sqlitex", "pkg/ta", "pkg/worldmodel",
+			"pkg/events", "pkg/logger", "pkg/perception", "pkg/perception/calendar", "pkg/proactive", "pkg/sqlitex", "pkg/ta", "pkg/worldmodel",
 			// The vocabulary of a plan's health: the breach codes and the numbers of
 			// a report. A leaf package of the standard library only; pkg/deltaneutral
 			// itself, which reaches the exchange clients, stays out.

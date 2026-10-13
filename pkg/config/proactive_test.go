@@ -17,6 +17,7 @@ func liveProactive() ProactiveConfig {
 	c.Enabled = true
 	c.Owner = validOwner()
 	c.Heartbeat.Mode = HeartbeatModeSweep
+	c.Perception.Enabled = true // a sweep heartbeat needs the perception pipeline
 	c.Attention.Mode = ProactiveModeLive
 	c.Triggers.Mode = ProactiveModeLive
 	c.Approvals.Enabled = true
@@ -29,9 +30,10 @@ func TestProactiveDefaults(t *testing.T) {
 		Heartbeat: ProactiveHeartbeatConfig{Mode: "legacy", Model: "primary"},
 		Attention: AttentionConfig{
 			Mode: "shadow", DailyBudget: 3, DedupWindowHours: 24, GroupWindowSeconds: 60, Digest: true,
+			CriticalRepeatMinutes: 30,
 		},
 		Perception: PerceptionConfig{MarketPollSeconds: 60, ReadsPerMinuteLimit: 30, SnapshotMinutes: 15},
-		Triggers:   ModeConfig{Mode: "off"},
+		Triggers:   TriggersConfig{Mode: "off"},
 		Approvals:  ApprovalsConfig{ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: "off"},
@@ -150,6 +152,8 @@ func TestValidateProactive_UnknownModes(t *testing.T) {
 		"policy.mode":         func(c *ProactiveConfig) { c.Policy.Mode = "governed" },
 		"daily_budget":        func(c *ProactiveConfig) { c.Attention.DailyBudget = -1 },
 		"dedup_window_hours":  func(c *ProactiveConfig) { c.Attention.DedupWindowHours = -1 },
+		"critical_repeat_min": func(c *ProactiveConfig) { c.Attention.CriticalRepeatMinutes = -1 },
+		"critical_repeat_max": func(c *ProactiveConfig) { c.Attention.CriticalRepeatMinutes = MaxCriticalRepeatMinutes + 1 },
 		"market_poll_seconds": func(c *ProactiveConfig) { c.Perception.MarketPollSeconds = -1 },
 		"expiry_minutes":      func(c *ProactiveConfig) { c.Approvals.ExpiryMinutes = -1 },
 		"tokens_per_day":      func(c *ProactiveConfig) { c.Cognition.TokensPerDay = -1 },
@@ -182,6 +186,7 @@ func TestValidateProactive_UnknownModes(t *testing.T) {
 	c.Learning.HoldoutRate = 1
 	c.Reflection.AtLocal = "00:00"
 	c.Attention.DailyBudget = 0
+	c.Attention.CriticalRepeatMinutes = 0 // keep each candidate's own window
 	if err := ValidateProactive(c); err != nil {
 		t.Fatalf("boundary values rejected: %v", err)
 	}

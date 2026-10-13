@@ -12,6 +12,17 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
+type exitErr struct{ code int }
+
+func (e exitErr) Error() string { return "boom" }
+func (e exitErr) ExitCode() int { return e.code }
+
+func TestExitStatus(t *testing.T) {
+	assert.Equal(t, 1, exitStatus(fmt.Errorf("plain")))
+	assert.Equal(t, 3, exitStatus(exitErr{3}))
+	assert.Equal(t, 4, exitStatus(fmt.Errorf("wrapped: %w", exitErr{4})))
+}
+
 func TestNewKhunquantCommand(t *testing.T) {
 	cmd := NewKhunquantCommand()
 
@@ -49,6 +60,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"skills",
 		"start",
 		"status",
+		"trigger",
 		"uninstall",
 		"update",
 		"version",

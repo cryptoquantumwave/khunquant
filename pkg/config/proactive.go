@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -44,7 +45,7 @@ type ProactiveConfig struct {
 	Heartbeat  ProactiveHeartbeatConfig `json:"heartbeat"`
 	Attention  AttentionConfig          `json:"attention"`
 	Perception PerceptionConfig         `json:"perception"`
-	Triggers   ModeConfig               `json:"triggers"   envPrefix:"KHUNQUANT_PROACTIVE_TRIGGERS_"`
+	Triggers   TriggersConfig           `json:"triggers"   envPrefix:"KHUNQUANT_PROACTIVE_TRIGGERS_"`
 	Intents    ToggleConfig             `json:"intents"    envPrefix:"KHUNQUANT_PROACTIVE_INTENTS_"`
 	Approvals  ApprovalsConfig          `json:"approvals"`
 	Mandates   ToggleConfig             `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
@@ -87,7 +88,18 @@ type AttentionConfig struct {
 	DedupWindowHours   int    `json:"dedup_window_hours"   env:"KHUNQUANT_PROACTIVE_ATTENTION_DEDUP_WINDOW_HOURS"`
 	GroupWindowSeconds int    `json:"group_window_seconds" env:"KHUNQUANT_PROACTIVE_ATTENTION_GROUP_WINDOW_SECONDS"`
 	Digest             bool   `json:"digest"               env:"KHUNQUANT_PROACTIVE_ATTENTION_DIGEST"`
+	// CriticalRepeatMinutes is how often a protective Critical that persists is sent
+	// again: its dedup window is this long, instead of the candidate's own (usually
+	// much longer) one, so a liquidation warning is not silenced for hours after the
+	// first message and is not repeated on every tick either. 0 keeps each candidate's
+	// own window.
+	CriticalRepeatMinutes int `json:"critical_repeat_minutes" env:"KHUNQUANT_PROACTIVE_ATTENTION_CRITICAL_REPEAT_MINUTES"`
 }
+
+// MaxCriticalRepeatMinutes is the longest protective repeat interval accepted: a
+// day. A longer one would silence a persisting liquidation warning for as long as a
+// whole ordinary dedup window.
+const MaxCriticalRepeatMinutes = 24 * 60
 
 // PerceptionConfig controls background market reads.
 type PerceptionConfig struct {
@@ -129,6 +141,22 @@ type ModeConfig struct {
 	Mode string `json:"mode" env:"MODE"`
 }
 
+// TriggersConfig is the "proactive.triggers" section: the mode, and the owner's
+// parameters for the built-in portfolio triggers.
+//
+// Params maps a trigger kind (move_vs_vol, drawdown, allocation_drift,
+// liquidation_distance, data_stale) to a JSON object that overrides that kind's
+// defaults. It is checked when the triggers are built, not here (this package may not
+// import the triggers): a block that does not validate is logged and the kind runs on
+// its defaults, so a typo never switches an alert off.
+type TriggersConfig struct {
+	Mode   string                     `json:"mode"             env:"MODE"`
+	Params map[string]json.RawMessage `json:"params,omitempty"`
+}
+
+// MaxTriggerParamBytes bounds one kind's parameter block in the config.
+const MaxTriggerParamBytes = 4 << 10
+
 // ToggleConfig is a single on/off switch.
 type ToggleConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
@@ -146,6 +174,8 @@ func defaultProactiveConfig() ProactiveConfig {
 			DedupWindowHours:   24,
 			GroupWindowSeconds: 60,
 			Digest:             true,
+
+			CriticalRepeatMinutes: 30,
 		},
 		Perception: PerceptionConfig{
 			Enabled:             false,
@@ -153,7 +183,7 @@ func defaultProactiveConfig() ProactiveConfig {
 			ReadsPerMinuteLimit: 30,
 			SnapshotMinutes:     15,
 		},
-		Triggers:   ModeConfig{Mode: ProactiveModeOff},
+		Triggers:   TriggersConfig{Mode: ProactiveModeOff},
 		Approvals:  ApprovalsConfig{Enabled: false, ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: ProactiveModeOff},
@@ -272,6 +302,7 @@ func ValidateProactive(c ProactiveConfig) error {
 		{"proactive.attention.daily_budget", c.Attention.DailyBudget},
 		{"proactive.attention.dedup_window_hours", c.Attention.DedupWindowHours},
 		{"proactive.attention.group_window_seconds", c.Attention.GroupWindowSeconds},
+		{"proactive.attention.critical_repeat_minutes", c.Attention.CriticalRepeatMinutes},
 		{"proactive.perception.market_poll_seconds", c.Perception.MarketPollSeconds},
 		{"proactive.perception.reads_per_minute_limit", c.Perception.ReadsPerMinuteLimit},
 		{"proactive.perception.snapshot_minutes", c.Perception.SnapshotMinutes},
@@ -282,6 +313,19 @@ func ValidateProactive(c ProactiveConfig) error {
 	} {
 		if n.v < 0 {
 			errs = append(errs, fmt.Errorf("%s must not be negative (got %d)", n.field, n.v))
+		}
+	}
+
+	if m := c.Attention.CriticalRepeatMinutes; m > MaxCriticalRepeatMinutes {
+		errs = append(errs, fmt.Errorf("proactive.attention.critical_repeat_minutes must be at most %d (got %d)",
+			MaxCriticalRepeatMinutes, m))
+	}
+
+	for kind, raw := range c.Triggers.Params {
+		var obj map[string]json.RawMessage
+		if len(raw) > MaxTriggerParamBytes || json.Unmarshal(raw, &obj) != nil || obj == nil {
+			errs = append(errs, fmt.Errorf("proactive.triggers.params.%q must be a JSON object of at most %d bytes",
+				kind, MaxTriggerParamBytes))
 		}
 	}
 
@@ -420,6 +464,23 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 //
 //	heartbeat.mode  governed -> legacy   unless the effective attention.mode is live
 //
+// A sweep heartbeat is a governed one that is started by what changed: it needs
+// everything a governed heartbeat needs and the perception pipeline, so even with
+// a valid owner:
+//
+//	heartbeat.mode  sweep -> governed    unless perception is effectively on
+//	heartbeat.mode  sweep -> legacy      unless the effective attention.mode is live
+//
+// (the governed rule above then applies to a sweep that became governed, each
+// with its own entry in Downgrades).
+//
+// Live triggers deliver the same way: a candidate is decided by attention, and with
+// attention off or shadow the decision is logged and nothing is sent. A live
+// trigger would take its alerts off the paths that do deliver (the migration
+// switches the cron alert jobs off) and then lose them, so even with a valid owner:
+//
+//	triggers.mode   live     -> shadow   unless the effective attention.mode is live
+//
 // off and shadow values are returned as configured, an unknown mode string
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
@@ -453,6 +514,22 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Mandates = c.Enabled && c.Mandates.Enabled
 
 	if c.Enabled && ownerOK {
+		// A sweep is a governed heartbeat that is started by what changed, so it
+		// needs everything a governed one needs and the perception pipeline that
+		// reports the changes. Without perception it is a governed heartbeat, and
+		// the rule below then decides whether that one can run.
+		if e.HeartbeatMode == HeartbeatModeSweep {
+			switch {
+			case !e.Perception:
+				e.Downgrades = append(e.Downgrades,
+					"proactive: perception is off; heartbeat.mode sweep → governed")
+				e.HeartbeatMode = HeartbeatModeGoverned
+			case e.AttentionMode != ProactiveModeLive:
+				e.Downgrades = append(e.Downgrades, fmt.Sprintf(
+					"proactive: attention.mode is %s, not live; heartbeat.mode sweep → legacy", e.AttentionMode))
+				e.HeartbeatMode = HeartbeatModeLegacy
+			}
+		}
 		// The owner can be reached, but a governed heartbeat still needs attention
 		// to deliver: shadow and off record decisions and send nothing, which
 		// would silently lose every heartbeat message.
@@ -460,6 +537,11 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 			e.Downgrades = append(e.Downgrades, fmt.Sprintf(
 				"proactive: attention.mode is %s, not live; heartbeat.mode governed → legacy", e.AttentionMode))
 			e.HeartbeatMode = HeartbeatModeLegacy
+		}
+		if e.TriggersMode == ProactiveModeLive && e.AttentionMode != ProactiveModeLive {
+			e.Downgrades = append(e.Downgrades, fmt.Sprintf(
+				"proactive: attention.mode is %s, not live; triggers.mode live → shadow", e.AttentionMode))
+			e.TriggersMode = ProactiveModeShadow
 		}
 		return e
 	}

@@ -60,6 +60,15 @@ type AgentLoop struct {
 	// Track active requests for safe provider cleanup
 	activeRequests sync.WaitGroup
 	debugTap       *debugtap.Store // nil when dev-mcp is disabled; set via SetDebugTap
+
+	// eventSink is where sub-turn lifecycle events go; nil means nowhere. It is
+	// per loop, never package state. See eventsink.go and SetEventBus.
+	eventSink atomic.Pointer[sinkHolder]
+
+	// background is the section background turns carry (see background_sections.go).
+	// It is created with the loop and handed to the context builder of every agent
+	// whenever a registry is installed, so a reload keeps it.
+	background *backgroundSections
 }
 
 // processOptions configures how a message is processed
@@ -100,6 +109,8 @@ type processOptions struct {
 	ToolFilter func(name string) bool
 	// OfferLoadSkill is BuildOptions.OfferLoadSkill for a PromptProactive turn.
 	OfferLoadSkill bool
+	// NoBackgroundSections is BuildOptions.NoBackgroundSections.
+	NoBackgroundSections bool
 	// ModelOverride pins the model tier for every iteration of the turn,
 	// instead of letting the router score the message.
 	ModelOverride modelOverride
@@ -126,7 +137,10 @@ const (
 // check must use the same value, or an estimate based on one prompt would be
 // compared against a request built with another.
 func (o processOptions) promptBuildOptions() BuildOptions {
-	return BuildOptions{Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill}
+	return BuildOptions{
+		Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill,
+		NoBackgroundSections: o.NoBackgroundSections,
+	}
 }
 
 type continuationTarget struct {
@@ -183,6 +197,7 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(SteeringOneAtATime),
+		background:  &backgroundSections{},
 	}
 
 	// Register shared tools to all agents (needs al for SubTurnSpawner)
@@ -228,6 +243,8 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 ) {
+	al.attachBackgroundSections(registry)
+
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// The profile tools share one store (the user has one profile) and are

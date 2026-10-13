@@ -58,6 +58,62 @@ type CollectResult struct {
 	// ErrorsByAccount this does not exclude the account from AccountTotals; the
 	// missing wallet type is simply absent from AccountWallets.
 	WalletErrorsByAccount map[string]string
+
+	// QuoteRates maps each native quote currency that positions were priced in
+	// (Position.Quote) to the multiplier that converts a value in it into the
+	// snapshot quote. It is the rate TotalValue was built with, so
+	// Position.Value*QuoteRates[Position.Quote] is the position's value in
+	// Snapshot.Quote. A quote with no rate is absent.
+	QuoteRates map[string]float64
+
+	// UnpricedByAccount lists, per "exchange/account", the assets whose price could
+	// not be fetched (sorted, without duplicates). Each such account also has its
+	// "could not price" entry in Errors and ErrorsByAccount, unchanged; this field
+	// only tells a caller what that entry was, so that "the only problem was
+	// unpriced assets" can be told from a failed read or a missing conversion rate
+	// (see OnlyUnpricedErrors). An unpriced asset is in Snapshot.Positions with a
+	// Value of 0 and is not in TotalValue.
+	UnpricedByAccount map[string][]string
+}
+
+// addUnpriced records the assets of an account that could not be priced.
+func (r *CollectResult) addUnpriced(label string, assets []string) {
+	if r.UnpricedByAccount == nil {
+		r.UnpricedByAccount = make(map[string][]string)
+	}
+	sorted := append([]string(nil), assets...)
+	sort.Strings(sorted)
+	out := sorted[:0]
+	for i, a := range sorted {
+		if i == 0 || a != sorted[i-1] {
+			out = append(out, a)
+		}
+	}
+	r.UnpricedByAccount[label] = out
+}
+
+// OnlyUnpricedErrors reports whether the collection has errors and every one of
+// them is an account's "could not price" entry: no account or wallet failed to
+// read and no conversion rate is missing. The collector adds exactly one Errors
+// entry per account with unpriced assets, so this is true when the number of
+// entries equals the number of accounts in UnpricedByAccount.
+func (r *CollectResult) OnlyUnpricedErrors() bool {
+	return r != nil && len(r.Errors) > 0 && len(r.Errors) == len(r.UnpricedByAccount)
+}
+
+// Unpriced returns the unpriced assets as sorted "exchange/account:ASSET" entries.
+func (r *CollectResult) Unpriced() []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	for label, assets := range r.UnpricedByAccount {
+		for _, a := range assets {
+			out = append(out, label+":"+a)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // addError records an account failure in both Errors and ErrorsByAccount.
@@ -333,6 +389,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 
 		if len(unpriced) > 0 {
 			result.addError(acctLabel, fmt.Sprintf("could not price: %s", strings.Join(unpriced, ", ")))
+			result.addUnpriced(acctLabel, unpriced)
 		}
 	}
 
@@ -407,6 +464,7 @@ func CollectFromExchanges(ctx context.Context, cfg *config.Config, opts CollectO
 	}
 
 	snap.TotalValue = totalValue
+	result.QuoteRates = convRates
 	return result, nil
 }
 

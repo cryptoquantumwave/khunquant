@@ -269,17 +269,41 @@ func (c *ComposeMode) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Bounds on Candidate.Detail. The trigger registry refuses a candidate over them,
+// and attention renders at most MaxDetailLines lines of it.
+const (
+	MaxDetailRunes = 600
+	MaxDetailLines = 6
+)
+
+// Bounds on Candidate.Quote, next to Detail's. The trigger registry refuses a
+// candidate over them.
+const (
+	MaxQuoteRunes = 600
+	MaxQuoteLines = 6
+)
+
 // Candidate is "something might deserve attention", produced by triggers (or,
 // in Phase 1, by a heartbeat turn's respond_proactive call).
 type Candidate struct {
-	ID          string // ULID
-	TriggerID   string // "price_cross:<id>", "dn:12", "heartbeat"
-	DedupKey    string // stable per situation, e.g. "drawdown:portfolio:tier2"
-	Severity    Severity
-	Protective  bool           // margin / liquidation / stop-loss
-	Salience    float64        // 0..1
-	Subject     string         // "BTC/USDT", "plan:12", "portfolio"
-	Title       string         // template-rendered headline (no LLM)
+	ID         string // ULID
+	TriggerID  string // "price_cross:<id>", "dn:12", "heartbeat"
+	DedupKey   string // stable per situation, e.g. "drawdown:portfolio:tier2"
+	Severity   Severity
+	Protective bool    // margin / liquidation / stop-loss
+	Salience   float64 // 0..1
+	Subject    string  // "BTC/USDT", "plan:12", "portfolio"
+	Title      string  // template-rendered headline (no LLM)
+	// Detail is template-rendered evidence lines built by code, never model text.
+	// Attention puts it under the title (see attention.renderGroup); the trigger
+	// registry refuses more than MaxDetailRunes characters or MaxDetailLines lines.
+	Detail string
+	// Quote is text that did not originate in this process (an external trigger's
+	// message, the note of an alert), already cleaned by the trigger to plain lines.
+	// It is shown to the owner under Detail as quoted lines; it is NEVER written into
+	// the owner's session and never given to a model. The registry refuses more than
+	// MaxQuoteRunes characters or MaxQuoteLines lines, and control characters.
+	Quote       string
 	Evidence    map[string]any // numbers for templates; never restated by the LLM
 	IntentID    string
 	Trust       Trust
@@ -287,6 +311,18 @@ type Candidate struct {
 	DedupWindow time.Duration // 0 = attention default (MR-208)
 	At          time.Time
 	Shadow      bool // produced by a shadow-mode trigger
+	// OwnerRequested says the owner asked for exactly this: the candidate is the firing
+	// of an alert the owner set (a price or an indicator crossing made by the alert
+	// tools, or migrated from the owner's own alert job). Attention does not hold it
+	// for the digest in quiet hours; every other rule applies to it as to any other
+	// candidate. It is a mark set by code and never text: it is not given to a model,
+	// no model decision can set it, and the trigger registry clears it from any
+	// candidate whose spec is not one of those alerts (see triggers.OwnerAlertSpec).
+	OwnerRequested bool
+	// ForcedSkills are skills the turn that composes this candidate's message
+	// should carry in full (names only, a handful at most; the consumer caps the
+	// list and the length of each name). Empty for most triggers.
+	ForcedSkills []string
 }
 
 // Disposition is attention's decision about a candidate.

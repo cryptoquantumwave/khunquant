@@ -55,6 +55,9 @@ const (
 
 	maxLineRunes  = 200
 	maxProseRunes = 300
+	// maxDetailLineRunes is longer than a title line: a detail line may quote an
+	// alert's own message, which a trigger caps at 300 characters.
+	maxDetailLineRunes = 320
 )
 
 // Item is a candidate to put in front of the owner, with optional model text.
@@ -83,6 +86,22 @@ type Message struct {
 	Digest bool
 	// Decisions are the decisions that make up the message, ranked as rendered.
 	Decisions []Decision
+	// SessionRestricted says that some member's Quote is not to be kept in the owner's
+	// session (see SessionWithheld): the session copy then carries SessionBody in
+	// place of Body. When it is false the session copy carries Body, as it always did.
+	SessionRestricted bool
+	SessionBody       string
+}
+
+// SessionWithheld stands in the owner's session for the quoted text of a message.
+// The session is what the model reads on the owner's next turn, a turn with the
+// owner's own tools, so text that did not originate in this process (see
+// proactive.Candidate.Quote) is shown to the owner in the chat and not kept there.
+const SessionWithheld = "(quoted text was shown to you in the message and is not kept in this conversation)"
+
+// hasQuote reports whether a member carries quoted text.
+func hasQuote(c proactive.Candidate) bool {
+	return strings.TrimSpace(c.Quote) != ""
 }
 
 // Deliverer sends one message to the owner. delivered=false with a nil error
@@ -111,6 +130,12 @@ var _ Gate = (*Governor)(nil)
 // Compose receives the template message m and the items in the order of
 // m.Decisions, and returns the message to send in its place. The outbox keeps
 // the intervention ID and the decisions of m whatever the result says.
+//
+// The Composer is never consulted for a message that has a protective Critical
+// among its decisions, even though attention decides such a candidate "escalate"
+// when it asks for composition: that message is delivered with the template
+// rendering at once, and no explanation follows (one breach, one message). It also
+// runs under composeTimeout, and a panic in it is an error.
 type Composer interface {
 	Compose(ctx context.Context, m Message, items []Item) (Message, error)
 }
@@ -138,6 +163,15 @@ type Outbox struct {
 	lastDigestMin int64
 	digestBusy    bool
 	lastTickWarn  time.Time
+
+	// The hand-over side (Accept and the delivery lanes; see handoff.go). All of
+	// it is guarded by mu.
+	tickEvery time.Duration
+	ordSlots  int
+	hand      *handoffState
+
+	// obs reports each finished message to the Observer (see observer.go).
+	obs *observerState
 }
 
 // NewOutbox builds an outbox over g and d. A groupWindow of zero or less means
@@ -148,7 +182,10 @@ func NewOutbox(g Gate, d Deliverer, groupWindow time.Duration, clock func() time
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Outbox{g: g, d: d, window: groupWindow, clock: clock, lastDigestMin: -1}
+	return &Outbox{
+		g: g, d: d, window: groupWindow, clock: clock, lastDigestMin: -1,
+		tickEvery: tickEvery, ordSlots: ordinaryLaneSlots, hand: newHandoffState(), obs: newObserverState(),
+	}
 }
 
 // Submit asks the governor to decide it and, for a notify or escalate decision,
@@ -210,7 +247,15 @@ func (o *Outbox) takeLocked() []buffered {
 // Tick flushes the buffer when its window has elapsed and sends the daily digest
 // when one is due. The window opens at the first buffered decision and later
 // ones do not extend it. It is safe to call concurrently with Submit and itself.
-func (o *Outbox) Tick(ctx context.Context) error {
+//
+// Tick delivers on the caller's goroutine. Run does not use it: it hands the
+// same work to the delivery lanes (see handoff.go), so that its own goroutine
+// never waits on a channel.
+func (o *Outbox) Tick(ctx context.Context) error { return o.tick(ctx, false) }
+
+// tick is Tick, or with handOver its non-blocking form: a due group and the
+// digest are queued for the delivery lanes instead of being delivered here.
+func (o *Outbox) tick(ctx context.Context, handOver bool) error {
 	now := o.clock()
 	var out []buffered
 	o.mu.Lock()
@@ -221,42 +266,44 @@ func (o *Outbox) Tick(ctx context.Context) error {
 
 	var errs []error
 	if out != nil {
-		errs = append(errs, o.flush(ctx, out))
+		if handOver {
+			o.handOverOrdinary(out)
+		} else {
+			errs = append(errs, o.flush(ctx, out))
+		}
 	}
-	errs = append(errs, o.tickDigest(ctx, now))
+	errs = append(errs, o.processDeferrals(ctx))
+	if handOver {
+		errs = append(errs, o.handOverDigest(ctx, now))
+	} else {
+		errs = append(errs, o.tickDigest(ctx, now))
+	}
 	return errors.Join(errs...)
 }
 
-// Run calls Tick every second until ctx ends, then flushes what is buffered once,
-// with a short timeout of its own. It returns after that flush.
+// Run drives the outbox until ctx ends: it starts the delivery lanes (one
+// ordinary worker, one protective worker), calls tick every tick interval (one
+// second unless SetTickInterval changed it) and, when ctx ends, delivers what is
+// buffered and queued once, with a short timeout of its own. It returns after
+// that, and only once both workers have exited (or, for a deliverer that ignores
+// its context, after a bounded wait).
 func (o *Outbox) Run(ctx context.Context) {
-	t := time.NewTicker(tickEvery)
+	o.mu.Lock()
+	every := o.tickEvery
+	o.mu.Unlock()
+	lanes := o.startLanes()
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			o.shutdown(ctx)
+			o.shutdown(ctx, lanes)
 			return
 		case <-t.C:
-			if err := o.Tick(ctx); err != nil && ctx.Err() == nil {
+			if err := o.tick(ctx, true); err != nil && ctx.Err() == nil {
 				o.warnTick(err)
 			}
 		}
-	}
-}
-
-func (o *Outbox) shutdown(ctx context.Context) {
-	o.mu.Lock()
-	o.closed = true
-	out := o.takeLocked()
-	o.mu.Unlock()
-	if out == nil {
-		return
-	}
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownFlushTimeout)
-	defer cancel()
-	if err := o.flush(fctx, out); err != nil {
-		logger.WarnCF("attention", "final flush failed", map[string]any{"error": err.Error()})
 	}
 }
 
@@ -277,40 +324,85 @@ func (o *Outbox) warnTick(err error) {
 
 // deliver calls the deliverer under deliverTimeout and folds its two failure
 // shapes into one.
-func (o *Outbox) deliver(ctx context.Context, m Message) (bool, error) {
+func (o *Outbox) deliver(ctx context.Context, m Message) (ok bool, err error) {
+	// A deliverer that panics has not delivered: the members are released like
+	// for any other failure, and the process survives.
+	defer func() {
+		if r := recover(); r != nil {
+			o.notePanic("deliverer", r)
+			ok, err = false, fmt.Errorf("deliverer panicked: %v", r)
+		}
+	}()
 	dctx, cancel := context.WithTimeout(ctx, deliverTimeout)
 	defer cancel()
-	ok, err := o.d.Deliver(dctx, m)
+	ok, err = o.d.Deliver(dctx, m)
 	if err != nil {
 		return false, err
 	}
 	return ok, nil
 }
 
+// compose calls the Composer under composeTimeout. A composer that panics is an
+// error like any other, so the template message goes out.
+func (o *Outbox) compose(ctx context.Context, m Message, items []Item) (out Message, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.notePanic("composer", r)
+			err = fmt.Errorf("composer panicked: %v", r)
+		}
+	}()
+	// Bounded here, whatever the Composer does: a queued message must still be
+	// inside its lease when it is delivered (see maxQueueAge).
+	cctx, cancel := context.WithTimeout(ctx, composeTimeout)
+	defer cancel()
+	return o.Composer.Compose(cctx, m, items)
+}
+
 // flush renders group as one message, delivers it and reports the outcome for
 // every member, whatever it was.
 func (o *Outbox) flush(ctx context.Context, group []buffered) error {
+	return o.flushWith(ctx, group, true)
+}
+
+// flushWith is flush; compose says whether the Composer may be consulted. The
+// protective lane passes false: a model turn must never stand between a
+// protective Critical and the owner.
+func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) error {
 	sort.SliceStable(group, func(i, j int) bool { return ranksBefore(group[i].dec, group[j].dec) })
 
 	items := make([]Item, len(group))
 	decs := make([]Decision, len(group))
-	escalate := false
+	escalate, composedOK := false, false
 	for i, b := range group {
 		items[i], decs[i] = b.item, b.dec
 		escalate = escalate || b.dec.Disposition == proactive.DispEscalate
+		// A message with a protective Critical in it is never held for the
+		// composer, whichever path flushes it: attention's rule 4 turns a protective
+		// Critical that asks for composition into an escalate, and a liquidation-class
+		// alert must not wait on a model call. It goes out as the template, once.
+		compose = compose && !isProtectiveCritical(b.dec.Candidate)
 	}
 	m := renderGroup(items)
 	m.InterventionID = proactive.NewID()
 	m.Decisions = decs
 
-	if escalate && o.Composer != nil {
-		composed, err := o.Composer.Compose(ctx, m, items)
+	if escalate && compose && o.Composer != nil {
+		composed, err := o.compose(ctx, m, items)
 		if err != nil {
 			logger.WarnCF("attention", "composer failed; delivering the template message", map[string]any{"error": err.Error()})
 		} else {
 			composed.InterventionID, composed.Decisions = m.InterventionID, m.Decisions
 			composed.Digest = false
+			// The session copy of a restricted message keeps its withheld form; the
+			// composer's prose is added to it only when it is, as it is meant to be,
+			// text appended to the template body (a composer that rewrote anything
+			// else leaves the session with the template alone).
+			composed.SessionRestricted, composed.SessionBody = m.SessionRestricted, m.SessionBody
+			if m.SessionRestricted && strings.HasPrefix(composed.Body, m.Body) {
+				composed.SessionBody = m.SessionBody + composed.Body[len(m.Body):]
+			}
 			m = composed
+			composedOK = true
 		}
 	}
 
@@ -331,6 +423,7 @@ func (o *Outbox) flush(ctx context.Context, group []buffered) error {
 			errs = append(errs, fmt.Errorf("decision %s: %w", d.ID, err))
 		}
 	}
+	o.observe(Outcome{Message: m, Delivered: ok, Composed: composedOK, At: o.clock()})
 	return errors.Join(errs...)
 }
 
@@ -338,31 +431,50 @@ func (o *Outbox) flush(ctx context.Context, group []buffered) error {
 // most once per clock minute (a digest time has minute granularity) and never
 // from two goroutines at once.
 func (o *Outbox) tickDigest(ctx context.Context, now time.Time) error {
+	dg, err := o.pendingDigest(ctx, now)
+	if err != nil || dg == nil {
+		return err
+	}
+	defer o.digestDone()
+	return o.sendDigest(ctx, dg)
+}
+
+// pendingDigest asks the governor whether a digest is due. A nil digest with a
+// nil error means none is due (or one is already being sent). A non-nil digest
+// leaves the outbox busy: the caller must call digestDone once it has sent it.
+func (o *Outbox) pendingDigest(ctx context.Context, now time.Time) (*Digest, error) {
 	minute := now.Unix() / 60
 	o.mu.Lock()
 	if o.digestBusy || minute == o.lastDigestMin {
 		o.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	o.lastDigestMin, o.digestBusy = minute, true
 	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		o.digestBusy = false
-		o.mu.Unlock()
-	}()
 
 	dg, err := o.g.PendingDigest(ctx)
 	if err != nil {
 		o.mu.Lock()
 		o.lastDigestMin = -1 // a failed check is retried on the next tick
+		o.digestBusy = false
 		o.mu.Unlock()
-		return err
+		return nil, err
 	}
 	if dg == nil {
-		return nil
+		o.digestDone()
+		return nil, nil
 	}
+	return dg, nil
+}
 
+func (o *Outbox) digestDone() {
+	o.mu.Lock()
+	o.digestBusy = false
+	o.mu.Unlock()
+}
+
+// sendDigest delivers dg and reports the outcome to the governor.
+func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
 	title, body := RenderDigest(dg.Items)
 	m := Message{
 		InterventionID: proactive.NewID(),
@@ -384,18 +496,27 @@ func (o *Outbox) tickDigest(ctx context.Context, now time.Time) error {
 	}
 	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bookkeepTimeout)
 	defer cancel()
-	return o.g.CompleteDigest(bctx, dg, Delivery{Delivered: ok, InterventionID: m.InterventionID})
+	err := o.g.CompleteDigest(bctx, dg, Delivery{Delivered: ok, InterventionID: m.InterventionID})
+	o.observe(Outcome{Message: m, Delivered: ok, At: o.clock()})
+	return err
 }
 
 // renderGroup renders ranked items as one message. One item keeps its own
-// title and prose; several get a headline with the count and one line per item
-// (a prose, when present, follows its line, indented). Severity is the highest in
-// the group. Every title is reduced to a single clean line here, so a newline in
-// one cannot pass for another item.
+// title, Detail, Quote (as "> " lines) and prose; several get a headline with the
+// count and one line per item (its first Detail line, or when it has none the first
+// line of its Quote, and a prose, when present, follow its line, indented). Severity
+// is the highest in the group. Every title is reduced to a single clean line here, so
+// a newline in one cannot pass for another item.
+//
+// The Quote is text from outside, shown to the owner here and not kept in the
+// session the model reads: when any member has one, the message also carries the
+// session form of its body, in which the quoted lines are replaced by one
+// SessionWithheld sentence. A message with no Quote is not restricted at all.
 func renderGroup(items []Item) Message {
 	m := Message{}
 	for _, it := range items {
 		m.Severity = max(m.Severity, it.Candidate.Severity)
+		m.SessionRestricted = m.SessionRestricted || hasQuote(it.Candidate)
 	}
 	if len(items) == 0 {
 		return m
@@ -403,23 +524,95 @@ func renderGroup(items []Item) Message {
 	m.DedupKey = items[0].Candidate.DedupKey
 
 	if len(items) == 1 {
-		m.Title = itemTitle(items[0].Candidate)
-		m.Body = strings.TrimSpace(items[0].Prose)
+		c := items[0].Candidate
+		prose := strings.TrimSpace(items[0].Prose)
+		m.Title = itemTitle(c)
+		m.Body = joinBlocks(detailBlock(c), quoteBlock(c), prose)
+		if m.SessionRestricted {
+			m.SessionBody = joinBlocks(detailBlock(c), SessionWithheld, prose)
+		}
 		return m
 	}
 	m.Title = strconv.Itoa(len(items)) + " updates"
-	var b strings.Builder
+	var b, sb strings.Builder
 	for i, it := range items {
 		if i > 0 {
 			b.WriteString("\n")
+			sb.WriteString("\n")
 		}
-		b.WriteString("• " + itemTitle(it.Candidate))
+		head := "• " + itemTitle(it.Candidate)
+		b.WriteString(head)
+		sb.WriteString(head)
+		if l := detailLines(it.Candidate.Detail, 1); len(l) > 0 {
+			b.WriteString("\n  " + l[0])
+			sb.WriteString("\n  " + l[0])
+		} else if l := quoteLines(it.Candidate, 1); len(l) > 0 {
+			b.WriteString("\n  " + l[0])
+		}
 		if p := oneLine(it.Prose, maxProseRunes); p != "" {
 			b.WriteString("\n  " + p)
+			sb.WriteString("\n  " + p)
 		}
 	}
 	m.Body = b.String()
+	if m.SessionRestricted {
+		m.SessionBody = sb.String() + "\n" + SessionWithheld
+	}
 	return m
+}
+
+// quoteLines cleans a candidate's Quote into at most max "> " lines, each cut at
+// maxDetailLineRunes. The trigger has cleaned it already; it is text from outside, so
+// each line goes through the same cleaning as a title all the same.
+func quoteLines(c proactive.Candidate, max int) []string {
+	var out []string
+	for _, raw := range strings.Split(c.Quote, "\n") {
+		if len(out) >= max {
+			break
+		}
+		if l := oneLine(raw, maxDetailLineRunes); l != "" {
+			out = append(out, "> "+l)
+		}
+	}
+	return out
+}
+
+// quoteBlock is the lines of a single message's Quote, one per line.
+func quoteBlock(c proactive.Candidate) string {
+	return strings.Join(quoteLines(c, proactive.MaxQuoteLines), "\n")
+}
+
+// detailLines cleans a candidate's Detail into at most max single lines, each cut
+// at maxDetailLineRunes. The Detail is built by code, but it may quote text from outside
+// (an alert's own message), so each line goes through the same cleaning as a
+// title: no control character survives and a newline cannot pass for another line.
+func detailLines(detail string, max int) []string {
+	var out []string
+	for _, raw := range strings.Split(detail, "\n") {
+		if len(out) >= max {
+			break
+		}
+		if l := oneLine(raw, maxDetailLineRunes); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// detailBlock is the lines of a single message's Detail, one per line.
+func detailBlock(c proactive.Candidate) string {
+	return strings.Join(detailLines(c.Detail, proactive.MaxDetailLines), "\n")
+}
+
+// joinBlocks puts the non-empty blocks of a message body one blank line apart.
+func joinBlocks(blocks ...string) string {
+	var out []string
+	for _, b := range blocks {
+		if b != "" {
+			out = append(out, b)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func itemTitle(c proactive.Candidate) string {

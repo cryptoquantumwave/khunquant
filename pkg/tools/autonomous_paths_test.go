@@ -18,7 +18,7 @@ func writeWorkspace(t *testing.T) string {
 	for _, rel := range []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 		"memory/MEMORY.md", "memory/notes.md", "HEARTBEAT.md", "reports/today.md",
 	} {
@@ -80,7 +80,7 @@ func TestAutonomousWrite_ProtectedPathsRefused(t *testing.T) {
 	protected := []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 	}
 
@@ -128,6 +128,7 @@ func TestAutonomousWrite_CaseTraversalAndNewFilesRefused(t *testing.T) {
 		for _, path := range []string{
 			"CRON/jobs.json", "Cron/Jobs.json", "cron/JOBS.JSON", "SKILLS/x/SKILL.md", "Memory/DCA/dca.db",
 			"agents.MD", "Agents.md", "STATE/daily_loss.json", "Sessions/main.jsonl",
+			"CALENDAR/set_holidays.json", "Calendar/US_Holidays.json", "calendar/../calendar/set_holidays.json", "calendar/new_market_holidays.json",
 			"notes/../cron/jobs.json", "./cron/../cron/jobs.json", "cron//jobs.json", "cron/./jobs.json",
 			"../" + filepath.Base(ws) + "/cron/jobs.json",
 			"cron/new.json", "skills/new/SKILL.md", "memory/dca/other.db", "state/new/deep/file.json",
@@ -139,7 +140,7 @@ func TestAutonomousWrite_CaseTraversalAndNewFilesRefused(t *testing.T) {
 			}
 		}
 	}
-	for _, rel := range []string{"cron/new.json", "skills/new", "state/new"} {
+	for _, rel := range []string{"cron/new.json", "skills/new", "state/new", "calendar/new_market_holidays.json"} {
 		if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(rel))); err == nil {
 			t.Errorf("%s was created", rel)
 		}

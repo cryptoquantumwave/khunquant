@@ -9,16 +9,25 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 // SetIndicatorAlertTool manages indicator-based alerts backed by the cron scheduler.
 type SetIndicatorAlertTool struct {
 	cfg         *config.Config
 	cronService *cron.CronService
+	// triggers: see SetPriceAlertTool.
+	triggers AlertTriggersFunc
 }
 
 func NewSetIndicatorAlertTool(cfg *config.Config, cronService *cron.CronService) *SetIndicatorAlertTool {
 	return &SetIndicatorAlertTool{cfg: cfg, cronService: cronService}
+}
+
+// WithTriggers: see SetPriceAlertTool.WithTriggers.
+func (t *SetIndicatorAlertTool) WithTriggers(f AlertTriggersFunc) *SetIndicatorAlertTool {
+	t.triggers = f
+	return t
 }
 
 func (t *SetIndicatorAlertTool) Name() string { return NameSetIndicatorAlert }
@@ -31,20 +40,21 @@ func (t *SetIndicatorAlertTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"action":    map[string]any{"type": "string", "enum": []string{"create", "list", "cancel"}, "description": "Action to perform."},
-			"provider":  map[string]any{"type": "string", "description": "Provider/exchange name (required for create)."},
-			"account":   map[string]any{"type": "string", "description": "Account name (empty = default)."},
-			"symbol":    map[string]any{"type": "string", "description": "Trading pair (required for create)."},
-			"timeframe": map[string]any{"type": "string", "enum": []string{"1m", "5m", "15m", "1h", "4h", "1d", "1w"}, "description": "Candle interval for indicator computation."},
-			"indicator": map[string]any{"type": "string", "enum": []string{"RSI", "MACD", "SMA", "EMA"}, "description": "Indicator family to monitor."},
-			"period":    map[string]any{"type": "integer", "description": "Lookback period for SMA/EMA/RSI (e.g. 9, 20, 50, 200, 350). Ignored for MACD (uses 12/26/9). Defaults: SMA=20, EMA=20, RSI=14."},
-			"condition": map[string]any{"type": "string", "enum": []string{"above", "below"}, "description": "Fire when indicator is above or below threshold."},
-			"threshold": map[string]any{"type": "number", "description": "Indicator value threshold."},
-			"message":   map[string]any{"type": "string", "description": "Custom alert message."},
-			"channel":   map[string]any{"type": "string", "description": "Optional: target notification channel (e.g. line, telegram). Defaults to the current channel."},
-			"chat_id":   map[string]any{"type": "string", "description": "Optional: target chat/user ID for the notification. Required when specifying a custom channel."},
-			"recurring": map[string]any{"type": "boolean", "description": "If true, keep alert active after firing."},
-			"alert_id":  map[string]any{"type": "string", "description": "Alert ID to cancel."},
+			"action":           map[string]any{"type": "string", "enum": []string{"create", "list", "cancel"}, "description": "Action to perform."},
+			"provider":         map[string]any{"type": "string", "description": "Provider/exchange name (required for create)."},
+			"account":          map[string]any{"type": "string", "description": "Account name (empty = default)."},
+			"symbol":           map[string]any{"type": "string", "description": "Trading pair (required for create)."},
+			"timeframe":        map[string]any{"type": "string", "enum": []string{"1m", "5m", "15m", "1h", "4h", "1d", "1w"}, "description": "Candle interval for indicator computation."},
+			"indicator":        map[string]any{"type": "string", "enum": []string{"RSI", "MACD", "SMA", "EMA"}, "description": "Indicator family to monitor."},
+			"period":           map[string]any{"type": "integer", "description": "Lookback period for SMA/EMA/RSI (e.g. 9, 20, 50, 200, 350). Ignored for MACD (uses 12/26/9). Defaults: SMA=20, EMA=20, RSI=14."},
+			"condition":        map[string]any{"type": "string", "enum": []string{"above", "below"}, "description": "Fire when indicator is above or below threshold."},
+			"threshold":        map[string]any{"type": "number", "description": "Indicator value threshold."},
+			"message":          map[string]any{"type": "string", "description": "Custom alert message."},
+			"channel":          map[string]any{"type": "string", "description": "Optional: target notification channel (e.g. line, telegram). Defaults to the current channel."},
+			"chat_id":          map[string]any{"type": "string", "description": "Optional: target chat/user ID for the notification. Required when specifying a custom channel."},
+			"recurring":        map[string]any{"type": "boolean", "description": "If true, keep alert active after firing."},
+			"cooldown_minutes": map[string]any{"type": "integer", "description": "Optional: the least time between two firings of a recurring alert, in minutes (default 60)."},
+			"alert_id":         map[string]any{"type": "string", "description": "Alert ID to cancel."},
 		},
 		"required": []string{"action"},
 	}
@@ -55,18 +65,14 @@ func (t *SetIndicatorAlertTool) Execute(ctx context.Context, args map[string]any
 
 	switch action {
 	case "list":
-		// Reuse the price alert tool's list logic — same job prefix pattern.
-		listTool := &SetPriceAlertTool{cfg: t.cfg, cronService: t.cronService}
-		return listTool.listAlerts()
+		// The price alert tool's list logic — same job prefix pattern.
+		return listAlertsAll(ctx, t.cronService, t.triggers)
 	case "cancel":
 		id, _ := args["alert_id"].(string)
 		if id == "" {
 			return ErrorResult("alert_id is required for cancel action")
 		}
-		if t.cronService.RemoveJob(id) {
-			return UserResult(fmt.Sprintf("Alert %s cancelled.", id))
-		}
-		return ErrorResult(fmt.Sprintf("Alert %s not found.", id))
+		return cancelAlertAny(ctx, t.cronService, t.triggers, id)
 	case "create":
 		return t.createAlert(ctx, args)
 	default:
@@ -142,6 +148,10 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 		}
 	}
 
+	if at := liveTriggers(t.triggers); at != nil {
+		return t.createTriggerAlert(ctx, at, providerID, account, symbol, timeframe, ind, period, condition, threshold, message, recurring, cooldown)
+	}
+
 	payload := IndicatorAlertPayload{
 		ProviderID: providerID,
 		Account:    account,
@@ -202,4 +212,37 @@ func (t *SetIndicatorAlertTool) createAlert(ctx context.Context, args map[string
 	}
 	return UserResult(fmt.Sprintf("Indicator alert created (ID: %s)\n  %s %s(%s) %s %.4g\n  Timeframe: %s  Recurring: %v",
 		job.ID, symbol, label, timeframe, condition, threshold, timeframe, recurring))
+}
+
+// createTriggerAlert writes the alert to the live trigger registry instead of a cron
+// job. It is judged on closed bars only and delivered to the owner, not to the chat
+// that asked for it. The MACD alert compares the MACD line, as the cron one did.
+func (t *SetIndicatorAlertTool) createTriggerAlert(ctx context.Context, at AlertTriggers,
+	providerID, account, symbol, timeframe, ind string, period int, condition string, threshold float64,
+	message string, recurring bool, cooldown int) *ToolResult {
+	kind := strings.ToLower(ind)
+	if ind == "MACD" {
+		kind, period = triggers.IndMACDLine, 0
+	}
+	p := triggers.IndicatorCrossParams{
+		Provider: providerID, Account: account, Symbol: symbol, Timeframe: timeframe, Indicator: kind, Period: period,
+		Direction: condition, Threshold: threshold, Recurring: recurring, CooldownMin: cooldown,
+		Message: triggers.CleanAlertMessage(message),
+	}
+	if err := p.Validate(); err != nil {
+		return ErrorResult(fmt.Sprintf("invalid indicator alert: %v", err))
+	}
+	spec, err := at.Add(ctx, triggers.Spec{
+		Kind: triggers.KindIndicatorCross, Params: p.JSON(), Mode: triggers.ModeLive,
+		Origin: triggers.OriginSetIndicatorAlert,
+	})
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("creating alert: %v", err))
+	}
+	label := ind
+	if period > 0 && ind != "MACD" {
+		label = fmt.Sprintf("%s(%d)", ind, period)
+	}
+	return UserResult(fmt.Sprintf("Indicator alert created (ID: %s)\n  %s %s(%s) %s %.4g\n  Timeframe: %s  Recurring: %v\n  Judged on closed candles only.\n%s",
+		spec.ID, symbol, label, timeframe, condition, threshold, timeframe, recurring, liveDeliveryNote))
 }

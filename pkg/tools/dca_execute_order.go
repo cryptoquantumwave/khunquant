@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -377,6 +378,20 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 		filledQty = *order.Filled
 	}
 	actualQuote := filledQty * filledPrice
+
+	// Report the accepted order to the perception order feed, before the bookkeeping
+	// below (which can fail without the order ceasing to exist). The USD value is the
+	// one the risk gates computed, scaled to what filled; unknown stays unknown.
+	dcaUSD, dcaUSDKnown := 0.0, false
+	if nq.USDKnown && nq.USDPerQuote > 0 {
+		dcaUSD, dcaUSDKnown = actualQuote*nq.USDPerQuote, true
+	}
+	publishOrder(ctx, orderReport{
+		tool: NameExecuteDCAOrder, provider: plan.Provider, account: plan.Account, symbol: plan.Symbol,
+		side: side, kind: "market", amount: baseAmount, unit: orderfeed.UnitBase, order: order,
+		notionalUSD: dcaUSD, notionalKnown: dcaUSDKnown,
+	})
+
 	feeQuote := 0.0
 	if order.Fee.Cost != nil && !math.IsNaN(*order.Fee.Cost) && !math.IsInf(*order.Fee.Cost, 0) && *order.Fee.Cost > 0 {
 		feeQuote = *order.Fee.Cost

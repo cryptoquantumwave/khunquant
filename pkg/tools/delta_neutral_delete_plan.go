@@ -12,10 +12,17 @@ import (
 type DeleteDeltaNeutralPlanTool struct {
 	store       *deltaneutral.Store
 	cronService *cron.CronService
+	sync        DNSyncFunc
 }
 
 func NewDeleteDeltaNeutralPlanTool(store *deltaneutral.Store, cronService *cron.CronService) *DeleteDeltaNeutralPlanTool {
 	return &DeleteDeltaNeutralPlanTool{store: store, cronService: cronService}
+}
+
+// WithSync gives the tool the hook it calls once the plan's cron job is removed. Nil is fine.
+func (t *DeleteDeltaNeutralPlanTool) WithSync(f DNSyncFunc) *DeleteDeltaNeutralPlanTool {
+	t.sync = f
+	return t
 }
 
 func (t *DeleteDeltaNeutralPlanTool) Name() string { return NameDeleteDeltaNeutralPlan }
@@ -76,6 +83,9 @@ func (t *DeleteDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	// Remove cron job
 	if plan.CronJobID != "" {
 		t.cronService.RemoveJob(plan.CronJobID)
+		// The spec of the removed job is dropped by the next pass; ask on the way out,
+		// after the plan row is gone (or the delete failed: the job is gone either way).
+		defer t.sync.request()
 	}
 
 	// Delete the plan (cascades snapshots, alerts, executions)

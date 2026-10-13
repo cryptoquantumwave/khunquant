@@ -8,6 +8,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -592,6 +593,12 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 		filledNotional = *order.Cost
 	}
 
+	publishOrder(ctx, orderReport{
+		tool: NameResizeDeltaNeutralPosition, provider: plan.FuturesProvider, account: plan.FuturesAccount,
+		symbol: plan.FuturesSymbol, side: side, kind: "market", amount: numContracts, unit: orderfeed.UnitContracts,
+		order: order, notionalUSD: filledNotional, notionalKnown: (order.Cost != nil && *order.Cost > 0) && usdQuoted(plan.FuturesSymbol, plan.FuturesProvider),
+	})
+
 	leg.OrderID = orderID(order)
 	leg.State = string(deltaneutral.LegStateFilled)
 	leg.FilledQuantity = filledBase
@@ -703,6 +710,12 @@ func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan
 	if order.Cost != nil && *order.Cost > 0 {
 		filledNotional = *order.Cost
 	}
+
+	publishOrder(ctx, orderReport{
+		tool: NameResizeDeltaNeutralPosition, provider: plan.SpotProvider, account: plan.SpotAccount,
+		symbol: plan.SpotSymbol, side: side, kind: "market", amount: quantity, unit: orderfeed.UnitBase,
+		order: order, notionalUSD: filledNotional, notionalKnown: (order.Cost != nil && *order.Cost > 0) && usdQuoted(plan.SpotSymbol, plan.SpotProvider),
+	})
 
 	leg.OrderID = orderID(order)
 	leg.State = string(deltaneutral.LegStateFilled)

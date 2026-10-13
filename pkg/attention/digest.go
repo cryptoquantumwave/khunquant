@@ -160,6 +160,75 @@ func (g *Governor) CompleteDigest(ctx context.Context, dg *Digest, r Delivery) e
 	return commit(tx)
 }
 
+// DeferToDigest turns an in-flight notify or escalate decision into a digest
+// item: its row becomes a digest row (reason ReasonDeferred) and joins the digest
+// queue, so the owner hears about it in the next digest instead of never. The
+// outbox does this for a message it could not hand over in time (a full lane, or
+// a wait past the decision's lease). Because the row stops being a notify, it no
+// longer reserves budget.
+//
+// It is idempotent: a decision already in the queue is left there once, and one
+// that was delivered or released, or that is no longer a notify or escalate, is
+// left alone. A protective decision is refused: protective alerts are never
+// deferred. Outside live mode it does nothing (no decision there is sendable).
+func (g *Governor) DeferToDigest(ctx context.Context, d Decision) error {
+	if g.mode != modeLive {
+		return nil
+	}
+	if d.ID == "" {
+		return errors.New("attention: decision has no id")
+	}
+	tx, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("attention: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		disp, reason string
+		delivered    int
+		releasedAt   sql.NullInt64
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT disposition, reason, delivered, delivered_at_ms FROM attention_decisions WHERE id = ?`, d.ID).
+		Scan(&disp, &reason, &delivered, &releasedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w %q", errUnknownDecision, d.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("attention: read decision: %w", err)
+	}
+	if reason == ReasonProtective {
+		return fmt.Errorf("attention: decision %q is protective and cannot be deferred", d.ID)
+	}
+	switch {
+	case disp == string(proactive.DispDigest):
+		// Already a digest item: make sure it is queued, once.
+	case (disp == string(proactive.DispNotify) || disp == string(proactive.DispEscalate)) &&
+		delivered == 0 && !releasedAt.Valid:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE attention_decisions SET disposition = ?, reason = ? WHERE id = ? AND delivered = 0`,
+			string(proactive.DispDigest), ReasonDeferred, d.ID); err != nil {
+			return fmt.Errorf("attention: defer decision: %w", err)
+		}
+	default:
+		return nil // delivered, released or not a message at all: nothing to defer
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO attention_digest_queue (decision_id, enqueued_ms) VALUES (?, ?)
+		 ON CONFLICT(decision_id) DO NOTHING`, d.ID, g.clock().UnixMilli()); err != nil {
+		return fmt.Errorf("attention: queue deferred decision: %w", err)
+	}
+	return commit(tx)
+}
+
+// CleanLine reduces text that came from outside the process (a model's prose, a
+// title) to one clean line of at most limit runes: line breaks and control and
+// invisible format characters are removed, white space collapses, and a long line
+// ends with an ellipsis. It is what the outbox applies to the titles and prose
+// of a grouped message.
+func CleanLine(s string, limit int) string { return oneLine(s, limit) }
+
 // digestDay returns the local day whose digest is due at now, as "2006-01-02".
 // See the comment at the top of the file for the rule. It reads the profile and
 // is therefore called before any transaction opens.

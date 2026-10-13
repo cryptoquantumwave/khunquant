@@ -95,6 +95,12 @@ type HeartbeatService struct {
 	cancel context.CancelFunc // ends ctx
 
 	running atomic.Bool // a run is in flight
+
+	// runWithoutTasks: a run happens even when HEARTBEAT.md lists no task of the
+	// owner's (guarded by mu). A sweep heartbeat has work that does not depend on
+	// the file: it reconciles the sources and looks at what changed, and the file
+	// only tells the model what the owner cares about.
+	runWithoutTasks bool
 }
 
 // normalizeInterval applies the minimum and the default to a configured
@@ -180,6 +186,17 @@ func (hs *HeartbeatService) SetContract(c Contract) {
 	hs.contract = c
 }
 
+// SetRunWithoutTasks makes the service run the handler on every tick, also when
+// HEARTBEAT.md is missing or holds no task of the owner's (the prompt is then the
+// file as it is, or the default for the contract). Set it before Start. It is for a
+// sweep heartbeat, whose reconciliation must not depend on the owner having written
+// a task.
+func (hs *HeartbeatService) SetRunWithoutTasks(v bool) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.runWithoutTasks = v
+}
+
 // Interval is the current interval, after the minimum and the default.
 func (hs *HeartbeatService) Interval() time.Duration { return hs.currentInterval() }
 
@@ -246,16 +263,21 @@ func (hs *HeartbeatService) Start() error {
 	return nil
 }
 
-// warnTemplateMismatch logs the advisory for a HEARTBEAT.md that does not match
-// the contract, once per Start (the gateway builds a new service for every start
+// warnTemplateMismatch logs the advisory for a v1 HEARTBEAT.md (a warning when the
+// contract is governed, a notice when it is legacy), once per Start (the gateway builds a new service for every start
 // and reload). The caller holds hs.mu.
 func (hs *HeartbeatService) warnTemplateMismatch() {
 	data, err := os.ReadFile(filepath.Join(hs.workspace, "HEARTBEAT.md"))
 	if err != nil {
 		return
 	}
-	if msg := TemplateAdvisory(string(data), hs.contract); msg != "" {
+	msg, warn := TemplateAdvisory(string(data), hs.contract)
+	switch {
+	case msg == "":
+	case warn:
 		warnLog(msg, map[string]any{"contract": hs.contract.String()})
+	default:
+		infoLog(msg, map[string]any{"contract": hs.contract.String()})
 	}
 }
 
@@ -532,24 +554,30 @@ with your read tools, and report through respond_proactive.
 func (hs *HeartbeatService) buildPrompt() string {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
 
+	hs.mu.RLock()
+	contract := hs.contract
+	always := hs.runWithoutTasks
+	hs.mu.RUnlock()
+
+	var content string
 	data, err := os.ReadFile(heartbeatPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			hs.createDefaultHeartbeatTemplate()
+	switch {
+	case err == nil:
+		content = string(data)
+	case os.IsNotExist(err):
+		hs.createDefaultHeartbeatTemplate()
+		if !always {
 			return ""
 		}
+		content = idleTemplateV2()
+	default:
 		hs.logErrorf("Error reading HEARTBEAT.md: %v", err)
 		return ""
 	}
 
-	content := string(data)
-	if !heartbeatHasUserTasks(content) {
+	if !always && !heartbeatHasUserTasks(content) {
 		return ""
 	}
-
-	hs.mu.RLock()
-	contract := hs.contract
-	hs.mu.RUnlock()
 
 	now := hs.clock.Now().Format("2006-01-02 15:04:05")
 	if contract == ContractGoverned {
@@ -558,6 +586,14 @@ func (hs *HeartbeatService) buildPrompt() string {
 		// for actions.
 		return GovernedPrompt(now, content)
 	}
+	return LegacyPrompt(now, content)
+}
+
+// LegacyPrompt is the prompt a legacy heartbeat gives its turn: the time and
+// HEARTBEAT.md's content, with the request for HEARTBEAT_OK when nothing needs
+// attention. now is formatted by the caller. It is exported, like GovernedPrompt,
+// so that a legacy turn can be tested on the real text.
+func LegacyPrompt(now, content string) string {
 	return fmt.Sprintf(`# Heartbeat Check
 
 Current time: %s
@@ -570,16 +606,12 @@ If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK
 `, now, content)
 }
 
-// createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file: the one
-// that matches the service's contract.
+// createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file: the v2
+// template with no tasks, in every mode, so it runs nothing until one is added.
 func (hs *HeartbeatService) createDefaultHeartbeatTemplate() {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
 
-	hs.mu.RLock()
-	contract := hs.contract
-	hs.mu.RUnlock()
-
-	if err := fileutil.WriteFileAtomic(heartbeatPath, []byte(defaultTemplate(contract)), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomic(heartbeatPath, []byte(idleTemplateV2()), 0o644); err != nil {
 		hs.logErrorf("Failed to create default HEARTBEAT.md: %v", err)
 	} else {
 		hs.logInfof("Created default HEARTBEAT.md template")

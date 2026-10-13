@@ -20,19 +20,21 @@ toward silence on trivia, toward speaking on the material.
 ## How to report
 
 For each material topic, call `respond_proactive` once, with a short `dedup_key`
-naming the topic (`sol:drop`). If it later gets materially worse, use a new key
-(`sol:drop:tier2`). If nothing is material, call it once with `decision: silent`.
+naming the topic (`sol:drop`; if it gets materially worse, a new key such as
+`sol:drop:tier2`). If nothing is material, call it once with `decision: silent`.
+Without that tool (a legacy heartbeat), send ONE short `message` covering all
+material topics, or nothing.
 
-You decide what is material. The system decides whether, when and where the user
-hears about it. Write `text` like an analyst texting a client: a headline saying
-what happened and why it matters to THEM, then at most two lines of context and an
-optional next step framed as a suggestion. Do not restate numbers the tools already
-returned. Never place or cancel an order from a heartbeat.
+You decide what is material. Write `text` (or the message) like an analyst texting
+a client: a headline saying what happened and why it matters to THEM, then at most
+two lines of context and an optional next step framed as a suggestion. Do not
+restate numbers the tools already returned. Never place or cancel an order from a
+heartbeat.
 
 ## Step 1 — Pull the live portfolio (cheap, every heartbeat)
 
-Get the current state across ALL asset classes the user holds — crypto, Thai
-equities, US equities/ETFs/options as applicable:
+Get the current state across ALL asset classes held (crypto, Thai equities, US
+equities/ETFs/options):
 
 - `list_portfolios` — enumerate configured portfolios/accounts.
 - `get_total_value` — current total value per portfolio and combined.

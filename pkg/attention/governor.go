@@ -245,6 +245,14 @@ func (g *Governor) normalize(c proactive.Candidate, now time.Time) (proactive.Ca
 }
 
 func (g *Governor) dedupWindow(c proactive.Candidate) time.Duration {
+	// A protective Critical that persists is re-sent every CriticalRepeatMinutes:
+	// that is its window, whatever the candidate asked for. Its own window is the
+	// ordinary one (hours, for a plan's cooldown), which would leave a liquidation
+	// warning unrepeated for as long; and with no window at all it would repeat on
+	// every tick.
+	if isProtectiveCritical(c) && g.cfg.CriticalRepeatMinutes > 0 {
+		return time.Duration(g.cfg.CriticalRepeatMinutes) * time.Minute
+	}
 	if c.DedupWindow > 0 {
 		return c.DedupWindow
 	}

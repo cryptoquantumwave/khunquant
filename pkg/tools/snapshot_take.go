@@ -72,6 +72,12 @@ func (t *TakeSnapshotTool) Execute(ctx context.Context, args map[string]any) *To
 		opts.Note = strings.TrimSpace(v)
 	}
 
+	// "auto" labels the scheduled snapshots that are pruned after a month; refuse it
+	// before spending any exchange request.
+	if snapshot.IsReservedLabel(opts.Label) {
+		return ErrorResult(fmt.Sprintf("take_snapshot: %v; choose another label", snapshot.ErrReservedLabel))
+	}
+
 	collected, err := snapshot.CollectFromExchanges(ctx, t.cfg, opts)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("take_snapshot: %v", err))

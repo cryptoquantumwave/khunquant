@@ -1,0 +1,28 @@
+{
+  "market": "set",
+  "source": "https://media.set.or.th/set/Documents/2025/Nov/SET-Calendar-2026-EN.pdf (SET Calendar 2026, published by the Stock Exchange of Thailand; index page https://www.set.or.th/en/about/event-calendar/holiday)",
+  "retrieved": "2026-10-12",
+  "years": [2026],
+  "note": "Full-day SET closures only. 2027 is deliberately absent: SET had not published a 2027 calendar on the retrieval date. Refresh this file yearly (and when SET announces an extra holiday). A date in a year not listed under years is treated as a normal trading day and logged once as a WARN.",
+  "holidays": [
+    "2026-01-01",
+    "2026-01-02",
+    "2026-03-03",
+    "2026-04-06",
+    "2026-04-13",
+    "2026-04-14",
+    "2026-04-15",
+    "2026-05-01",
+    "2026-05-04",
+    "2026-06-01",
+    "2026-06-03",
+    "2026-07-28",
+    "2026-07-29",
+    "2026-08-12",
+    "2026-10-13",
+    "2026-10-23",
+    "2026-12-07",
+    "2026-12-10",
+    "2026-12-31"
+  ]
+}

@@ -63,7 +63,8 @@ func TestStaticDemands_Concurrent(t *testing.T) {
 
 func TestDemandKind_String(t *testing.T) {
 	for k, want := range map[DemandKind]string{
-		DemandTicker: "ticker", DemandOHLCV: "ohlcv", DemandFuturesPositions: "futures_positions", DemandKind(99): "unknown",
+		DemandTicker: "ticker", DemandOHLCV: "ohlcv", DemandFuturesPositions: "futures_positions",
+		DemandPlanHealth: "plan_health", DemandKind(99): "unknown",
 	} {
 		if k.String() != want {
 			t.Errorf("%d = %q, want %q", int(k), k.String(), want)

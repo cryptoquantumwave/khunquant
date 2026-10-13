@@ -45,6 +45,7 @@ func (w *world) newRegistry() *triggers.Registry {
 		map[string]triggers.Factory{
 			triggers.KindPriceCross:     triggers.PriceCrossFactory(cfg),
 			triggers.KindIndicatorCross: triggers.IndicatorCrossFactory(cfg),
+			triggers.KindDNHealth:       triggers.DNHealthFactory(triggers.DNHealthConfig{}),
 		},
 		triggers.WithIDFunc(func() string { return fmt.Sprintf("spec-%03d", w.ids.Add(1)) }))
 	if err != nil {

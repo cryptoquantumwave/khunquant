@@ -87,7 +87,18 @@ type AttentionConfig struct {
 	DedupWindowHours   int    `json:"dedup_window_hours"   env:"KHUNQUANT_PROACTIVE_ATTENTION_DEDUP_WINDOW_HOURS"`
 	GroupWindowSeconds int    `json:"group_window_seconds" env:"KHUNQUANT_PROACTIVE_ATTENTION_GROUP_WINDOW_SECONDS"`
 	Digest             bool   `json:"digest"               env:"KHUNQUANT_PROACTIVE_ATTENTION_DIGEST"`
+	// CriticalRepeatMinutes is how often a protective Critical that persists is sent
+	// again: its dedup window is this long, instead of the candidate's own (usually
+	// much longer) one, so a liquidation warning is not silenced for hours after the
+	// first message and is not repeated on every tick either. 0 keeps each candidate's
+	// own window.
+	CriticalRepeatMinutes int `json:"critical_repeat_minutes" env:"KHUNQUANT_PROACTIVE_ATTENTION_CRITICAL_REPEAT_MINUTES"`
 }
+
+// MaxCriticalRepeatMinutes is the longest protective repeat interval accepted: a
+// day. A longer one would silence a persisting liquidation warning for as long as a
+// whole ordinary dedup window.
+const MaxCriticalRepeatMinutes = 24 * 60
 
 // PerceptionConfig controls background market reads.
 type PerceptionConfig struct {
@@ -146,6 +157,8 @@ func defaultProactiveConfig() ProactiveConfig {
 			DedupWindowHours:   24,
 			GroupWindowSeconds: 60,
 			Digest:             true,
+
+			CriticalRepeatMinutes: 30,
 		},
 		Perception: PerceptionConfig{
 			Enabled:             false,
@@ -272,6 +285,7 @@ func ValidateProactive(c ProactiveConfig) error {
 		{"proactive.attention.daily_budget", c.Attention.DailyBudget},
 		{"proactive.attention.dedup_window_hours", c.Attention.DedupWindowHours},
 		{"proactive.attention.group_window_seconds", c.Attention.GroupWindowSeconds},
+		{"proactive.attention.critical_repeat_minutes", c.Attention.CriticalRepeatMinutes},
 		{"proactive.perception.market_poll_seconds", c.Perception.MarketPollSeconds},
 		{"proactive.perception.reads_per_minute_limit", c.Perception.ReadsPerMinuteLimit},
 		{"proactive.perception.snapshot_minutes", c.Perception.SnapshotMinutes},
@@ -283,6 +297,11 @@ func ValidateProactive(c ProactiveConfig) error {
 		if n.v < 0 {
 			errs = append(errs, fmt.Errorf("%s must not be negative (got %d)", n.field, n.v))
 		}
+	}
+
+	if m := c.Attention.CriticalRepeatMinutes; m > MaxCriticalRepeatMinutes {
+		errs = append(errs, fmt.Errorf("proactive.attention.critical_repeat_minutes must be at most %d (got %d)",
+			MaxCriticalRepeatMinutes, m))
 	}
 
 	if r := c.Learning.HoldoutRate; math.IsNaN(r) || r < 0 || r > 1 {

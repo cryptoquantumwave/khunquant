@@ -17,6 +17,10 @@ func TestTriggers_ImportBoundary(t *testing.T) {
 		Root: "pkg/triggers",
 		Allowed: []string{
 			"pkg/events", "pkg/logger", "pkg/perception", "pkg/proactive", "pkg/sqlitex", "pkg/ta", "pkg/worldmodel",
+			// The vocabulary of a plan's health: the breach codes and the numbers of
+			// a report. A leaf package of the standard library only; pkg/deltaneutral
+			// itself, which reaches the exchange clients, stays out.
+			"pkg/deltaneutral/planhealth",
 		},
 		Forbidden: []string{
 			"pkg/agent", "pkg/tools", "pkg/providers", "pkg/notify", "pkg/channels", "pkg/attention",

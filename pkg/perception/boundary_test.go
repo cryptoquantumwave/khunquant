@@ -34,6 +34,11 @@ func TestPerceptionSources_ImportBoundary(t *testing.T) {
 			// schedule function (cron.NextRun). pkg/cron imports only the logger and
 			// fileutil; it holds no provider, tool or order path.
 			"pkg/cron",
+			// The plan-health source checks delta-neutral plans through the monitor,
+			// which holds read-only views of the exchange (pkg/deltaneutral imports
+			// the broker interfaces and no order path: the closure below is checked
+			// against the same forbidden list).
+			"pkg/deltaneutral", "pkg/deltaneutral/planhealth",
 		},
 		// pkg/dca (the plan store and its order-adjacent gate) is also out of reach: the
 		// DCA plans source reads plans through an interface the gateway implements, so it

@@ -17,6 +17,12 @@ const (
 	// source does not serve it (the futures source does); it is part of the
 	// vocabulary so that one registry can name every kind of read.
 	DemandFuturesPositions
+	// DemandPlanHealth wants a plan checked and its health reported: Provider is the
+	// plan family ("dn") and Symbol the plan's numeric ID. MinInterval is not used: the
+	// plan's own monitor interval decides how often it is checked, and a source never
+	// checks a plan more than once a minute. The plan-health source serves it; the
+	// market source does not.
+	DemandPlanHealth
 )
 
 // String names the kind, for logs.
@@ -28,6 +34,8 @@ func (k DemandKind) String() string {
 		return "ohlcv"
 	case DemandFuturesPositions:
 		return "futures_positions"
+	case DemandPlanHealth:
+		return "plan_health"
 	}
 	return "unknown"
 }

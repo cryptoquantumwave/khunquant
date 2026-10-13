@@ -553,6 +553,16 @@ func getFileSize(path string) int64 {
 	return info.Size()
 }
 
+// cronHooks are the late-bound hooks the gateway gives the tools setupCronTool
+// registers. Both are optional: without them the tools behave as they always did.
+type cronHooks struct {
+	// Alerts routes the alert tools to the trigger registry, when one is live.
+	Alerts tools.AlertTriggersFunc
+	// DNSync asks for a (debounced) pass of the delta-neutral hand-over after a plan
+	// tool changed a plan's cron job.
+	DNSync tools.DNSyncFunc
+}
+
 func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
@@ -560,7 +570,7 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
-	alertRoute ...tools.AlertTriggersFunc,
+	hooks ...cronHooks,
 ) (*cron.CronService, *deltaneutral.Store) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
@@ -634,10 +644,11 @@ func setupCronTool(
 	// Alert tools (Track D) — require cron service, registered after it is created.
 	// The tools write to the trigger registry only while one is live (decided on every
 	// call, see tools.AlertTriggers); otherwise they are the cron tools they always were.
-	var route tools.AlertTriggersFunc
-	if len(alertRoute) > 0 {
-		route = alertRoute[0]
+	var h cronHooks
+	if len(hooks) > 0 {
+		h = hooks[0]
 	}
+	route := h.Alerts
 	if cfg.Tools.IsToolEnabled("set_price_alert") {
 		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService).WithTriggers(route))
 	}
@@ -680,7 +691,7 @@ func setupCronTool(
 	// Delta-neutral tools (Track F) — require cron service + the store opened above.
 	if dnToolsEnabled(cfg) && dnStore != nil {
 		if cfg.Tools.IsToolEnabled("create_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("list_delta_neutral_plans") {
 			agentLoop.RegisterTool(tools.NewListDeltaNeutralPlansTool(dnStore))
@@ -689,10 +700,10 @@ func setupCronTool(
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralPlanTool(cfg, dnStore))
 		}
 		if cfg.Tools.IsToolEnabled("update_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("get_delta_neutral_summary") {
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralSummaryTool(cfg, dnStore))

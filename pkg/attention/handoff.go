@@ -138,8 +138,12 @@ type OutboxStats struct {
 	Superseded uint64
 	// RejectedClosed counts Accepts after the outbox stopped.
 	RejectedClosed uint64
-	// Panics counts recovered panics in a deliverer, a composer or a lane worker.
+	// Panics counts recovered panics in a deliverer, a composer, an observer or a
+	// lane worker.
 	Panics uint64
+	// ObserverDropped counts outcomes not reported because too many observer calls
+	// were still running.
+	ObserverDropped uint64
 
 	OrdinaryQueued    int
 	ProtectivePending int
@@ -226,6 +230,7 @@ func (o *Outbox) Stats() OutboxStats {
 	s.Superseded = h.superseded.Load()
 	s.RejectedClosed = h.rejectedClosed.Load()
 	s.Panics = h.panics.Load()
+	s.ObserverDropped = o.obs.dropped.Load()
 	return s
 }
 
@@ -519,6 +524,7 @@ func (o *Outbox) shutdown(ctx context.Context, l *lanes) {
 	if err := o.processDeferrals(fctx); err != nil {
 		logger.WarnCF("attention", "final deferral failed", map[string]any{"error": err.Error()})
 	}
+	o.stopObservers() // after the last delivery: its outcome is reported first
 }
 
 func (o *Outbox) popOrdinary() (laneJob, bool) {

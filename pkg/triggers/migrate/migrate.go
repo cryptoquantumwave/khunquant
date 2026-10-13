@@ -127,6 +127,12 @@ type Family struct {
 	// one-shot that is still there when it is promoted has not been delivered, so
 	// its spec starts the live period from nothing.
 	OneShot func(job cron.CronJob) bool
+	// OffRestores says that a spec found switched off while its job is switched off
+	// and marked means the spec stopped (the registry switched it off after repeated
+	// errors, or somebody did): the job is switched back on, not removed. It is for a
+	// family that watches something continuously, where "off" is never "finished"; the
+	// alert family's one-shots are, and keep their job removed.
+	OffRestores bool
 }
 
 func (f Family) ownsKind(kind string) bool { return slices.Contains(f.Kinds, kind) }
@@ -416,6 +422,9 @@ func (m *Migrator) reconcile(ctx context.Context, mode Mode, spec triggers.Spec,
 	if spec.Mode == triggers.ModeOff {
 		// A spec that was switched off: a one-shot that fired live, done. Its job stays
 		// off, and both go, so it cannot fire again.
+		if marked && m.fam.OffRestores {
+			return m.restore(job, rep) // the spec stopped: the job takes the watch back
+		}
 		if marked {
 			rep.Finished++
 			m.jobs.RemoveJob(job.ID)

@@ -145,11 +145,12 @@ func TestTriggers_BuiltWhenOnAndTheMarketSourceReadsItsDemands(t *testing.T) {
 	}
 }
 
-// Production registers the two crossing kinds, the external kind and the DCA due kind, and nothing else.
+// Production registers the two crossing kinds, the external kind, the DCA due kind and
+// the delta-neutral health kind, and nothing else.
 func TestTriggerFactories_ProductionRegistersTheCrossingKinds(t *testing.T) {
 	got := triggerFactories(assemblyDeps{})
-	if len(got) != 4 || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
-		got[triggers.KindExternal] == nil || got[triggers.KindDCADue] == nil {
+	if len(got) != 5 || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
+		got[triggers.KindExternal] == nil || got[triggers.KindDCADue] == nil || got[triggers.KindDNHealth] == nil {
 		t.Fatalf("production registers %d trigger kinds: %v", len(got), got)
 	}
 }

@@ -53,6 +53,9 @@ type InhibitRule struct {
 // it later; nothing reads one yet.
 var defaultInhibits = []InhibitRule{
 	{WhenPrefix: "dn:", SuppressPrefix: "price_cross:", SameBaseAsset: true, For: time.Hour},
+	// The delta-neutral health trigger's dedup keys start with its kind, dn_health:
+	// (the registry requires the kind as the prefix of every key).
+	{WhenPrefix: "dn_health:", SuppressPrefix: "price_cross:", SameBaseAsset: true, For: time.Hour},
 	{WhenPrefix: "liquidation:", SuppressPrefix: "move:", SameBaseAsset: true, For: time.Hour},
 	{WhenPrefix: "drawdown:portfolio", SuppressPrefix: "move:", SameBaseAsset: false, For: 30 * time.Minute},
 }
@@ -215,6 +218,12 @@ type facts struct {
 //     A reservation is held until the decision is delivered (stays counted) or
 //     reported failed (released). Only notify/escalate rows count; a delivered
 //     digest item does not.
+//   - The window of rule 3 is the candidate's DedupWindow (else the configured
+//     default), except for a protective Critical, whose window is
+//     AttentionConfig.CriticalRepeatMinutes when that is set (30 by default): a
+//     breach that persists is delivered again at most that often, neither once per
+//     dedup window of hours nor on every tick. A protective Critical still ignores
+//     in-flight decisions.
 //   - Rule 3b does not apply to a protective Critical candidate: it is about
 //     things the owner has NOT been told, and a queued item must never swallow
 //     the one alert that must not wait.

@@ -50,6 +50,8 @@ type alertRuntime struct {
 	cfg   *config.Config
 	db    func() (*sql.DB, error)
 	stats *triggers.CrossStats
+	// dn is the delta-neutral side of the same runtime (dn_wiring.go).
+	dn dnRuntime
 
 	cron atomic.Pointer[cron.CronService]
 	reg  atomic.Pointer[triggers.Registry]
@@ -264,6 +266,7 @@ func migrateMode(reg *triggers.Registry) migrate.Mode {
 func (a *alertRuntime) sync(ctx context.Context, reg *triggers.Registry, cs *cron.CronService, atStart bool) {
 	sctx, cancel := context.WithTimeout(ctx, alertSyncTimeout)
 	defer cancel()
+	a.dn.sync(sctx, reg, cs, a.migrateOptions())
 	rep, err := migrate.MigrateAlertJobs(sctx, cs, reg, migrateMode(reg), a.migrateOptions()...)
 	if atStart {
 		warnInactiveAlerts(rep.Inactive)
@@ -290,6 +293,16 @@ func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cro
 	defer syncT.Stop()
 	cmpT := time.NewTicker(alertCompareEvery)
 	defer cmpT.Stop()
+
+	// A plan tool's request starts one debounce window; the pass at its end reads the
+	// jobs and plans as they are then, so every edit in the window is covered by it.
+	var dnPass <-chan time.Time
+	var dnTimer *time.Timer
+	defer func() {
+		if dnTimer != nil {
+			dnTimer.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -298,8 +311,35 @@ func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cro
 			a.sync(ctx, reg, cs, false)
 		case <-cmpT.C:
 			a.compare(reg)
+		case <-a.dn.wake: // nil channel (no plan store) blocks forever
+			if dnPass == nil {
+				dnTimer = time.NewTimer(a.dn.debounce)
+				dnPass = dnTimer.C
+			}
+		case <-dnPass:
+			dnPass, dnTimer = nil, nil
+			a.syncDN(ctx, reg, cs)
 		}
 	}
+}
+
+// requestDNSync is what the delta-neutral plan tools call after they changed a plan's
+// cron job. It is a no-op without a running registry (triggers off, or this generation
+// stopped), in which case the tools behave exactly as before. Otherwise it only signals
+// the maintenance loop, which debounces and does the work on its own goroutine.
+func (a *alertRuntime) requestDNSync() {
+	if a == nil || a.reg.Load() == nil {
+		return
+	}
+	a.dn.requestSync()
+}
+
+// syncDN is the delta-neutral part of a migration pass alone, with the pass's timeout.
+func (a *alertRuntime) syncDN(ctx context.Context, reg *triggers.Registry, cs *cron.CronService) {
+	sctx, cancel := context.WithTimeout(ctx, alertSyncTimeout)
+	defer cancel()
+	a.dn.sync(sctx, reg, cs, a.migrateOptions())
+	a.dn.passes.Add(1)
 }
 
 // compare logs what each path did since the last comparison. Only the shadow period
@@ -327,6 +367,7 @@ func (a *alertRuntime) restoreWithoutRegistry(cs *cron.CronService) {
 		return
 	}
 	a.handOverWithoutRegistry(cs)
+	a.dn.restoreWithoutRegistry(cs) // before the early return below: the markers are not the alerts'
 	marked := false
 	for _, j := range cs.ListJobs(true) {
 		if j.State.Migrated != nil {

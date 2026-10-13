@@ -46,6 +46,23 @@ func (l *readLimiter) Allow(provider string) bool {
 	return true
 }
 
+// AllowMany takes n tokens from each provider in needs, or none at all when any of
+// them cannot spare its share: a read that needs two providers must not spend one's
+// budget and then be refused by the other.
+func (l *readLimiter) AllowMany(needs map[string]int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for p, n := range needs {
+		if l.refillLocked(p).tokens < float64(n) {
+			return false
+		}
+	}
+	for p, n := range needs {
+		l.refillLocked(p).tokens -= float64(n)
+	}
+	return true
+}
+
 // Left is the whole tokens provider has now.
 func (l *readLimiter) Left(provider string) int {
 	l.mu.Lock()

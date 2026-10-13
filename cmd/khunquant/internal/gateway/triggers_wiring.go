@@ -21,6 +21,7 @@ var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory {
 	f := alertTriggerFactories(d)
 	f[triggers.KindExternal] = triggers.ExternalFactory
 	f[triggers.KindDCADue] = dcaDueFactory(d)
+	f[triggers.KindDNHealth] = dnHealthFactory(d)
 	return f
 }
 

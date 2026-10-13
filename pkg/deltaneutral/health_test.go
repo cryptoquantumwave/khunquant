@@ -276,8 +276,8 @@ func TestHealthScoreComponents(t *testing.T) {
 			policy:             DefaultRiskPolicy(),
 			crossExchange:      false,
 			fundingRate:        0.00001,
-			minScore:           50,
-			maxScore:           75,
+			minScore:           30, // 5 funding + 15 margin + 8 delta + 10 exchange: the 25 free points are gone
+			maxScore:           50,
 		},
 		{
 			name:               "danger plan",

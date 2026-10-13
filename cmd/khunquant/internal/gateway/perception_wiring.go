@@ -117,6 +117,10 @@ type perceptionRuntime struct {
 	// (perception_finance_wiring.go).
 	finance financeRuntime
 
+	// dnPlans is the delta-neutral plan-health source, when it is among the sources
+	// (dn_wiring.go).
+	dnPlans *sources.DNPlans
+
 	// worldModel is the belief store the pipeline applies events to; nil when it
 	// could not be built (worldmodel_wiring.go).
 	worldModel *worldModelRuntime
@@ -169,6 +173,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	}
 	rt.attachFinance(d)
 	rt.attachDCADue(d)
+	rt.attachDNPlans(d) // after the triggers, whose demands say which plans to watch
 
 	engCtx, engCancel := context.WithCancel(context.Background())
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
@@ -221,7 +226,9 @@ type perceptionStatsResponse struct {
 	WorldModel *worldModelStats       `json:"worldmodel,omitempty"`
 	Market     *perceptionMarketStats `json:"market,omitempty"`
 	// Triggers is present only while the trigger registry is running.
-	Triggers *triggerStats         `json:"triggers,omitempty"`
+	Triggers *triggerStats `json:"triggers,omitempty"`
+	// DNPlans is present only while the delta-neutral plan-health source is running.
+	DNPlans  *dnPlansStats         `json:"dn_plans,omitempty"`
 	Clock    *perceptionClockStats `json:"clock,omitempty"`
 	Finance  financeStats          `json:"finance"`
 	Dispatch struct {
@@ -282,6 +289,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	out.WorldModel = rt.worldModelStats()
 	out.Market = rt.marketStats()
 	out.Triggers = rt.triggerStats()
+	out.DNPlans = rt.dnPlansStats()
 	out.Clock = rt.clockStats()
 	rt.fillFinanceStats(&out.Finance)
 

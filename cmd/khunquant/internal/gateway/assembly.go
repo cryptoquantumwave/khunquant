@@ -14,6 +14,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/devices"
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
@@ -145,6 +146,11 @@ type assemblyDeps struct {
 	// deps; the caller of buildServices never sets it.
 	Alerts *alertRuntime
 
+	// DNStore is the delta-neutral plan store (nil when it could not be opened);
+	// buildServices sets it on its own copy of the deps once the cron side has opened
+	// it, and the caller never sets it.
+	DNStore *deltaneutral.Store
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -223,8 +229,10 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		cfg.Agents.Defaults.RestrictToWorkspace,
 		execTimeout,
 		cfg,
-		s.Alerts.resolver(),
+		cronHooks{Alerts: s.Alerts.resolver(), DNSync: s.Alerts.requestDNSync},
 	)
+	d.DNStore = s.DNStore
+	s.Alerts.dn.configure(s.DNStore)
 	if err := s.CronService.Start(); err != nil {
 		return s, fmt.Errorf("error %s cron service: %w", starting, err)
 	}
@@ -302,6 +310,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Attention: the governor and the outbox that turns its decisions into
 	// messages. After notify, which it delivers through.
 	s.Attention, s.attentionRun = buildAttention(d, s.NotifyService)
+	wireDNAudit(s.Attention, d) // the audit rows of delivered delta-neutral alerts
 
 	// Perception: the sources, the manager and the pipeline engine. After
 	// attention, whose outbox it decides through and hands over to; nothing is

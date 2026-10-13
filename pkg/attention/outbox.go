@@ -169,6 +169,9 @@ type Outbox struct {
 	tickEvery time.Duration
 	ordSlots  int
 	hand      *handoffState
+
+	// obs reports each finished message to the Observer (see observer.go).
+	obs *observerState
 }
 
 // NewOutbox builds an outbox over g and d. A groupWindow of zero or less means
@@ -181,7 +184,7 @@ func NewOutbox(g Gate, d Deliverer, groupWindow time.Duration, clock func() time
 	}
 	return &Outbox{
 		g: g, d: d, window: groupWindow, clock: clock, lastDigestMin: -1,
-		tickEvery: tickEvery, ordSlots: ordinaryLaneSlots, hand: newHandoffState(),
+		tickEvery: tickEvery, ordSlots: ordinaryLaneSlots, hand: newHandoffState(), obs: newObserverState(),
 	}
 }
 
@@ -369,7 +372,7 @@ func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) 
 
 	items := make([]Item, len(group))
 	decs := make([]Decision, len(group))
-	escalate := false
+	escalate, composedOK := false, false
 	for i, b := range group {
 		items[i], decs[i] = b.item, b.dec
 		escalate = escalate || b.dec.Disposition == proactive.DispEscalate
@@ -399,6 +402,7 @@ func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) 
 				composed.SessionBody = m.SessionBody + composed.Body[len(m.Body):]
 			}
 			m = composed
+			composedOK = true
 		}
 	}
 
@@ -419,6 +423,7 @@ func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) 
 			errs = append(errs, fmt.Errorf("decision %s: %w", d.ID, err))
 		}
 	}
+	o.observe(Outcome{Message: m, Delivered: ok, Composed: composedOK, At: o.clock()})
 	return errors.Join(errs...)
 }
 
@@ -491,7 +496,9 @@ func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
 	}
 	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bookkeepTimeout)
 	defer cancel()
-	return o.g.CompleteDigest(bctx, dg, Delivery{Delivered: ok, InterventionID: m.InterventionID})
+	err := o.g.CompleteDigest(bctx, dg, Delivery{Delivered: ok, InterventionID: m.InterventionID})
+	o.observe(Outcome{Message: m, Delivered: ok, At: o.clock()})
+	return err
 }
 
 // renderGroup renders ranked items as one message. One item keeps its own

@@ -34,15 +34,22 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+const workerFrame = "orderfeed.(*feed).run"
+
+// reset clears the publisher and returns only once no worker of an earlier test is
+// left. SetPublisher(nil) stops a worker but does not wait for it, so a test that
+// counts workers would otherwise take a base that still holds a worker about to end,
+// and wait for a count that never comes back.
 func reset(t *testing.T) {
 	t.Helper()
 	SetPublisher(nil)
+	waitFor(t, "the previous test's worker to end", func() bool { return goroutinesIn(workerFrame) == 0 })
 	t.Cleanup(func() { SetPublisher(nil) })
 }
 
 func TestPublish_NoPublisherIsANoOpAndStartsNothing(t *testing.T) {
 	reset(t)
-	before := goroutinesIn("orderfeed.(*feed).run")
+	before := goroutinesIn(workerFrame)
 	s := ReadStats()
 	for i := 0; i < 100; i++ {
 		Publish(context.Background(), OrderEvent{Symbol: "BTC/USDT"})
@@ -50,7 +57,7 @@ func TestPublish_NoPublisherIsANoOpAndStartsNothing(t *testing.T) {
 	if after := ReadStats(); after != s {
 		t.Fatalf("counters moved with no publisher: %+v -> %+v", s, after)
 	}
-	if goroutinesIn("orderfeed.(*feed).run") != before {
+	if goroutinesIn(workerFrame) != before {
 		t.Fatal("a goroutine runs with no publisher set")
 	}
 }
@@ -155,11 +162,11 @@ func TestSetPublisher_ClearOnlyRemovesItsOwn(t *testing.T) {
 
 func TestSetPublisher_NilStopsTheGoroutine(t *testing.T) {
 	reset(t)
-	base := goroutinesIn("orderfeed.(*feed).run")
+	base := goroutinesIn(workerFrame)
 	SetPublisher(func(OrderEvent) {})
-	waitFor(t, "the worker", func() bool { return goroutinesIn("orderfeed.(*feed).run") == base+1 })
+	waitFor(t, "the worker", func() bool { return goroutinesIn(workerFrame) == base+1 })
 	SetPublisher(nil)
-	waitFor(t, "the worker to end", func() bool { return goroutinesIn("orderfeed.(*feed).run") == base })
+	waitFor(t, "the worker to end", func() bool { return goroutinesIn(workerFrame) == base })
 }
 
 func TestOrderFeed_ImportBoundary(t *testing.T) {

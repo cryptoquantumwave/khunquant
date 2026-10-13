@@ -206,7 +206,7 @@ func (p phase) sayf(format string, args ...any) {
 // ctx only bounds construction. Long-lived services (channels, devices) run on
 // context.Background() on purpose: they must outlive this call.
 func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
-	s := &gatewayServices{perceptionLive: newPerceptionHolder()}
+	s := &gatewayServices{perceptionLive: newPerceptionHolder(), journalLive: newJournalHolder()}
 	if prev := d.Prev; prev != nil {
 		s.SandboxServer = prev.SandboxServer
 		s.SandboxToken = prev.SandboxToken
@@ -343,6 +343,10 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// builds the registry, and after the cron service started.
 	s.Alerts.attach(d, s.CronService, s.Perception)
 
+	// The workflow engine: built only when a definition is registered (none is
+	// today), so a running gateway gains no goroutine and no table.
+	s.journalLive.Store(buildJournal(d))
+
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
 	// run is scheduled. The run time is kept in the shared state manager, so a
@@ -438,7 +442,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
-	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken, perceptionStatsFn(s.perceptionLive))
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
+		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
 	registerTriggerAPIFor(mux, s, d)
 
 	if cfg.Debug.DevMCP.Enabled {
@@ -456,7 +461,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: heartbeat, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
+// resources. Order: heartbeat, workflow engine, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
 // notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
@@ -469,6 +474,14 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// and waits for it.
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
+	}
+
+	// The workflow engine next, while channels, notify and the exchanges are still up:
+	// a step in flight may be placing an order or sending a receipt, and it is let to
+	// finish (bounded) before anything it uses goes away.
+	if s.journalLive != nil {
+		s.journalLive.Load().stop()
+		s.journalLive.Store(nil)
 	}
 
 	// Then perception, before the outbox: the sources stop first so that nothing

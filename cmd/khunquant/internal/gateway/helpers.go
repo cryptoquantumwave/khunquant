@@ -79,6 +79,7 @@ type gatewayServices struct {
 	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
 	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
 	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
+	journalLive      *atomic.Pointer[journalRuntime]    // the workflow engine, nil until a definition is registered; what the stats route reads and stopServices stops
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

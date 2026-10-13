@@ -155,8 +155,12 @@ const (
 	KindApprovalDecided Kind = "approval.decided"
 	// KindApprovalExpired is emitted when an approval proposal expires.
 	KindApprovalExpired Kind = "approval.expired"
-	// KindJournalStep is emitted when a workflow journal step is recorded.
+	// KindJournalStep is emitted when a workflow journal step starts, finishes, fails
+	// or is scheduled to retry. It carries ids, names and numbers only.
 	KindJournalStep Kind = "journal.step"
+	// KindJournalWorkflow is emitted when a workflow is started and when it reaches
+	// a terminal status (succeeded, failed or cancelled). Ids, names and numbers only.
+	KindJournalWorkflow Kind = "journal.workflow"
 	// KindControlCommand is emitted when a control command is received.
 	KindControlCommand Kind = "control.command"
 )
@@ -231,6 +235,7 @@ var knownKinds = []Kind{
 	KindApprovalDecided,
 	KindApprovalExpired,
 	KindJournalStep,
+	KindJournalWorkflow,
 	KindControlCommand,
 }
 

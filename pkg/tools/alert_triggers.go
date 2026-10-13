@@ -64,7 +64,7 @@ func anyTriggers(f AlertTriggersFunc) AlertTriggers {
 // It is a change in behaviour and is not to be missed.
 const liveDeliveryNote = "  Delivery: to you, the owner, privately. It will NOT be sent to the chat where it was created " +
 	"(the channel and chat_id arguments are ignored).\n" +
-	"  Quiet hours: during your quiet hours the alert is held for the daily digest, not sent at once."
+	"  Quiet hours: an alert you set is sent at once, even in your quiet hours."
 
 func fmtAlertNumber(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 

@@ -59,7 +59,7 @@ import (
 
 // OriginPrefix starts the Origin of every spec made from a cron job; the job's ID
 // follows it.
-const OriginPrefix = "migration:cron:"
+const OriginPrefix = triggers.MigratedOriginPrefix
 
 // Mode says what a Sync may do.
 type Mode int

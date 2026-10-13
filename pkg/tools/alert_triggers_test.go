@@ -89,6 +89,9 @@ func TestSetPriceAlertTool_WritesRegistryWhenLive(t *testing.T) {
 	if s.Kind != triggers.KindPriceCross || s.Mode != triggers.ModeLive || s.Origin != "tool:set_price_alert" {
 		t.Fatalf("spec = %+v", s)
 	}
+	if !triggers.OwnerAlertSpec(s.Kind, s.Origin) {
+		t.Fatalf("the spec the tool wrote is not an owner's alert (its candidates would wait for the digest in quiet hours): %+v", s)
+	}
 	var p triggers.PriceCrossParams
 	if err := json.Unmarshal(s.Params, &p); err != nil {
 		t.Fatal(err)
@@ -242,6 +245,9 @@ func TestSetIndicatorAlertTool_WritesRegistryWhenLive(t *testing.T) {
 	if s.Kind != triggers.KindIndicatorCross || s.Origin != "tool:set_indicator_alert" || s.Mode != triggers.ModeLive ||
 		p.Indicator != "rsi" || p.Period != 14 || p.Timeframe != "4h" || p.Direction != "above" || p.CooldownMin != 120 {
 		t.Fatalf("spec = %+v params = %+v", s, p)
+	}
+	if !triggers.OwnerAlertSpec(s.Kind, s.Origin) {
+		t.Fatalf("the spec the tool wrote is not an owner's alert: %+v", s)
 	}
 	if !strings.Contains(res.ForLLM, "closed candles") || !strings.Contains(res.ForLLM, "owner") {
 		t.Fatalf("result = %q", res.ForLLM)

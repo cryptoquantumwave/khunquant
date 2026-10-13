@@ -104,7 +104,17 @@ func (r *Registry) evaluateOne(ctx context.Context, e *entry, g int, v worldmode
 	}
 	p.turnOff = st.TurnOff && eff == 2
 	out := make([]proactive.Candidate, 0, len(cands))
+	ownerAlert := OwnerAlertSpec(spec.Kind, spec.Origin)
 	for _, c := range cands {
+		if c.OwnerRequested && !ownerAlert {
+			// Only an alert the owner set may break quiet hours. The candidate is kept
+			// (a refused one would fail the evaluation and count against the spec) but
+			// loses the mark, so the worst a wrong mark costs is a digest entry.
+			c.OwnerRequested = false
+			r.c.ownerMarkCleared.Add(1)
+			r.warn("mark:"+spec.ID, "A trigger returned a candidate marked as the owner's own alert, but its spec is not one; the mark was removed",
+				map[string]any{"trigger_id": e.tid, "kind": safeLabel(spec.Kind)})
+		}
 		c.ID = r.newID()
 		c.TriggerID = e.tid
 		c.IntentID = spec.IntentID

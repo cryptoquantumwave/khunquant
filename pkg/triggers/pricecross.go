@@ -83,7 +83,7 @@ func PriceCrossFactory(cfg CrossConfig) Factory {
 			return nil, err
 		}
 		return &priceCross{
-			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg,
+			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg, owner: OwnerAlertSpec(spec.Kind, spec.Origin),
 			line: newLine(p.Direction, p.Threshold, p.Threshold*p.hysteresisPct()/100, cooldownOrDefault(p.CooldownMin), p.fireIfAlready(), p.Recurring),
 		}, nil
 	}
@@ -106,6 +106,9 @@ type priceCross struct {
 	p    PriceCrossParams
 	cfg  CrossConfig
 	line line
+	// owner: the spec is an alert the owner set (OwnerAlertSpec); its candidates are
+	// marked OwnerRequested.
+	owner bool
 }
 
 func (t *priceCross) ID() string { return t.id }
@@ -168,10 +171,12 @@ func (t *priceCross) candidate(price float64, trust proactive.Trust, v worldmode
 		"price": price, "threshold": t.p.Threshold, "direction": t.p.Direction,
 		"provider": t.p.Provider, "symbol": t.p.Symbol, "message": msg,
 	}
-	return crossCandidate(
+	c := crossCandidate(
 		PriceCrossKey(t.p.Provider, t.p.Symbol, t.p.Direction, thr),
 		t.p.Symbol,
 		crossTitle(thai, t.p.Symbol, t.p.Direction == DirAbove, thr, now),
 		crossDetail(thai, t.p.Provider, thr, now), msg,
 		ev, trust, t.p.CooldownMin, v.Now())
+	c.OwnerRequested = t.owner
+	return c
 }

@@ -8,6 +8,7 @@ type counters struct {
 	autoDisabled, discarded, turnedOff          atomic.Uint64
 	stateSaved, saveFailures                    atomic.Uint64
 	stateLoadFailures, stateDiscarded, unusable atomic.Uint64
+	ownerMarkCleared                            atomic.Uint64
 }
 
 // Stats are the registry's counters and gauges: counts only, no ID, no text.
@@ -26,6 +27,7 @@ type Stats struct {
 	StateLoadFailures uint64
 	StateDiscarded    uint64 // saved states that were damaged and dropped
 	Unusable          uint64 // stored specs this build cannot run (unknown kind, refused parameters)
+	OwnerMarkCleared  uint64 // candidates that came back marked OwnerRequested from a spec that is not an owner's alert; the mark was removed
 
 	Specs int // gauge: specs held, including unusable ones
 }
@@ -38,7 +40,7 @@ func (r *Registry) Stats() Stats {
 		Panics: c.panics.Load(), InvalidCandidates: c.invalidCandidates.Load(), InvalidState: c.invalidState.Load(),
 		AutoDisabled: c.autoDisabled.Load(), TurnedOff: c.turnedOff.Load(), Discarded: c.discarded.Load(), StateSaved: c.stateSaved.Load(),
 		SaveFailures: c.saveFailures.Load(), StateLoadFailures: c.stateLoadFailures.Load(),
-		StateDiscarded: c.stateDiscarded.Load(), Unusable: c.unusable.Load(),
+		StateDiscarded: c.stateDiscarded.Load(), Unusable: c.unusable.Load(), OwnerMarkCleared: c.ownerMarkCleared.Load(),
 		Specs: len(r.snap.Load().ordered),
 	}
 }

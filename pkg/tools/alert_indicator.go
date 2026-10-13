@@ -234,7 +234,7 @@ func (t *SetIndicatorAlertTool) createTriggerAlert(ctx context.Context, at Alert
 	}
 	spec, err := at.Add(ctx, triggers.Spec{
 		Kind: triggers.KindIndicatorCross, Params: p.JSON(), Mode: triggers.ModeLive,
-		Origin: alertOriginPrefix + NameSetIndicatorAlert,
+		Origin: triggers.OriginSetIndicatorAlert,
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("creating alert: %v", err))

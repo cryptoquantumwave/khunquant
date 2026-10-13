@@ -180,7 +180,7 @@ func (t *SetPriceAlertTool) createTriggerAlert(ctx context.Context, at AlertTrig
 		return ErrorResult(fmt.Sprintf("invalid price alert: %v", err))
 	}
 	spec, err := at.Add(ctx, triggers.Spec{
-		Kind: triggers.KindPriceCross, Params: p.JSON(), Mode: triggers.ModeLive, Origin: alertOriginPrefix + NameSetPriceAlert,
+		Kind: triggers.KindPriceCross, Params: p.JSON(), Mode: triggers.ModeLive, Origin: triggers.OriginSetPriceAlert,
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("creating alert: %v", err))

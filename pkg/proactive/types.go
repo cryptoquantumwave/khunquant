@@ -311,6 +311,14 @@ type Candidate struct {
 	DedupWindow time.Duration // 0 = attention default (MR-208)
 	At          time.Time
 	Shadow      bool // produced by a shadow-mode trigger
+	// OwnerRequested says the owner asked for exactly this: the candidate is the firing
+	// of an alert the owner set (a price or an indicator crossing made by the alert
+	// tools, or migrated from the owner's own alert job). Attention does not hold it
+	// for the digest in quiet hours; every other rule applies to it as to any other
+	// candidate. It is a mark set by code and never text: it is not given to a model,
+	// no model decision can set it, and the trigger registry clears it from any
+	// candidate whose spec is not one of those alerts (see triggers.OwnerAlertSpec).
+	OwnerRequested bool
 	// ForcedSkills are skills the turn that composes this candidate's message
 	// should carry in full (names only, a handful at most; the consumer caps the
 	// list and the length of each name). Empty for most triggers.

@@ -12,7 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
-func TestLiveCreateResultSaysQuietHoursHoldAlertsForTheDigest(t *testing.T) {
+func TestLiveCreateResultSaysAnAlertYouSetBreaksQuietHours(t *testing.T) {
 	reg := &fakeAlertTriggers{live: true}
 	for name, tool := range map[string]interface {
 		Execute(ctx context.Context, args map[string]any) *ToolResult
@@ -26,8 +26,9 @@ func TestLiveCreateResultSaysQuietHoursHoldAlertsForTheDigest(t *testing.T) {
 		}
 		res := tool.Execute(groupCtx, args)
 		for _, out := range []string{res.ForLLM, res.ForUser} {
-			if !strings.Contains(out, "quiet hours") || !strings.Contains(out, "daily digest, not sent at once") {
-				t.Fatalf("%s: the result does not say that quiet hours hold the alert:\n%s", name, out)
+			if !strings.Contains(out, "Quiet hours") || !strings.Contains(out, "sent at once, even in your quiet hours") ||
+				strings.Contains(out, "daily digest") {
+				t.Fatalf("%s: the result does not say that the alert is sent in quiet hours:\n%s", name, out)
 			}
 		}
 	}

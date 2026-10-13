@@ -1,6 +1,9 @@
 package snapshot
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"sort"
 	"strings"
 )
@@ -63,6 +66,26 @@ func UnpricedFromNote(note string) []string {
 // an automatic note. A row that carries the label with any other note (one saved
 // before the label was reserved) is not.
 func IsAuto(label, note string) bool { return label == LabelAuto && IsAutoNote(note) }
+
+// LatestAuto returns the most recent automatic snapshot with its positions, or nil
+// when there is none. It is the one read that returns automatic rows without the
+// caller naming their label: QuerySnapshots and SnapshotSummary keep hiding them.
+// It exists for the one caller that decides for itself whether an automatic row is
+// newer than the owner's own (the portfolio section of a chat turn's prompt).
+func (s *Store) LatestAuto(ctx context.Context) (*Snapshot, error) {
+	cond, args := autoSQL("")
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM snapshots WHERE `+cond+` ORDER BY taken_at DESC, id DESC LIMIT 1`, args...,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetSnapshot(ctx, id)
+}
 
 // autoSQL is the SQL condition that selects automatic snapshots, for a table
 // alias such as "s", and its arguments.

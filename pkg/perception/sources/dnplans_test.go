@@ -356,7 +356,11 @@ func TestDNPlans_FailingCheckBacksOffAndRecovers(t *testing.T) {
 	r := newDNRig(t, nil, dnPlan(1, "5m"))
 	r.checker.err = errors.New("boom")
 	advance := r.run(t)
-	waitFor(t, "the first failure", func() bool { return r.checker.count() == 1 })
+	// The checker is called before the failure is recorded in health, so wait for
+	// the streak, which is what is asserted next.
+	waitFor(t, "the first failure", func() bool {
+		return r.checker.count() == 1 && r.src.Health().ConsecutiveErrors == 1
+	})
 	if len(r.out.events()) != 0 || r.src.Health().ConsecutiveErrors != 1 {
 		t.Fatalf("events %d, health %+v", len(r.out.events()), r.src.Health())
 	}

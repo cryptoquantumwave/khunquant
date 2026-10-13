@@ -562,7 +562,9 @@ func TestNotify_NoCrossPackageCallsInTx(t *testing.T) {
 func TestDeliver_WriteBackFailureDoesNotLogOwnerID(t *testing.T) {
 	var buf syncBuffer
 	logger.SetAdditionalWriter(&buf)
-	defer logger.SetAdditionalWriter(nil)
+	// Registered before the fixture, so it runs after the fixture's Close: the
+	// write-back worker has stopped logging by the time the writer is removed.
+	t.Cleanup(func() { logger.SetAdditionalWriter(nil) })
 
 	f := newFixture(t, ownerConfig(true))
 	f.appender.Err = fmt.Errorf("rename /ws/sessions/agent_main_telegram_direct_%s.json: no space left", ownerChat)
@@ -572,8 +574,16 @@ func TestDeliver_WriteBackFailureDoesNotLogOwnerID(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "failed write-back", func() bool { return f.svc.FailedWriteBacks() == 1 })
+	// The worker counts the failure before it logs it. Close returns only once
+	// the worker has finished, so everything it logs is in buf after this.
+	if err := f.svc.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	out := buf.String()
+	if !strings.Contains(out, "Session write-back failed") {
+		t.Fatalf("the failure was not logged; the checks below would be vacuous:\n%s", out)
+	}
 	for _, secret := range []string{ownerChat, "secret-body", "secret-dedup"} {
 		if strings.Contains(out, secret) {
 			t.Fatalf("log output contains %q:\n%s", secret, out)

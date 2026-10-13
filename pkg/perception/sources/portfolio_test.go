@@ -159,7 +159,11 @@ func kinds(evs []events.Event) []events.Kind {
 func TestPortfolioSource_PartialNotSaved(t *testing.T) {
 	r := newPortfolioRig(t, ok(partialResult()), ok(completeResult()))
 
-	waitFor(t, "the degraded signal", func() bool { return len(r.out.events()) == 1 })
+	// degraded emits the signal before it records the failure in health, so wait
+	// for the streak too: it is what the health assertion below reads.
+	waitFor(t, "the degraded signal", func() bool {
+		return len(r.out.events()) == 1 && r.src.Health().ConsecutiveErrors == 1
+	})
 	evs := r.out.events()
 	if evs[0].Kind != events.KindPerceptionSourceHealth {
 		t.Fatalf("first event = %s, want the degraded signal, not a snapshot", evs[0].Kind)

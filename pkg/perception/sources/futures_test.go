@@ -299,7 +299,11 @@ func TestFuturesSource_DropsASampleWithABadNumber(t *testing.T) {
 			mut(&broken)
 			fp := &fakeFutures{positions: []ccxt.Position{good, broken}}
 			r := newFuturesRig(t, oneAccount(fp))
-			waitFor(t, "the drop", func() bool { return r.src.Stats().Dropped == 1 })
+			// poll counts the drop before it records the failure in health, so
+			// wait for the streak, the last thing the failed poll writes.
+			waitFor(t, "the drop", func() bool {
+				return r.src.Stats().Dropped == 1 && r.src.Health().ConsecutiveErrors == 1
+			})
 			if n := len(r.out.events()); n != 0 {
 				t.Fatalf("%d events emitted: a sample that omits a position reads as a close", n)
 			}

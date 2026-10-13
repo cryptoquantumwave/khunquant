@@ -18,13 +18,15 @@ func TestTemplateV2_Contract(t *testing.T) {
 	if !IsV2Template(v2) || IsV1Template(v2) {
 		t.Fatalf("v2 template: IsV2=%v IsV1=%v", IsV2Template(v2), IsV1Template(v2))
 	}
-	for _, want := range []string{"`respond_proactive`", "`dedup_key`", "`decision: silent`", userTasksMarker} {
+	for _, want := range []string{
+		"`respond_proactive`", "`dedup_key`", "`decision: silent`", "`message`", "legacy heartbeat", userTasksMarker,
+	} {
 		if !strings.Contains(v2, want) {
 			t.Errorf("v2 template lacks %q", want)
 		}
 	}
 	for _, banned := range []string{
-		"`message`", "spawn", "ledger", "Ledger", "MEMORY.md", "append_file", "edit_file",
+		"spawn", "ledger", "Ledger", "MEMORY.md", "append_file", "edit_file",
 		"HEARTBEAT_OK", "Quiet hours", "Rate limit", "How delivery actually works",
 	} {
 		if strings.Contains(v2, banned) {
@@ -53,9 +55,9 @@ func TestV1Template_IsRecognised(t *testing.T) {
 	}
 }
 
-// A missing HEARTBEAT.md is recreated to match the contract: a governed install
-// must never be given v1 instructions, and neither default may start paid turns.
-func TestDefaultTemplate_MatchesTheContract(t *testing.T) {
+// A missing HEARTBEAT.md is recreated as the idle v2 template in every mode, and
+// neither default may start paid turns.
+func TestDefaultTemplate_IsV2InEveryMode(t *testing.T) {
 	for _, c := range []Contract{ContractLegacy, ContractGoverned} {
 		ws := t.TempDir()
 		hs := NewHeartbeatService(ws, 30, true, nil)
@@ -67,20 +69,39 @@ func TestDefaultTemplate_MatchesTheContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c, err)
 		}
-		got := string(data)
-		switch c {
-		case ContractGoverned:
-			if !IsV2Template(got) || IsV1Template(got) || strings.Contains(got, "spawn") {
-				t.Errorf("governed default is not v2:\n%s", got)
-			}
-		case ContractLegacy:
-			if got != legacyDefaultTemplate || IsV2Template(got) || !strings.Contains(got, "use the spawn tool") {
-				t.Errorf("legacy default changed:\n%s", got)
-			}
+		if got := string(data); got != idleTemplateV2() || !IsV2Template(got) || IsV1Template(got) ||
+			strings.Contains(got, "spawn") {
+			t.Errorf("%s: the default is not the idle v2 template:\n%s", c, got)
 		}
 		if prompt := hs.buildPrompt(); prompt != "" {
 			t.Errorf("%s: the default template must stay idle, got a prompt", c)
 		}
+	}
+}
+
+// workspace/HEARTBEAT.md is what onboarding copies to a new install. It is the
+// v2 template, byte for byte: there is one text, and this holds the copy to it.
+func TestWorkspaceHeartbeatFile_IsTheV2Template(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found above the test directory")
+		}
+		dir = parent
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "workspace", "HEARTBEAT.md"))
+	if err != nil || len(got) == 0 {
+		t.Fatalf("reading workspace/HEARTBEAT.md: %v (%d bytes)", err, len(got))
+	}
+	if string(got) != TemplateV2() {
+		t.Fatal("workspace/HEARTBEAT.md differs from pkg/heartbeat/template_v2.md: copy the template over it")
 	}
 }
 
@@ -131,45 +152,51 @@ func TestTemplateAdvisory(t *testing.T) {
 		content  string
 		contract Contract
 		want     string // substring of the advisory; "" = none
+		warn     bool
 	}{
-		"governed + v1":      {v1, ContractGoverned, "khunquant heartbeat upgrade-template"},
-		"governed + v1 says": {v1, ContractGoverned, "does not have"},
-		"governed + v2":      {v2, ContractGoverned, ""},
-		"governed + custom":  {"- my own tasks\n", ContractGoverned, ""},
-		"legacy + v1":        {v1, ContractLegacy, ""},
-		"legacy + custom":    {"- my own tasks\n", ContractLegacy, ""},
-		"legacy + v2":        {v2, ContractLegacy, "heartbeats run and deliver nothing"},
-		"legacy + v2 fix":    {v2, ContractLegacy, "HEARTBEAT.md.v1.bak"},
-		"legacy + v2 fresh":  {v2, ContractLegacy, "delete HEARTBEAT.md to get the default back"},
+		"governed + v1":      {v1, ContractGoverned, "khunquant heartbeat upgrade-template", true},
+		"governed + v1 says": {v1, ContractGoverned, "does not have", true},
+		"governed + v2":      {v2, ContractGoverned, "", false},
+		"governed + custom":  {"- my own tasks\n", ContractGoverned, "", false},
+		"legacy + v1":        {v1, ContractLegacy, "khunquant heartbeat upgrade-template", false},
+		"legacy + v1 keeps":  {v1, ContractLegacy, "keeps working", false},
+		"legacy + custom":    {"- my own tasks\n", ContractLegacy, "", false},
+		"legacy + v2":        {v2, ContractLegacy, "", false},
 	} {
-		got := TemplateAdvisory(tc.content, tc.contract)
+		got, warn := TemplateAdvisory(tc.content, tc.contract)
 		if tc.want == "" && got != "" {
 			t.Errorf("%s: unexpected advisory %q", name, got)
 		}
-		if tc.want != "" && !strings.Contains(got, tc.want) {
-			t.Errorf("%s: advisory %q lacks %q", name, got, tc.want)
+		if tc.want != "" && (!strings.Contains(got, tc.want) || warn != tc.warn) {
+			t.Errorf("%s: advisory %q (warn=%v) lacks %q or has the wrong level (want warn=%v)",
+				name, got, warn, tc.want, tc.warn)
 		}
 	}
 }
 
-// Start logs the advisory once, and never changes the file.
-func TestStart_WarnsOncePerStartAboutAMismatchedTemplate(t *testing.T) {
-	var warned []string
-	prev := warnLog
+// Start logs the advisory once - a warning for a governed heartbeat on a v1 file,
+// a notice for a legacy one, nothing for a v2 file - and never changes the file.
+func TestStart_AdvisoryOncePerStart(t *testing.T) {
+	var warned, noticed []string
+	prevW, prevI := warnLog, infoLog
 	warnLog = func(msg string, _ map[string]any) { warned = append(warned, msg) }
-	t.Cleanup(func() { warnLog = prev })
+	infoLog = func(msg string, _ map[string]any) { noticed = append(noticed, msg) }
+	t.Cleanup(func() { warnLog, infoLog = prevW, prevI })
 
+	const v1 = "- t\n\nHow delivery actually works\n"
 	for name, tc := range map[string]struct {
 		content  string
 		contract Contract
 		warns    int
+		notices  int
 	}{
-		"governed + v1 file": {"- t\n\nHow delivery actually works\n", ContractGoverned, 1},
-		"legacy + v2 file":   {TemplateV2(), ContractLegacy, 1},
-		"governed + v2 file": {TemplateV2(), ContractGoverned, 0},
-		"legacy + v1 file":   {"- t\n\nHow delivery actually works\n", ContractLegacy, 0},
+		"governed + v1 file": {v1, ContractGoverned, 1, 0},
+		"legacy + v1 file":   {v1, ContractLegacy, 0, 1},
+		"governed + v2 file": {TemplateV2(), ContractGoverned, 0, 0},
+		"legacy + v2 file":   {TemplateV2(), ContractLegacy, 0, 0},
+		"legacy + own file":  {"- my tasks\n", ContractLegacy, 0, 0},
 	} {
-		warned = nil
+		warned, noticed = nil, nil
 		ws := t.TempDir()
 		path := filepath.Join(ws, "HEARTBEAT.md")
 		if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
@@ -181,25 +208,27 @@ func TestStart_WarnsOncePerStartAboutAMismatchedTemplate(t *testing.T) {
 		if err := hs.Start(); err != nil {
 			t.Fatal(err)
 		}
-		if err := hs.Start(); err != nil { // already running: no second warning
+		if err := hs.Start(); err != nil { // already running: no second line
 			t.Fatal(err)
 		}
 		hs.Stop()
-		if len(warned) != tc.warns {
-			t.Errorf("%s: %d warnings %q, want %d", name, len(warned), warned, tc.warns)
+		if len(warned) != tc.warns || len(noticed) != tc.notices {
+			t.Errorf("%s: %d warnings %q and %d notices %q, want %d and %d",
+				name, len(warned), warned, len(noticed), noticed, tc.warns, tc.notices)
 		}
 		if got, _ := os.ReadFile(path); string(got) != tc.content {
 			t.Errorf("%s: the user's HEARTBEAT.md was changed", name)
 		}
 
-		// A restart or reload is a new Start, and warns again.
-		warned = nil
+		// A restart or reload is a new Start, and says it again.
+		warned, noticed = nil, nil
 		if err := hs.Start(); err != nil {
 			t.Fatal(err)
 		}
 		hs.Stop()
-		if len(warned) != tc.warns {
-			t.Errorf("%s: after a restart %d warnings, want %d", name, len(warned), tc.warns)
+		if len(warned) != tc.warns || len(noticed) != tc.notices {
+			t.Errorf("%s: after a restart %d warnings and %d notices, want %d and %d",
+				name, len(warned), len(noticed), tc.warns, tc.notices)
 		}
 	}
 }

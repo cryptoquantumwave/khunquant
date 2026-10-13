@@ -129,10 +129,10 @@ func TestProactiveTurn_SweepHeartbeatFirstCallWithinBudget(t *testing.T) {
 	}
 }
 
-// The default workspace's own HEARTBEAT.md is the long v1 file (it is about 9 KB by
-// itself, against 5 KB for the v2 template), so a governed heartbeat on it is already
-// near the budget. What the sweep adds on top of whatever file it runs on is bounded
-// by its caps, and that is what is checked here.
+// The default workspace's own HEARTBEAT.md is the v2 template (about 5 KB; an install
+// that still has the v1 file has one of about 9 KB, which is already near the budget).
+// What the sweep adds on top of whatever file it runs on is bounded by its caps, and
+// that is what is checked here.
 func TestProactiveTurn_SweepAddsABoundedAmountToAnyHeartbeatFile(t *testing.T) {
 	_, ws := defaultWorkspaceLoop(t, script())
 	v1, err := os.ReadFile(filepath.Join(ws, "HEARTBEAT.md"))

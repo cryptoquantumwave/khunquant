@@ -249,22 +249,58 @@ func (o *Outbox) Stats() OutboxStats {
 //
 // Delivery needs Run: without it queued messages wait. Only Run's workers
 // deliver them, and Run's final flush delivers what is still queued.
+//
+// Decisions that belong together (the candidates of one event) must go through
+// AcceptAll: Accept one at a time lets the protective worker deliver the first
+// before the second arrives, and one breach reaches the owner as two messages.
 func (o *Outbox) Accept(d Decision, it Item) Handoff {
-	if d.Disposition != proactive.DispNotify && d.Disposition != proactive.DispEscalate {
-		return HandoffIgnored
+	return o.acceptAll([]Decision{d}, []Item{it})[0]
+}
+
+// AcceptAll is Accept for the decisions of one event, handed over together: all of
+// them are taken under one hold of the outbox's lock, so a delivery worker sees
+// either none of them or all of them. Protective Criticals of the same event that
+// are delivered at once therefore go out as one message (one breach, one message),
+// and the rules for each decision are Accept's: the result holds what Accept would
+// have returned for ds[i], in order. Nothing in it waits or does I/O.
+func (o *Outbox) AcceptAll(ds []Decision) []Handoff {
+	its := make([]Item, len(ds))
+	for i, d := range ds {
+		its[i] = Item{Candidate: d.Candidate}
 	}
-	it.Candidate = d.Candidate
+	return o.acceptAll(ds, its)
+}
+
+// acceptAll hands over ds[i] with its[i] under a single hold of o.mu.
+func (o *Outbox) acceptAll(ds []Decision, its []Item) []Handoff {
 	h := o.hand
 	now := o.clock()
+	res := make([]Handoff, len(ds))
 
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for i, d := range ds {
+		if d.Disposition != proactive.DispNotify && d.Disposition != proactive.DispEscalate {
+			res[i] = HandoffIgnored
+			continue
+		}
+		if o.closed {
+			h.rejectedClosed.Add(1)
+			res[i] = HandoffClosed
+			continue
+		}
+		it := its[i]
+		it.Candidate = d.Candidate
+		res[i] = o.acceptLocked(d, it, now)
+	}
+	return res
+}
+
+// acceptLocked buffers one notify or escalate decision, queueing what is due. The
+// caller holds o.mu and has checked that the outbox is open.
+func (o *Outbox) acceptLocked(d Decision, it Item, now time.Time) Handoff {
 	var expired []buffered
 	result := HandoffBuffered
-	o.mu.Lock()
-	if o.closed {
-		o.mu.Unlock()
-		h.rejectedClosed.Add(1)
-		return HandoffClosed
-	}
 	if len(o.buf) > 0 && o.window > 0 && !now.Before(o.windowStart.Add(o.window)) {
 		expired = o.takeLocked() // the window closed before a tick got to it
 	}
@@ -284,7 +320,6 @@ func (o *Outbox) Accept(d Decision, it Item) Handoff {
 	if expired != nil {
 		o.pushOrdinaryLocked(expired)
 	}
-	o.mu.Unlock()
 	return result
 }
 

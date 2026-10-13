@@ -59,6 +59,7 @@ type dnPipeline struct {
 	clk      *perceptiontest.Clock
 	eng      *engine.Engine
 	ob       *attention.Outbox
+	disp     *engine.DefaultDispatcher
 	phone    *recordingDeliverer
 	composer *countingComposer
 	outcomes atomic.Int64
@@ -110,9 +111,10 @@ func newDNPipeline(t *testing.T, params triggers.DNHealthParams) *dnPipeline {
 	runDone := make(chan struct{})
 	go func() { defer close(runDone); p.ob.Run(runCtx) }()
 
+	p.disp = engine.NewDefaultDispatcher(p.ob)
 	p.eng = engine.New(engine.Options{
 		WorldModel: worldModelStage{s: store}, Evaluator: triggerStage{r: reg},
-		Attention: p.ob, Dispatcher: engine.NewDefaultDispatcher(p.ob), Clock: p.clk,
+		Attention: p.ob, Dispatcher: p.disp, Clock: p.clk,
 	})
 	engCtx, engStop := context.WithCancel(ctx)
 	engDone := make(chan struct{})
@@ -150,6 +152,23 @@ func (p *dnPipeline) settle(want int) {
 	})
 }
 
+// drain waits until every decision the engine handed to the outbox has been delivered
+// (or deferred, or superseded), so that a count of the phone's messages taken after it
+// cannot be overtaken by one still on its way: a report is processed, and so handed
+// over, before report returns, which makes this a wait on a condition and not on time.
+func (p *dnPipeline) drain() {
+	p.t.Helper()
+	waitUntil(p.t, "every handed-over decision to be delivered", func() bool {
+		ds, st := p.disp.Stats(), p.ob.Stats()
+		delivered := uint64(0)
+		for _, m := range p.phone.messages() {
+			delivered += uint64(len(m.Decisions))
+		}
+		return delivered+st.Superseded+st.Deferred >= ds.Buffered+ds.Queued &&
+			p.outcomes.Load() >= int64(len(p.phone.messages()))
+	})
+}
+
 func marginCritical() planhealth.Health {
 	return planhealth.Health{
 		Score: 31, BreachCodes: []string{planhealth.CodeMarginCritical, planhealth.CodeLiquidationDistanceLow},
@@ -177,7 +196,7 @@ func TestDNTrigger_SingleMessagePerBreach(t *testing.T) {
 			p.clk.Advance(5 * time.Minute)
 		}
 	}
-	time.Sleep(50 * time.Millisecond) // nothing late may arrive
+	p.drain() // nothing late may arrive
 
 	msgs := p.phone.messages()
 	if len(msgs) > 5 {
@@ -222,13 +241,27 @@ func TestDNCritical_RepeatEvery30MinNotEveryTick(t *testing.T) {
 			p.clk.Advance(5 * time.Minute)
 		}
 	}
-	time.Sleep(50 * time.Millisecond)
+	p.drain()
 	if n := len(p.phone.messages()); n != 5 {
 		t.Fatalf("%d messages, want 5", n)
 	}
 	for i, d := range times {
 		if d != time.Duration(i)*30*time.Minute {
 			t.Fatalf("message times %v", times)
+		}
+	}
+	// What was decided, and when: each message is the one breach (both codes) of the
+	// report made at its minute, decided at that minute and not a tick later. A
+	// message that were split, or recorded after the clock had moved on, would carry
+	// one code and a later time, and move that code's next repeat with it.
+	for i, m := range p.phone.messages() {
+		if len(m.Decisions) != 2 {
+			t.Fatalf("message %d carries %d decisions, want both codes of the one breach", i, len(m.Decisions))
+		}
+		for _, dec := range m.Decisions {
+			if at := dec.At.Sub(p.start); at != time.Duration(i)*30*time.Minute {
+				t.Fatalf("message %d: %s decided at +%s, want +%s", i, dec.Candidate.DedupKey, at, time.Duration(i)*30*time.Minute)
+			}
 		}
 	}
 	// A breach that clears and comes back inside the interval is still one message per
@@ -261,7 +294,7 @@ func TestDNTrigger_WarningWakesTheModelOncePerCooldown_CriticalNever(t *testing.
 			p.clk.Advance(step)
 		}
 	}
-	time.Sleep(50 * time.Millisecond)
+	p.drain()
 	if n := len(p.phone.messages()); n != 2 {
 		t.Fatalf("%d messages for a Warning over two hours with a one-hour cooldown, want 2", n)
 	}
@@ -303,7 +336,10 @@ func TestDNTrigger_OwnerSilenceHoldsUntilItEnds(t *testing.T) {
 		p.report(silenced)
 		p.clk.Advance(5 * time.Minute)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// Nothing was handed over, so nothing can be on its way.
+	if ds := p.disp.Stats(); ds.Buffered+ds.Queued != 0 {
+		t.Fatalf("%d decisions handed to the outbox while every code was silenced", ds.Buffered+ds.Queued)
+	}
 	if n := len(p.phone.messages()); n != 0 {
 		t.Fatalf("%d messages while every code was silenced", n)
 	}

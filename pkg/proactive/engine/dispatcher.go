@@ -9,9 +9,10 @@ import (
 )
 
 // Handover is the part of *attention.Outbox the default dispatcher uses: the
-// entry point that takes a decision that has already been made and does no I/O.
+// entry point that takes the decisions of one event, already made, together and
+// does no I/O. It returns what became of each, in order.
 type Handover interface {
-	Accept(d attention.Decision, it attention.Item) attention.Handoff
+	AcceptAll(ds []attention.Decision) []attention.Handoff
 }
 
 // DispatchStats counts what the default dispatcher handed over.
@@ -36,12 +37,14 @@ type DefaultDispatcher struct {
 // NewDefaultDispatcher returns a dispatcher over out.
 func NewDefaultDispatcher(out Handover) *DefaultDispatcher { return &DefaultDispatcher{out: out} }
 
-// Dispatch hands ds to the outbox. It returns an error only to say that the outbox
-// had stopped and did not take some of them (their reservations lapse).
+// Dispatch hands ds, the decisions of one event, to the outbox in one call, so that
+// the protective lane cannot deliver the first of them before the others arrived:
+// one breach is one message. It returns an error only to say that the outbox had
+// stopped and did not take some of them (their reservations lapse).
 func (d *DefaultDispatcher) Dispatch(_ context.Context, ds []attention.Decision) error {
 	rejected := 0
-	for _, dec := range ds {
-		switch d.out.Accept(dec, attention.Item{Candidate: dec.Candidate}) {
+	for _, h := range d.out.AcceptAll(ds) {
+		switch h {
 		case attention.HandoffBuffered:
 			d.buffered.Add(1)
 		case attention.HandoffQueued:

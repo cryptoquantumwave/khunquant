@@ -24,6 +24,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/voice"
 )
 
@@ -75,6 +76,11 @@ type sharedResources struct {
 	// triggerLim is the external trigger route's rate limit, per process: a reload
 	// keeps it (see trigger_api.go).
 	triggerLim *triggerLimiter
+
+	// dcaStats and dcaOutcomes are the dca_due trigger's counters and per-slot record:
+	// per process, so that a reload keeps the day's record (dca_due_wiring.go).
+	dcaStats    *triggers.DCAStats
+	dcaOutcomes *triggers.DCAOutcomes
 }
 
 type namedCloser struct {

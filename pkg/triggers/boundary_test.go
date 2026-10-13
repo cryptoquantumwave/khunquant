@@ -21,6 +21,9 @@ func TestTriggers_ImportBoundary(t *testing.T) {
 		Forbidden: []string{
 			"pkg/agent", "pkg/tools", "pkg/providers", "pkg/notify", "pkg/channels", "pkg/attention",
 			"pkg/config", "pkg/snapshot", "pkg/perception/sources", "pkg/proactive/engine",
+			// The DCA plan store and its gate reach the broker; the dca_due trigger gets
+			// its gate as an injected function and its plan's facts from the event.
+			"pkg/dca", "pkg/cron", "pkg/exchanges",
 		},
 	})
 }

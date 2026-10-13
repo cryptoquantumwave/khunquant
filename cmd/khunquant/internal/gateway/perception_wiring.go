@@ -126,6 +126,10 @@ type perceptionRuntime struct {
 	// model exists (triggers_wiring.go).
 	triggers *triggers.Registry
 
+	// dca is the DCA due source, its plan store and the daily shadow comparison; nil
+	// unless triggers are on (dca_due_wiring.go).
+	dca *dcaRuntime
+
 	mgrCancel context.CancelFunc
 	engCancel context.CancelFunc
 	engDone   chan struct{}
@@ -164,6 +168,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 		}
 	}
 	rt.attachFinance(d)
+	rt.attachDCADue(d)
 
 	engCtx, engCancel := context.WithCancel(context.Background())
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
@@ -316,6 +321,7 @@ func (rt *perceptionRuntime) stop() {
 		logger.WarnCF("perception", "Sources did not stop in time", map[string]any{"error": err.Error()})
 	}
 	cancel()
+	rt.stopDCADue()
 	rt.closeFinance()
 
 	rt.engCancel()

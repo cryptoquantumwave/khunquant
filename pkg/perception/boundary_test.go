@@ -30,8 +30,15 @@ func TestPerceptionSources_ImportBoundary(t *testing.T) {
 			// collector and store, the broker's provider interfaces, permission
 			// check and contract-size valuation, and the config they read accounts from.
 			"pkg/snapshot", "pkg/providers/broker", "pkg/config",
+			// The DCA plans source computes a plan's slots with the cron service's own
+			// schedule function (cron.NextRun). pkg/cron imports only the logger and
+			// fileutil; it holds no provider, tool or order path.
+			"pkg/cron",
 		},
-		Forbidden: forbidden,
+		// pkg/dca (the plan store and its order-adjacent gate) is also out of reach: the
+		// DCA plans source reads plans through an interface the gateway implements, so it
+		// cannot reach the store, the order tool or the broker's trading side.
+		Forbidden: append(append([]string{}, forbidden...), "pkg/dca"),
 		// pkg/providers/broker is the one package under pkg/providers a source may
 		// reach (it holds the interfaces, not an implementation); every other provider
 		// stays forbidden.

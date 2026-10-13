@@ -189,6 +189,12 @@ type Engine struct {
 	c       *counters
 	running atomic.Bool
 
+	// popMu makes "take an event from the inbox" and "count it as taken" one step
+	// for Settle, which must not see an event that has left the inbox and is not yet
+	// counted. popped is guarded by it.
+	popMu  sync.Mutex
+	popped uint64
+
 	warnMu sync.Mutex
 	warned map[string]time.Time
 }
@@ -253,7 +259,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	for ctx.Err() == nil {
 		progressed := false
 		for ctx.Err() == nil {
-			ev, ok := e.in.pop()
+			ev, ok := e.pop()
 			if !ok {
 				break
 			}
@@ -282,13 +288,65 @@ func (e *Engine) Run(ctx context.Context) error {
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 	defer cancel()
 	for dctx.Err() == nil {
-		ev, ok := e.in.pop()
+		ev, ok := e.pop()
 		if !ok {
 			break
 		}
 		e.process(dctx, ev)
 	}
 	return nil
+}
+
+// pop takes the next event from the inbox and counts it as taken, in one step with
+// respect to Settle. Only Run calls it.
+func (e *Engine) pop() (events.Event, bool) {
+	e.popMu.Lock()
+	defer e.popMu.Unlock()
+	ev, ok := e.in.pop()
+	if ok {
+		e.popped++
+	}
+	return ev, ok
+}
+
+// settlePoll is how often Settle looks again.
+const settlePoll = 2 * time.Millisecond
+
+// Settle waits until the pipeline has processed every event that was in the inbox
+// when it was called: the world model has applied it, the evaluator has run, and
+// attention has recorded a decision for every candidate it produced. Events that
+// arrive afterwards are not waited for, so a source that keeps emitting cannot hold
+// it. The heartbeat sweep calls it after asking the sources to reconcile, because a
+// reconcile only queues events: until they are processed the world model has not
+// moved and no trigger has decided anything.
+//
+// It returns an error when ctx ends first, and when the engine is not running or has
+// stopped (nothing would ever process what is queued). It does not touch the
+// pipeline goroutine: it only reads counters, on the caller's goroutine, with real
+// time (the engine's own Clock is not consulted).
+func (e *Engine) Settle(ctx context.Context) error {
+	t := time.NewTimer(settlePoll)
+	defer t.Stop()
+	for {
+		if !e.running.Load() || e.in.closed() {
+			return errors.New("engine: not running")
+		}
+		e.popMu.Lock()
+		depth, popped := e.in.depth(), e.popped
+		e.popMu.Unlock()
+		// Read after the pair above: it can only have caught up with popped, and
+		// when the two are equal with an empty inbox, everything taken has been
+		// processed. An event taken after the pair was emitted after the call.
+		if depth == 0 && e.c.processed.Load() >= popped {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("engine: not settled: %w", ctx.Err())
+		case <-t.C:
+			t.Reset(settlePoll)
+		}
+	}
 }
 
 // process runs one event through the stages. It never returns an error and never

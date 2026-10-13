@@ -3,7 +3,6 @@ package triggers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -318,7 +317,7 @@ func (t *liquidation) candidate(acct string, p worldmodel.FuturesView, tier int,
 		ev["unrealized_pnl"] = p.UnrealizedPnl
 	}
 	c := proactive.Candidate{
-		DedupKey:    fmt.Sprintf("%s:%s:%s:%s:%s", KindLiquidationDistance, cleanKeyToken(acct), cleanKeyToken(p.Symbol), sideLabel(p), name),
+		DedupKey:    LiquidationKey(acct, p.Symbol, sideLabel(p), name),
 		Subject:     p.Symbol,
 		Title:       liqTitle(thai, acct, p, tier, distKnown, dist, marginKnown, margin, t.p.MarginRatioCriticalPct),
 		Detail:      liqDetail(thai, p, distKnown, dist, marginKnown, margin),

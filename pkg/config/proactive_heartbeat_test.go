@@ -33,15 +33,15 @@ func TestEffective_GovernedHeartbeatNeedsLiveAttention(t *testing.T) {
 		t.Errorf("governed + live attention + owner must stay governed: %+v", e)
 	}
 
-	// Legacy and sweep are not touched by this rule.
-	for _, hb := range []string{HeartbeatModeLegacy, HeartbeatModeSweep} {
+	// Legacy is not touched by this rule (sweep has its own, tested below).
+	{
 		c := liveProactive()
 		c.Triggers.Mode = ProactiveModeOff
-		c.Heartbeat.Mode = hb
+		c.Heartbeat.Mode = HeartbeatModeLegacy
 		c.Attention.Mode = ProactiveModeShadow
 		e := c.Effective()
-		if e.HeartbeatMode != hb || len(e.Downgrades) != 0 {
-			t.Errorf("%s with shadow attention changed: %+v", hb, e)
+		if e.HeartbeatMode != HeartbeatModeLegacy || len(e.Downgrades) != 0 {
+			t.Errorf("legacy with shadow attention changed: %+v", e)
 		}
 	}
 
@@ -169,6 +169,7 @@ func TestEffective_LiveTriggersNeedLiveAttention(t *testing.T) {
 	// Off and shadow triggers are never touched by it.
 	for _, m := range []string{ProactiveModeOff, ProactiveModeShadow} {
 		c := liveProactive()
+		c.Heartbeat.Mode = HeartbeatModeLegacy // a sweep needs live attention, and says so
 		c.Triggers.Mode = m
 		c.Attention.Mode = ProactiveModeShadow
 		if e := c.Effective(); e.TriggersMode != m || len(e.Downgrades) != 0 {

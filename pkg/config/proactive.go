@@ -464,6 +464,16 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 //
 //	heartbeat.mode  governed -> legacy   unless the effective attention.mode is live
 //
+// A sweep heartbeat is a governed one that is started by what changed: it needs
+// everything a governed heartbeat needs and the perception pipeline, so even with
+// a valid owner:
+//
+//	heartbeat.mode  sweep -> governed    unless perception is effectively on
+//	heartbeat.mode  sweep -> legacy      unless the effective attention.mode is live
+//
+// (the governed rule above then applies to a sweep that became governed, each
+// with its own entry in Downgrades).
+//
 // Live triggers deliver the same way: a candidate is decided by attention, and with
 // attention off or shadow the decision is logged and nothing is sent. A live
 // trigger would take its alerts off the paths that do deliver (the migration
@@ -504,6 +514,22 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Mandates = c.Enabled && c.Mandates.Enabled
 
 	if c.Enabled && ownerOK {
+		// A sweep is a governed heartbeat that is started by what changed, so it
+		// needs everything a governed one needs and the perception pipeline that
+		// reports the changes. Without perception it is a governed heartbeat, and
+		// the rule below then decides whether that one can run.
+		if e.HeartbeatMode == HeartbeatModeSweep {
+			switch {
+			case !e.Perception:
+				e.Downgrades = append(e.Downgrades,
+					"proactive: perception is off; heartbeat.mode sweep → governed")
+				e.HeartbeatMode = HeartbeatModeGoverned
+			case e.AttentionMode != ProactiveModeLive:
+				e.Downgrades = append(e.Downgrades, fmt.Sprintf(
+					"proactive: attention.mode is %s, not live; heartbeat.mode sweep → legacy", e.AttentionMode))
+				e.HeartbeatMode = HeartbeatModeLegacy
+			}
+		}
 		// The owner can be reached, but a governed heartbeat still needs attention
 		// to deliver: shadow and off record decisions and send nothing, which
 		// would silently lose every heartbeat message.

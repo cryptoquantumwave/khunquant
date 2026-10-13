@@ -103,8 +103,11 @@ func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun, force bool) erro
 	}
 
 	// A v2 file under a heartbeat that is not governed delivers nothing: say so
-	// before anything is written, and go on only when asked to.
-	notGoverned := cfg.Proactive.Effective().HeartbeatMode != config.HeartbeatModeGoverned
+	// before anything is written, and go on only when asked to. A sweep is a
+	// governed heartbeat that is started by what changed, and uses the v2 contract
+	// too.
+	mode := cfg.Proactive.Effective().HeartbeatMode
+	notGoverned := mode != config.HeartbeatModeGoverned && mode != config.HeartbeatModeSweep
 	if notGoverned {
 		fmt.Fprintf(out, "WARNING: the heartbeat is in legacy mode; with the v2 template it will deliver nothing "+
 			"until proactive.heartbeat.mode is governed and attention is live "+

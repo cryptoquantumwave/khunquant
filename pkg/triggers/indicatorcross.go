@@ -289,8 +289,7 @@ func (t *indicatorCross) candidate(value float64, trust proactive.Trust, v world
 	if t.p.Period > 0 {
 		ev["period"] = t.p.Period
 	}
-	key := fmt.Sprintf("%s:%s:%s:%s:%s%d:%s:%s", KindIndicatorCross, t.p.Provider, t.p.Symbol, t.p.Timeframe,
-		t.p.Indicator, t.p.Period, t.p.Direction, thr)
+	key := IndicatorCrossKey(t.p.Provider, t.p.Symbol, t.p.Timeframe, t.p.Indicator, t.p.Period, t.p.Direction, thr)
 	return crossCandidate(key, t.p.Symbol,
 		crossTitle(thai, t.p.Symbol+" "+t.p.label(), t.p.Direction == DirAbove, thr, now),
 		crossDetail(thai, t.p.Provider, thr, now), msg,

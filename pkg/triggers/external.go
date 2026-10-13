@@ -3,7 +3,6 @@ package triggers
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -82,7 +81,7 @@ func (externalTrigger) Evaluate(_ context.Context, _ worldmodel.View, d worldmod
 	msg := cleanExternalMessage(req.Message)
 	sum := sha256.Sum256([]byte(msg))
 	return []proactive.Candidate{{
-		DedupKey:    "external:" + req.Name + ":" + hex.EncodeToString(sum[:4]),
+		DedupKey:    ExternalKey(req.Name, sum[:4]),
 		Severity:    sev,
 		Protective:  false,
 		Salience:    externalSalience(sev),

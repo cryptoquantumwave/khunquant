@@ -185,7 +185,7 @@ func (t *dataStale) staleCandidate(src StaleSource, n int, silent time.Duration,
 		detail += "\nAlerts that rely on this data are not being judged until it returns."
 	}
 	return proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:%s:stale%d", KindDataStale, cleanKeyToken(src.Name), n),
+		DedupKey: StaleKey(src.Name, n),
 		Severity: proactive.SeverityWarning, Salience: 0.6, Subject: "source:" + cleanKeyToken(src.Name),
 		Title: title, Detail: detail,
 		Evidence: map[string]any{
@@ -202,7 +202,7 @@ func (t *dataStale) recoveredCandidate(src StaleSource, n int, at time.Time) pro
 		title = "แหล่งข้อมูลกลับมาแล้ว: " + src.Name
 	}
 	return proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:%s:ok%d", KindDataStale, cleanKeyToken(src.Name), n),
+		DedupKey: StaleClearKey(src.Name, n),
 		Severity: proactive.SeverityInfo, Salience: 0.2, Subject: "source:" + cleanKeyToken(src.Name),
 		Title:    title,
 		Evidence: map[string]any{"source": src.Name, "outage": n},

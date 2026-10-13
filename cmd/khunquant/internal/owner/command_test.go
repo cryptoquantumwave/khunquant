@@ -156,6 +156,7 @@ func TestOwnerShowCommand(t *testing.T) {
 	cfg.Proactive.Enabled = true
 	cfg.Proactive.Attention.Mode = "live"
 	cfg.Proactive.Heartbeat.Mode = "sweep"
+	cfg.Proactive.Perception.Enabled = true // a sweep needs the perception pipeline
 	cfg.Proactive.Heartbeat.Model = "light"
 	d2, _ := fileDeps(t, cfg)
 	out, err = run(t, d2, "show")

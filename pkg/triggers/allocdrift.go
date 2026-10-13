@@ -163,7 +163,7 @@ func (t *allocDrift) candidate(class string, weight, target, gap float64, pf wor
 		detail += " · " + strconv.Itoa(pf.UnpricedCount) + " assets not priced and left out"
 	}
 	return proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:%s:%s", KindAllocationDrift, label, dir),
+		DedupKey: DriftKey(label, dir),
 		Severity: proactive.SeverityInfo, Salience: clamp01(math.Abs(gap) / 50), Subject: "portfolio",
 		Title: title, Detail: detail,
 		Evidence: map[string]any{

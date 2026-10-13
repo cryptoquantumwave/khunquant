@@ -22,6 +22,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -86,6 +87,21 @@ type sharedResources struct {
 	// portfolioStats are the portfolio triggers' counters, per process
 	// (portfolio_triggers_wiring.go).
 	portfolioStats *triggers.PortfolioStats
+
+	// sweep is the heartbeat sweep's overlap guard, failure count and counters, per
+	// process: a sweep still running when a reload builds the next generation is
+	// seen by it (sweep_wiring.go). Created on first use, guarded by mu.
+	sweep *sweep.State
+}
+
+// sweepState returns the process's sweep state, creating it on first use.
+func (r *sharedResources) sweepState() *sweep.State {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sweep == nil {
+		r.sweep = &sweep.State{}
+	}
+	return r.sweep
 }
 
 type namedCloser struct {
@@ -344,8 +360,17 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		// generation was built from, so a reload that changes
 		// proactive.heartbeat.model or .tools builds a handler with it.
 		eff := cfg.Proactive.Effective()
-		s.HeartbeatService.SetContextHandler(newGovernedHandler(
-			al, s.Attention, s.HeartbeatService.Interval(), eff.HeartbeatModel, eff.HeartbeatTools))
+		interval := s.HeartbeatService.Interval()
+		if h := sweepHandler(d, s, eff, al, interval); h != nil {
+			// A sweep: reconcile, look at what changed, ask the model only if
+			// something did. It runs on every tick, also when HEARTBEAT.md lists no
+			// task: its reconciliation does not depend on one.
+			s.HeartbeatService.SetRunWithoutTasks(true)
+			s.HeartbeatService.SetContextHandler(h)
+		} else {
+			s.HeartbeatService.SetContextHandler(newGovernedHandler(
+				al, s.Attention, interval, eff.HeartbeatModel, eff.HeartbeatTools))
+		}
 	} else {
 		s.HeartbeatService.SetBus(msgBus)
 		s.HeartbeatService.SetHandler(heartbeatHandler(al))

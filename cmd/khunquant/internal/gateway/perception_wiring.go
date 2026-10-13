@@ -12,6 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/sources"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
@@ -132,6 +133,10 @@ type perceptionRuntime struct {
 	// portfolioStats are the portfolio triggers' counters (per process).
 	portfolioStats *triggers.PortfolioStats
 
+	// sweep is the heartbeat sweep's process-wide state while this generation runs a
+	// sweep (sweep_wiring.go); nil otherwise.
+	sweep *sweep.State
+
 	// dca is the DCA due source, its plan store and the daily shadow comparison; nil
 	// unless triggers are on (dca_due_wiring.go).
 	dca *dcaRuntime
@@ -230,7 +235,10 @@ type perceptionStatsResponse struct {
 	// Triggers is present only while the trigger registry is running.
 	Triggers *triggerStats `json:"triggers,omitempty"`
 	// DNPlans is present only while the delta-neutral plan-health source is running.
-	DNPlans  *dnPlansStats         `json:"dn_plans,omitempty"`
+	DNPlans *dnPlansStats `json:"dn_plans,omitempty"`
+	// Sweep is present only while the heartbeat runs as a sweep. Its counters are the
+	// process's: a reload keeps them.
+	Sweep    *sweepStats           `json:"sweep,omitempty"`
 	Clock    *perceptionClockStats `json:"clock,omitempty"`
 	Finance  financeStats          `json:"finance"`
 	Dispatch struct {
@@ -292,6 +300,7 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	out.Market = rt.marketStats()
 	out.Triggers = rt.triggerStats()
 	out.DNPlans = rt.dnPlansStats()
+	out.Sweep = rt.sweepStats()
 	out.Clock = rt.clockStats()
 	rt.fillFinanceStats(&out.Finance)
 

@@ -580,7 +580,7 @@ func (t *dcaDue) candidate(v worldmodel.View, due time.Time, late time.Duration,
 		ev["gate"] = gate
 	}
 	return proactive.Candidate{
-		DedupKey:    fmt.Sprintf("%s:%d:%d", KindDCADue, t.p.PlanID, due.UnixMilli()),
+		DedupKey:    DCADueKey(t.p.PlanID, due.UnixMilli()),
 		Severity:    proactive.SeverityInfo,
 		Salience:    0.2,
 		Subject:     t.p.Symbol,

@@ -189,7 +189,7 @@ func (t *dnHealth) candidate(code string, h planhealth.Health, trust proactive.T
 	plan := strconv.FormatInt(t.p.PlanID, 10)
 
 	c := proactive.Candidate{
-		DedupKey:    KindDNHealth + ":" + plan + ":" + code,
+		DedupKey:    DNHealthKey(plan, code),
 		Subject:     t.subject(plan),
 		Title:       dnTitle(thai, plan, t.p.Symbol, code, h),
 		Detail:      dnDetail(thai, h, code),

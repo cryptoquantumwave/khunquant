@@ -432,7 +432,7 @@ func (cb *ContextBuilder) BuildMessagesWithOptions(
 	dynamicCtx := cb.buildDynamicContext(channel, chatID)
 	// Background turns, and only they, also carry the sections attached for them.
 	// A user turn's dynamic context is exactly what it always was.
-	if o.Mode == PromptLight || o.Mode == PromptProactive {
+	if (o.Mode == PromptLight || o.Mode == PromptProactive) && !o.NoBackgroundSections {
 		if extra := cb.background.render(context.Background()); extra != "" {
 			dynamicCtx += "\n\n" + extra
 		}

@@ -3,7 +3,6 @@ package triggers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -417,7 +416,7 @@ func (t *moveVsVol) candidate(h heldAsset, hit moveHit, price, weight float64, p
 		ev["sigma_multiple"] = math.Abs(hit.ret) / hit.sigmaW
 	}
 	c := proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:%s:%s:tier%d", KindMoveVsVol, asset, hit.window, hit.tier),
+		DedupKey: MoveKey(asset, hit.window, hit.tier),
 		Subject:  asset, Title: title, Detail: detail, Evidence: ev, Trust: trust,
 		Salience: clamp01(weight * float64(hit.tier) / 3), DedupWindow: moveWindow, At: at,
 	}

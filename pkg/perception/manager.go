@@ -96,6 +96,10 @@ type managed struct {
 	lastLog     time.Time
 	suppressed  int
 	runningFrom time.Time // when the current run began; zero between runs
+
+	// reconciling is set while a Reconcile started by ReconcileReport has not
+	// returned (see reconcile.go).
+	reconciling atomic.Bool
 }
 
 // NewManager returns a Manager that gives its sources e to emit into.

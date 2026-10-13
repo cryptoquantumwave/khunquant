@@ -109,6 +109,8 @@ type processOptions struct {
 	ToolFilter func(name string) bool
 	// OfferLoadSkill is BuildOptions.OfferLoadSkill for a PromptProactive turn.
 	OfferLoadSkill bool
+	// NoBackgroundSections is BuildOptions.NoBackgroundSections.
+	NoBackgroundSections bool
 	// ModelOverride pins the model tier for every iteration of the turn,
 	// instead of letting the router score the message.
 	ModelOverride modelOverride
@@ -135,7 +137,10 @@ const (
 // check must use the same value, or an estimate based on one prompt would be
 // compared against a request built with another.
 func (o processOptions) promptBuildOptions() BuildOptions {
-	return BuildOptions{Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill}
+	return BuildOptions{
+		Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill,
+		NoBackgroundSections: o.NoBackgroundSections,
+	}
 }
 
 type continuationTarget struct {

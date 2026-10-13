@@ -108,7 +108,18 @@ type item struct {
 }
 
 // renderDiff turns a diff into the section text.
-func renderDiff(d Diff) string {
+func renderDiff(d Diff) string { return renderDiffLimited(d, MaxContributorItems, MaxContributorChars) }
+
+// RenderChanges is the section the changes contributor renders, with limits of the
+// caller's choosing: at most maxItems lines and maxChars characters in all, most
+// important first, figures formatted here and every outside name reduced to one
+// line of a safe alphabet. The heartbeat sweep renders its prompt's changes with
+// it. A diff with nothing in it renders as "".
+func RenderChanges(d Diff, maxItems, maxChars int) string {
+	return renderDiffLimited(d, max(maxItems, 0), max(maxChars, 0))
+}
+
+func renderDiffLimited(d Diff, maxItems, maxChars int) string {
 	items := make([]item, 0, len(d.Changes)+len(d.Signals))
 	for _, c := range d.Changes {
 		items = append(items, changeItem(c))
@@ -136,13 +147,13 @@ func renderDiff(d Diff) string {
 		b.WriteString(")\n")
 		return b.String()
 	}
-	shown := min(len(items), MaxContributorItems)
+	shown := min(len(items), maxItems)
 	for ; shown > 0; shown-- {
 		total := len([]rune(header(shown)))
 		for _, it := range items[:shown] {
 			total += len([]rune(it.text)) + 1
 		}
-		if total <= MaxContributorChars {
+		if total <= maxChars {
 			break
 		}
 	}

@@ -95,6 +95,12 @@ type HeartbeatService struct {
 	cancel context.CancelFunc // ends ctx
 
 	running atomic.Bool // a run is in flight
+
+	// runWithoutTasks: a run happens even when HEARTBEAT.md lists no task of the
+	// owner's (guarded by mu). A sweep heartbeat has work that does not depend on
+	// the file: it reconciles the sources and looks at what changed, and the file
+	// only tells the model what the owner cares about.
+	runWithoutTasks bool
 }
 
 // normalizeInterval applies the minimum and the default to a configured
@@ -178,6 +184,17 @@ func (hs *HeartbeatService) SetContract(c Contract) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.contract = c
+}
+
+// SetRunWithoutTasks makes the service run the handler on every tick, also when
+// HEARTBEAT.md is missing or holds no task of the owner's (the prompt is then the
+// file as it is, or the default for the contract). Set it before Start. It is for a
+// sweep heartbeat, whose reconciliation must not depend on the owner having written
+// a task.
+func (hs *HeartbeatService) SetRunWithoutTasks(v bool) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.runWithoutTasks = v
 }
 
 // Interval is the current interval, after the minimum and the default.
@@ -532,24 +549,30 @@ with your read tools, and report through respond_proactive.
 func (hs *HeartbeatService) buildPrompt() string {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
 
+	hs.mu.RLock()
+	contract := hs.contract
+	always := hs.runWithoutTasks
+	hs.mu.RUnlock()
+
+	var content string
 	data, err := os.ReadFile(heartbeatPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			hs.createDefaultHeartbeatTemplate()
+	switch {
+	case err == nil:
+		content = string(data)
+	case os.IsNotExist(err):
+		hs.createDefaultHeartbeatTemplate()
+		if !always {
 			return ""
 		}
+		content = defaultTemplate(contract)
+	default:
 		hs.logErrorf("Error reading HEARTBEAT.md: %v", err)
 		return ""
 	}
 
-	content := string(data)
-	if !heartbeatHasUserTasks(content) {
+	if !always && !heartbeatHasUserTasks(content) {
 		return ""
 	}
-
-	hs.mu.RLock()
-	contract := hs.contract
-	hs.mu.RUnlock()
 
 	now := hs.clock.Now().Format("2006-01-02 15:04:05")
 	if contract == ContractGoverned {

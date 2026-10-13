@@ -73,26 +73,40 @@ func (s *Store) Cursor() int64 {
 // SetMark names "now" in the change log. SinceMark(name) later returns what changed
 // after it. Marks are kept in memory and written at the next checkpoint.
 func (s *Store) SetMark(ctx context.Context, name string) error {
-	return s.setMark(ctx, name, -1, true)
+	return s.setMark(ctx, name, -1, true, 0)
 }
 
 // EnsureMark is SetMark unless the mark already exists.
 func (s *Store) EnsureMark(ctx context.Context, name string) error {
-	return s.setMark(ctx, name, -1, false)
+	return s.setMark(ctx, name, -1, false, 0)
 }
 
 // SetMarkAt moves a mark forward to a position in the log taken earlier from
 // Cursor, never backward and never past the cursor. A reader uses it to say "I
 // have seen everything up to here" without losing what arrived while it read.
 func (s *Store) SetMarkAt(ctx context.Context, name string, seq int64) error {
-	return s.setMark(ctx, name, seq, true)
+	return s.setMark(ctx, name, seq, true, 0)
 }
 
-func (s *Store) setMark(_ context.Context, name string, seq int64, replace bool) error {
+// SetMarkAtTime is SetMarkAt for a reader that took the position at a known time:
+// the mark's time (MarkInfo) becomes at, not the moment of this call, so that the
+// window from the mark to the next read starts when the position was taken, and
+// what happened while the reader worked is inside it. The time moves forward only,
+// and moves even when the position does not (nothing was logged since).
+func (s *Store) SetMarkAtTime(ctx context.Context, name string, seq int64, at time.Time) error {
+	return s.setMark(ctx, name, seq, true, at.UnixMilli())
+}
+
+// setMark sets a mark. A seq below zero means the cursor. atMs is the time to
+// record; zero or less means now.
+func (s *Store) setMark(_ context.Context, name string, seq int64, replace bool, atMs int64) error {
 	if !validToken(name, 32) {
 		return fmt.Errorf("worldmodel: invalid mark name")
 	}
-	nowMs := s.clock.Now().UnixMilli()
+	explicitTime := atMs > 0
+	if !explicitTime {
+		atMs = s.clock.Now().UnixMilli()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, exists := s.marks[name]
@@ -106,13 +120,30 @@ func (s *Store) setMark(_ context.Context, name string, seq int64, replace bool)
 	if seq >= 0 {
 		at = min(seq, s.seq)
 		if exists && at <= cur.seq {
-			return nil
+			// The position stays; a later explicit time still moves (see SetMarkAtTime).
+			if !explicitTime || atMs <= cur.atMs {
+				return nil
+			}
+			at = cur.seq
 		}
 	}
-	s.marks[name] = markState{seq: at, atMs: nowMs}
+	s.marks[name] = markState{seq: at, atMs: atMs}
 	s.ver++
 	s.dirtyMarks[name] = s.ver
 	return nil
+}
+
+// MarkInfo is where a mark stands: the position in the change log it names and
+// the time it was last set or moved. ok is false for a mark that was never set. The
+// time is the store's clock, so it is the start of the window SinceMark reads.
+func (s *Store) MarkInfo(name string) (seq int64, at time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.marks[name]
+	if !ok {
+		return 0, time.Time{}, false
+	}
+	return m.seq, time.UnixMilli(m.atMs), true
 }
 
 // SinceMark returns what changed after the mark, aggregated by (subject, key): the

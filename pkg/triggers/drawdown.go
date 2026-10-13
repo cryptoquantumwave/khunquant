@@ -3,7 +3,6 @@ package triggers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 	"time"
@@ -250,7 +249,7 @@ func (t *drawdown) candidate(ref string, tier int, dd, line float64, window time
 		}
 	}
 	return proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:portfolio:%s:tier%d", KindDrawdown, ref, tier),
+		DedupKey: DrawdownKey(ref, tier),
 		Severity: sev, Salience: clamp01(0.4 + 0.15*float64(tier)), Subject: "portfolio",
 		Title: title, Detail: detail,
 		Evidence: map[string]any{
@@ -283,7 +282,7 @@ func (t *drawdown) rebaseNotice(pf worldmodel.PortfolioView, n int, now time.Tim
 		detail = "จุดเปรียบเทียบมูลค่าถูกตั้งใหม่ " + strconv.Itoa(n) + " ครั้งวันนี้ การแจ้งเตือนการลดลงของพอร์ตต้องใช้จุดเปรียบเทียบที่คงที่"
 	}
 	return proactive.Candidate{
-		DedupKey: fmt.Sprintf("%s:rebase:%s", KindDrawdown, cleanKeyToken(pf.DayDate)),
+		DedupKey: DrawdownRebaseKey(pf.DayDate),
 		Severity: proactive.SeverityNotice, Salience: 0.5, Subject: "portfolio",
 		Title: title, Detail: detail,
 		Evidence: map[string]any{"rebases": n, "unpriced_count": pf.UnpricedCount, "day_date": pf.DayDate, "unpriced_truncated": pf.UnpricedTruncated},

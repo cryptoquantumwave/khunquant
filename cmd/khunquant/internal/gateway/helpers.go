@@ -614,11 +614,22 @@ func setupCronTool(
 		dnStore = store
 	}
 
+	var h cronHooks
+	if len(hooks) > 0 {
+		h = hooks[0]
+	}
+	// triggersLive says, at the moment a job runs, whether the trigger registry is
+	// live and so owns the alert families a promotion switched off.
+	triggersLive := func() bool { return h.Alerts != nil && h.Alerts().Live() }
+
 	// Set onJob handler — alert, DCA, and DN jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
 	// The ctx carries the per-run job timeout and is cancelled when the cron service
 	// gives up waiting at stop; every handler uses it instead of context.Background().
 	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
+		// The legacy handlers below stay for rollback; a job of a family the triggers
+		// replaced that runs while they are live is said so (once per job per day).
+		legacyJobs.check(job, triggersLive)
 		if strings.HasPrefix(job.Name, tools.JobPrefixPriceAlert) {
 			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
@@ -644,10 +655,6 @@ func setupCronTool(
 	// Alert tools (Track D) — require cron service, registered after it is created.
 	// The tools write to the trigger registry only while one is live (decided on every
 	// call, see tools.AlertTriggers); otherwise they are the cron tools they always were.
-	var h cronHooks
-	if len(hooks) > 0 {
-		h = hooks[0]
-	}
 	route := h.Alerts
 	if cfg.Tools.IsToolEnabled("set_price_alert") {
 		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService).WithTriggers(route))

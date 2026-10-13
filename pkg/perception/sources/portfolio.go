@@ -128,13 +128,30 @@ type Portfolio struct {
 	keepDays int
 	pruneGap time.Duration
 
-	health   healthTracker
-	lastPrun time.Time // only the loop goroutine touches it
+	health healthTracker
+
+	// run is held (capacity one) for the whole of a collection, so that Start's
+	// loop and a Reconcile never collect at once: two collections would read every
+	// account twice and save two automatic snapshots. It is a channel and not a
+	// mutex so that a Reconcile that waits can be given up by its context. The
+	// three fields below are touched only while it is held.
+	run      chan struct{}
+	lastPrun time.Time // when the old snapshots were last pruned
+	// lastDone and lastErr are when the last collection that was not cut short
+	// ended, and what it returned.
+	lastDone time.Time
+	lastErr  error
 
 	cycles, saved, partial, failed, dropped, pruned, withUnpriced atomic.Uint64
 
-	lastUnpriced string // the unpriced list of the last snapshot, to log a change once
+	lastUnpriced string // the unpriced list of the last snapshot, to log a change once (run held)
 }
+
+// reconcileReuse is how recent the last collection may be for Reconcile to return
+// its result instead of collecting again: a Reconcile that found a collection in
+// flight waits for it, and one that comes soon after another is not a reason to
+// read every account a second time and save a second snapshot.
+const reconcileReuse = 60 * time.Second
 
 // NewPortfolio builds the source. Store may be nil, in which case snapshots are
 // emitted and not saved.
@@ -143,6 +160,7 @@ func NewPortfolio(o PortfolioOptions) *Portfolio {
 		cfg: o.Cfg, collect: o.Collect, store: o.Store, clock: o.Clock,
 		interval: o.Interval, delay: o.InitialDelay, timeout: o.Timeout,
 		keepDays: o.KeepDays, pruneGap: o.PruneEvery,
+		run: make(chan struct{}, 1),
 	}
 	if p.collect == nil {
 		p.collect = snapshot.CollectFromExchanges
@@ -209,9 +227,22 @@ func (p *Portfolio) Start(ctx context.Context, out perception.Emitter) error {
 	}
 }
 
-// Reconcile collects once now.
+// Reconcile collects once now, unless a collection ended less than reconcileReuse
+// ago (the schedule's, or another Reconcile's): then it returns that one's result.
+// If a collection is in flight it waits for it first, and gives up if ctx ends.
 func (p *Portfolio) Reconcile(ctx context.Context, out perception.Emitter) error {
-	return p.cycle(ctx, out)
+	select {
+	case p.run <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-p.run }()
+	if !p.lastDone.IsZero() {
+		if age := p.clock.Now().Sub(p.lastDone); age >= 0 && age < reconcileReuse {
+			return p.lastErr
+		}
+	}
+	return p.collectLocked(ctx, out)
 }
 
 // wait is the delay to the next collection: the interval, doubled for each of the
@@ -227,8 +258,30 @@ func (p *Portfolio) fail(msg string) error {
 	return fmt.Errorf("portfolio: %s", msg)
 }
 
-// cycle runs one collection. It returns an error for a failed or partial one.
+// cycle runs one collection of the schedule, after any collection in flight. It
+// returns an error for a failed or partial one.
 func (p *Portfolio) cycle(ctx context.Context, out perception.Emitter) error {
+	select {
+	case p.run <- struct{}{}:
+	case <-ctx.Done():
+		return nil // stopping
+	}
+	defer func() { <-p.run }()
+	return p.collectLocked(ctx, out)
+}
+
+// collectLocked runs one collection and remembers how it ended. The caller holds
+// p.run.
+func (p *Portfolio) collectLocked(ctx context.Context, out perception.Emitter) error {
+	err := p.collectOnce(ctx, out)
+	if ctx.Err() == nil {
+		p.lastDone, p.lastErr = p.clock.Now(), err
+	}
+	return err
+}
+
+// collectOnce is the collection itself. The caller holds p.run.
+func (p *Portfolio) collectOnce(ctx context.Context, out perception.Emitter) error {
 	p.cycles.Add(1)
 	defer p.pruneIfDue(ctx)
 

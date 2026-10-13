@@ -59,6 +59,13 @@ type BuildOptions struct {
 	// without it a listing would be a list of things the turn cannot open, so
 	// the listing is left out.
 	OfferLoadSkill bool
+	// NoBackgroundSections leaves the attached background section (the world
+	// model's "changes since you last looked") out of the request and out of the
+	// context-usage estimate. A caller that renders the changes into its own prompt,
+	// from a window of its own (the heartbeat sweep), sets it so that the model does
+	// not read two overlapping lists and the first call does not carry both. The
+	// static prompt is the same either way, so it is not part of the cache key.
+	NoBackgroundSections bool
 }
 
 // promptCacheKey identifies one cached system prompt. ForcedSkills is the
@@ -336,7 +343,7 @@ func (cb *ContextBuilder) EstimateSystemTokensFor(o BuildOptions, summary string
 	const dynamicContextChars = 800
 
 	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
-	if (o.Mode == PromptLight || o.Mode == PromptProactive) && cb.background.attached() {
+	if (o.Mode == PromptLight || o.Mode == PromptProactive) && !o.NoBackgroundSections && cb.background.attached() {
 		totalChars += backgroundSectionChars // the section a background turn carries, at its cap
 	}
 

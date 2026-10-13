@@ -17,6 +17,7 @@ func liveProactive() ProactiveConfig {
 	c.Enabled = true
 	c.Owner = validOwner()
 	c.Heartbeat.Mode = HeartbeatModeSweep
+	c.Perception.Enabled = true // a sweep heartbeat needs the perception pipeline
 	c.Attention.Mode = ProactiveModeLive
 	c.Triggers.Mode = ProactiveModeLive
 	c.Approvals.Enabled = true

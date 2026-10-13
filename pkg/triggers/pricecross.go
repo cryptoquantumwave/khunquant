@@ -169,7 +169,7 @@ func (t *priceCross) candidate(price float64, trust proactive.Trust, v worldmode
 		"provider": t.p.Provider, "symbol": t.p.Symbol, "message": msg,
 	}
 	return crossCandidate(
-		fmt.Sprintf("%s:%s:%s:%s:%s", KindPriceCross, t.p.Provider, t.p.Symbol, t.p.Direction, thr),
+		PriceCrossKey(t.p.Provider, t.p.Symbol, t.p.Direction, thr),
 		t.p.Symbol,
 		crossTitle(thai, t.p.Symbol, t.p.Direction == DirAbove, thr, now),
 		crossDetail(thai, t.p.Provider, thr, now), msg,

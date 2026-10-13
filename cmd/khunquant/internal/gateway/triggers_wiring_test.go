@@ -198,6 +198,9 @@ func TestTriggers_ShadowEndToEndLoggedNotDelivered(t *testing.T) {
 	if disp != string(proactive.DispLog) || reason != "shadow" || shadow != 1 || trig != "gwtest:s1" {
 		t.Fatalf("decision = %s/%s shadow=%d trigger=%s", disp, reason, shadow, trig)
 	}
+	// The engine counts a decision just after attention commits it, so the row can be
+	// seen before the counter moves: wait for the counter this asserts.
+	waitUntil(t, "the engine to count the decision", func() bool { return rt.engine.Stats().Decisions == 1 })
 	if st := rt.engine.Stats(); st.StageErrors != 0 || st.StagePanics != 0 || st.Candidates != 1 || st.Decisions != 1 {
 		t.Fatalf("engine stats = %+v", st)
 	}

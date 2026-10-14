@@ -783,10 +783,11 @@ func (a *webullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side
 		return ccxt.Order{}, fmt.Errorf("webull: unsupported time_in_force %q for equities (use \"DAY\" or \"GTC\")", timeInForce)
 	}
 
-	// Generate unique client_order_id (≤32 chars)
-	clientOrderID, err := generateClientOrderID()
+	// client_order_id: the caller's (params["client_order_id"], alphanumeric,
+	// at most 32 characters) or a generated unique one (≤32 chars).
+	clientOrderID, err := equityClientOrderID(params)
 	if err != nil {
-		return ccxt.Order{}, fmt.Errorf("webull: generate client_order_id: %w", err)
+		return ccxt.Order{}, err
 	}
 
 	// Build NewOrder
@@ -1137,6 +1138,50 @@ func (a *webullAdapter) FetchOpenOptionOrders(ctx context.Context) ([]ccxt.Order
 
 // --- Helpers ---
 
+// maxClientOrderIDLen is Webull's documented client_order_id limit (the adapter's
+// own note); its character set is not stated, so only alphanumerics are
+// accepted from a caller.
+const maxClientOrderIDLen = 32
+
+// equityClientOrderID returns the caller's params["client_order_id"] when given
+// and valid, else a generated one. A caller's value that is not a non-empty
+// alphanumeric string within the limit is an error, not silently replaced: the
+// caller wants to find the order by it later.
+func equityClientOrderID(params map[string]interface{}) (string, error) {
+	v, ok := params["client_order_id"]
+	if !ok || v == nil {
+		id, err := generateClientOrderID()
+		if err != nil {
+			return "", fmt.Errorf("webull: generate client_order_id: %w", err)
+		}
+		return id, nil
+	}
+	id, isStr := v.(string)
+	if !isStr || id == "" || len(id) > maxClientOrderIDLen {
+		return "", fmt.Errorf("webull: client_order_id must be a non-empty alphanumeric string of at most %d characters", maxClientOrderIDLen)
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return "", fmt.Errorf("webull: client_order_id must be a non-empty alphanumeric string of at most %d characters", maxClientOrderIDLen)
+		}
+	}
+	return id, nil
+}
+
+// ClientOrderIDKey makes the adapter broker.ClientIDCapable for equity orders:
+// the API takes a client_order_id of at most 32 characters and the order
+// listings return it (as Order.Id and Order.ClientOrderId). There is no
+// FetchOrderByClientID: FetchOrder fails with untyped strings, so "no such
+// order" cannot be told from an outage, and the reconcile searches the open and
+// closed listings instead. Whether Webull refuses a repeated client_order_id is
+// not established. Webull has no futures here.
+func (a *webullAdapter) ClientOrderIDKey(market string) (string, int, bool) {
+	if market == broker.OrderMarketSpot {
+		return "client_order_id", maxClientOrderIDLen, true
+	}
+	return "", 0, false
+}
+
 // generateClientOrderID generates a unique client_order_id (≤32 chars).
 // Format: "kq" + 30 hex chars from crypto/rand = 32 chars total.
 func generateClientOrderID() (string, error) {
@@ -1223,16 +1268,18 @@ func orderItemToCCXT(symbol string, item *OrderItem) ccxt.Order {
 	// Remaining = total - filled
 	remaining := totalQty - filledQty
 
+	clientID := item.ClientOrderID
 	return ccxt.Order{
-		Id:        &id,
-		Symbol:    &sym,
-		Side:      &side,
-		Type:      &typ,
-		Status:    &status,
-		Amount:    &totalQty,
-		Filled:    &filledQty,
-		Remaining: &remaining,
-		Price:     &limitPrice,
+		Id:            &id,
+		ClientOrderId: &clientID,
+		Symbol:        &sym,
+		Side:          &side,
+		Type:          &typ,
+		Status:        &status,
+		Amount:        &totalQty,
+		Filled:        &filledQty,
+		Remaining:     &remaining,
+		Price:         &limitPrice,
 		Info: map[string]interface{}{
 			"order_id":        item.OrderID,
 			"client_order_id": item.ClientOrderID,

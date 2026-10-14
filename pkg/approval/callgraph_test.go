@@ -209,7 +209,16 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 			place = append(place, s)
 		}
 	}
-	assertSites(t, "broker.PlaceOrderIdempotent", place, "pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder")
+	// The second caller (MR-309) is the delta-neutral open: dnExchange.Place, reached
+	// only from the place steps of dn.open, which only the open tool starts on a
+	// user's confirm=true (the owner's decision for that path is the confirmation
+	// itself, as it is for create_order), and which the kill flag, every order gate
+	// and the paper-mode refusal precede. dn.recover never places: it asks.
+	assertSites(t, "broker.PlaceOrderIdempotent", place,
+		"pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder",
+		"pkg/tools/dn_exchange.go:dnExchange.Place")
+	assertSites(t, "deltaneutral.Exchange.Place", callSites(srcs, "Place"), "pkg/deltaneutral/workflows.go:Deps.placeLeg")
+	assertSites(t, "the dn.open place step", callSites(srcs, "placeLeg"), "pkg/deltaneutral/workflows.go:Deps.runOpen")
 
 	assertSites(t, "OrderBackend.PlaceApprovedOrder", callSites(srcs, "PlaceApprovedOrder"),
 		"pkg/approval/execute.go:Service.stepPlace")
@@ -217,7 +226,12 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 		t.Errorf("PlaceApprovedOrder is implemented in %v: there must be exactly one implementation", got)
 	}
 
-	assertSites(t, "StartWithID", callSites(srcs, "StartWithID"), "pkg/approval/service.go:Service.startExecution")
+	// StartWithID: the approval.order workflow (startExecution) and dn.recover, started
+	// by the finalize step of an open that needs recovery (idempotent by its id).
+	assertSites(t, "StartWithID", callSites(srcs, "StartWithID"),
+		"pkg/approval/service.go:Service.startExecution",
+		"pkg/deltaneutral/workflows.go:Deps.startRecovery")
+	assertSites(t, "Deps.startRecovery", callSites(srcs, "startRecovery"), "pkg/deltaneutral/workflows.go:Deps.settleOpen")
 	assertSites(t, "Service.startExecution", callSites(srcs, "startExecution"),
 		"pkg/approval/service.go:Service.Decide", "pkg/approval/service.go:Service.Recover")
 	assertSites(t, "store.decide", callSites(srcs, "decide"), "pkg/approval/service.go:Service.Decide")

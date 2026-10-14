@@ -181,6 +181,10 @@ type assemblyDeps struct {
 	// the caller never sets it.
 	Control *controlRuntime
 
+	// DNFlow is the delta-neutral workflow side (dn_workflows_wiring.go); buildServices
+	// sets it on its own copy of the deps before the workflow engine is built.
+	DNFlow *dnFlowRuntime
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -370,8 +374,15 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// The workflow engine: built only when a definition is registered (the approval
 	// one is, while approvals are on), so a gateway without one gains no goroutine
 	// and no table.
+	// The delta-neutral workflows (dn.open, dn.recover) join the same engine. They
+	// ask through the approval service and wake the owner through the outbox, so they
+	// come after both.
+	s.DNFlow = buildDNFlow(d, s.Attention, s.NotifyService)
+	d.DNFlow = s.DNFlow
+
 	s.journalLive.Store(buildJournal(d))
 	s.Approval.attach(s.journalLive.Load())
+	s.DNFlow.attach(s.journalLive.Load())
 
 	// The control path gets the services it acts on, now that they exist. An
 	// approval service that could not attach (no engine) is withdrawn from it by
@@ -521,6 +532,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// cards and delivers through notify and the channels, which are still up here.
 	s.Approval.stop()
 	s.Approval = nil
+	s.DNFlow.stop() // the open tool refuses once the engine is going
+	s.DNFlow = nil
 
 	// The workflow engine next, while channels, notify and the exchanges are still up:
 	// a step in flight may be placing an order or sending a receipt, and it is let to

@@ -149,8 +149,13 @@ type OrderRequest struct {
 	// are computed from it); it is ignored for spot.
 	Amount      float64
 	NotionalUSD float64
-	Price       *float64
-	ReduceOnly  bool
+	// Contracts is an exact futures contract count for a REDUCE-ONLY order, set by
+	// code only (the delta-neutral recovery closes exactly the quantity it assessed;
+	// a notional would round it). propose_order never sets it, and the backend
+	// refuses it on an order that can add risk.
+	Contracts  float64
+	Price      *float64
+	ReduceOnly bool
 	// CollarPct overrides DefaultCollarPct when positive.
 	CollarPct float64
 }

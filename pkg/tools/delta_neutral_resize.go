@@ -252,7 +252,7 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	firstLegType := deltaneutral.FirstLegType(spotLessLiquid)
 
 	// Transition to awaiting_approval
-	exec.State = string(deltaneutral.ExecutionStateAwaitingApproval)
+	transition(exec, deltaneutral.ExecutionStateAwaitingApproval)
 	approvedNow := time.Now()
 	exec.ApprovedAt = &approvedNow
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
@@ -260,7 +260,7 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Transition to placing_first_leg
-	exec.State = string(deltaneutral.ExecutionStatePlacingFirstLeg)
+	transition(exec, deltaneutral.ExecutionStatePlacingFirstLeg)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to update execution state: %v", err))
 	}
@@ -284,11 +284,11 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		if firstLegErr != nil {
 			failMsg = firstLegErr.Error()
 		}
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
+		transition(exec, deltaneutral.ExecutionStateFirstLegFailed)
 		exec.ErrorMsg = failMsg
 		updateExecutionLogged(ctx, t.store, exec)
 
-		exec.State = string(deltaneutral.ExecutionStateFailed)
+		transition(exec, deltaneutral.ExecutionStateFailed)
 		updateExecutionLogged(ctx, t.store, exec)
 
 		if firstLegErr != nil {
@@ -302,12 +302,12 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	firstBkErr := firstOut.BookkeepingErr
 
 	// First leg filled — transition to first_leg_filled, then placing_second_leg
-	exec.State = string(deltaneutral.ExecutionStateFirstLegFilled)
+	transition(exec, deltaneutral.ExecutionStateFirstLegFilled)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
 		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
 
-	exec.State = string(deltaneutral.ExecutionStatePlacingSecondLeg)
+	transition(exec, deltaneutral.ExecutionStatePlacingSecondLeg)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
 		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
@@ -331,7 +331,7 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		if secondLegErr != nil {
 			secondMsg = secondLegErr.Error()
 		}
-		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
+		transition(exec, deltaneutral.ExecutionStateSecondLegFailed)
 		exec.ErrorMsg = execErrMsg(secondMsg, firstBkErr)
 		updateExecutionLogged(ctx, t.store, exec)
 
@@ -360,7 +360,7 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Both legs filled — success. Update plan notionals.
-	exec.State = string(deltaneutral.ExecutionStateBothLegsFilled)
+	transition(exec, deltaneutral.ExecutionStateBothLegsFilled)
 	completedNow := time.Now()
 	exec.CompletedAt = &completedNow
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {

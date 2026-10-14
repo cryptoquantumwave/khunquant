@@ -55,6 +55,9 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 	// sqlitex.Shared; this process owns it, so release it on the way out. It is
 	// deferred before agentLoop.Close so that it runs after the loop has stopped.
 	defer func() { _ = sqlitex.CloseShared() }()
+	// The workflow engine for an interrupted delta-neutral open is deferred AFTER the
+	// line above, so it stops (bounded) before the shared database it uses is closed.
+	defer startDNEngine(cfg)()
 	defer agentLoop.Close()
 
 	// Print agent startup info (only for interactive mode)

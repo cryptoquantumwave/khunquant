@@ -154,7 +154,7 @@ func escalateToRecovery(ctx context.Context, store *deltaneutral.Store, planID i
 
 	var failures []string
 	if exec != nil {
-		exec.State = string(deltaneutral.ExecutionStateRecoveryRequired)
+		transition(exec, deltaneutral.ExecutionStateRecoveryRequired)
 		exec.ErrorMsg = msg
 		if err := store.UpdateExecution(bctx, exec); err != nil {
 			logger.ErrorCF("deltaneutral", "Could not move execution to recovery_required", map[string]any{
@@ -176,6 +176,18 @@ func escalateToRecovery(ctx context.Context, store *deltaneutral.Store, planID i
 		"\nWARNING: could not persist recovery_required state (%s). Treat plan %d as recovery_required: "+
 			"do NOT re-open it; verify the exchange positions manually.",
 		strings.Join(failures, "; "), planID)
+}
+
+// transition moves exec through the state machine (Execution.Transition) and is the
+// only way these tools change an execution's state. An illegal transition is
+// logged at ERROR and leaves exec.State where it was, so the UpdateExecution that
+// follows rewrites the same state: it cannot slip past the table.
+func transition(exec *deltaneutral.Execution, to deltaneutral.ExecutionState) {
+	if err := exec.Transition(to); err != nil {
+		logger.ErrorCF("deltaneutral", "Illegal execution state transition refused", map[string]any{
+			"execution_id": exec.ID, "from": exec.State, "to": string(to), "error": err.Error(),
+		})
+	}
 }
 
 // setPlanStatusLogged updates a plan status, logging (never discarding) a failure.

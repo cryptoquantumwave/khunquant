@@ -24,8 +24,9 @@ import (
 // package's; pkg/approval depends on the interface only.
 //
 // Every order that follows from a proposal is placed by PlaceApprovedOrder, which
-// is the only caller of broker.PlaceOrderIdempotent in the program
-// (TestOrderExecutionCallGraph keeps it so).
+// is the only caller of broker.PlaceOrderIdempotent that follows from a proposal (the
+// delta-neutral open, dnExchange.Place, is the other caller in the program, and is not
+// reached from a proposal; TestOrderExecutionCallGraph keeps both lists exact).
 type ApprovalOrderBackend struct {
 	cfg *config.Config
 	now func() time.Time
@@ -113,6 +114,15 @@ func (b *ApprovalOrderBackend) Prepare(ctx context.Context, req approval.OrderRe
 		spec.amount = req.Amount
 	default:
 		spec.symbol = normalizeFuturesSymbol(spec.symbol)
+		if req.Contracts != 0 {
+			// An exact count, from code, and only for an order that cannot add risk:
+			// the reduce-only gate then checks it against the position held.
+			if !spec.reduceOnly || !positiveFinite(req.Contracts) {
+				return approval.Prepared{}, errors.New("an exact contract count is for a reduce-only order, and must be positive and finite")
+			}
+			spec.amount = req.Contracts
+			break
+		}
 		// A futures amount is a CONTRACT count, computed by code from a USD size
 		// and the market's contract size; the model's number is only the size.
 		if !positiveFinite(req.NotionalUSD) {
@@ -433,8 +443,8 @@ func (b *ApprovalOrderBackend) Throttle(p approval.OrderParams) (bool, time.Dura
 	return false, wait
 }
 
-// PlaceApprovedOrder implements approval.OrderBackend. It is the ONLY caller of
-// broker.PlaceOrderIdempotent in the program: spot orders go through
+// PlaceApprovedOrder implements approval.OrderBackend. It is the only caller of
+// broker.PlaceOrderIdempotent that an approved proposal reaches: spot orders go through
 // TradingProviderFor (a simulation in paper mode, in which a reconcile then looks
 // in that same provider), futures orders through the real futures provider, which
 // paper mode allows only for a reduce-only exit.

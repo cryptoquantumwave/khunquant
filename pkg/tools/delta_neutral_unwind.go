@@ -191,7 +191,7 @@ func (t *UnwindDeltaNeutralPositionTool) execute(ctx context.Context, args map[s
 	finish := func(state deltaneutral.ExecutionState, msg string, completedAt *time.Time) bool {
 		bctx, cancel := bookkeepingContext(ctx)
 		defer cancel()
-		exec.State = string(state)
+		transition(exec, state)
 		exec.ErrorMsg = msg
 		exec.CompletedAt = completedAt
 		if err := t.store.UpdateExecution(bctx, exec); err != nil {

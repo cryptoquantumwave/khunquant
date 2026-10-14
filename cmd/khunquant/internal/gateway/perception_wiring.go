@@ -57,12 +57,14 @@ type agentTurnRunner struct{ run proactiveRunner }
 
 func (a agentTurnRunner) RunProactiveTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResult, error) {
 	res, err := a.run.RunProactiveTurn(ctx, agent.ProactiveTurnRequest{
-		Kind:         req.Kind,
-		Prompt:       req.Prompt,
-		Candidates:   req.Candidates,
-		ForcedSkills: req.ForcedSkills,
-		Deadline:     req.Deadline,
-		Model:        req.Model,
+		Kind:           req.Kind,
+		Prompt:         req.Prompt,
+		Candidates:     req.Candidates,
+		ForcedSkills:   req.ForcedSkills,
+		Deadline:       req.Deadline,
+		Model:          req.Model,
+		DeliverNow:     req.DeliverNow,
+		InterventionID: req.InterventionID,
 	})
 	return engine.TurnResult{
 		Decisions: res.Decisions, FinalText: res.FinalText, ContractViolated: res.ContractViolated,

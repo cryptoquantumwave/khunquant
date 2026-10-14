@@ -650,6 +650,7 @@ var paperModeSkips = map[string]string{
 	NameUpdateDCAPlan:          "writes a plan row only; places no order",
 	NameUpdateDeltaNeutralPlan: "its one exchange call (live leverage on an active plan) is refused in the tool: TestPaperMode_UpdateDNPlanLeverageRejected",
 	NameInstallSkill:           "fetches and installs a skill; makes no exchange call",
+	NameProposeOrder:           "stores a proposal and sends a card; places nothing itself. The order is placed by the approval.order workflow, through TradingProviderFor (a simulation in paper mode) - TestApprovalBackend_PaperMode*",
 }
 
 func paperCases() map[string]paperCase {

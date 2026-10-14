@@ -47,8 +47,12 @@ func TestJournal_NothingRegisteredBuildsNothing(t *testing.T) {
 		"proactive enabled": withOwner("1001"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if len(journalSources) != 0 {
-				t.Fatalf("%d journal sources registered in production code; this change registers none", len(journalSources))
+			// The approval source is registered in production code; with approvals off
+			// it must yield no definition, so nothing is built.
+			for i, src := range journalSources {
+				if defs := src(assemblyDeps{}); len(defs) != 0 {
+					t.Fatalf("journal source %d yields %d definitions with approvals off", i, len(defs))
+				}
 			}
 			f := newAssemblyFixture(t, mutate)
 			if f.services.journalLive == nil || f.services.journalLive.Load() != nil {

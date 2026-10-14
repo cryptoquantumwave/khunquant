@@ -161,3 +161,15 @@ func profileTools(cfg *config.Config, store *intent.Store) []tools.Tool {
 	}
 	return out
 }
+
+// proposalTools builds propose_order, or nothing while approvals are off (the
+// tool does not exist then) or the operator disabled the tool. The tool is
+// registered like any other; which turns may call it is decided by
+// tools.TurnMayCall, and the approval service it proposes through is attached by
+// the gateway.
+func proposalTools(cfg *config.Config) []tools.Tool {
+	if cfg == nil || !cfg.Proactive.Effective().Approvals || !cfg.Tools.IsToolEnabled(tools.NameProposeOrder) {
+		return nil
+	}
+	return []tools.Tool{tools.NewProposeOrderTool(cfg)}
+}

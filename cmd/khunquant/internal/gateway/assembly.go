@@ -171,6 +171,11 @@ type assemblyDeps struct {
 	// it, and the caller never sets it.
 	DNStore *deltaneutral.Store
 
+	// Approval is the order-approval side of this generation (approval_wiring.go);
+	// buildServices sets it on its own copy of the deps before the workflow engine is
+	// built, and the caller never sets it.
+	Approval *approvalRuntime
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -343,9 +348,17 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// builds the registry, and after the cron service started.
 	s.Alerts.attach(d, s.CronService, s.Perception)
 
-	// The workflow engine: built only when a definition is registered (none is
-	// today), so a running gateway gains no goroutine and no table.
+	// Order approvals: the service is built first, because its workflow definition
+	// goes to the engine below, and attached after, because it needs the engine to
+	// start workflows. With approvals off none of it exists.
+	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager)
+	d.Approval = s.Approval
+
+	// The workflow engine: built only when a definition is registered (the approval
+	// one is, while approvals are on), so a gateway without one gains no goroutine
+	// and no table.
 	s.journalLive.Store(buildJournal(d))
+	s.Approval.attach(s.journalLive.Load())
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -475,6 +488,12 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// The approval sweeper and propose_order go before the engine: no new proposal
+	// may start while the services it needs are being stopped, and the sweeper edits
+	// cards and delivers through notify and the channels, which are still up here.
+	s.Approval.stop()
+	s.Approval = nil
 
 	// The workflow engine next, while channels, notify and the exchanges are still up:
 	// a step in flight may be placing an order or sending a receipt, and it is let to

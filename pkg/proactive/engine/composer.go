@@ -42,6 +42,27 @@ type TurnRequest struct {
 	// Deadline and Model are left zero by the Composer: the turn's defaults apply.
 	Deadline time.Duration
 	Model    proactive.ModelTier
+	// DeliverNow is true when every decision behind the message is a notify or an
+	// escalate, in a message that is not the digest: attention has decided to put
+	// it in front of the owner now, so quiet hours were respected. InterventionID is
+	// that message's ID. They are set by the Composer from the attention message,
+	// never from anything a model said.
+	DeliverNow     bool
+	InterventionID string
+}
+
+// deliveredNow reports whether m is a message attention decided to deliver now:
+// not the digest, with at least one decision, every one a notify or an escalate.
+func deliveredNow(m attention.Message) bool {
+	if m.Digest || len(m.Decisions) == 0 {
+		return false
+	}
+	for _, d := range m.Decisions {
+		if d.Disposition != proactive.DispNotify && d.Disposition != proactive.DispEscalate {
+			return false
+		}
+	}
+	return true
 }
 
 // TurnResult is what a proactive turn decided. Nothing in it has been delivered.
@@ -139,10 +160,12 @@ func (c *Composer) Compose(ctx context.Context, m attention.Message, items []att
 		cands[i].Quote = ""
 	}
 	res, err := c.run.RunProactiveTurn(ctx, TurnRequest{
-		Kind:         proactive.TurnProactive,
-		Prompt:       composePrompt,
-		Candidates:   cands,
-		ForcedSkills: forcedSkills(cands),
+		Kind:           proactive.TurnProactive,
+		Prompt:         composePrompt,
+		Candidates:     cands,
+		ForcedSkills:   forcedSkills(cands),
+		DeliverNow:     deliveredNow(m),
+		InterventionID: m.InterventionID,
 	})
 	if err != nil {
 		c.failed.Add(1)

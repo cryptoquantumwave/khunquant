@@ -154,8 +154,18 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
 - **Every new tool must be classified in `pkg/tools/classification.go`** (`ClassOf`: read,
   notify, local state, automation, propose, trade, funds, system), choosing the more restrictive class when
   in doubt. Autonomous turns (heartbeat, scheduled jobs, and anything spawned from them) may call
-  read, notify and local-state tools only; an unclassified tool — every MCP tool included — is
-  denied there and hidden from its tool definitions.
+  read, notify and local-state tools only, with ONE named opening: `propose_order` (class `propose`),
+  open to a candidate-driven proactive turn (`TurnProactive`, never a heartbeat, sweep, cron or
+  sub-turn) whose candidates are all of at least `TrustExchange`, that attention decided to
+  deliver now, and that has read no outside text (`web_search`, `web_fetch`, files, skills, news,
+  MCP: any tool not in `trustedDataTools` lowers the turn's trust floor for the rest of the turn).
+  It may only propose a risk-reducing order, and it places nothing: the owner, and only the
+  owner, approves exactly the stored order before it expires, and it then runs as the journal
+  workflow `approval.order` (`pkg/approval`), which re-checks every gate. Proposal cards are a
+  second delivery path (`notify.Deliver` directly) that bypasses the attention outbox on purpose.
+  The grant is `proposeOrderOpen` in `pkg/tools/proposal_scope.go`; do not widen it by class.
+  An unclassified tool — every MCP tool included — is denied there and hidden from its tool
+  definitions.
   `TestClassOf_AllRegisteredToolsClassified` (and the gateway variant) fail on a registered tool
   with no class. Exits are trade tools too, so autonomous turns cannot call them. A turn-starting call
   site must tag its origin (`tools.WithToolOrigin`); a context built from `context.Background()`

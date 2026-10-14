@@ -193,6 +193,52 @@ func (e *Engine) Start(ctx context.Context, kind string, input any) (string, err
 	return id, nil
 }
 
+// ErrIDInUse is returned by StartWithID when a workflow of that id exists with a
+// different kind or input: the id is not the one the caller derived it from.
+var ErrIDInUse = errors.New("journal: workflow id is in use by a different workflow")
+
+// StartWithID is Start with an id the caller derives, so that starting the same
+// logical workflow twice is a no-op: when a workflow of that id already exists
+// (whatever its status) nothing is written, created is false, and the existing
+// one is left alone. It is how a caller that cannot make "decide" and "start" one
+// transaction makes the second half safe to repeat after a crash.
+//
+// The id is checked like a step name (letters, digits, '_', '.', '-'). An
+// existing workflow of the same id must have the same kind and input, else
+// ErrIDInUse: an id derived from something else must not silently stand for it.
+func (e *Engine) StartWithID(ctx context.Context, kind, id string, input any) (created bool, err error) {
+	def, ok := e.defs[kind]
+	if !ok {
+		return false, fmt.Errorf("%w: %q", ErrUnknownKind, kind)
+	}
+	if err := checkName("workflow id", id); err != nil {
+		return false, err
+	}
+	raw, err := encodeInput(input)
+	if err != nil {
+		return false, err
+	}
+	now := e.clock.Now()
+	created, err = e.st.insertWorkflowOnce(ctx, Workflow{ID: id, Kind: kind, Input: raw, Protective: def.Protective}, now)
+	if err != nil {
+		return false, err
+	}
+	if !created {
+		w, gerr := e.st.getWorkflow(ctx, id)
+		if gerr != nil {
+			return false, gerr
+		}
+		if w.Kind != kind || string(w.Input) != string(raw) {
+			return false, fmt.Errorf("%w: %q", ErrIDInUse, id)
+		}
+		return false, nil
+	}
+	e.stats.started.Add(1)
+	e.publish(Event{Scope: ScopeWorkflow, WorkflowID: id, WorkflowKind: kind, Protective: def.Protective, Status: WorkflowStarted})
+	e.wake()
+	return true, nil
+}
+
 func encodeInput(input any) (json.RawMessage, error) {
 	var raw []byte
 	switch v := input.(type) {

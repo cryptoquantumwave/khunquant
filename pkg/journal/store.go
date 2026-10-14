@@ -165,6 +165,25 @@ func (s *store) insertWorkflow(ctx context.Context, w Workflow, now time.Time) e
 	})
 }
 
+// insertWorkflowOnce inserts w under its own id unless a workflow of that id
+// exists, and reports whether it inserted. One statement, so two callers racing
+// on the same id insert exactly one row.
+func (s *store) insertWorkflowOnce(ctx context.Context, w Workflow, now time.Time) (created bool, err error) {
+	err = s.tx(ctx, "insert_workflow_once", true, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO workflows (id, kind, input, status, protective, created_at_ms, updated_at_ms)
+			 VALUES (?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+			w.ID, w.Kind, string(w.Input), boolInt(w.Protective), ms(now), ms(now))
+		if err != nil {
+			return fmt.Errorf("journal: insert workflow: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		created = n == 1
+		return nil
+	})
+	return created, err
+}
+
 func boolInt(b bool) int {
 	if b {
 		return 1

@@ -29,9 +29,11 @@ const (
 	ClassAutomation
 	// ClassPropose is for tools that queue a proposal for a person to approve.
 	// create_intent is the first: what it stores from any turn but the owner's own
-	// is a suggestion that does nothing until the owner confirms it. Autonomous
-	// turns may not call this class yet: opening it to them is designed once, with
-	// propose_order.
+	// is a suggestion that does nothing until the owner confirms it. The class
+	// ceiling does not admit autonomous turns to it. The one opening is propose_order
+	// in a candidate-driven proactive turn, granted by name in proposeOrderOpen
+	// (policy.go) and bound to the trust of the turn's inputs; heartbeat, sweep and
+	// cron turns have no way in.
 	ClassPropose
 	// ClassTrade places, cancels or modifies orders or positions. Exits are
 	// trade tools too: an autonomous turn does not get to unwind by itself.
@@ -184,6 +186,11 @@ var toolClasses = map[string]Class{
 	// intent in their own conversation; the autonomous ceiling does not admit this
 	// class, so a background turn cannot even suggest one yet.
 	NameCreateIntent: ClassPropose,
+	// propose_order stores an order for the owner to approve; nothing is placed
+	// until the owner decides. Trade is the nearest class a mistake would fall into,
+	// so the tool is propose, not read: the ceiling refuses it everywhere except
+	// where proposeOrderOpen grants it.
+	NameProposeOrder: ClassPropose,
 
 	// Orders and positions. Every exit is here as well: the previous rule that
 	// exits are never gated holds for turns a person started, not for these.

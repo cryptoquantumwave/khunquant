@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/identity"
@@ -76,7 +75,7 @@ func checkOwnerTurn(ctx context.Context, cfg *config.Config, rootOnly bool) (by 
 		if !ok {
 			return "", ownerNoOwner
 		}
-		if sender == "" || !strings.EqualFold(sender, route.SenderID) {
+		if !identity.SameSender(sender, route.SenderID) {
 			return "", ownerOther
 		}
 		return sender, ownerYes
@@ -88,9 +87,5 @@ func checkOwnerTurn(ctx context.Context, cfg *config.Config, rootOnly bool) (by 
 // sender to that form already; a raw id is qualified with the turn's channel,
 // the way the allow-list falls back.
 func canonicalSender(ctx context.Context) string {
-	sender := ToolSender(ctx)
-	if platform, id, ok := identity.ParseCanonicalID(sender); ok {
-		return identity.BuildCanonicalID(platform, id)
-	}
-	return identity.BuildCanonicalID(ToolChannel(ctx), sender)
+	return identity.CanonicalSender(ToolSender(ctx), ToolChannel(ctx))
 }

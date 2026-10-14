@@ -133,7 +133,7 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	// params (which can open or enlarge a short on a spot symbol) add risk. A
 	// plain spot sell only reduces exposure, so a tripped limit must never stop
 	// the user getting out.
-	if !strings.EqualFold(side, "sell") || strings.Contains(symbol, ":") || orderParamsAddRisk(params) {
+	if orderAddsRisk(symbol, side, params, false) {
 		if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
 			return ErrorResult(err.Error())
 		}

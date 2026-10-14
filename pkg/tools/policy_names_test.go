@@ -41,6 +41,7 @@ func TestPolicyCoversKnownFinancialTools(t *testing.T) {
 		NameResizeDeltaNeutralPosition,
 		NameManageEarnPosition,
 		NameInstallSkill,
+		NameProposeOrder, // places nothing itself, but an approved proposal becomes a real order
 	} {
 		if _, ok := table[name]; !ok {
 			t.Errorf("%q moves money or runs third-party code but has no policy entry", name)
@@ -82,7 +83,7 @@ func knownToolNames() map[string]bool {
 		NameScanDeltaNeutralOpportunities, NameRenderDeltaNeutralYieldChart,
 		NameEarnOverview, NameManageEarnPosition,
 		NameGetProfile, NameUpdateProfile, NameRespondProactive,
-		NameCreateIntent, NameListIntents, NameUpdateIntent,
+		NameCreateIntent, NameListIntents, NameUpdateIntent, NameProposeOrder,
 	}
 
 	known := make(map[string]bool, len(names))

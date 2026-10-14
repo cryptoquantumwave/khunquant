@@ -43,7 +43,7 @@ func toolCall(id, name string, args map[string]any) providers.LLMResponse {
 func watchCallArgs(title string, requested bool) map[string]any {
 	return map[string]any{
 		"type": "watch", "title": title, "user_requested": requested,
-		"trigger": map[string]any{"kind": "price_cross", "params": map[string]any{"symbol": "SOL/USDT", "below": 120}},
+		"trigger": map[string]any{"kind": "price_cross", "params": map[string]any{"provider": "binance", "symbol": "SOL/USDT", "direction": "below", "threshold": 120}},
 	}
 }
 
@@ -77,7 +77,7 @@ func TestIntentAcceptance_OwnerSaysItOneActiveWatch(t *testing.T) {
 		t.Fatalf("stored = %+v", rows)
 	}
 	if !anyMessageContains(provider.gotMsgs[1], "Active watch: SOL/USDT below 120") ||
-		!anyMessageContains(provider.gotMsgs[1], "Nothing is watching for it yet") {
+		!anyMessageContains(provider.gotMsgs[1], "nothing watches it") {
 		t.Fatal("the model was not shown what was stored, and that it is not live yet")
 	}
 

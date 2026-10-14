@@ -103,7 +103,8 @@ func (s Source) Valid() bool {
 
 // TriggerSpec names the trigger that watches for an intent and its parameters.
 // The kind is checked here by format only; it is validated against the trigger
-// registry when intents are compiled into triggers (a later change).
+// registry by the intent compiler (pkg/triggers/intents), which refuses a kind that
+// cannot be carried out before an intent becomes active.
 type TriggerSpec struct {
 	Kind   string          `json:"kind"`
 	Params json.RawMessage `json:"params,omitempty"`
@@ -136,7 +137,8 @@ type Intent struct {
 	// Params is type-specific JSON (a goal's target, a reminder's text), at most
 	// MaxParamsBytes.
 	Params json.RawMessage
-	// Trigger is compiled into a trigger by a later change; nothing reads it yet.
+	// Trigger is compiled into a trigger spec by pkg/triggers/intents while the intent
+	// is active (a watch or standing order: price_cross or indicator_cross).
 	Trigger  *TriggerSpec
 	Expected *Expectation
 	// MandateID is always empty in this change: no mandate exists to point at.
@@ -149,7 +151,8 @@ type Intent struct {
 	// FiresUsed reaches it the intent is done.
 	FireBudget int
 	FiresUsed  int
-	// Cooldown is the least time between two fires (enforced when intents fire).
+	// Cooldown is the least time between two fires (enforced by the trigger the intent
+	// compiles into: the crossing kinds' cooldown_minutes).
 	Cooldown time.Duration
 	// Lifetime is how long the intent stays in force once ACTIVE (0 = until the
 	// owner ends it). ExpiresAt is derived from it by the ledger: while proposed it

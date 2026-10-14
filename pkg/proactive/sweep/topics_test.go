@@ -176,7 +176,7 @@ func TestFilter(t *testing.T) {
 }
 
 func TestKnownKindsAndKindOf(t *testing.T) {
-	if len(KnownKinds()) != 10 {
+	if len(KnownKinds()) != 11 {
 		t.Errorf("%d kinds: %v", len(KnownKinds()), KnownKinds())
 	}
 	for _, k := range KnownKinds() {

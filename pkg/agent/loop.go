@@ -49,6 +49,7 @@ type AgentLoop struct {
 	fallback         *providers.FallbackChain
 	channelManager   *channels.Manager
 	mediaStore       media.MediaStore
+	intentCompiler   atomic.Pointer[intentCompilerBox]
 	transcriber      voice.Transcriber
 	cmdRegistry      *commands.Registry
 	mcp              mcpRuntime
@@ -255,7 +256,7 @@ func registerSharedTools(
 	// The intent tools share that store and exist only while the intent ledger is
 	// on (proactive.enabled and proactive.intents.enabled); a reload builds them
 	// afresh, so switching it on or off takes effect without a restart.
-	profile = append(profile, intentTools(cfg, profileStore)...)
+	profile = append(profile, intentTools(cfg, profileStore, al.intentCompilerRoute)...)
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)

@@ -93,21 +93,46 @@ func intentsEnabled(cfg *config.Config) bool {
 // ledger is on, or when the store is missing. create_intent is registered like any
 // tool, and is kept out of autonomous turns by its class (propose), not by being
 // absent here.
-func intentTools(cfg *config.Config, store *intent.Store) []tools.Tool {
+func intentTools(cfg *config.Config, store *intent.Store, comp tools.IntentCompilerFunc) []tools.Tool {
 	if store == nil || !intentsEnabled(cfg) {
 		return nil
 	}
 	var out []tools.Tool
 	if cfg.Tools.IsToolEnabled(tools.NameCreateIntent) {
-		out = append(out, tools.NewCreateIntentTool(store, cfg))
+		out = append(out, tools.NewCreateIntentTool(store, cfg).WithCompiler(comp))
 	}
 	if cfg.Tools.IsToolEnabled(tools.NameListIntents) {
-		out = append(out, tools.NewListIntentsTool(store, cfg))
+		out = append(out, tools.NewListIntentsTool(store, cfg).WithCompiler(comp))
 	}
 	if cfg.Tools.IsToolEnabled(tools.NameUpdateIntent) {
-		out = append(out, tools.NewUpdateIntentTool(store, cfg))
+		out = append(out, tools.NewUpdateIntentTool(store, cfg).WithCompiler(comp))
 	}
 	return out
+}
+
+// intentCompilerBox holds the compiler behind an atomic pointer (an interface cannot
+// be stored in one directly).
+type intentCompilerBox struct{ c tools.IntentCompiler }
+
+// SetIntentCompiler gives the intent tools the compiler of the running gateway
+// generation, late: the tools are built before the trigger registry exists and
+// outlive a generation. The gateway sets it when it builds the compiler and clears
+// it (nil) when it stops it. A CLI agent never sets one, and the tools then say that
+// nothing watches an intent.
+func (al *AgentLoop) SetIntentCompiler(c tools.IntentCompiler) {
+	if c == nil {
+		al.intentCompiler.Store(nil)
+		return
+	}
+	al.intentCompiler.Store(&intentCompilerBox{c: c})
+}
+
+// intentCompilerRoute is what the intent tools call to find the compiler now.
+func (al *AgentLoop) intentCompilerRoute() tools.IntentCompiler {
+	if b := al.intentCompiler.Load(); b != nil {
+		return b.c
+	}
+	return nil
 }
 
 // withIntentsContributor adds the intents digest to the financial context when

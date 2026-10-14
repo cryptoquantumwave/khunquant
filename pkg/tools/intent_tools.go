@@ -18,6 +18,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers/intents"
 )
 
 // The intent tools. An intent is what the owner wants the assistant to keep doing
@@ -30,14 +32,9 @@ import (
 // below is nevertheless implemented, and tested, for every origin, because the
 // ceiling is a separate layer and the rule must not rely on it.
 
-// intentNotLiveNote is appended to the echo of an active intent that a trigger
-// must carry out. Nothing compiles intents into triggers yet, so the owner must
-// not believe the watch is running. The change that compiles them removes it.
-const intentNotLiveNote = "Recorded; it starts working when intent triggers are switched on in a later update. Nothing is watching for it yet."
-
 // intentContextNote is appended to the echo of an active goal, which works by being
 // in front of the model: the digest shows it in every prompt.
-const intentContextNote = "It is kept in front of the assistant in every conversation."
+const intentContextNote = intentGoalNote
 
 // intentPreferenceNote is appended to the echo of an active preference. The digest
 // shows goals, standing orders and watches, and nothing else yet reads a
@@ -126,6 +123,14 @@ func (t turnInfo) provenance(ownerWords bool) intent.Provenance {
 type CreateIntentTool struct {
 	store *intent.Store
 	cfg   *config.Config
+	comp  IntentCompilerFunc
+}
+
+// WithCompiler gives the tool the late-bound route to the intent compiler: it asks
+// for a pass after storing an intent and tells the owner whether the intent works.
+func (t *CreateIntentTool) WithCompiler(f IntentCompilerFunc) *CreateIntentTool {
+	t.comp = f
+	return t
 }
 
 // NewCreateIntentTool creates the create_intent tool. cfg is read on every call
@@ -162,20 +167,25 @@ func (t *CreateIntentTool) Parameters() map[string]any {
 					`"SOL/USDT below 120". No line breaks.`, intent.MaxTitleRunes),
 			},
 			"params": map[string]any{
-				"type":        "object",
-				"description": fmt.Sprintf("Optional details as a JSON object (at most %d bytes), for example a goal's target.", intent.MaxParamsBytes),
+				"type": "object",
+				"description": fmt.Sprintf("Optional details as a JSON object (at most %d bytes), for example a goal's target. "+
+					`A reminder needs exactly one of "at" (a date and time such as 2026-10-16T09:00, in the owner's time zone), `+
+					`"in" (a delay such as 3d) or "cron" (a five-field schedule, with "tz"; at most once a minute).`, intent.MaxParamsBytes),
 			},
 			"trigger": map[string]any{
-				"type":        "object",
-				"description": "Optional: what to watch for. Stored as given; nothing acts on it until triggers are switched on in a later update.",
+				"type": "object",
+				"description": "What to watch for, required for a watch or a standing order: a price_cross or an indicator_cross. " +
+					"Its parameters are checked now and a bad one is refused. Nothing is watched while triggers are off.",
 				"properties": map[string]any{
 					"kind": map[string]any{
 						"type":        "string",
-						"description": `A lower-case token naming the trigger kind, for example "price_cross".`,
+						"description": `"price_cross" or "indicator_cross"; no other kind works.`,
 					},
 					"params": map[string]any{
-						"type":        "object",
-						"description": fmt.Sprintf("The trigger's parameters as a JSON object (at most %d bytes), for example the symbol and the level.", intent.MaxParamsBytes),
+						"type": "object",
+						"description": fmt.Sprintf("The trigger's parameters as a JSON object (at most %d bytes). price_cross: provider, symbol, "+
+							`direction ("above" or "below"), threshold. indicator_cross: provider, symbol, timeframe, indicator, period, `+
+							"direction, threshold. Leave message and recurring out: the title and the fire budget decide them.", intent.MaxParamsBytes),
 					},
 				},
 				"required": []string{"kind"},
@@ -327,11 +337,18 @@ func (t *CreateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 	in.Provenance = turn.provenance(active)
 
+	// An intent that cannot be carried out is refused now, in the turn the owner asked
+	// for it, not accepted to sit "active" and do nothing.
+	if err := validateIntent(ctx, t.store, in); err != nil {
+		return ErrorResult("nothing was stored: " + intentRefusal(err))
+	}
+
 	stored, err := t.store.CreateIntent(ctx, in)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("nothing was stored: %v", err))
 	}
-	return NewToolResult(describeIntent(stored, time.Now()))
+	requestCompile(t.comp)
+	return NewToolResult(describeIntent(stored, time.Now(), resolveCompiler(t.comp)))
 }
 
 func argString(args map[string]any, key string) string {
@@ -347,6 +364,13 @@ func argString(args map[string]any, key string) string {
 type UpdateIntentTool struct {
 	store *intent.Store
 	cfg   *config.Config
+	comp  IntentCompilerFunc
+}
+
+// WithCompiler gives the tool the late-bound route to the intent compiler.
+func (t *UpdateIntentTool) WithCompiler(f IntentCompilerFunc) *UpdateIntentTool {
+	t.comp = f
+	return t
 }
 
 // NewUpdateIntentTool creates the update_intent tool.
@@ -429,15 +453,24 @@ func (t *UpdateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 			statusWord(allowedFrom), actionPast(action), statusWord(cur.Status)))
 	}
 
+	// A suggestion becomes active only if it can be carried out; the owner hears why
+	// not, now.
+	if action == "confirm" {
+		if err := validateIntent(ctx, t.store, cur); err != nil {
+			return ErrorResult("not confirmed: " + intentRefusal(err))
+		}
+	}
+
 	by := turn.provenance(true)
 	if err := t.store.Transition(ctx, id, want, by, "owner: "+action); err != nil {
 		return ErrorResult(intentErrorText(err))
 	}
+	requestCompile(t.comp)
 	done, err := t.store.GetIntent(ctx, id)
 	if err != nil {
 		return ErrorResult(intentErrorText(err))
 	}
-	return NewToolResult(describeIntent(done, time.Now()))
+	return NewToolResult(describeIntent(done, time.Now(), resolveCompiler(t.comp)))
 }
 
 func actionPast(action string) string {
@@ -479,6 +512,14 @@ const maxListedIntents = 50
 type ListIntentsTool struct {
 	store *intent.Store
 	cfg   *config.Config
+	comp  IntentCompilerFunc
+}
+
+// WithCompiler gives the tool the late-bound route to the intent compiler, for the
+// status note of each row.
+func (t *ListIntentsTool) WithCompiler(f IntentCompilerFunc) *ListIntentsTool {
+	t.comp = f
+	return t
 }
 
 // NewListIntentsTool creates the list_intents tool. cfg is read on every call for
@@ -601,7 +642,9 @@ func (t *ListIntentsTool) Execute(ctx context.Context, args map[string]any) *Too
 			more++
 			continue
 		}
-		out = append(out, listRow(it, now))
+		r := listRow(it, now)
+		t.addNote(ctx, &r, it)
+		out = append(out, r)
 	}
 	if len(out) == 0 && hidden == 0 {
 		return NewToolResult("No intents match.")
@@ -641,10 +684,36 @@ func listRow(it intent.Intent, now time.Time) listedIntent {
 	if it.ExpiresAt != nil {
 		r.Expires = it.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	if it.Status == intent.StatusActive && liveNeedsTrigger(it.Type) {
-		r.Live = "recorded; not watching yet"
-	}
 	return r
+}
+
+// addNote fills the row's note: for an active intent that a trigger carries out,
+// whether it works (or why it does not: a code-built note from the compiler); for an
+// intent the system ended, the reason it recorded. Every word is built by code.
+func (t *ListIntentsTool) addNote(ctx context.Context, r *listedIntent, it intent.Intent) {
+	comp := resolveCompiler(t.comp)
+	switch {
+	case it.Status == intent.StatusActive && liveNeedsTrigger(it.Type) && intents.Compilable(it.Type):
+		if comp == nil || !comp.Running() || comp.Mode() == triggers.ModeOff {
+			r.Live = "recorded; nothing watches it (triggers are off)"
+			return
+		}
+		if n := comp.Note(it.ID); n != "" {
+			r.Live = n
+			return
+		}
+		if comp.Mode() == triggers.ModeShadow {
+			r.Live = "rehearsal only: triggers are in shadow mode"
+		}
+	case it.Status == intent.StatusDone || it.Status == intent.StatusExpired:
+		evs, err := t.store.Events(ctx, it.ID)
+		if err != nil || len(evs) == 0 {
+			return
+		}
+		if last := evs[len(evs)-1]; strings.HasPrefix(last.By, "system:") && last.Reason != "" {
+			r.Live = oneLine(last.Reason, 120)
+		}
+	}
 }
 
 func newListNonce() string {
@@ -750,7 +819,7 @@ func describeIn(d time.Duration) string {
 
 // describeIntent states, from the stored row, what the ledger now holds: its
 // kind, status, title, trigger, budget and expiry, and whether it is working.
-func describeIntent(it intent.Intent, now time.Time) string {
+func describeIntent(it intent.Intent, now time.Time, comp IntentCompiler) string {
 	var b strings.Builder
 	kind := typeWord(it.Type)
 	title := oneLine(it.Title, intent.MaxTitleRunes)
@@ -785,7 +854,7 @@ func describeIntent(it intent.Intent, now time.Time) string {
 		case it.Type == intent.TypePreference:
 			b.WriteString(" " + intentPreferenceNote)
 		case liveNeedsTrigger(it.Type):
-			b.WriteString(" " + intentNotLiveNote)
+			b.WriteString(" " + liveNote(it, comp))
 		default:
 			b.WriteString(" " + intentContextNote)
 		}

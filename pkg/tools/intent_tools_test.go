@@ -84,7 +84,7 @@ func turnCases() []intentTurn {
 func watchArgs(title string, requested bool) map[string]any {
 	return map[string]any{
 		"type": "watch", "title": title, "user_requested": requested,
-		"trigger": map[string]any{"kind": "price_cross", "params": map[string]any{"symbol": "SOL/USDT", "below": 120}},
+		"trigger": map[string]any{"kind": "price_cross", "params": map[string]any{"provider": "binance", "symbol": "SOL/USDT", "direction": "below", "threshold": 120}},
 	}
 }
 
@@ -178,10 +178,10 @@ func TestCreateIntent_EchoStatesWhatWasStored(t *testing.T) {
 	res := tool.Execute(owner, watchArgs("SOL/USDT below 120", true))
 	for _, want := range []string{
 		"Active watch: SOL/USDT below 120",
-		"[trigger price_cross (below=120, symbol=SOL/USDT)]",
+		"[trigger price_cross (direction=below, provider=binance, symbol=SOL/USDT, threshold=120)]",
 		"fires once",
 		"expires in 30 days",
-		"Recorded; it starts working when intent triggers are switched on in a later update. Nothing is watching for it yet.",
+		"Recorded, but nothing watches it",
 	} {
 		if !strings.Contains(res.ForLLM, want) {
 			t.Errorf("echo lacks %q:\n%s", want, res.ForLLM)
@@ -216,7 +216,7 @@ func TestCreateIntent_EchoStatesWhatWasStored(t *testing.T) {
 	}
 
 	custom := tool.Execute(owner, map[string]any{"type": "reminder", "title": "review SET positions", "user_requested": true,
-		"fire_budget": 3, "expires_in": "2w"})
+		"fire_budget": 3, "expires_in": "2w", "params": map[string]any{"in": "3d"}})
 	if !strings.Contains(custom.ForLLM, "fires up to 3 times") || !strings.Contains(custom.ForLLM, "expires in 14 days") {
 		t.Errorf("custom budget and expiry not echoed: %q", custom.ForLLM)
 	}

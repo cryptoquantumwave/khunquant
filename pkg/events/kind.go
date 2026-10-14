@@ -127,6 +127,9 @@ const (
 	KindPerceptionClockSession Kind = "perception.clock.session"
 	// KindPerceptionClockDayStart is emitted at the start of a day.
 	KindPerceptionClockDayStart Kind = "perception.clock.day_start"
+	// KindPerceptionClockTimer is emitted when a timer scheduled on the clock source
+	// comes due (a reminder).
+	KindPerceptionClockTimer Kind = "perception.clock.timer"
 	// KindPerceptionExternalTrigger is emitted for a trigger from outside the process.
 	KindPerceptionExternalTrigger Kind = "perception.external.trigger"
 	// KindPerceptionDevice is emitted for a device observation.
@@ -223,6 +226,7 @@ var knownKinds = []Kind{
 	KindPerceptionPlanDCADue,
 	KindPerceptionClockSession,
 	KindPerceptionClockDayStart,
+	KindPerceptionClockTimer,
 	KindPerceptionExternalTrigger,
 	KindPerceptionDevice,
 	KindPerceptionNewsItem,

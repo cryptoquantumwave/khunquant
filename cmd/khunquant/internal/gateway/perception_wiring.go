@@ -14,6 +14,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers/intents"
 )
 
 const (
@@ -110,6 +111,13 @@ type perceptionRuntime struct {
 	// clock is the clock source, when it is among the sources (for its counters).
 	clock *sources.ClockSource
 
+	// intentComp is the intent compiler, when there is a trigger registry to compile
+	// into (intents_wiring.go). agentLoop is who it tells.
+	intentComp   *intents.Compiler
+	intentCancel context.CancelFunc
+	intentDone   chan struct{}
+	agentLoop    *agent.AgentLoop
+
 	// devicesTakenOver: the device adapter is among the sources, so the legacy
 	// device service must not be started.
 	devicesTakenOver bool
@@ -181,7 +189,8 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	}
 	rt.attachFinance(d)
 	rt.attachDCADue(d)
-	rt.attachDNPlans(d) // after the triggers, whose demands say which plans to watch
+	rt.attachDNPlans(d)      // after the triggers, whose demands say which plans to watch
+	rt.startIntentCompiler() // after the sources: it schedules reminders on the clock
 
 	engCtx, engCancel := context.WithCancel(context.Background())
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
@@ -334,7 +343,8 @@ func (rt *perceptionRuntime) stop() {
 	if rt == nil {
 		return
 	}
-	rt.stopFinanceFeed() // no new orders reach an engine that is stopping
+	rt.detachIntentTools() // the compiler itself stops after the drain, below
+	rt.stopFinanceFeed()   // no new orders reach an engine that is stopping
 	ctx, cancel := context.WithTimeout(context.Background(), perceptionSourcesStopTimeout)
 	rt.mgrCancel()
 	if err := rt.manager.Stop(ctx); err != nil {
@@ -350,6 +360,9 @@ func (rt *perceptionRuntime) stop() {
 	case <-time.After(perceptionEngineStopTimeout):
 		logger.WarnCF("perception", "Pipeline engine did not stop in time", nil)
 	}
+	// After the drain, so that a firing the drain committed is counted: the compiler
+	// writes what is queued as it stops.
+	rt.stopIntentCompiler()
 	// After the drain: every event the pipeline held is in the model now, and the
 	// final checkpoint writes it.
 	rt.stopWorldModel()

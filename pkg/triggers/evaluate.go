@@ -28,6 +28,20 @@ type pending struct {
 	// mode was live. It takes effect when the candidates are decided, like disable,
 	// but is no failure: the error count is left alone.
 	turnOff bool
+	// fires are the live candidates of the evaluation that belong to an intent (see
+	// Firing). They are reported once the evaluation is committed, never before.
+	fires []Firing
+}
+
+// Firing is one live candidate of a spec compiled from an intent, reported to the
+// fire observer when attention has recorded its decision (see SetFireObserver). It
+// carries no text: the ids and the key the candidate was made with.
+type Firing struct {
+	SpecID   string
+	Kind     string
+	IntentID string
+	DedupKey string
+	At       time.Time
 }
 
 // Evaluate routes d to the triggers that list the kind of its event, in spec ID
@@ -127,6 +141,9 @@ func (r *Registry) evaluateOne(ctx context.Context, e *entry, g int, v worldmode
 			c.At = v.Now()
 		}
 		p.ids = append(p.ids, c.ID)
+		if spec.IntentID != "" && !c.Shadow {
+			p.fires = append(p.fires, Firing{SpecID: spec.ID, Kind: spec.Kind, IntentID: spec.IntentID, DedupKey: c.DedupKey, At: c.At})
+		}
 		out = append(out, c)
 	}
 	r.c.candidates.Add(uint64(len(out)))
@@ -306,6 +323,92 @@ func (r *Registry) Committed(ctx context.Context, ids []string) {
 			continue
 		}
 		r.apply(ctx, p)
+		r.observe(p.fires)
+	}
+}
+
+// AutoDisabled reports whether the registry switched the spec off itself after
+// MaxConsecutiveErrors errors in a row: its mode is off and its error count is the
+// maximum. Nothing but a change of the spec (Update, which starts the count again)
+// clears it, so a spec that is off for any other reason (a one-shot that fired, a
+// pause) is not reported. The count is the registry's own, kept with the spec's row
+// and restored at start.
+func (r *Registry) AutoDisabled(id string) bool {
+	e, ok := r.snap.Load().byID[id]
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.spec.Mode == ModeOff && e.errs >= MaxConsecutiveErrors
+}
+
+// OneShotFired reports whether the committed state of a one-shot spec says it has
+// already fired: a price_cross or indicator_cross whose line was crossed once
+// (state.done), or a time_at that has fired at least once. The state is the one
+// adopted when attention recorded the decision, so a true answer means the owner was
+// told, whatever became of the count in the intent ledger. It is false for a spec it
+// cannot read, for a recurring crossing and for any other kind. It reads the state
+// row when the trigger has not been evaluated since the start; it never blocks the
+// pipeline (it takes only the entry's own mutex, briefly).
+func (r *Registry) OneShotFired(ctx context.Context, id string) bool {
+	e, ok := r.snap.Load().byID[id]
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	kind, loaded, raw := e.spec.Kind, e.stateLoaded, bytes.Clone(e.state)
+	e.mu.Unlock()
+	if !loaded {
+		var err error
+		if raw, err = readState(ctx, r.db, id); err != nil {
+			return false
+		}
+	}
+	if len(raw) == 0 {
+		return false
+	}
+	switch kind {
+	case KindPriceCross, KindIndicatorCross:
+		var cs crossState
+		return json.Unmarshal(raw, &cs) == nil && cs.Done
+	case KindTimeAt:
+		var ts timeAtState
+		return json.Unmarshal(raw, &ts) == nil && ts.Fired >= 1
+	}
+	return false
+}
+
+// SetFireObserver installs the function Committed calls for each live candidate of
+// a spec that has an intent, after attention has recorded its decision and the
+// trigger's change has been applied. It runs on the pipeline goroutine and must not
+// wait: the intent compiler's NoteFire only queues. Nil removes it. A panic in it is
+// recovered and counted as a failure of the observer, not of the pipeline.
+func (r *Registry) SetFireObserver(f func(Firing)) {
+	if f == nil {
+		r.fireObs.Store(nil)
+		return
+	}
+	r.fireObs.Store(&f)
+}
+
+func (r *Registry) observe(fires []Firing) {
+	if len(fires) == 0 {
+		return
+	}
+	f := r.fireObs.Load()
+	if f == nil {
+		return
+	}
+	for _, fr := range fires {
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					r.c.panics.Add(1)
+				}
+			}()
+			(*f)(fr)
+		}()
 	}
 }
 

@@ -72,6 +72,12 @@ func isAlertKind(kind string) bool {
 	return kind == triggers.KindPriceCross || kind == triggers.KindIndicatorCross
 }
 
+// isAlertOrigin reports whether a spec was written by the alert tools or migrated
+// from an alert job: the specs the alert tools list and cancel.
+func isAlertOrigin(origin string) bool {
+	return strings.HasPrefix(origin, alertOriginPrefix) || strings.HasPrefix(origin, migratedOriginPrefix)
+}
+
 // registryAlerts returns the alert specs a user should see: those the tools made, in
 // any mode, and those migrated from a cron job once they are live (before that the
 // cron job is the alert and is listed as itself).
@@ -223,7 +229,9 @@ func cancelAlertAny(ctx context.Context, cs *cron.CronService, f AlertTriggersFu
 		return ErrorResult(fmt.Sprintf("cancelling alert: %v", err))
 	}
 	for _, s := range specs {
-		if s.ID != id || !isAlertKind(s.Kind) {
+		// Only the owner's alerts: a spec compiled from an intent has an alert's kind and
+		// is not one to cancel here (cancel the intent with update_intent).
+		if s.ID != id || !isAlertKind(s.Kind) || !isAlertOrigin(s.Origin) {
 			continue
 		}
 		if err := at.Remove(ctx, id); err != nil {

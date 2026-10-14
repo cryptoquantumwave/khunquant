@@ -94,6 +94,7 @@ type BaseChannel struct {
 	placeholderRecorder PlaceholderRecorder
 	owner               Channel // the concrete channel that embeds this BaseChannel
 	reasoningChannelID  string
+	controlRouter       atomic.Pointer[controlRouterBox]
 }
 
 func NewBaseChannel(
@@ -272,6 +273,18 @@ func (c *BaseChannel) HandleMessage(
 	resolvedSenderID := senderID
 	if sender.CanonicalID != "" {
 		resolvedSenderID = sender.CanonicalID
+	}
+
+	// The control path comes before anything else the message would set off:
+	// no typing indicator, reaction or placeholder, and no agent. The hints are
+	// taken out of the metadata first so that a message that is not handled
+	// is published exactly as it always was.
+	ownText, hasOwn, forwarded := takeControlHints(metadata)
+	if r := c.ControlRouter(); r != nil {
+		if c.routeControl(ctx, r, peer, messageID, resolvedSenderID, chatID, content,
+			sender, metadata, ownText, hasOwn, forwarded) {
+			return
+		}
 	}
 
 	scope := BuildMediaScope(c.name, chatID, messageID)

@@ -52,6 +52,26 @@ func (m *Manager) SetDeliveryObserver(fn func(DeliveryReceipt)) {
 // manager strips message actions while this is false.
 func (m *Manager) SetControlEnabled(enabled bool) { m.controlEnabled.Store(enabled) }
 
+// SetControlRouter installs the control path on every channel (and on every channel
+// the manager creates later) and, because the text commands in an action footer
+// are then handled before any model sees them, enables message actions. nil
+// removes the router from the channels that take one and disables actions again.
+func (m *Manager) SetControlRouter(r ControlRouter) {
+	if r == nil {
+		m.controlRouter.Store(nil)
+	} else {
+		m.controlRouter.Store(&controlRouterBox{r: r})
+	}
+	m.mu.RLock()
+	for _, ch := range m.channels {
+		if setter, ok := ch.(interface{ SetControlRouter(r ControlRouter) }); ok {
+			setter.SetControlRouter(r)
+		}
+	}
+	m.mu.RUnlock()
+	m.SetControlEnabled(r != nil)
+}
+
 // ControlEnabled reports whether message actions may be sent. It is false until
 // the control-command dispatcher is registered.
 func (m *Manager) ControlEnabled() bool { return m.controlEnabled.Load() }

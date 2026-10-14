@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -302,6 +303,10 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 // expiry sweeper decides at most once; the loser is told the current status.
 // Everything else the caller could probe answers ErrNotFound and nothing more.
 //
+// While the kill switch is engaged an approval of a proposal that does not only reduce
+// risk is refused with ErrKilled and the proposal stays pending; a rejection, and
+// the approval of an order that reduces risk, are not affected.
+//
 // Approving starts the approval.order workflow; the proposal is then executing.
 func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, senderID string) (Proposal, error) {
 	ownerID, ok := s.owner()
@@ -331,6 +336,14 @@ func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, 
 		logger.ErrorCF(logComponent, "SECURITY: refusing to decide a proposal that does not match its hash", map[string]any{"code": code})
 		_, _ = s.st.cancel(ctx, p.ID, "integrity check failed", now)
 		return Proposal{}, ErrNotFound
+	}
+
+	// While the kill switch is engaged only an order that reduces risk may be
+	// approved. The proposal is left pending (it expires on its own, and an owner
+	// who resumes can still approve it); a rejection is never blocked.
+	if approve && s.killed() && !p.Reducing {
+		logger.InfoCF(logComponent, "Approval refused: the kill switch is engaged", map[string]any{"code": code})
+		return Proposal{}, ErrKilled
 	}
 
 	to := StatusRejected
@@ -364,6 +377,36 @@ func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, 
 		}
 	}
 	return p, nil
+}
+
+// PendingByCard returns the pending, unexpired proposal whose card is the
+// message messageID in chatID on channel: the answer to "does this reply point at a
+// card that can still be decided?". A topic's composite chat id ("chat/thread")
+// matches the chat the card was sent to. Anything else answers ErrNotFound.
+func (s *Service) PendingByCard(ctx context.Context, channel, chatID, messageID string) (Proposal, error) {
+	if messageID == "" || chatID == "" {
+		return Proposal{}, ErrNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	defer cancel()
+	ps, err := s.st.list(ctx, `status = 'pending' AND expires_at_ms > ?`, ms(s.now()))
+	if err != nil {
+		return Proposal{}, err
+	}
+	for _, p := range ps {
+		if p.CardChatID == "" || !strings.EqualFold(p.CardChannel, channel) {
+			continue
+		}
+		if chatID != p.CardChatID && !strings.HasPrefix(chatID, p.CardChatID+"/") {
+			continue
+		}
+		for _, id := range p.CardMessageIDs {
+			if id == messageID {
+				return p, nil
+			}
+		}
+	}
+	return Proposal{}, ErrNotFound
 }
 
 // expireOne moves one pending proposal past its expiry to expired.

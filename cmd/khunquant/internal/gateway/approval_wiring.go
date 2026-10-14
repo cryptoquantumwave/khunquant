@@ -57,6 +57,12 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *a
 		logger.WarnCF("gateway", "Order approvals disabled: owner delivery is not available", nil)
 		return nil
 	}
+	// No approvals without the kill flag: an order that could be approved while a
+	// /stop cannot be honoured is the failure the flag exists to prevent.
+	if d.Control.killer() == nil {
+		logger.ErrorCF("gateway", "Order approvals disabled: the kill switch is unavailable", nil)
+		return nil
+	}
 	db, err := proactiveDB(d)
 	if err != nil {
 		logger.ErrorCF("gateway", "Order approvals disabled: the shared proactive database is unavailable",
@@ -70,6 +76,11 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *a
 	}
 	if mgr != nil {
 		opts.Editor = channelCardEditor{mgr: mgr}
+	}
+	// The kill flag: set only when there is one (a nil *State in the interface
+	// would not read as "never killed").
+	if k := d.Control.killer(); k != nil {
+		opts.Killer = k
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

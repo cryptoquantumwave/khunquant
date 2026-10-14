@@ -737,6 +737,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		}
 	}
 
+	// What the sender typed, before the quoted message goes in front of it: the
+	// control path needs it to tell "yes" typed as a reply from a long message.
+	ownText := content
+
 	// Prepend the quoted message before the empty check: a bare "yes" replying
 	// to something is meaningful, and would otherwise be dropped here as empty.
 	if message.ReplyToMessage != nil {
@@ -776,6 +780,18 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			return nil
 		}
 		content = cleaned
+		if message.ReplyToMessage != nil {
+			// The same trimming for the sender's own words; if it leaves nothing
+			// to answer, there is no text for the control path.
+			if isMentioned {
+				ownText = c.stripBotMention(ownText)
+			}
+			if ok, own := c.ShouldRespondInGroup(isMentioned, ownText); ok {
+				ownText = own
+			} else {
+				ownText = ""
+			}
+		}
 	}
 
 	// For forum topics, embed the thread ID as "chatID/threadID" so replies
@@ -814,6 +830,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 
 	if message.ReplyToMessage != nil {
 		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
+		// Hints for the control path; HandleMessage removes them before publishing.
+		metadata[channels.MetaOwnText] = ownText
+	}
+	if message.ForwardOrigin != nil {
+		metadata[channels.MetaForwarded] = "true"
 	}
 
 	// Set parent_peer metadata for per-topic agent binding.

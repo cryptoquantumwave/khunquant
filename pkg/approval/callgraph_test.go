@@ -112,6 +112,37 @@ func callSites(srcs map[string]*ast.File, name string) []site {
 	return out
 }
 
+// callSitesWithArgs is callSites narrowed to calls with exactly nargs arguments:
+// it tells Service.Decide (five) from the other methods called Decide (the attention
+// governor's takes two).
+func callSitesWithArgs(srcs map[string]*ast.File, name string, nargs int) []site {
+	var out []site
+	for file, f := range srcs {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			fn := fd.Name.Name
+			if fd.Recv != nil && len(fd.Recv.List) == 1 {
+				fn = receiverName(fd.Recv.List[0].Type) + "." + fn
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != nargs {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+					out = append(out, site{file, fn})
+				}
+				return true
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
 func receiverName(e ast.Expr) string {
 	switch t := e.(type) {
 	case *ast.StarExpr:
@@ -190,6 +221,12 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	assertSites(t, "Service.startExecution", callSites(srcs, "startExecution"),
 		"pkg/approval/service.go:Service.Decide", "pkg/approval/service.go:Service.Recover")
 	assertSites(t, "store.decide", callSites(srcs, "decide"), "pkg/approval/service.go:Service.Decide")
+
+	// Decide itself (the owner's decision) is called from one place outside this
+	// package: the control path, which sees a message before any model does and acts
+	// only on the whole text of an owner's message in the owner's own chat (see
+	// pkg/control). A new caller needs the same property and a deliberate edit here.
+	assertSites(t, "Service.Decide", callSitesWithArgs(srcs, "Decide", 5), "pkg/control/approve.go:Dispatcher.decideProposal")
 	assertSites(t, "the order workflow body", callSites(srcs, "runOrder"))
 
 	// The workflow is registered in exactly one place, and its definition is the

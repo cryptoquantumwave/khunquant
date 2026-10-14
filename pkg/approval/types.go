@@ -246,7 +246,7 @@ type Workflows interface {
 	Steps(ctx context.Context, id string) ([]journal.StepRecord, error)
 }
 
-// Killer reports the kill switch (MR-311 adds the state). Nil means never killed.
+// Killer reports the kill switch (control.State is the persisted one). Nil means never killed.
 type Killer interface{ Killed() bool }
 
 // Locale is how a card is worded and timed.

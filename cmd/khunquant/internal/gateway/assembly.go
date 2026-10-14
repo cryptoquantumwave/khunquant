@@ -176,6 +176,11 @@ type assemblyDeps struct {
 	// built, and the caller never sets it.
 	Approval *approvalRuntime
 
+	// Control is the control path of this generation (control_wiring.go); buildServices
+	// sets it on its own copy of the deps right after the channel manager exists, and
+	// the caller never sets it.
+	Control *controlRuntime
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -283,6 +288,14 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		return s, fmt.Errorf("error %s channel manager: %w", p.pick("creating", "recreating"), err)
 	}
 
+	// The control path: the kill flag and the dispatcher that sees every message
+	// before the agent does. It is installed on the channels now, before they start
+	// and before the services it acts on exist (attach adds them below), so that
+	// /whoami and the refusals work from the first message. The approval service
+	// and the routes need the kill flag, so it comes before both.
+	s.Control = buildControl(d, s.ChannelManager)
+	d.Control = s.Control
+
 	// Inject channel manager and media store into the agent loop.
 	al.SetChannelManager(s.ChannelManager)
 	al.SetMediaStore(s.MediaStore)
@@ -359,6 +372,11 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// and no table.
 	s.journalLive.Store(buildJournal(d))
 	s.Approval.attach(s.journalLive.Load())
+
+	// The control path gets the services it acts on, now that they exist. An
+	// approval service that could not attach (no engine) is withdrawn from it by
+	// the same rule propose_order is: approvals stay unavailable.
+	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -458,6 +476,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
 		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
 	registerTriggerAPIFor(mux, s, d)
+	registerControlAPI(mux, s.Control.killSwitch(), cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -474,7 +493,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: heartbeat, workflow engine, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
+// resources. Order: heartbeat, the control path's hold on the services below,
+// approval sweeper, workflow engine, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
 // notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
@@ -488,6 +508,13 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// The control path lets go of the services it acts on before they stop, so that
+	// an /approve that arrives while they do is told approvals are unavailable and
+	// does not approve an order that nothing is left to execute. It stays installed
+	// on the channels until they have stopped (below): taking it off earlier would
+	// hand a late /approve or /stop to the agent instead.
+	s.Control.detach()
 
 	// The approval sweeper and propose_order go before the engine: no new proposal
 	// may start while the services it needs are being stopped, and the sweeper edits
@@ -526,6 +553,7 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.ChannelManager != nil {
 		s.ChannelManager.StopAll(shutdownCtx)
 	}
+	s.Control = nil // the channels are stopped: nothing offers it a message any more
 	if s.DeviceService != nil {
 		s.DeviceService.Stop()
 	}

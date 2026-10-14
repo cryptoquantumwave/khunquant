@@ -46,6 +46,11 @@ type Engine struct {
 
 	// hook, when set (tests only), is called at the crash points of a step.
 	hook func(point string, workflowID, step string, attempt int)
+
+	// beforeStopping, when set (tests only), is called by Run's own goroutine after
+	// its context has ended and before it raises the stopping flag. It holds that
+	// goroutine back, to show that a stop does not depend on it.
+	beforeStopping func()
 }
 
 // Crash points passed to Engine.hook.
@@ -424,6 +429,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 	}
 
+	if e.beforeStopping != nil {
+		e.beforeStopping()
+	}
 	e.stopping.Store(true)
 	close(work)
 	done := make(chan struct{})

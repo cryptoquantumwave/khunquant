@@ -2,7 +2,9 @@ package journal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -183,5 +185,63 @@ func TestCrashInjection_RepeatedCrashes(t *testing.T) {
 	}
 	if got := l.seen("s3"); len(got) != 3 || got[2] != 3 {
 		t.Errorf("s3 attempts = %v, want [1 2 3]", got)
+	}
+}
+
+// A stop is "at the next step boundary" the moment Run's context ends, not the
+// moment Run's own goroutine gets around to saying so. Run's goroutine is held
+// back here, as a loaded machine can hold it, between seeing its context end and
+// raising the stopping flag: the worker must still start no step after the one
+// that was running when the context was cancelled.
+func TestStop_BoundaryDoesNotWaitForRunGoroutine(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		ran      []string
+		passed   = make(chan struct{})
+		release  = make(chan struct{})
+		cancelFn context.CancelFunc
+	)
+	def := Definition{Kind: "gate", Run: func(c *Ctx, _ json.RawMessage) error {
+		for _, name := range []string{"a", "b", "c", "d", "e"} {
+			err := c.Step(name, nil, func(context.Context, int) (any, error) {
+				mu.Lock()
+				ran = append(ran, name)
+				mu.Unlock()
+				if name == "b" {
+					cancelFn() // the stop arrives while step b is running
+				}
+				return nil, nil
+			})
+			if name == "c" {
+				close(passed) // the boundary after b has been decided, one way or the other
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
+
+	n := newNode(t, dbPath(t), t0, []Definition{def})
+	var ctx context.Context
+	ctx, cancelFn = context.WithCancel(context.Background())
+	defer cancelFn()
+	n.beforeStopping = func() { <-release }
+	id := mustStart(t, n.Engine, "gate", nil)
+	done := make(chan struct{})
+	go func() { defer close(done); _ = n.Run(ctx) }()
+
+	waitClosed(t, passed, "the workflow to reach the boundary after step b")
+	close(release)
+	waitClosed(t, done, "Run to return")
+
+	mu.Lock()
+	got := append([]string(nil), ran...)
+	mu.Unlock()
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("steps run = %v, want [a b]: a step started after the context was cancelled", got)
+	}
+	if w := status(t, n, id); w.Status != StatusPending {
+		t.Errorf("after the stop: %+v, want the workflow released as pending", w)
 	}
 }

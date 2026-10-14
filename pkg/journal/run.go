@@ -18,6 +18,11 @@ type run struct {
 	wf    Workflow
 	dbCtx context.Context
 
+	// engineCtx is the context Run was given. Unlike the engine's stopping flag, which
+	// Run's own goroutine raises some time after the context ends, it is read at the
+	// step boundary as it stands: once it is cancelled no new step starts.
+	engineCtx context.Context
+
 	// stepCtx is what step functions run under. It ends when the lease is lost and
 	// when the engine's shutdown wait is over.
 	stepCtx    context.Context
@@ -127,7 +132,7 @@ func (e *Engine) execute(ctx context.Context, id string) {
 
 	stepCtx, cancel := e.stepContext()
 	r := &run{
-		e: e, f: f, wf: wf, dbCtx: dbCtx, stepCtx: stepCtx, cancelStep: cancel,
+		e: e, f: f, wf: wf, dbCtx: dbCtx, engineCtx: ctx, stepCtx: stepCtx, cancelStep: cancel,
 		stopRenew: make(chan struct{}), renewDone: make(chan struct{}),
 	}
 	r.leaseEnd.Store(ms(now.Add(e.opt.lease)))

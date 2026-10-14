@@ -86,12 +86,15 @@ func (c *Ctx) halted(kind haltKind, err error) error {
 }
 
 // pre refuses to start anything new when the lease is gone or the engine is
-// stopping.
+// stopping. The engine is stopping from the moment the context Run was given ends:
+// the boundary reads that context itself and does not wait for Run's goroutine to
+// raise the flag. A step that is already running is not affected here; the shutdown
+// wait governs it.
 func (c *Ctx) pre() error {
 	if c.run.lost.Load() {
 		return c.halted(haltLost, ErrLeaseLost)
 	}
-	if c.run.e.stopping.Load() || c.run.stepCtx.Err() != nil {
+	if c.run.engineCtx.Err() != nil || c.run.e.stopping.Load() || c.run.stepCtx.Err() != nil {
 		return c.halted(haltInterrupt, ErrInterrupted)
 	}
 	return nil

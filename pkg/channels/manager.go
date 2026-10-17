@@ -95,6 +95,8 @@ type Manager struct {
 
 	// observer receives one DeliveryReceipt per logical message; nil is free.
 	observer atomic.Pointer[func(DeliveryReceipt)]
+	// controlRouter is the control path handed to every channel; nil when there is none.
+	controlRouter atomic.Pointer[controlRouterBox]
 	// controlEnabled is false until the control-command dispatcher exists.
 	// While false, message actions are stripped before sending.
 	controlEnabled atomic.Bool
@@ -243,6 +245,12 @@ func (m *Manager) initChannel(name, displayName string) {
 		// Inject PlaceholderRecorder if channel supports it
 		if setter, ok := ch.(interface{ SetPlaceholderRecorder(r PlaceholderRecorder) }); ok {
 			setter.SetPlaceholderRecorder(m)
+		}
+		// Inject the control path, if there is one.
+		if b := m.controlRouter.Load(); b != nil {
+			if setter, ok := ch.(interface{ SetControlRouter(r ControlRouter) }); ok {
+				setter.SetControlRouter(b.r)
+			}
 		}
 		// Inject owner reference so BaseChannel.HandleMessage can auto-trigger typing/reaction
 		if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {

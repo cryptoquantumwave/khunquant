@@ -98,12 +98,12 @@ func NewStore(workspacePath string) (*Store, error) {
 		return nil, fmt.Errorf("dca: open db: %w", err)
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + mandateSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("dca: create schema: %w", err)
 	}
 
-	for _, m := range migrations {
+	for _, m := range append(append([]string(nil), migrations...), mandateMigrations...) {
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
 			return nil, fmt.Errorf("dca: migration %q: %w", m, err)

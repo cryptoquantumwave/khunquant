@@ -372,7 +372,14 @@ func (cb *ContextBuilder) loadBootstrapFiles(bootstrapFiles ...string) string {
 // See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 // See: https://platform.openai.com/docs/guides/prompt-caching
 func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+	return cb.buildDynamicContextFor(channel, chatID, false)
+}
+
+// buildDynamicContextFor is buildDynamicContext for a full prompt (compact false)
+// or for a light or proactive one (compact true), which tells the financial
+// context's live sections to keep to their smaller size.
+func (cb *ContextBuilder) buildDynamicContextFor(channel, chatID string, compact bool) string {
+	now :=time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
@@ -383,7 +390,7 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 	}
 
 	if cb.financialCollector != nil {
-		if fin := cb.financialCollector.GetSummary(); fin != "" {
+		if fin := cb.financialCollector.GetSummaryFor(compact); fin != "" {
 			fmt.Fprintf(&sb, "\n\n%s", fin)
 		}
 	}
@@ -429,7 +436,7 @@ func (cb *ContextBuilder) BuildMessagesWithOptions(
 	staticPrompt := cb.BuildSystemPromptFor(o)
 
 	// Build short dynamic context (time, runtime, session) — changes per request
-	dynamicCtx := cb.buildDynamicContext(channel, chatID)
+	dynamicCtx := cb.buildDynamicContextFor(channel, chatID, o.Mode == PromptLight || o.Mode == PromptProactive)
 	// Background turns, and only they, also carry the sections attached for them.
 	// A user turn's dynamic context is exactly what it always was.
 	if (o.Mode == PromptLight || o.Mode == PromptProactive) && !o.NoBackgroundSections {

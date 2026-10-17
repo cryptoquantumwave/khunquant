@@ -20,6 +20,22 @@ import (
 // turn is measured as a fresh install would run it.
 func defaultWorkspaceLoop(t *testing.T, prov providers.LLMProvider) (*AgentLoop, string) {
 	t.Helper()
+	return defaultWorkspaceLoopWith(t, prov)
+}
+
+// budgetFixture changes what a measured loop is built over: config edits before
+// the loop is made, and state seeded into the workspace after the copy and before
+// the loop opens its stores. The zero value (and none at all) is the shipped
+// default.
+type budgetFixture struct {
+	config func(*config.Config)
+	seed   func(t *testing.T, workspace string)
+	after  func(t *testing.T, workspace string) // once the loop exists
+}
+
+// defaultWorkspaceLoopWith is defaultWorkspaceLoop with fixtures applied.
+func defaultWorkspaceLoopWith(t *testing.T, prov providers.LLMProvider, fixtures ...budgetFixture) (*AgentLoop, string) {
+	t.Helper()
 	ws := filepath.Join(t.TempDir(), "workspace")
 	if err := os.CopyFS(ws, os.DirFS(filepath.Join(repoRoot(t), "workspace"))); err != nil {
 		t.Fatalf("copy default workspace: %v", err)
@@ -30,8 +46,21 @@ func defaultWorkspaceLoop(t *testing.T, prov providers.LLMProvider) (*AgentLoop,
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = ws
 	cfg.Agents.Defaults.Model = "char-model"
+	for _, fx := range fixtures {
+		if fx.config != nil {
+			fx.config(cfg)
+		}
+		if fx.seed != nil {
+			fx.seed(t, ws)
+		}
+	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), prov)
 	t.Cleanup(al.Close)
+	for _, fx := range fixtures {
+		if fx.after != nil {
+			fx.after(t, ws)
+		}
+	}
 	return al, ws
 }
 

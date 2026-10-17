@@ -250,7 +250,7 @@ func TestAllowedTransitions(t *testing.T) {
 		},
 		{
 			ExecutionStatePlacingFirstLeg,
-			[]ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed},
+			[]ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStateFirstLegFailed,
@@ -258,11 +258,11 @@ func TestAllowedTransitions(t *testing.T) {
 		},
 		{
 			ExecutionStateFirstLegFilled,
-			[]ExecutionState{ExecutionStatePlacingSecondLeg},
+			[]ExecutionState{ExecutionStatePlacingSecondLeg, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStatePlacingSecondLeg,
-			[]ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed},
+			[]ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStateSecondLegFailed,

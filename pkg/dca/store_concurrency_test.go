@@ -99,7 +99,7 @@ func TestNewStore_OpensDatabaseCreatedByOldOpener(t *testing.T) {
 		t.Fatalf("legacy SaveExecution: %v", err)
 	}
 	var tablesBefore int
-	if err := legacy.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&tablesBefore); err != nil {
+	if err := legacy.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE ` + legacyObjects).Scan(&tablesBefore); err != nil {
 		t.Fatal(err)
 	}
 	if err := legacy.Close(); err != nil {
@@ -122,7 +122,7 @@ func TestNewStore_OpensDatabaseCreatedByOldOpener(t *testing.T) {
 	}
 	var tablesAfter int
 	var mode string
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&tablesAfter); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE ` + legacyObjects).Scan(&tablesAfter); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
@@ -135,3 +135,9 @@ func TestNewStore_OpensDatabaseCreatedByOldOpener(t *testing.T) {
 		t.Errorf("journal_mode = %q, want wal", mode)
 	}
 }
+
+// legacyObjects selects the schema objects an old opener knew: the mandate tables
+// (and the workflow-id column index) are added by the open on purpose, so they are
+// left out of the "the open changed nothing else" count.
+const legacyObjects = `name NOT LIKE '%mandate%' AND name NOT LIKE '%unproven%' AND name NOT LIKE '%slot_asks%'
+	AND name NOT LIKE '%notice_days%' AND name NOT LIKE '%workflow%'`

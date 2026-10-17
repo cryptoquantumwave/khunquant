@@ -95,6 +95,13 @@ type ProactiveTurnRequest struct {
 	// next turn that does show it still sees the changes since ITS last look. The
 	// default (false) is every other turn exactly as before.
 	CallerSuppliesChanges bool
+	// DeliverNow says attention decided to deliver the candidates' message now (the
+	// composer runs only for a message that is about to be delivered), so quiet
+	// hours were respected upstream. A turn without it can never call propose_order.
+	DeliverNow bool
+	// InterventionID is the ID of the message the turn composes for; a proposal the
+	// turn creates carries it.
+	InterventionID string
 }
 
 // ProactiveTurnResult is what a proactive turn decided. Nothing in it has been
@@ -217,6 +224,15 @@ func (al *AgentLoop) RunProactiveTurn(
 	ctx = proactive.WithCollector(ctx, collector)
 	ctx = tools.WithProactiveTurn(ctx, req.Kind)
 	ctx = tools.WithToolSender(ctx, sender)
+
+	// propose_order is open to a candidate-driven turn only, on the trust of its
+	// candidates, and never to a heartbeat (legacy or sweep) turn. Forced skills put
+	// text from a registry in the prompt, so such a turn starts with its trust
+	// already lowered.
+	if req.Kind == proactive.TurnProactive && len(req.Candidates) > 0 {
+		ctx = tools.WithProposalScope(ctx, tools.NewProposalScope(
+			req.Candidates, req.DeliverNow, req.InterventionID, len(req.ForcedSkills) > 0))
+	}
 
 	nonce := newFenceNonce()
 	block, refs := renderCandidates(req.Candidates, nonce)

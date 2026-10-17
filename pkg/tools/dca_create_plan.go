@@ -41,7 +41,7 @@ func (t *CreateDCAPlanTool) Description() string {
 }
 
 func (t *CreateDCAPlanTool) Parameters() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"plan_name": map[string]any{"type": "string", "description": "Unique human-readable plan name (e.g. 'BTC RSI Dip Buy')."},
@@ -147,6 +147,10 @@ func (t *CreateDCAPlanTool) Parameters() map[string]any {
 		},
 		"required": []string{"plan_name", "provider", "symbol", "amount_per_order"},
 	}
+	for k, v := range mandateParameters {
+		params["properties"].(map[string]any)[k] = v
+	}
+	return params
 }
 
 func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -159,6 +163,10 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	startDateStr, _ := args["start_date"].(string)
 	endDateStr, _ := args["end_date"].(string)
 
+	ask, askErr := mandateAskFrom(t.cfg, args)
+	if askErr != "" {
+		return ErrorResult(askErr)
+	}
 	if planName == "" || providerID == "" || symbol == "" {
 		return ErrorResult("plan_name, provider, and symbol are required")
 	}
@@ -364,6 +372,7 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	out += fmt.Sprintf("  Cron job ID:   %s\n", job.ID)
 	out += fmt.Sprintf("\nOn each cron tick the agent will receive:\n  \"%s\"\n", cronMsg)
 	out += fmt.Sprintf("The DCA skill will call execute_dca_order(plan_id=%d) automatically.\n", planID)
+	out += proposeMandateFor(ctx, t.cfg, t.store, plan, ask)
 	return UserResult(out)
 }
 

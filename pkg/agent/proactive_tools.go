@@ -87,6 +87,8 @@ var heartbeatTools = []string{
 //	get_dca_summary            whether a DCA plan already acts on the subject
 //	get_delta_neutral_summary  whether a hedge already covers it
 //	load_skill                 a skill the caller's prompt names
+//	propose_order              suggest a risk-reducing order for the owner to approve; offered only
+//	                           when approvals are on and the turn's ceiling grants it (proposeOrderOpen)
 var candidateTools = []string{
 	tools.NameGetProfile,
 	tools.NameGetTicker,
@@ -96,6 +98,7 @@ var candidateTools = []string{
 	tools.NameGetDCASummary,
 	tools.NameGetDeltaNeutralSummary,
 	tools.NameLoadSkill,
+	tools.NameProposeOrder,
 }
 
 // defaultProactiveTools is the built-in subset for a kind of turn.

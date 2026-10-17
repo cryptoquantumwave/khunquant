@@ -307,7 +307,9 @@ func TestUserTurn_Unchanged(t *testing.T) {
 
 		armPolicy(t, false, nil)
 		for name := range toolClasses {
-			if name == "" {
+			// propose_order is granted by name to the owner's own turn only (it needs the
+			// armed config and an owner); TestProposeOrder_TurnMatrix covers who gets it.
+			if name == "" || name == NameProposeOrder {
 				continue
 			}
 			if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {

@@ -1286,6 +1286,12 @@ type ToolsConfig struct {
 	GetProfile    ToolConfig `json:"get_profile"    envPrefix:"KHUNQUANT_TOOLS_GET_PROFILE_"`
 	UpdateProfile ToolConfig `json:"update_profile" envPrefix:"KHUNQUANT_TOOLS_UPDATE_PROFILE_"`
 
+	// Intents (the owner's standing wishes). The tools exist only while
+	// proactive.intents is effectively on; these switches then turn each off.
+	CreateIntent ToolConfig `json:"create_intent" envPrefix:"KHUNQUANT_TOOLS_CREATE_INTENT_"`
+	ListIntents  ToolConfig `json:"list_intents"  envPrefix:"KHUNQUANT_TOOLS_LIST_INTENTS_"`
+	UpdateIntent ToolConfig `json:"update_intent" envPrefix:"KHUNQUANT_TOOLS_UPDATE_INTENT_"`
+
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
 
@@ -1961,6 +1967,12 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.GetProfile.Enabled
 	case "update_profile":
 		return t.UpdateProfile.Enabled
+	case "create_intent":
+		return t.CreateIntent.Enabled
+	case "list_intents":
+		return t.ListIntents.Enabled
+	case "update_intent":
+		return t.UpdateIntent.Enabled
 	default:
 		return true
 	}

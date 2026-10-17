@@ -60,6 +60,15 @@ func defaultToolPolicies() map[string]ToolPolicy {
 		NameCreateOrder:   {BlockedOrigins: cronBlocked},
 		NameTransferFunds: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
+		// propose_order moves no money itself: it stores an order and sends the
+		// owner a card, and the order is placed only by the approval.order workflow
+		// after the owner approves exactly it. It is a money-moving path all the
+		// same (an approved proposal becomes a real order), so it is listed: cron
+		// is blocked, and paper mode is handled by the proposal itself (spot is
+		// simulated, a futures order is refused unless it only reduces a position),
+		// so RefuseUnderPaperMode is deliberately not set.
+		NameProposeOrder: {BlockedOrigins: cronBlocked},
+
 		// Options are not simulated: the tool refuses in paper mode itself, and the flag is the registry backstop.
 		NameOptionCreateOrder: {BlockedOrigins: cronBlocked, RefuseUnderPaperMode: true},
 
@@ -191,6 +200,11 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
 	if !turnMayCall(ctx, name) {
+		if name == NameProposeOrder {
+			return policyRefusal(name, "propose_order is not available in this turn. It is open only to the owner's own "+
+				"conversation turn and to a proactive turn whose inputs were all exchange data (a proactive turn that "+
+				"has read the web, a file or a skill cannot propose); approvals must also be switched on.")
+		}
 		if ToolOrigin(ctx) == OriginProactive {
 			return policyRefusal(name, fmt.Sprintf(
 				"tool %q is not permitted in an autonomous (%s) turn. A proactive turn can read data and "+
@@ -267,6 +281,13 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 // where it starts, and the per-tool rows already fail closed on an empty origin.
 // Like the rows, the ceiling does nothing until SetPolicyConfig has armed it.
 func turnMayCall(ctx context.Context, name string) bool {
+	// propose_order is granted by name, to the owner's own root turn and to a
+	// trusted candidate-driven proactive turn, and to nothing else (see
+	// proposeOrderOpen). It is decided before the origin shortcuts below, which
+	// would give a proactive turn the read class only and a person's turn everything.
+	if name == NameProposeOrder {
+		return proposeOrderOpen(ctx)
+	}
 	origin := ToolOrigin(ctx)
 
 	// A proactive turn is decided before the shortcuts below, which would give

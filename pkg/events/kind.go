@@ -127,6 +127,9 @@ const (
 	KindPerceptionClockSession Kind = "perception.clock.session"
 	// KindPerceptionClockDayStart is emitted at the start of a day.
 	KindPerceptionClockDayStart Kind = "perception.clock.day_start"
+	// KindPerceptionClockTimer is emitted when a timer scheduled on the clock source
+	// comes due (a reminder).
+	KindPerceptionClockTimer Kind = "perception.clock.timer"
 	// KindPerceptionExternalTrigger is emitted for a trigger from outside the process.
 	KindPerceptionExternalTrigger Kind = "perception.external.trigger"
 	// KindPerceptionDevice is emitted for a device observation.
@@ -155,8 +158,12 @@ const (
 	KindApprovalDecided Kind = "approval.decided"
 	// KindApprovalExpired is emitted when an approval proposal expires.
 	KindApprovalExpired Kind = "approval.expired"
-	// KindJournalStep is emitted when a workflow journal step is recorded.
+	// KindJournalStep is emitted when a workflow journal step starts, finishes, fails
+	// or is scheduled to retry. It carries ids, names and numbers only.
 	KindJournalStep Kind = "journal.step"
+	// KindJournalWorkflow is emitted when a workflow is started and when it reaches
+	// a terminal status (succeeded, failed or cancelled). Ids, names and numbers only.
+	KindJournalWorkflow Kind = "journal.workflow"
 	// KindControlCommand is emitted when a control command is received.
 	KindControlCommand Kind = "control.command"
 )
@@ -219,6 +226,7 @@ var knownKinds = []Kind{
 	KindPerceptionPlanDCADue,
 	KindPerceptionClockSession,
 	KindPerceptionClockDayStart,
+	KindPerceptionClockTimer,
 	KindPerceptionExternalTrigger,
 	KindPerceptionDevice,
 	KindPerceptionNewsItem,
@@ -231,6 +239,7 @@ var knownKinds = []Kind{
 	KindApprovalDecided,
 	KindApprovalExpired,
 	KindJournalStep,
+	KindJournalWorkflow,
 	KindControlCommand,
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
@@ -83,6 +84,12 @@ type sharedResources struct {
 	// per process, so that a reload keeps the day's record (dca_due_wiring.go).
 	dcaStats    *triggers.DCAStats
 	dcaOutcomes *triggers.DCAOutcomes
+
+	// dcaStart is the workflow engine as the dispatcher sees it (set by the mandated
+	// DCA flow, which exists only once the engine does); dcaPromoted maps a plan id to
+	// the mandate its dca_due spec is live for (dca_mandate_wiring.go).
+	dcaStart    atomic.Pointer[dcaStarterBox]
+	dcaPromoted sync.Map
 
 	// portfolioStats are the portfolio triggers' counters, per process
 	// (portfolio_triggers_wiring.go).
@@ -171,6 +178,24 @@ type assemblyDeps struct {
 	// it, and the caller never sets it.
 	DNStore *deltaneutral.Store
 
+	// Approval is the order-approval side of this generation (approval_wiring.go);
+	// buildServices sets it on its own copy of the deps before the workflow engine is
+	// built, and the caller never sets it.
+	Approval *approvalRuntime
+
+	// Control is the control path of this generation (control_wiring.go); buildServices
+	// sets it on its own copy of the deps right after the channel manager exists, and
+	// the caller never sets it.
+	Control *controlRuntime
+
+	// DNFlow is the delta-neutral workflow side (dn_workflows_wiring.go); buildServices
+	// sets it on its own copy of the deps before the workflow engine is built.
+	DNFlow *dnFlowRuntime
+
+	// DCAFlow is the mandated-DCA side (dca_mandate_wiring.go); buildServices sets it
+	// on its own copy of the deps before the workflow engine is built.
+	DCAFlow *dcaFlowRuntime
+
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
 	// the caller of buildServices.
@@ -206,7 +231,7 @@ func (p phase) sayf(format string, args ...any) {
 // ctx only bounds construction. Long-lived services (channels, devices) run on
 // context.Background() on purpose: they must outlive this call.
 func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
-	s := &gatewayServices{perceptionLive: newPerceptionHolder()}
+	s := &gatewayServices{perceptionLive: newPerceptionHolder(), journalLive: newJournalHolder()}
 	if prev := d.Prev; prev != nil {
 		s.SandboxServer = prev.SandboxServer
 		s.SandboxToken = prev.SandboxToken
@@ -278,6 +303,14 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		return s, fmt.Errorf("error %s channel manager: %w", p.pick("creating", "recreating"), err)
 	}
 
+	// The control path: the kill flag and the dispatcher that sees every message
+	// before the agent does. It is installed on the channels now, before they start
+	// and before the services it acts on exist (attach adds them below), so that
+	// /whoami and the refusals work from the first message. The approval service
+	// and the routes need the kill flag, so it comes before both.
+	s.Control = buildControl(d, s.ChannelManager)
+	d.Control = s.Control
+
 	// Inject channel manager and media store into the agent loop.
 	al.SetChannelManager(s.ChannelManager)
 	al.SetMediaStore(s.MediaStore)
@@ -342,6 +375,43 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// one, hand back any job a promotion had switched off. After perception, which
 	// builds the registry, and after the cron service started.
 	s.Alerts.attach(d, s.CronService, s.Perception)
+
+	// Order approvals: the service is built first, because its workflow definition
+	// goes to the engine below, and attached after, because it needs the engine to
+	// start workflows. With approvals off none of it exists.
+	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager)
+	d.Approval = s.Approval
+
+	// The workflow engine: built only when a definition is registered (the approval
+	// one is, while approvals are on), so a gateway without one gains no goroutine
+	// and no table.
+	// The delta-neutral workflows (dn.open, dn.recover) join the same engine. They
+	// ask through the approval service and wake the owner through the outbox, so they
+	// come after both.
+	s.DNFlow = buildDNFlow(d, s.Attention, s.NotifyService)
+	d.DNFlow = s.DNFlow
+
+	// Mandated DCA: after the approval service, which creates mandates and owns the
+	// plan store handle. Without it, a plan whose legacy job a mandate switched off
+	// gets the job back.
+	s.DCAFlow = buildDCAFlow(d, s.NotifyService)
+	d.DCAFlow = s.DCAFlow
+	if s.DCAFlow == nil && s.CronService != nil {
+		restoreDCALegacyJobs(d, s.CronService)
+	}
+
+	s.journalLive.Store(buildJournal(d))
+	s.Approval.attach(s.journalLive.Load())
+	s.DNFlow.attach(s.journalLive.Load())
+	if s.CronService != nil {
+		s.DCAFlow.attach(d, s.journalLive.Load(), s.Perception, s.CronService)
+	}
+
+	// The control path gets the services it acts on, now that they exist. An
+	// approval service that could not attach (no engine) is withdrawn from it by
+	// the same rule propose_order is: approvals stay unavailable.
+	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
+	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -438,8 +508,10 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
-	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken, perceptionStatsFn(s.perceptionLive))
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
+		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
 	registerTriggerAPIFor(mux, s, d)
+	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -456,7 +528,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: heartbeat, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
+// resources. Order: heartbeat, the control path's hold on the services below,
+// approval sweeper, workflow engine, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
 // notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
@@ -470,6 +543,33 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// The control path lets go of the services it acts on before they stop, so that
+	// an /approve that arrives while they do is told approvals are unavailable and
+	// does not approve an order that nothing is left to execute. It stays installed
+	// on the channels until they have stopped (below): taking it off earlier would
+	// hand a late /approve or /stop to the agent instead.
+	s.Control.detach()
+
+	// The approval sweeper and propose_order go before the engine: no new proposal
+	// may start while the services it needs are being stopped, and the sweeper edits
+	// cards and delivers through notify and the channels, which are still up here.
+	appr := s.Approval
+	s.Approval.stop()
+	s.Approval = nil
+	s.DNFlow.stop() // the open tool refuses once the engine is going
+	s.DNFlow = nil
+	s.DCAFlow.stop() // the dispatcher starts nothing once the engine is going
+	s.DCAFlow = nil
+
+	// The workflow engine next, while channels, notify and the exchanges are still up:
+	// a step in flight may be placing an order or sending a receipt, and it is let to
+	// finish (bounded) before anything it uses goes away.
+	if s.journalLive != nil {
+		s.journalLive.Load().stop()
+		s.journalLive.Store(nil)
+	}
+	appr.closeStores() // after the engine: a step in flight may still write the plan store
 
 	// Then perception, before the outbox: the sources stop first so that nothing
 	// new arrives, then the engine drains what its inbox holds through the pipeline,
@@ -494,6 +594,7 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.ChannelManager != nil {
 		s.ChannelManager.StopAll(shutdownCtx)
 	}
+	s.Control = nil // the channels are stopped: nothing offers it a message any more
 	if s.DeviceService != nil {
 		s.DeviceService.Stop()
 	}

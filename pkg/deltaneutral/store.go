@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -631,7 +632,7 @@ func (s *Store) OpenLegExposure(ctx context.Context, planID int64) (LegExposure,
 		 FROM delta_neutral_execution_legs l
 		 JOIN delta_neutral_executions e ON l.execution_id = e.id
 		 WHERE e.plan_id = ?
-		   AND l.state = 'filled'
+		   AND l.state IN ('filled', 'partially_filled')
 		 GROUP BY l.leg_type, l.side`,
 		planID,
 	)
@@ -1142,8 +1143,17 @@ func (s *Store) SaveExecution(ctx context.Context, exec *Execution) (int64, erro
 	return id, nil
 }
 
-// UpdateExecution updates an execution attempt.
+// UpdateExecution updates an execution attempt. The state machine is enforced
+// here: the update is one conditional statement that applies only when the STORED
+// state is the requested one (a rewrite of the other columns, and the way a step
+// that ran twice repeats a transition) or may legally move to it (CanTransition).
+// Anything else is ErrIllegalTransition and nothing is written. A caller holding a
+// stale copy cannot jump the machine either: the comparison is with the row.
 func (s *Store) UpdateExecution(ctx context.Context, exec *Execution) error {
+	to := ExecutionState(exec.State)
+	if !to.Valid() {
+		return fmt.Errorf("%w: %q is not an execution state", ErrIllegalTransition, exec.State)
+	}
 	var approvedAt, completedAt *string
 	if exec.ApprovedAt != nil {
 		v := exec.ApprovedAt.Format(time.RFC3339)
@@ -1155,17 +1165,46 @@ func (s *Store) UpdateExecution(ctx context.Context, exec *Execution) error {
 	}
 
 	exec.UpdatedAt = time.Now()
-	_, err := s.db.ExecContext(ctx,
+	from := []any{exec.State}
+	for _, f := range allExecutionStates {
+		if CanTransition(f, to) {
+			from = append(from, string(f))
+		}
+	}
+	args := append([]any{exec.State, approvedAt, completedAt, exec.ErrorMsg, exec.UpdatedAt.Format(time.RFC3339), exec.ID}, from...)
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE delta_neutral_executions
 		 SET state=?, approved_at=?, completed_at=?, error_msg=?, updated_at=?
-		 WHERE id=?`,
-		exec.State, approvedAt, completedAt, exec.ErrorMsg,
-		exec.UpdatedAt.Format(time.RFC3339), exec.ID,
-	)
+		 WHERE id=? AND state IN (?`+strings.Repeat(",?", len(from)-1)+`)`, args...)
 	if err != nil {
 		return fmt.Errorf("deltaneutral: update execution %d: %w", exec.ID, err)
 	}
-	return nil
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	var stored string
+	switch err := s.db.QueryRowContext(ctx, `SELECT state FROM delta_neutral_executions WHERE id = ?`, exec.ID).Scan(&stored); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("deltaneutral: update execution %d: no such execution", exec.ID)
+	case err != nil:
+		return fmt.Errorf("deltaneutral: update execution %d: %w", exec.ID, err)
+	}
+	return fmt.Errorf("%w: execution %d is %q and cannot move to %q", ErrIllegalTransition, exec.ID, stored, exec.State)
+}
+
+// ExecutionByAttempt returns the execution with the given attempt id, or nil when
+// there is none. A workflow derives its attempt id from its own id, so a step that
+// creates the row finds it again when it runs twice.
+func (s *Store) ExecutionByAttempt(ctx context.Context, attemptID string) (*Execution, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, plan_id, attempt_id, state, requested_at, approved_at, completed_at,
+		        error_msg, created_at, updated_at
+		 FROM delta_neutral_executions WHERE attempt_id = ? ORDER BY id LIMIT 1`, attemptID)
+	exec, err := scanExecution(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return exec, err
 }
 
 // GetExecution retrieves a single execution by ID.
@@ -1294,7 +1333,7 @@ func (s *Store) SumPlanExecutionFees(ctx context.Context, planID int64) (float64
 		`SELECT COALESCE(SUM(l.fee_usdt), 0)
 		 FROM delta_neutral_execution_legs l
 		 JOIN delta_neutral_executions e ON l.execution_id = e.id
-		 WHERE e.plan_id = ? AND l.state = 'filled'`,
+		 WHERE e.plan_id = ? AND l.state IN ('filled', 'partially_filled')`,
 		planID,
 	).Scan(&total)
 	return total, err

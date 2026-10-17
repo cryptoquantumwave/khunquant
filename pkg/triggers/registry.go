@@ -90,6 +90,10 @@ type Registry struct {
 	warnMu sync.Mutex
 	warned map[string]time.Time
 
+	// fireObs is told about the live candidates of intent specs once committed
+	// (SetFireObserver).
+	fireObs atomic.Pointer[func(Firing)]
+
 	shadowMu     sync.Mutex
 	shadowByKind map[string]uint64
 

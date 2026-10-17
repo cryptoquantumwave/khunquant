@@ -1,0 +1,19 @@
+Resize review (DRY-RUN):
+  Plan:                    resize-golden (ID 1)
+  Status:                  active
+
+Current Position:
+  Spot Notional (USDT):    5000.00
+  Futures Notional (USDT): 5000.00
+
+Resize Parameters:
+  Delta (USDT):            -500.00
+  Direction:               decrease
+
+New Position (both legs equal):
+  Spot Notional (USDT):    4500.00
+  Futures Notional (USDT): 4500.00
+
+[CROSS-EXCHANGE WARNING] Spot and futures on different exchanges — slippage and timing risk.
+
+Set confirm=true to execute.

@@ -481,6 +481,17 @@
         "to_hint": "Optional. Specific recipient user ID or identifier for the message."
       },
       "proactive": {
+        "stop": {
+          "title": "Stop",
+          "description": "Stops the assistant acting at once: cancels running turns, workflows, mandates, pending proposals and the open orders it placed. Monitoring and notifications stay on. Send /resume to allow approvals again.",
+          "button": "Stop everything",
+          "confirm_title": "Stop the assistant?",
+          "confirm_description": "Running work is cancelled, mandates are revoked and pending proposals are cancelled. Mandates must be approved again.",
+          "confirm": "Stop",
+          "cancel": "Cancel",
+          "done": "Stopped",
+          "error": "Could not stop"
+        },
         "loading": "Loading...",
         "load_error": "Failed to load proactive settings.",
         "owner": {

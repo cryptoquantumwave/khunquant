@@ -20,6 +20,7 @@ import (
 var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory {
 	f := alertTriggerFactories(d)
 	f[triggers.KindExternal] = triggers.ExternalFactory
+	f[triggers.KindTimeAt] = triggers.TimeAtFactory(triggers.CrossConfig{Language: ownerLanguage(d)})
 	f[triggers.KindDCADue] = dcaDueFactory(d)
 	f[triggers.KindDNHealth] = dnHealthFactory(d)
 	for kind, fac := range portfolioTriggerFactories(d) {

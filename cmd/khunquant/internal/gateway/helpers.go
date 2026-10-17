@@ -83,6 +83,7 @@ type gatewayServices struct {
 	Control          *controlRuntime                    // the kill flag and the control-command dispatcher (control_wiring.go); built on every generation
 	Approval         *approvalRuntime                   // order approvals (pkg/approval); nil unless approvals are effectively on and the workflow engine runs
 	DNFlow           *dnFlowRuntime                     // dn.open / dn.recover dependencies; nil unless the delta-neutral tools are on
+	DCAFlow          *dcaFlowRuntime                    // dca.execute dependencies and the mandate sync; nil unless mandates are on
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

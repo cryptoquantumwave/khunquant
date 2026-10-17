@@ -209,6 +209,7 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
   USD, but `amount × price` is in the symbol's quote currency (THB on Bitkub). Value the order
   with `broker.EstimateNotionalUSDWithFallback` and refuse it when the USD value is unknown while
   a cap is set; never compare `amount × price` to a cap.
+- **A mandate (`pkg/dca/mandate.go`) is created only by `Store.CreateMandateFromProposal`, from an approved, owner-decided, hash-verified proposal of kind `mandate`** (the approval executor `tools.mandateSink`); never by a tool argument, never for an inferred intent. The `dca.execute` workflow (`pkg/dca/workflow.go`) places a buy only through `dcaExchange.PlaceMandateBuy`, only from a live `dca_due` candidate of a plan the gateway sync promoted, and every cap in it is USD (`EstimateNotionalUSDWithFallback`; unknown refuses). A new caller of `StartExecute` or `PlaceMandateBuy`, or a new place that names `approval.OriginMandate`, needs a deliberate edit of `TestOrderExecutionCallGraph`.
 - **A new `ToolConfig` field needs an `IsToolEnabled` switch arm**, which is default-allow for
   unknown names. `TestCatalogToolsHaveEnableArms` catches a missing arm for catalog tools.
 - **Credentials under a `yaml:"-"` subtree** (`Providers`, `Tools`, `Debug`, `Gateway`, most

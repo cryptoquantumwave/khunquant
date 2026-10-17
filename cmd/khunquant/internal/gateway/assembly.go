@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
@@ -83,6 +84,12 @@ type sharedResources struct {
 	// per process, so that a reload keeps the day's record (dca_due_wiring.go).
 	dcaStats    *triggers.DCAStats
 	dcaOutcomes *triggers.DCAOutcomes
+
+	// dcaStart is the workflow engine as the dispatcher sees it (set by the mandated
+	// DCA flow, which exists only once the engine does); dcaPromoted maps a plan id to
+	// the mandate its dca_due spec is live for (dca_mandate_wiring.go).
+	dcaStart    atomic.Pointer[dcaStarterBox]
+	dcaPromoted sync.Map
 
 	// portfolioStats are the portfolio triggers' counters, per process
 	// (portfolio_triggers_wiring.go).
@@ -184,6 +191,10 @@ type assemblyDeps struct {
 	// DNFlow is the delta-neutral workflow side (dn_workflows_wiring.go); buildServices
 	// sets it on its own copy of the deps before the workflow engine is built.
 	DNFlow *dnFlowRuntime
+
+	// DCAFlow is the mandated-DCA side (dca_mandate_wiring.go); buildServices sets it
+	// on its own copy of the deps before the workflow engine is built.
+	DCAFlow *dcaFlowRuntime
 
 	// Demands is what the market source reads. buildPerception sets it on its own
 	// copy of the deps when the triggers registry is built; it is never set by
@@ -380,9 +391,21 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.DNFlow = buildDNFlow(d, s.Attention, s.NotifyService)
 	d.DNFlow = s.DNFlow
 
+	// Mandated DCA: after the approval service, which creates mandates and owns the
+	// plan store handle. Without it, a plan whose legacy job a mandate switched off
+	// gets the job back.
+	s.DCAFlow = buildDCAFlow(d, s.NotifyService)
+	d.DCAFlow = s.DCAFlow
+	if s.DCAFlow == nil && s.CronService != nil {
+		restoreDCALegacyJobs(d, s.CronService)
+	}
+
 	s.journalLive.Store(buildJournal(d))
 	s.Approval.attach(s.journalLive.Load())
 	s.DNFlow.attach(s.journalLive.Load())
+	if s.CronService != nil {
+		s.DCAFlow.attach(d, s.journalLive.Load(), s.Perception, s.CronService)
+	}
 
 	// The control path gets the services it acts on, now that they exist. An
 	// approval service that could not attach (no engine) is withdrawn from it by
@@ -535,6 +558,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	s.Approval = nil
 	s.DNFlow.stop() // the open tool refuses once the engine is going
 	s.DNFlow = nil
+	s.DCAFlow.stop() // the dispatcher starts nothing once the engine is going
+	s.DCAFlow = nil
 
 	// The workflow engine next, while channels, notify and the exchanges are still up:
 	// a step in flight may be placing an order or sending a receipt, and it is let to

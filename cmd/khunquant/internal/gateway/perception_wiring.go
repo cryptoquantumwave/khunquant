@@ -168,7 +168,9 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	rt.dispatch = engine.NewDefaultDispatcher(ob)
 	rt.composer, _ = ob.Composer.(*engine.Composer) // set by buildAttention, before the outbox ran
 
-	opts := engine.Options{Attention: ob, Dispatcher: rt.dispatch}
+	// A live execute_dca candidate (a plan with a mandate) goes to the dca.execute
+	// workflow; every other candidate goes to the outbox as before.
+	opts := engine.Options{Attention: ob, Dispatcher: dcaDispatcher{next: rt.dispatch, shared: d.Shared}}
 	if bus := d.Shared.eventBus(); bus != nil {
 		opts.Bus = bus
 	}

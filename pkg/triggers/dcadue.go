@@ -19,7 +19,8 @@ import (
 )
 
 // KindDCADue is the kind of the trigger that says "a DCA execution is due and its
-// gate passes". It runs in SHADOW ONLY: see the type doc of dcaDue.
+// gate passes". It runs in SHADOW unless the plan has an active mandate: see the type
+// doc of dcaDue.
 const KindDCADue = "dca_due"
 
 // DCASpecOrigin is the origin of the specs the gateway keeps in line with the plans.
@@ -161,6 +162,11 @@ type DCADueParams struct {
 	Amount     float64             `json:"amount"`
 	AmountUnit string              `json:"amount_unit"`
 	Gate       *perception.DCAGate `json:"gate,omitempty"`
+	// MandateID, when set, makes the trigger LIVE for this plan: the gateway sets it
+	// (from the store, never from a person) only for a plan with an active mandate,
+	// and the candidate then asks for the plan's execution by the dca.execute
+	// workflow instead of being logged.
+	MandateID string `json:"mandate_id,omitempty"`
 }
 
 // DCADueParamsFor copies the facts of a plan a spec needs.
@@ -197,6 +203,8 @@ func (p DCADueParams) Validate() error {
 		return fmt.Errorf("amount_unit must be quote or base")
 	case !finite(p.Amount) || p.Amount <= 0:
 		return fmt.Errorf("amount must be a positive number")
+	case p.MandateID != "" && !validAlertToken(p.MandateID, false):
+		return fmt.Errorf("mandate_id is malformed")
 	}
 	if g := p.Gate; g != nil {
 		switch {
@@ -260,13 +268,20 @@ func DCADueFactory(cfg DCAConfig) Factory {
 
 // dcaDue judges one DCA plan's due slots.
 //
-// SHADOW ONLY, enforced here and not by configuration: every candidate it returns has
-// Shadow set, so attention logs it and never delivers it, whatever the global mode,
-// the spec's mode or the attention mode say. Nothing in this package can place or
-// simulate an order, call a tool or fetch anything (the import boundary pins it); the
-// legacy "dca:" cron job remains the only thing that buys or sells. The candidate is
-// what the legacy path would do, recorded next to what it did so that the two can be
-// compared (see CompareDCA).
+// SHADOW unless the plan has a mandate, enforced here and not by configuration: for a
+// plan whose params carry no MandateID every candidate it returns has Shadow set, so
+// attention logs it and never delivers it, whatever the global mode, the spec's mode
+// or the attention mode say. Nothing in this package can place or simulate an order,
+// call a tool or fetch anything (the import boundary pins it); for such a plan the
+// legacy "dca:" cron job remains the only thing that buys or sells, and the candidate
+// is what the legacy path would do, recorded next to what it did so that the two can
+// be compared (see CompareDCA).
+//
+// For a plan WITH a mandate the candidate is live (Evidence["action"] = "execute_dca",
+// with the plan, slot and mandate ids) and is still only a candidate: the gateway's
+// dispatcher hands it to the dca.execute workflow, which checks the mandate and every
+// order gate in code. The registry still marks it shadow unless the spec and the
+// triggers mode are live.
 //
 // It reads two kinds of event:
 //
@@ -561,10 +576,12 @@ func (t *dcaDue) candidate(v worldmodel.View, due time.Time, late time.Duration,
 	if capN > 0 {
 		lines = append(lines, dcaCapLine(thai, count, capN))
 	}
-	lines = append(lines, dcaShadowLine(thai))
+	if t.p.MandateID == "" {
+		lines = append(lines, dcaShadowLine(thai))
+	}
 
 	ev := map[string]any{
-		"action": "execute_dca", "shadow": true,
+		"action": "execute_dca", "shadow": t.p.MandateID == "", "mandate_id": t.p.MandateID,
 		"plan_id": t.p.PlanID, "due_at_ms": due.UnixMilli(), "late_ms": late.Milliseconds(),
 		"provider": t.p.Provider, "account": t.p.Account, "symbol": t.p.Symbol,
 		"side": t.p.Side, "amount": t.p.Amount, "amount_unit": t.p.AmountUnit,
@@ -584,15 +601,25 @@ func (t *dcaDue) candidate(v worldmodel.View, due time.Time, late time.Duration,
 		Severity:    proactive.SeverityInfo,
 		Salience:    0.2,
 		Subject:     t.p.Symbol,
-		Title:       dcaTitle(thai, t.p.PlanID, t.p.Side, t.p.Symbol),
+		Title:       t.title(thai),
 		Detail:      strings.Join(lines, "\n"),
 		Evidence:    ev,
 		Trust:       trust,
 		Compose:     proactive.ComposeTemplate,
 		DedupWindow: dcaDedupWindow,
 		At:          v.Now(),
-		Shadow:      true, // always: see the type doc
+		Shadow:      t.p.MandateID == "", // see the type doc
 	}
+}
+
+func (t *dcaDue) title(thai bool) string {
+	if t.p.MandateID != "" {
+		if thai {
+			return "แผน DCA " + strconv.FormatInt(t.p.PlanID, 10) + " ถึงกำหนด: " + dcaSide(true, t.p.Side) + " " + t.p.Symbol
+		}
+		return "DCA plan " + strconv.FormatInt(t.p.PlanID, 10) + " is due: " + t.p.Side + " " + t.p.Symbol
+	}
+	return dcaTitle(thai, t.p.PlanID, t.p.Side, t.p.Symbol)
 }
 
 func (c DCAConfig) isThai() bool { return CrossConfig{Language: c.Language}.isThai() }

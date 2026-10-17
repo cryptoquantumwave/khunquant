@@ -126,6 +126,15 @@ func handleDCAAutoJob(
 		}
 	}
 
+	// A plan whose mandate took over (the sync switches this job off, and records it
+	// first) is executed by the dca.execute workflow; this job must not also buy.
+	if cfg.Proactive.Effective().Mandates {
+		if _, promoted, _ := dcaStore.PromotedMandate(ctx, planID); promoted {
+			logger.DebugCF("dca-gate", "Plan is executed by its mandate, skipping", map[string]any{"plan_id": planID})
+			return "executed by the mandate path", nil
+		}
+	}
+
 	if !plan.Enabled {
 		logger.DebugCF("dca-gate", "Plan disabled, skipping", map[string]any{"plan_id": planID})
 		return "plan disabled", nil

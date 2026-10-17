@@ -214,16 +214,44 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	// user's confirm=true (the owner's decision for that path is the confirmation
 	// itself, as it is for create_order), and which the kill flag, every order gate
 	// and the paper-mode refusal precede. dn.recover never places: it asks.
+	// The third caller (MR-310) is the mandated DCA run: dcaExchange.PlaceMandateBuy,
+	// reached only from the place step of dca.execute, which only StartExecute starts
+	// (from the gateway's dispatcher, on a live execute_dca candidate of a plan with an
+	// ACTIVE MANDATE the owner approved), and which the kill flag, the mandate check, every
+	// order gate and the throttle precede. A run outside the mandate asks instead.
 	assertSites(t, "broker.PlaceOrderIdempotent", place,
 		"pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder",
+		"pkg/tools/dca_mandate_exchange.go:dcaExchange.PlaceMandateBuy",
 		"pkg/tools/dn_exchange.go:dnExchange.Place")
+	assertSites(t, "dca.Exchange.PlaceMandateBuy", callSites(srcs, "PlaceMandateBuy"), "pkg/dca/workflow.go:Deps.place")
+	assertSites(t, "dca.StartExecute", callSites(srcs, "StartExecute"),
+		"cmd/khunquant/internal/gateway/dca_mandate_wiring.go:dcaDispatcher.Dispatch")
+	assertSites(t, "dca.startFrom", callSites(srcs, "startFrom"), "pkg/dca/workflow.go:StartExecute")
 	assertSites(t, "Store.CreateMandateFromProposal", callSites(srcs, "CreateMandateFromProposal"),
 		"pkg/tools/dca_mandate_sink.go:mandateSink.CreateMandate")
 	assertSites(t, "Service.executeMandate", callSites(srcs, "executeMandate"),
 		"pkg/approval/service.go:Service.Recover", "pkg/approval/service.go:Service.startExecution")
-	// A mandate card is proposed from one place: the plan tools, in the owner's own root turn.
+	// A mandate card is proposed from one place (the plan tools, in the owner's own root
+	// turn), and the code-only origin of a mandated run's question is named in one place
+	// outside this package: the asker the dca.execute workflow calls.
 	assertSites(t, "Service.ProposeMandate", callSites(srcs, "ProposeMandate"),
 		"pkg/tools/dca_mandate_propose.go:proposeMandateFor")
+	var originFiles []string
+	for file, f := range srcs {
+		if strings.HasPrefix(file, "pkg/approval/") {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "OriginMandate" {
+				originFiles = append(originFiles, file)
+			}
+			return true
+		})
+	}
+	if len(originFiles) != 1 || originFiles[0] != "pkg/tools/dca_mandate_exchange.go" {
+		t.Errorf("approval.OriginMandate is named in %v outside pkg/approval, want only pkg/tools/dca_mandate_exchange.go (the mandated run's asker): "+
+			"no model-driven path may set it", originFiles)
+	}
 	assertSites(t, "deltaneutral.Exchange.Place", callSites(srcs, "Place"), "pkg/deltaneutral/workflows.go:Deps.placeLeg")
 	assertSites(t, "the dn.open place step", callSites(srcs, "placeLeg"), "pkg/deltaneutral/workflows.go:Deps.runOpen")
 
@@ -237,6 +265,7 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	// by the finalize step of an open that needs recovery (idempotent by its id).
 	assertSites(t, "StartWithID", callSites(srcs, "StartWithID"),
 		"pkg/approval/service.go:Service.startExecution",
+		"pkg/dca/workflow.go:startFrom",
 		"pkg/deltaneutral/workflows.go:Deps.startRecovery")
 	assertSites(t, "Deps.startRecovery", callSites(srcs, "startRecovery"), "pkg/deltaneutral/workflows.go:Deps.settleOpen")
 	assertSites(t, "Service.startExecution", callSites(srcs, "startExecution"),

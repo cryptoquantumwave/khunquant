@@ -179,6 +179,14 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if planID <= 0 {
 		return ErrorResult("plan_id is required")
 	}
+	// A plan whose mandate took over is bought by the dca.execute workflow. The legacy
+	// scheduled job (one that started before the switch, still inside its model turn)
+	// must not buy as well; a run the owner asks for in their own turn is not affected.
+	if ToolOrigin(ctx) == OriginCron && t.cfg != nil && t.store != nil && t.cfg.Proactive.Effective().Mandates {
+		if _, promoted, _ := t.store.PromotedMandate(ctx, planID); promoted {
+			return SilentResult(fmt.Sprintf("DCA plan %d is executed by its mandate; the scheduled job places nothing", planID))
+		}
+	}
 	if refusal := dcaScopeRefusal(ctx, planID); refusal != nil {
 		return refusal
 	}

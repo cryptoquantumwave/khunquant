@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,7 +43,8 @@ func (s *thbSpotCap) GetBalances(ctx context.Context) ([]broker.Balance, error) 
 }
 
 // mandateE2E is a THB DCA plan on a simulated exchange, with the real approval
-// service and the real plan tools, one journal database and one fake clock.
+// service, the real plan tools, the real dca.execute workflow over the real exchange
+// adapter, one journal database and one fake clock.
 type mandateE2E struct {
 	t     *testing.T
 	cfg   *config.Config
@@ -54,7 +57,10 @@ type mandateE2E struct {
 	db    *sql.DB
 	cron  *cron.CronService
 	ctl   *control.State
+	deps  *dca.Deps
 
+	mu    sync.Mutex
+	tells []dca.Notice
 }
 
 func newMandateE2E(t *testing.T, capable bool) *mandateE2E {
@@ -99,12 +105,15 @@ func newMandateE2E(t *testing.T, capable bool) *mandateE2E {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.eng, err = journal.New(db, e.svc.Definitions(), clock,
-		journal.WithWaitPoll(2*time.Millisecond), journal.WithShutdownWait(300*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
+	e.deps = &dca.Deps{
+		Store: store, Exchange: NewDCAExchange(cfg, store, clock.Now), Asker: NewDCAAsker(cfg, nil), Clock: clock, PollInterval: -1,
+		Killed: ctl.Killed, PriceMovePct: func() float64 { return 5 },
+		Tag: func(ctx context.Context, origin, sender string) context.Context {
+			return WithToolSender(WithToolOrigin(ctx, origin), sender)
+		},
+		Tell: func(_ context.Context, n dca.Notice) { e.mu.Lock(); e.tells = append(e.tells, n); e.mu.Unlock() },
 	}
-	e.svc.SetWorkflows(e.eng)
+	e.restart()
 	SetOrderProposer(e.svc)
 	SetMandateProposer(e.svc)
 	t.Cleanup(func() { SetOrderProposer(nil); SetMandateProposer(nil); SetProposalConfig(nil) })
@@ -160,6 +169,30 @@ func (e *mandateE2E) planWithMandate(extra map[string]any) (dca.Plan, dca.Mandat
 		e.t.Fatalf("no active mandate after the approval: %v %v", ok, err)
 	}
 	return plan, m
+}
+
+func (e *mandateE2E) run(plan dca.Plan, m dca.Mandate, slot time.Time) journal.Workflow {
+	e.t.Helper()
+	ok, err := dca.StartExecute(context.Background(), e.eng, map[string]any{
+		"action": "execute_dca", "plan_id": plan.ID, "due_at_ms": slot.UnixMilli(), "mandate_id": m.ID,
+	}, OriginProactive, "")
+	if err != nil || !ok {
+		e.t.Fatalf("StartExecute: %v %v", ok, err)
+	}
+	id := dca.WorkflowID(plan.ID, slot.UnixMilli())
+	for i := 0; i < 20; i++ {
+		e.eng.ExecuteNow(context.Background(), id)
+		w, err := e.eng.Get(context.Background(), id)
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		if w.Status.Terminal() {
+			return w
+		}
+		e.clock.Advance(time.Minute)
+	}
+	e.t.Fatalf("workflow %s did not finish", id)
+	return journal.Workflow{}
 }
 
 // TestMandateFromApprovedProposal: a plan tool call in the owner's own turn puts a
@@ -312,6 +345,130 @@ func TestModelTurnCannotProposeABuy(t *testing.T) {
 	}
 }
 
+// The execution path end to end, on a capable and a not-capable (Bitkub-like) exchange:
+// a due slot buys once through the real adapter, valued in USD at the THB rate, with
+// the row and the usage recorded together and a silent receipt.
+func TestDCAExecute_EndToEnd(t *testing.T) {
+	for _, capable := range []bool{true, false} {
+		t.Run(fmt.Sprintf("capable=%v", capable), func(t *testing.T) {
+			e := newMandateE2E(t, capable)
+			plan, m := e.planWithMandate(nil)
+			slot := e.clock.Now()
+			if w := e.run(plan, m, slot); w.Status != journal.StatusSucceeded {
+				t.Fatalf("workflow: %s %s", w.Status, w.Error)
+			}
+			e.run(plan, m, slot) // fired twice: nothing more
+			if e.world.placed("spot") != 1 {
+				t.Fatalf("%d orders, want 1", e.world.placed("spot"))
+			}
+			rows, _ := e.store.GetExecutions(context.Background(), dca.QueryFilter{PlanID: &plan.ID})
+			if len(rows) != 1 || rows[0].Status != "completed" || !near(rows[0].AmountQuote, 2000) {
+				t.Fatalf("rows = %+v", rows)
+			}
+			used, _ := e.store.MandateUsage(context.Background(), m.ID, time.Time{}, false)
+			if !near(used, 20) {
+				t.Errorf("usage = %v, want 20 (2000 THB at 100 THB per dollar)", used)
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if len(e.tells) != 1 || e.tells[0].Severity != "info" || !e.tells[0].Silent {
+				t.Errorf("receipts = %+v", e.tells)
+			}
+		})
+	}
+}
+
+// A run outside the mandate becomes one code-built question for exactly the plan's
+// amount; approving that question places that order, once, through the approval
+// workflow. The cap is compared in USD ($20 against $15), not in THB.
+func TestDCAExecute_OutsideTheMandateAsks(t *testing.T) {
+	e := newMandateE2E(t, true)
+	plan, m := e.planWithMandate(map[string]any{"mandate_max_per_run": 1500.0}) // $15 per run
+	slot := e.clock.Now()
+	e.run(plan, m, slot)
+	e.run(plan, m, slot)
+	if e.world.placed("spot") != 0 {
+		t.Fatal("a run over the per-run cap placed an order")
+	}
+	var asks []approval.Proposal
+	rows, _ := e.svcPending()
+	for _, p := range rows {
+		if p.Origin == approval.OriginMandate {
+			asks = append(asks, p)
+		}
+	}
+	if len(asks) != 1 {
+		t.Fatalf("%d questions for one slot, want 1", len(asks))
+	}
+	q := e.tg.last()
+	if !strings.Contains(q.Body, "Outside the mandate") || !strings.Contains(q.Body, "per-run limit of $15.00") {
+		t.Errorf("the question does not say which bound: %q", q.Body)
+	}
+	if !strings.Contains(q.Title, "BUY 20 BTC") {
+		t.Errorf("the question is not for the plan's amount: %q", q.Title)
+	}
+	got := e.approveCard()
+	e.eng.ExecuteNow(context.Background(), approval.WorkflowID(got.ID))
+	if e.world.placed("spot") != 1 {
+		t.Fatalf("%d orders after approving the question, want 1", e.world.placed("spot"))
+	}
+	if used, _ := e.store.MandateUsage(context.Background(), m.ID, time.Time{}, true); used != 0 {
+		t.Errorf("an approved question counted toward the mandate: %v", used)
+	}
+}
+
+// svcPending lists the pending proposals.
+func (e *mandateE2E) svcPending() ([]approval.Proposal, error) {
+	var out []approval.Proposal
+	// ByCode needs a code; the cards sent are the record of what is pending.
+	for _, n := range e.tg.sentAll() {
+		if len(n.Actions) == 0 {
+			continue
+		}
+		code, _, ok := approval.ParseButtonPayload(n.Actions[0].Payload)
+		if !ok {
+			continue
+		}
+		if p, err := e.svc.ByCode(context.Background(), code); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// The kill flag stops a mandated run, and an exit is not touched by anything here.
+func TestDCAExecute_KillFlagRefusesTheRun(t *testing.T) {
+	e := newMandateE2E(t, true)
+	plan, m := e.planWithMandate(nil)
+	if _, err := e.ctl.Engage(context.Background(), "test", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	e.run(plan, m, e.clock.Now())
+	if e.world.placed("spot") != 0 {
+		t.Error("an order was placed with the kill flag engaged")
+	}
+}
+
+// A legacy scheduled job that is still inside its model turn when its plan is promoted
+// does not buy as well; the owner's own run is unaffected.
+func TestExecuteDCAOrder_CronStandsDownForAPromotedPlan(t *testing.T) {
+	e := newMandateE2E(t, true)
+	plan, m := e.planWithMandate(nil)
+	if err := e.store.SetLegacyOff(context.Background(), m.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewExecuteDCAOrderTool(e.cfg, e.store)
+	cronCtx := WithToolOrigin(context.Background(), OriginCron)
+	res := tool.Execute(cronCtx, map[string]any{"plan_id": float64(plan.ID)})
+	if res.IsError || !strings.Contains(res.ForLLM, "executed by its mandate") || e.world.placed("spot") != 0 {
+		t.Errorf("cron run = %q, %d orders", res.ForLLM, e.world.placed("spot"))
+	}
+	owner := tool.Execute(e.ownerCtx(), map[string]any{"plan_id": float64(plan.ID)})
+	if owner.IsError || e.world.placed("spot") != 1 {
+		t.Errorf("the owner's own run = %q, %d orders", owner.ForLLM, e.world.placed("spot"))
+	}
+}
+
 // sentAll returns every message the owner was sent.
 func (f *fakeTelegram) sentAll() []notify.Notification {
 	f.mu.Lock()
@@ -319,3 +476,172 @@ func (f *fakeTelegram) sentAll() []notify.Notification {
 	return append([]notify.Notification(nil), f.msgs...)
 }
 
+// restart is a new process: a fresh journal engine over the same database.
+func (e *mandateE2E) restart() {
+	e.t.Helper()
+	eng, err := journal.New(e.db, append(e.svc.Definitions(), e.deps.Definitions()...), e.clock,
+		journal.WithWaitPoll(2*time.Millisecond), journal.WithShutdownWait(300*time.Millisecond))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.eng = eng
+	e.svc.SetWorkflows(eng)
+}
+
+// TestDCAExecute_CrashMatrixThroughTheRealPlacer crashes the place, verify and record
+// steps at every crash point with the real exchange adapter and broker.PlaceOrderIdempotent
+// behind them, on a capable adapter and on a not-capable (Bitkub-like) one. Never two
+// orders; a run is either recorded once as a fill with its usage, or ends unproven with
+// the owner told to check the exchange, no usage, and the plan blocked.
+func TestDCAExecute_CrashMatrixThroughTheRealPlacer(t *testing.T) {
+	points := []string{journal.CrashBeforeStarted, journal.CrashAfterStarted, journal.CrashAfterFn, journal.CrashAfterOutput}
+	for _, capable := range []bool{true, false} {
+		for _, step := range []string{"place", "verify", "record"} {
+			for _, point := range points {
+				t.Run(fmt.Sprintf("capable=%v/%s/%s", capable, step, point), func(t *testing.T) {
+					e := newMandateE2E(t, capable)
+					plan, m := e.planWithMandate(nil)
+					slot := e.clock.Now()
+					ok, err := dca.StartExecute(context.Background(), e.eng, map[string]any{
+						"action": "execute_dca", "plan_id": plan.ID, "due_at_ms": slot.UnixMilli(), "mandate_id": m.ID,
+					}, OriginProactive, "")
+					if err != nil || !ok {
+						t.Fatal(err)
+					}
+					id := dca.WorkflowID(plan.ID, slot.UnixMilli())
+					kill := e.eng.SimulateKill(func(pt, st string, _ int) bool { return pt == point && st == step })
+					e.eng.ExecuteNow(context.Background(), id)
+					if !kill.Dead() {
+						t.Fatal("the crash point was never reached")
+					}
+					e.clock.Advance(time.Minute)
+					e.restart()
+					if w := e.run(plan, m, slot); w.Status != journal.StatusSucceeded {
+						t.Fatalf("workflow ended %s: %s", w.Status, w.Error)
+					}
+					orders := e.world.placed("spot")
+					if orders > 1 {
+						t.Fatalf("%d orders", orders)
+					}
+					rows, _ := e.store.GetExecutions(context.Background(), dca.QueryFilter{PlanID: &plan.ID})
+					used, _ := e.store.MandateUsage(context.Background(), m.ID, time.Time{}, false)
+					unproven, _ := e.store.Unproven(context.Background(), plan.ID)
+					if len(rows) != 1 {
+						t.Fatalf("%d execution rows, want exactly one", len(rows))
+					}
+					t.Logf("row %q, %d orders, usage %v, blocked %v", rows[0].Status, orders, used, unproven != "")
+					switch rows[0].Status {
+					case "completed":
+						if orders != 1 || !near(used, 20) || unproven != "" {
+							t.Errorf("completed with %d orders, usage %v, unproven %q", orders, used, unproven)
+						}
+					case "failed":
+						if capable {
+							t.Errorf("a capable adapter ended unproven: %q", rows[0].ErrorMsg)
+						}
+						if used != 0 || unproven == "" {
+							t.Errorf("unproven run: usage %v, blocked %q", used, unproven)
+						}
+						e.mu.Lock()
+						told := false
+						for _, n := range e.tells {
+							told = told || strings.Contains(n.Body, "MAY OR MAY NOT")
+						}
+						e.mu.Unlock()
+						if !told {
+							t.Error("the owner was not told to check the exchange")
+						}
+					default:
+						t.Errorf("row status %q", rows[0].Status)
+					}
+				})
+			}
+		}
+	}
+}
+
+// The kill flag is read on EVERY place attempt. A capable adapter that finds no order
+// by its client id on a retry would place one; after /stop it must not. Attempt 1 ends
+// outcome-unknown with no order created, the flag is engaged, attempt 2 runs: zero
+// orders, the run ends unproven, the plan is blocked and the owner is told once.
+func TestDCAExecute_KillFlagOnARetry(t *testing.T) {
+	e := newMandateE2E(t, true)
+	plan, m := e.planWithMandate(nil)
+	e.world.setReject("spot", errors.New("request timeout")) // the order is not created
+	slot := e.clock.Now()
+	if ok, err := dca.StartExecute(context.Background(), e.eng, map[string]any{
+		"action": "execute_dca", "plan_id": plan.ID, "due_at_ms": slot.UnixMilli(), "mandate_id": m.ID,
+	}, OriginProactive, ""); err != nil || !ok {
+		t.Fatal(err)
+	}
+	id := dca.WorkflowID(plan.ID, slot.UnixMilli())
+	e.eng.ExecuteNow(context.Background(), id)
+	w, err := e.eng.Get(context.Background(), id)
+	if err != nil || w.Status.Terminal() {
+		t.Fatalf("after attempt 1 the workflow is %v (%v); want it waiting to retry", w.Status, err)
+	}
+	if e.world.placed("spot") != 0 {
+		t.Fatal("attempt 1 created an order")
+	}
+	if _, err := e.ctl.Engage(context.Background(), "test", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	e.world.setReject("spot", nil) // a retry that ran would now place
+	for i := 0; i < 20 && !w.Status.Terminal(); i++ {
+		e.clock.Advance(time.Minute)
+		e.eng.ExecuteNow(context.Background(), id)
+		w, _ = e.eng.Get(context.Background(), id)
+	}
+	if w.Status != journal.StatusSucceeded {
+		t.Fatalf("workflow ended %s: %s", w.Status, w.Error)
+	}
+	if n := e.world.placed("spot"); n != 0 {
+		t.Fatalf("%d orders placed after /stop", n)
+	}
+	rows, _ := e.store.GetExecutions(context.Background(), dca.QueryFilter{PlanID: &plan.ID})
+	if len(rows) != 1 || rows[0].Status != "failed" || !strings.Contains(rows[0].ErrorMsg, "unproven") {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if reason, _ := e.store.Unproven(context.Background(), plan.ID); !strings.Contains(reason, "kill switch") {
+		t.Errorf("the plan is not blocked as unproven by the kill switch: %q", reason)
+	}
+	if used, _ := e.store.MandateUsage(context.Background(), m.ID, time.Time{}, true); used != 0 {
+		t.Errorf("usage %v recorded for a run that bought nothing", used)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.tells) != 1 || !strings.Contains(e.tells[0].Body, "MAY OR MAY NOT") || e.tells[0].Severity != "warning" {
+		t.Errorf("owner notices = %+v, want exactly one warning to check the exchange", e.tells)
+	}
+}
+
+// The converse: the flag engaged AFTER the order was placed does not undo anything. The
+// fill is verified, recorded with its usage, and receipted.
+func TestDCAExecute_KillFlagAfterAFilledPlaceKeepsTheRecord(t *testing.T) {
+	e := newMandateE2E(t, true)
+	plan, m := e.planWithMandate(nil)
+	e.world.onCreate = func(string) {
+		if _, err := e.ctl.Engage(context.Background(), "test", "stop"); err != nil {
+			t.Error(err)
+		}
+	}
+	e.run(plan, m, e.clock.Now())
+	if e.world.placed("spot") != 1 {
+		t.Fatalf("%d orders, want 1", e.world.placed("spot"))
+	}
+	if !e.ctl.Killed() {
+		t.Fatal("the flag was never engaged")
+	}
+	rows, _ := e.store.GetExecutions(context.Background(), dca.QueryFilter{PlanID: &plan.ID})
+	if len(rows) != 1 || rows[0].Status != "completed" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if used, _ := e.store.MandateUsage(context.Background(), m.ID, time.Time{}, false); !near(used, 20) {
+		t.Errorf("usage = %v, want 20", used)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.tells) != 1 || e.tells[0].Severity != "info" || !e.tells[0].Silent {
+		t.Errorf("receipts = %+v", e.tells)
+	}
+}

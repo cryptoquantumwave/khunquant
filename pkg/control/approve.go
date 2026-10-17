@@ -79,6 +79,16 @@ func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, c
 
 func decidedText(p approval.Proposal, approve bool) string {
 	summary := firstLine(p.Summary, 200)
+	if p.Kind == approval.KindMandate {
+		// A mandate card places nothing: approving it lets code buy inside its limits.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Rejected mandate %s: %s\nNothing was bought and no mandate was created.", p.Code, summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Approved mandate %s: %s\nThe mandate is active. Nothing was bought by this approval; due runs now execute inside its limits.", p.Code, summary)
+		}
+		return fmt.Sprintf("Approved mandate %s: %s\nCreating the mandate now.", p.Code, summary)
+	}
 	if !approve {
 		return fmt.Sprintf("Rejected proposal %s: %s\nNothing was placed.", p.Code, summary)
 	}

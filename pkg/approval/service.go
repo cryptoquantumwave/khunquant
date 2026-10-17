@@ -41,6 +41,9 @@ type Options struct {
 	Editor CardEditor
 	// Killer is the kill switch; nil means never killed.
 	Killer Killer
+	// Mandates creates the mandate row of an approved mandate proposal; nil means
+	// mandate proposals cannot be made or approved.
+	Mandates MandateSink
 	// Clock is the time source for expiry, staleness and waits; nil is the wall clock.
 	Clock journal.Clock
 	// Events receives approval.created, approval.decided and approval.expired.
@@ -160,6 +163,11 @@ type ProposeRequest struct {
 	// (so quiet hours were respected upstream).
 	DeliverNow                  bool
 	CandidateID, InterventionID string
+	// MandateID and Expiry are set by CODE only (never from a tool argument): the
+	// dca.execute workflow asking about a run outside its mandate. OriginMandate
+	// requires a MandateID; a positive Expiry replaces the default life of the card.
+	MandateID string
+	Expiry    time.Duration
 }
 
 // Propose creates a pending proposal and delivers its card to the owner.
@@ -180,6 +188,12 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		if !r.DeliverNow || r.CandidateID == "" {
 			return Proposal{}, ErrNotDeliverNow
 		}
+	case OriginMandate:
+		// Built by code, from a mandate, for exactly the plan's own amount; only the
+		// owner's approval places it, like any other order proposal.
+		if r.MandateID == "" {
+			return Proposal{}, fmt.Errorf("approval: origin %q needs a mandate", r.Origin)
+		}
 	default:
 		return Proposal{}, fmt.Errorf("approval: unknown origin %q", r.Origin)
 	}
@@ -193,9 +207,9 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 	defer s.mu.Unlock()
 
 	now := s.now()
-	if codes, err := s.st.pendingCodes(ctx, now); err != nil {
+	if codes, err := s.st.pendingCodes(ctx, now, r.Origin == OriginMandate); err != nil {
 		return Proposal{}, err
-	} else if len(codes) >= MaxPending {
+	} else if len(codes) >= pendingLimit(r.Origin == OriginMandate) {
 		return Proposal{}, &PendingError{Codes: codes}
 	}
 
@@ -221,6 +235,9 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		CandidateID: r.CandidateID, InterventionID: r.InterventionID,
 		Lang: langOf(loc.Lang), Status: StatusPending, CreatedAt: now, ExpiresAt: now.Add(s.expiry()),
 	}
+	if r.Expiry > 0 {
+		p.ExpiresAt = now.Add(r.Expiry)
+	}
 	var card Card
 	for attempt := 0; ; attempt++ {
 		p.Code = newCode()
@@ -240,7 +257,7 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		if bounds.hourly {
 			return Proposal{}, ErrHourlyLimit
 		}
-		codes, _ := s.st.pendingCodes(ctx, now)
+		codes, _ := s.st.pendingCodes(ctx, now, r.Origin == OriginMandate)
 		return Proposal{}, &PendingError{Codes: codes}
 	case err != nil:
 		return Proposal{}, err
@@ -332,7 +349,7 @@ func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, 
 		logger.WarnCF(logComponent, "SECURITY: approval decision with the wrong nonce", map[string]any{"code": code})
 		return Proposal{}, ErrNotFound
 	}
-	if _, err := decodeVerified(p); err != nil {
+	if err := verifyProposal(p); err != nil {
 		logger.ErrorCF(logComponent, "SECURITY: refusing to decide a proposal that does not match its hash", map[string]any{"code": code})
 		_, _ = s.st.cancel(ctx, p.ID, "integrity check failed", now)
 		return Proposal{}, ErrNotFound
@@ -346,6 +363,9 @@ func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, 
 		return Proposal{}, ErrKilled
 	}
 
+	if approve && p.Kind == KindMandate && s.o.Mandates == nil {
+		return Proposal{}, ErrUnavailable
+	}
 	to := StatusRejected
 	if approve {
 		to = StatusApproved
@@ -444,15 +464,23 @@ func (s *Service) editCard(ctx context.Context, p Proposal, outcome string) {
 	if s.o.Editor == nil || len(p.CardMessageIDs) == 0 {
 		return
 	}
-	op, err := decodeVerified(p)
-	if err != nil {
-		return
-	}
 	loc := s.locale(ctx)
 	loc.Lang = p.Lang
-	card, err := RenderOrderCard(p, op, loc, outcome)
-	if err != nil {
-		return
+	var card Card
+	if p.Kind == KindMandate {
+		mp, err := VerifiedMandate(p)
+		if err != nil {
+			return
+		}
+		card = RenderMandateCard(p, mp, loc, outcome)
+	} else {
+		op, err := decodeVerified(p)
+		if err != nil {
+			return
+		}
+		if card, err = RenderOrderCard(p, op, loc, outcome); err != nil {
+			return
+		}
 	}
 	// A card is edited in its first message only: a long card is one message, and
 	// the editor drops the buttons by replacing the message's content.
@@ -478,6 +506,9 @@ type workflowInput struct {
 // whose start was lost to a crash between the two). The workflow's first step
 // re-reads the row and refuses anything that is not approved by the owner.
 func (s *Service) startExecution(ctx context.Context, p Proposal) error {
+	if p.Kind == KindMandate {
+		return s.executeMandate(ctx, p) // creates the mandate row; no workflow, no order
+	}
 	wf := s.workflows()
 	if wf == nil {
 		return errors.New("approval: no workflow engine attached")
@@ -515,6 +546,10 @@ func (s *Service) Recover(ctx context.Context) error {
 		return errors.Join(append(errs, err)...)
 	}
 	for _, p := range executing {
+		if p.Kind == KindMandate {
+			errs = append(errs, s.executeMandate(ctx, p))
+			continue
+		}
 		w, err := wf.Get(ctx, p.WorkflowID)
 		switch {
 		case errors.Is(err, journal.ErrNotFound):
@@ -582,3 +617,10 @@ func (s *Service) sweep(ctx context.Context) {
 
 // Params returns the stored params of a proposal, verified against its hash.
 func (s *Service) Params(p Proposal) (OrderParams, error) { return decodeVerified(p) }
+
+func pendingLimit(mandate bool) int {
+	if mandate {
+		return MaxPendingMandate
+	}
+	return MaxPending
+}

@@ -46,6 +46,8 @@ func (t *DeleteDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
 
+	_, _ = t.store.RevokePlanMandate(ctx, planID, "plan deleted")
+	_ = t.store.ClearMandatePending(ctx, planID)
 	if err := t.store.DeletePlan(ctx, planID); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to delete plan: %v", err))
 	}

@@ -305,6 +305,11 @@ const (
 	MaxPending = 3
 	// MaxPerHour is how many may be created in a rolling hour.
 	MaxPerHour = 10
+	// MaxPendingMandate and MaxMandatePerHour are the same two bounds for mandate cards
+	// and the questions of mandated runs, counted apart from orders so that they can
+	// never keep an order (an exit above all) from being proposed.
+	MaxPendingMandate = 8
+	MaxMandatePerHour = 30
 	// MaxRationaleRunes bounds the model's prose on a card.
 	MaxRationaleRunes = 300
 	// DefaultExpiry is the life of a proposal when the config sets none.

@@ -530,6 +530,7 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// The approval sweeper and propose_order go before the engine: no new proposal
 	// may start while the services it needs are being stopped, and the sweeper edits
 	// cards and delivers through notify and the channels, which are still up here.
+	appr := s.Approval
 	s.Approval.stop()
 	s.Approval = nil
 	s.DNFlow.stop() // the open tool refuses once the engine is going
@@ -542,6 +543,7 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 		s.journalLive.Load().stop()
 		s.journalLive.Store(nil)
 	}
+	appr.closeStores() // after the engine: a step in flight may still write the plan store
 
 	// Then perception, before the outbox: the sources stop first so that nothing
 	// new arrives, then the engine drains what its inbox holds through the pipeline,

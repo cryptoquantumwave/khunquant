@@ -9,6 +9,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -39,9 +40,23 @@ func init() {
 // Executing an approved order is the journal engine's job (approval.order), not
 // a goroutine of this runtime.
 type approvalRuntime struct {
-	svc    *approval.Service
-	cancel context.CancelFunc
+	svc *approval.Service
+	// mandateStore is the DCA plan store handle mandates live in (nil while mandates
+	// are off). It is closed by closeStores, after the workflow engine has stopped.
+	mandateStore *dca.Store
+	cancel       context.CancelFunc
 	done   chan struct{}
+}
+
+// closeStores releases the plan store handle. Safe on nil.
+func (rt *approvalRuntime) closeStores() {
+	if rt == nil || rt.mandateStore == nil {
+		return
+	}
+	if err := rt.mandateStore.Close(); err != nil {
+		logger.WarnCF("gateway", "Closing the mandate plan store failed", map[string]any{"error": err.Error()})
+	}
+	rt.mandateStore = nil
 }
 
 // buildApproval constructs the approval service, or nil when approvals are not
@@ -82,14 +97,28 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *a
 	if k := d.Control.killer(); k != nil {
 		opts.Killer = k
 	}
+	// Mandates: an approved mandate card writes its row in the DCA store, so the
+	// approval service gets the executor only while mandates are on.
+	var mandateStore *dca.Store
+	if d.Cfg.Proactive.Effective().Mandates {
+		if st, err := dca.NewStore(d.Cfg.WorkspacePath()); err != nil {
+			logger.ErrorCF("gateway", "Mandates disabled: the DCA plan store could not be opened", map[string]any{"error": err.Error()})
+		} else {
+			mandateStore = st
+			opts.Mandates = tools.NewMandateSink(d.Cfg, st, nil)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	svc, err := approval.New(ctx, opts)
 	if err != nil {
 		logger.ErrorCF("gateway", "Order approvals disabled", map[string]any{"error": err.Error()})
+		if mandateStore != nil {
+			_ = mandateStore.Close()
+		}
 		return nil
 	}
-	return &approvalRuntime{svc: svc}
+	return &approvalRuntime{svc: svc, mandateStore: mandateStore}
 }
 
 // attach connects the service to the workflow engine, starts the sweeper (whose
@@ -111,6 +140,9 @@ func (rt *approvalRuntime) attach(j *journalRuntime) {
 		rt.svc.Run(ctx)
 	}()
 	tools.SetOrderProposer(rt.svc)
+	if rt.mandateStore != nil {
+		tools.SetMandateProposer(rt.svc)
+	}
 }
 
 // stop closes propose_order and ends the sweeper. Safe on nil.
@@ -119,6 +151,7 @@ func (rt *approvalRuntime) stop() {
 		return
 	}
 	tools.SetOrderProposer(nil)
+	tools.SetMandateProposer(nil)
 	if rt.cancel == nil {
 		return
 	}

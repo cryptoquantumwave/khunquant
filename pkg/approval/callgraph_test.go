@@ -217,6 +217,13 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	assertSites(t, "broker.PlaceOrderIdempotent", place,
 		"pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder",
 		"pkg/tools/dn_exchange.go:dnExchange.Place")
+	assertSites(t, "Store.CreateMandateFromProposal", callSites(srcs, "CreateMandateFromProposal"),
+		"pkg/tools/dca_mandate_sink.go:mandateSink.CreateMandate")
+	assertSites(t, "Service.executeMandate", callSites(srcs, "executeMandate"),
+		"pkg/approval/service.go:Service.Recover", "pkg/approval/service.go:Service.startExecution")
+	// A mandate card is proposed from one place: the plan tools, in the owner's own root turn.
+	assertSites(t, "Service.ProposeMandate", callSites(srcs, "ProposeMandate"),
+		"pkg/tools/dca_mandate_propose.go:proposeMandateFor")
 	assertSites(t, "deltaneutral.Exchange.Place", callSites(srcs, "Place"), "pkg/deltaneutral/workflows.go:Deps.placeLeg")
 	assertSites(t, "the dn.open place step", callSites(srcs, "placeLeg"), "pkg/deltaneutral/workflows.go:Deps.runOpen")
 

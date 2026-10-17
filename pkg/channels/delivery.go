@@ -278,6 +278,19 @@ func actionFooter(actions []bus.Action) string {
 	return actionFooterPrefix + strings.Join(cmds, actionFooterSep)
 }
 
+// AppendActionFooter adds the text fallback of actions to the last of chunks,
+// for a channel that renders the actions as buttons and keeps the fallback in
+// the message anyway, so that a client which cannot show the buttons still has
+// the commands. Like the Manager's own footer it is all or nothing: a footer
+// longer than half of maxLen is left out. The chunks are changed in place.
+func AppendActionFooter(chunks []string, actions []bus.Action, maxLen int) []string {
+	footer := actionFooter(actions)
+	if footer == "" || (maxLen > 0 && runeLen(footer) > maxLen/2) {
+		return chunks
+	}
+	return appendActionFooter(chunks, footer, maxLen)
+}
+
 // appendActionFooter adds footer to the last chunk. When that would push the
 // chunk past maxLen the last chunk is re-split to leave room, so the footer is
 // never split and always ends the final chunk.

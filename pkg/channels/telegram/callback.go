@@ -29,11 +29,6 @@ import (
 // checks the payload (a code and a nonce) against the stored proposal.
 
 const (
-	// callbackVersion starts every callback data string. It is bumped if the
-	// layout changes; a string with another prefix is dropped.
-	callbackVersion = "kq1"
-	callbackSep     = "|"
-
 	// maxCallbackDataBytes is Telegram's limit on callback_data.
 	maxCallbackDataBytes = 64
 	// maxButtonsPerRow keeps the buttons large enough to tap on a phone.
@@ -55,102 +50,21 @@ const (
 	toastFailed        = "That command could not be handled. Try again."
 )
 
-// callbackActions maps the short code in the callback data to the action ID the
-// control path knows (pkg/control's button action IDs). Confirm-intent ("ci") is
-// not here because the control path has no handler for it yet: a button for an
-// action that is not listed is not sent.
-var callbackActions = map[string]string{
-	"apv":   "approve",
-	"rej":   "reject",
-	"snz1h": "snooze_1h",
-	"snz4h": "snooze_4h",
-	"snz1d": "snooze_1d",
-	"use":   "useful",
-	"nu":    "not_useful",
-}
-
-// callbackCodes is callbackActions the other way round.
-var callbackCodes = func() map[string]string {
-	m := make(map[string]string, len(callbackActions))
-	for code, id := range callbackActions {
-		m[id] = code
-	}
-	return m
-}()
-
-// validPayloadByte is what a payload may be made of: an approval payload
-// (<code>.<nonce>) and an intervention id both fit. The separator of the data
-// string and any whitespace are excluded, so a payload cannot shift the fields.
-func validPayloadByte(b byte) bool {
-	switch {
-	case b >= '0' && b <= '9', b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z':
-		return true
-	}
-	return b == '.' || b == '_' || b == '-' || b == ':'
-}
-
-// checkPayload validates the payload of a button. Approve and reject need the
-// <code>.<nonce> shape; the other actions take whatever opaque id they carry, or
-// nothing.
-func checkPayload(code, payload string) error {
-	if len(payload) > bus.MaxActionPayloadBytes {
-		return fmt.Errorf("payload is %d bytes, the limit is %d", len(payload), bus.MaxActionPayloadBytes)
-	}
-	for i := 0; i < len(payload); i++ {
-		if !validPayloadByte(payload[i]) {
-			return errors.New("payload has a character that is not allowed")
-		}
-	}
-	if code == "apv" || code == "rej" {
-		before, after, ok := strings.Cut(payload, ".")
-		if !ok || before == "" || after == "" || strings.Contains(after, ".") {
-			return errors.New("an approval payload must be <code>.<nonce>")
-		}
-	}
-	return nil
-}
+// callbackCodes maps an action ID to its short code in the callback data. The
+// codec itself (kq1|<action>|<payload>) is shared by every channel that renders
+// buttons and lives in pkg/channels; only Telegram's 64-byte limit is its own.
+var callbackCodes = channels.CallbackCodes()
 
 // encodeCallbackData builds "kq1|<action>|<payload>" for a button. A string over
 // 64 bytes, an action the control path does not know and a payload that does not
 // fit are programming errors: they are returned, never truncated.
 func encodeCallbackData(a bus.Action) (string, error) {
-	code, ok := callbackCodes[a.ID]
-	if !ok {
-		return "", fmt.Errorf("action %q has no callback code", a.ID)
-	}
-	if err := checkPayload(code, a.Payload); err != nil {
-		return "", fmt.Errorf("action %q: %w", a.ID, err)
-	}
-	data := callbackVersion + callbackSep + code + callbackSep + a.Payload
-	if len(data) > maxCallbackDataBytes {
-		return "", fmt.Errorf("action %q: callback data is %d bytes, the limit is %d",
-			a.ID, len(data), maxCallbackDataBytes)
-	}
-	return data, nil
+	return channels.EncodeCallbackData(a, maxCallbackDataBytes)
 }
 
-// parseCallbackData is the strict inverse of encodeCallbackData. It returns the
-// control path's action ID and the payload. An unknown version, an unknown action
-// code, a field count other than three or a malformed payload is an error.
+// parseCallbackData is the strict inverse of encodeCallbackData.
 func parseCallbackData(data string) (actionID, payload string, err error) {
-	if data == "" || len(data) > maxCallbackDataBytes {
-		return "", "", errors.New("callback data has the wrong size")
-	}
-	parts := strings.Split(data, callbackSep)
-	if len(parts) != 3 {
-		return "", "", errors.New("callback data does not have three fields")
-	}
-	if parts[0] != callbackVersion {
-		return "", "", errors.New("unknown callback version")
-	}
-	actionID, ok := callbackActions[parts[1]]
-	if !ok {
-		return "", "", errors.New("unknown callback action")
-	}
-	if err := checkPayload(parts[1], parts[2]); err != nil {
-		return "", "", err
-	}
-	return actionID, parts[2], nil
+	return channels.ParseCallbackData(data, maxCallbackDataBytes)
 }
 
 // buildKeyboard builds the inline keyboard of a message's actions, at most

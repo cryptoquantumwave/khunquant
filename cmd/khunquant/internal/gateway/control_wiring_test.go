@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 func controlRequest(t *testing.T, method, url, token string, headers map[string]string) int {
@@ -92,7 +94,7 @@ func TestControlWiring_KillFlagSurvivesReload(t *testing.T) {
 	}
 
 	rep, ok := c.disp.TryHandle(context.Background(), ownerMsg("/stop"))
-	if !ok || !strings.Contains(rep.Text, "Stopped acting") {
+	if !ok || !strings.HasPrefix(rep.Text, "Stopped.") {
 		t.Fatalf("/stop: %+v, %v", rep, ok)
 	}
 	if !c.state.Killed() {
@@ -195,7 +197,7 @@ func TestControlWiring_KillRoute(t *testing.T) {
 func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 	kill := &memKill{}
 	mux := http.NewServeMux()
-	registerControlAPI(mux, kill, "")
+	registerControlAPI(mux, kill, nil, "")
 
 	for _, method := range []string{http.MethodPost, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/api/control/kill", nil)
@@ -213,7 +215,7 @@ func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 	// Sanity: the same request with a token configured and presented goes through,
 	// so the refusal above is the token's doing and not the harness's.
 	mux = http.NewServeMux()
-	registerControlAPI(mux, kill, "t0ken")
+	registerControlAPI(mux, kill, nil, "t0ken")
 	req := httptest.NewRequest(http.MethodPost, "/api/control/kill", nil)
 	req.RemoteAddr = "127.0.0.1:50000"
 	req.Header.Set("Authorization", "Bearer t0ken")
@@ -237,7 +239,7 @@ func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 
 func TestControlWiring_KillRouteWithoutAKillSwitch(t *testing.T) {
 	mux := http.NewServeMux()
-	registerControlAPI(mux, nil, "t0ken")
+	registerControlAPI(mux, nil, nil, "t0ken")
 	req := httptest.NewRequest(http.MethodPost, "/api/control/kill", nil)
 	req.RemoteAddr = "127.0.0.1:50000"
 	req.Header.Set("Authorization", "Bearer t0ken")
@@ -245,6 +247,112 @@ func TestControlWiring_KillRouteWithoutAKillSwitch(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("proactive off: %d, want 503", rec.Code)
+	}
+}
+
+type fakeStopper struct {
+	runs int
+	sum  control.StopSummary
+}
+
+func (s *fakeStopper) Stop(context.Context, string, string) control.StopSummary {
+	s.runs++
+	return s.sum
+}
+
+// POST runs the whole of /stop and returns the same summary the chat gets; with no
+// token configured nothing runs, and a refused request runs nothing either.
+func TestControlWiring_KillRouteRunsTheWholeStop(t *testing.T) {
+	kill := &memKill{}
+	stopper := &fakeStopper{sum: control.StopSummary{Engaged: true, TurnsCancelled: 2, MandatesRevoked: 1, WorkflowsCancelled: []string{"dca.execute"}}}
+	get := func() control.Stopper { return stopper }
+	do := func(mux *http.ServeMux, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/control/kill", nil)
+		req.RemoteAddr = "127.0.0.1:50000"
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	mux := http.NewServeMux()
+	registerControlAPI(mux, kill, get, "")
+	if rec := do(mux, ""); rec.Code != http.StatusServiceUnavailable || stopper.runs != 0 {
+		t.Errorf("no token configured: %d, runs %d", rec.Code, stopper.runs)
+	}
+	mux = http.NewServeMux()
+	registerControlAPI(mux, kill, get, "t0ken")
+	if rec := do(mux, "wrong"); rec.Code != http.StatusUnauthorized || stopper.runs != 0 {
+		t.Errorf("wrong token: %d, runs %d", rec.Code, stopper.runs)
+	}
+	rec := do(mux, "t0ken")
+	if rec.Code != http.StatusOK || stopper.runs != 1 {
+		t.Fatalf("with the token: %d, runs %d", rec.Code, stopper.runs)
+	}
+	var body struct {
+		Summary control.StopSummary `json:"summary"`
+		Text    string              `json:"text"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Summary.TurnsCancelled != 2 || body.Summary.MandatesRevoked != 1 || body.Text != stopper.sum.Text() ||
+		!strings.Contains(body.Text, "Cancelled 2 turns, 1 workflow (dca.execute)") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+	if kill.engaged {
+		t.Error("the route engaged the flag itself instead of leaving it to the stopper")
+	}
+
+	// A flag that did not write is an error status, not a "stopped".
+	stopper.sum = control.StopSummary{Engaged: false}
+	if rec := do(mux, "t0ken"); rec.Code != http.StatusInternalServerError {
+		t.Errorf("flag not engaged: %d, want 500", rec.Code)
+	}
+
+	// No stopper attached yet (or any more): the flag alone.
+	mux = http.NewServeMux()
+	registerControlAPI(mux, kill, func() control.Stopper { return nil }, "t0ken")
+	if rec := do(mux, "t0ken"); rec.Code != http.StatusOK || !kill.engaged {
+		t.Errorf("without a stopper: %d engaged=%v", rec.Code, kill.engaged)
+	}
+}
+
+// With approvals running, the dispatcher and the route get the whole /stop, and
+// detach takes it away again while the flag keeps working.
+func TestControlWiring_StopIsAttachedAndDetached(t *testing.T) {
+	f := newAssemblyFixture(t, withApprovals)
+	c := f.services.Control
+	if c.stopper() == nil || c.disp.Deps().Stop == nil {
+		t.Fatal("no /stop sequence is attached though approvals run")
+	}
+	c.detach()
+	if c.stopper() != nil || c.disp.Deps().Stop != nil {
+		t.Error("detach left the /stop sequence attached")
+	}
+	rep, ok := c.disp.TryHandle(context.Background(), ownerMsg("/stop"))
+	if !ok || !strings.Contains(rep.Text, "Stopped") || !c.state.Killed() {
+		t.Errorf("/stop after detach: %+v, %v, killed=%v", rep, ok, c.state.Killed())
+	}
+}
+
+// The control path arms the tools' kill flag with the same state the dispatcher
+// engages: after /stop a scheduled DCA job is refused (it reads the flag before it
+// touches a plan or an exchange).
+func TestControlWiring_ToolKillFlagIsTheSameState(t *testing.T) {
+	f := newAssemblyFixture(t, withApprovals)
+	t.Cleanup(func() { tools.SetKillFlag(nil) })
+	c := f.services.Control
+	if rep, ok := c.disp.TryHandle(context.Background(), ownerMsg("/stop")); !ok || !c.state.Killed() {
+		t.Fatalf("/stop: %+v, %v", rep, ok)
+	}
+	job := tools.WithAutomationScope(tools.WithToolOrigin(context.Background(), tools.OriginCron),
+		tools.AutomationScope{JobName: "dca:9:weekly", DCAPlanID: 9})
+	res := tools.NewExecuteDCAOrderTool(nil, nil).Execute(job, map[string]any{"plan_id": float64(9)})
+	if !res.IsError || !strings.Contains(res.ForLLM, "kill switch is engaged") {
+		t.Errorf("a scheduled DCA job after /stop = %+v", res)
 	}
 }
 

@@ -19,7 +19,8 @@
 //	/mute TRIGGER, /unmute        mute or unmute a trigger kind or id (30 days)
 //	/useful, /notuseful           as a reply to an alert: logged (no feedback store yet)
 //	/whoami                       the IDs proactive.owner needs; any allow-listed sender
-//	/stop, /resume                engage or clear the kill flag
+//	/stop, /resume                /stop: the kill flag and everything in "/stop" below;
+//	                                /resume clears the flag and restores nothing
 //	button callbacks              the same handlers, by Callback.Action
 //
 // A text command is recognised only as the WHOLE message: one line, the command and
@@ -54,4 +55,36 @@
 // from memory and re-reads the table at most every DefaultRefresh, so a second
 // process sees a change within that bound. It fails closed: while the table cannot
 // be read it answers true.
+//
+// # /stop
+//
+// Kill.Stop is the whole of /stop, also behind POST /api/control/kill. In this
+// order, each step bounded and none stopped by another's failure: (1) engage the
+// flag; (2) cancel the running model turns; (3) cancel the non-protective workflows
+// at their next step boundary; (4) revoke every mandate and cancel every pending
+// proposal, editing the cards; (5) withdraw the open orders the agent placed in the
+// last 7 days; (6) reply with a summary built by code. What it leaves running, and
+// why that is safe:
+//
+//   - protective workflows (journal.Definition.Protective, and an approved exit,
+//     which approval.Service.FlowOrders marks): they only reduce risk;
+//   - a workflow whose place step has finished, and any dn.open once a place step has
+//     begun, is left to settle: cancelling it would skip the steps that record the
+//     order, tell the owner or start the recovery of a filled leg. Every place step
+//     reads the kill flag on every attempt, so it places nothing more;
+//   - nothing scheduled keeps buying: execute_dca_order reads the same flag (armed by
+//     the gateway through tools.SetKillFlag) and refuses in a turn the assistant
+//     started itself (tools.IsAutonomousOrigin, a legacy "dca:" cron job above all);
+//     the owner's own turn is never held back by the switch;
+//   - a reduce-only exit the agent placed is not withdrawn (it is getting the owner
+//     out), and the owner's own orders are never looked at: only orders a journal
+//     step names are.
+//
+// An order a workflow was cut on, inside its place step, is looked up read-only
+// (broker.FindOrder: its client order ID where the adapter was established to take
+// one, else its shape) and withdrawn if found open; one that cannot be found or
+// looked up is named "may exist: check the exchange". The reply is sent within
+// DefaultReplyBudget; steps still running go on in the background and their outcome
+// is sent as a second message. A second /stop while one runs answers "already
+// running"; a /stop while already stopped runs again and may find new things.
 package control

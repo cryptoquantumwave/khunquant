@@ -234,7 +234,7 @@ func (rt *dcaFlowRuntime) attach(d assemblyDeps, j *journalRuntime, p *perceptio
 		return
 	}
 	rt.shared.setDCAStarter(j.engine)
-	y := &dcaMandateSync{store: rt.store, jobs: jobs, shared: d.Shared, now: time.Now, tell: rt.deps.Tell,
+	y := &dcaMandateSync{store: rt.store, jobs: jobs, shared: d.Shared, now: time.Now, tell: rt.deps.Tell, killed: rt.deps.Killed,
 		canPromote: func() bool {
 			e := d.Cfg.Proactive.Effective()
 			return e.Mandates && e.TriggersMode == config.ProactiveModeLive && e.AttentionMode == config.ProactiveModeLive
@@ -305,6 +305,10 @@ type dcaMandateSync struct {
 	// canPromote says mandates are on and triggers are live: only then is a plan's
 	// legacy job switched off.
 	canPromote func() bool
+	// killed freezes the sync while the kill switch is engaged: /stop revokes the
+	// mandates, and the sync's reaction (switching the plans' legacy jobs back on)
+	// would restart scheduled buying that /stop just ended. Nil means never killed.
+	killed func() bool
 	proposals dcaProposals
 	now       func() time.Time
 	tell      func(ctx context.Context, n dca.Notice)
@@ -336,6 +340,9 @@ func (y *dcaMandateSync) tick(ctx context.Context) {
 	plans, err := y.store.ListPlans(ctx, dca.QueryFilter{Limit: 1000})
 	if err != nil {
 		logger.WarnCF("dca", "Mandate sync could not list plans", map[string]any{"error": err.Error()})
+		return
+	}
+	if y.killed != nil && y.killed() {
 		return
 	}
 	live := y.canPromote != nil && y.canPromote() && y.specs.reg != nil

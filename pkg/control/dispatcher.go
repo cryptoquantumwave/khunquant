@@ -66,9 +66,12 @@ type KillSwitch interface {
 // Deps are what the handlers act on. Every field but Cfg may be nil; a handler
 // whose dependency is missing says so instead of failing.
 type Deps struct {
-	Cfg       *config.Config
-	Events    *events.EventBus
-	Kill      KillSwitch
+	Cfg    *config.Config
+	Events *events.EventBus
+	Kill   KillSwitch
+	// Stop runs the whole of /stop (cancel turns, workflows, mandates, proposals and
+	// open orders); nil means /stop only engages the kill flag.
+	Stop      Stopper
 	Approvals Approver
 	Sent      SentLookup
 	Attention Attention

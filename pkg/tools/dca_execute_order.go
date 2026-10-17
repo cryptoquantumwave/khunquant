@@ -179,6 +179,10 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if planID <= 0 {
 		return ErrorResult("plan_id is required")
 	}
+	// The kill switch stops a scheduled job from buying; the owner's own turn is not affected.
+	if refusal := killRefusal(ctx); refusal != nil {
+		return refusal
+	}
 	// A plan whose mandate took over is bought by the dca.execute workflow. The legacy
 	// scheduled job (one that started before the switch, still inside its model turn)
 	// must not buy as well; a run the owner asks for in their own turn is not affected.

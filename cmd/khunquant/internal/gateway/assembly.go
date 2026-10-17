@@ -411,6 +411,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// approval service that could not attach (no engine) is withdrawn from it by
 	// the same rule propose_order is: approvals stay unavailable.
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
+	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -510,7 +511,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
 		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
 	registerTriggerAPIFor(mux, s, d)
-	registerControlAPI(mux, s.Control.killSwitch(), cfg.Gateway.ManagementToken)
+	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)

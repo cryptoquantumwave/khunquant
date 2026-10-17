@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -331,6 +332,33 @@ func TestRevokeAll_And_Expiry_ReEnableCron(t *testing.T) {
 			t.Errorf("status = %q", s)
 		}
 	})
+}
+
+// /stop revokes the mandates, and the sync must not answer by switching the plans'
+// legacy jobs back on while the kill switch is engaged (that would restart the
+// scheduled buying /stop just ended). After /resume it puts the plans back as before.
+func TestMandateSync_FrozenWhileKilled(t *testing.T) {
+	r := newMandateRig(t)
+	r.approve(r.ask())
+	r.tick()
+	if r.jobs.enabled("job1") {
+		t.Fatal("not promoted")
+	}
+	var killed atomic.Bool
+	r.sync.killed = killed.Load
+	killed.Store(true)
+	if n, err := r.store.RevokeAll(context.Background(), "kill switch"); err != nil || n != 1 {
+		t.Fatalf("RevokeAll = %d, %v", n, err)
+	}
+	r.tick()
+	if r.jobs.enabled("job1") {
+		t.Error("the legacy job came back on while the kill switch was engaged")
+	}
+	killed.Store(false)
+	r.tick()
+	if !r.jobs.enabled("job1") {
+		t.Error("after /resume the plan was left with no job and no mandate")
+	}
 }
 
 // A plan promoted by a previous generation that now runs without a mandate path gets

@@ -4,14 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
+	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 // controlRuntime is the control path of one generation of services: the kill flag
@@ -27,6 +35,85 @@ type controlRuntime struct {
 	// database could not be opened (then /stop says so, and nothing is killable).
 	state *control.State
 	disp  *control.Dispatcher
+	// stop is the whole of /stop, set by attachStop once the services it acts on exist
+	// and cleared by detach. The gateway route reads it at request time, because the
+	// route is registered before the services are built.
+	stop atomic.Pointer[control.Kill]
+}
+
+// stopper is the /stop sequence, or nil while none is attached. Safe on nil.
+func (rt *controlRuntime) stopper() control.Stopper {
+	if rt == nil {
+		return nil
+	}
+	if k := rt.stop.Load(); k != nil {
+		return k
+	}
+	return nil
+}
+
+// attachStop gives the dispatcher and the route the whole /stop sequence, over what
+// this generation of services has: the agent loop, the workflow engine, the
+// mandate store, the approval service and the brokers. A part that does not exist
+// is left nil, and its step is skipped. Called after attach, with d carrying the
+// approval, delta-neutral and DCA sides.
+func (rt *controlRuntime) attachStop(d assemblyDeps, j *journalRuntime, ns *notify.Service) {
+	if rt == nil || rt.state == nil {
+		return
+	}
+	k := &control.Kill{Flag: rt.state, Desk: control.BrokerDesk{Cfg: d.Cfg}}
+	if d.AgentLoop != nil {
+		k.Turns = d.AgentLoop
+	}
+	if j != nil {
+		k.Flows = j.engine
+	}
+	var (
+		svc  *approval.Service
+		dcaD *dca.Deps
+		dnD  *deltaneutral.Deps
+	)
+	if d.Approval != nil {
+		svc = d.Approval.svc
+		if svc != nil {
+			k.Proposals = svc
+		}
+		if d.Approval.mandateStore != nil {
+			k.Mandates = d.Approval.mandateStore
+		}
+	}
+	if d.DCAFlow != nil {
+		dcaD = d.DCAFlow.deps
+	}
+	if d.DNFlow != nil {
+		dnD = d.DNFlow.deps
+	}
+	k.Orders = func(ctx context.Context, w journal.Workflow, steps []journal.StepRecord) (broker.FlowOrders, error) {
+		switch {
+		case w.Kind == approval.WorkflowKind && svc != nil:
+			return svc.FlowOrders(ctx, w, steps)
+		case w.Kind == dca.KindExecute && dcaD != nil:
+			return dcaD.FlowOrders(ctx, w, steps)
+		case (w.Kind == deltaneutral.KindOpen || w.Kind == deltaneutral.KindResize) && dnD != nil:
+			return dnD.FlowOrders(ctx, w, steps)
+		}
+		return broker.FlowOrders{}, nil
+	}
+	if ns != nil {
+		k.Followup = func(ctx context.Context, text string) {
+			res, err := ns.Deliver(context.WithoutCancel(ctx), notify.Notification{
+				Severity: proactive.SeverityWarning, Title: "Stop: update", Body: text,
+				DedupKey: "kill-stop:" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			})
+			if err != nil || !res.Delivered {
+				logger.WarnCF("control", "Could not send the second message of /stop", nil)
+			}
+		}
+	}
+	rt.stop.Store(k)
+	deps := rt.disp.Deps()
+	deps.Stop = k
+	rt.disp.SetDeps(deps)
 }
 
 // buildControl builds the kill flag (when proactive is on) and the dispatcher, and
@@ -54,6 +141,14 @@ func buildControl(d assemblyDeps, mgr *channels.Manager) *controlRuntime {
 				deps.Kill = st // only ever a non-nil *State: a typed nil in the interface would not read as nil
 			}
 		}
+	}
+
+	// Tools that can act on their own (a scheduled DCA job) read the same flag instance.
+	// Armed on every build and reload; nil (proactive off) disarms it.
+	if rt.state != nil {
+		tools.SetKillFlag(rt.state.Killed)
+	} else {
+		tools.SetKillFlag(nil)
 	}
 
 	rt.disp = control.New(deps)
@@ -113,7 +208,8 @@ func (rt *controlRuntime) detach() {
 		return
 	}
 	deps := rt.disp.Deps()
-	deps.Approvals, deps.Sent, deps.Attention = nil, nil, nil
+	deps.Approvals, deps.Sent, deps.Attention, deps.Stop = nil, nil, nil, nil
+	rt.stop.Store(nil)
 	rt.disp.SetDeps(deps)
 }
 
@@ -123,14 +219,14 @@ func (rt *controlRuntime) detach() {
 // the management token and refuse requests a browser could have made. Unlike the
 // token middleware, which lets everything through when the configured token is
 // empty, they refuse every request while no token is configured.
-func registerControlAPI(mux handleMux, kill control.KillSwitch, token string) {
-	h := controlKillHandler(kill, token)
+func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string) {
+	h := controlKillHandler(kill, stop, token)
 	guarded := loopbackOnly(bearerTokenMiddleware(token, noBrowser(h)))
 	mux.Handle("POST /api/control/kill", guarded)
 	mux.Handle("DELETE /api/control/kill", guarded)
 }
 
-func controlKillHandler(kill control.KillSwitch, token string) http.Handler {
+func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if token == "" {
@@ -147,6 +243,19 @@ func controlKillHandler(kill control.KillSwitch, token string) http.Handler {
 		var err error
 		switch r.Method {
 		case http.MethodPost:
+			// The whole of /stop when it is attached, else the flag alone.
+			if stop != nil {
+				if st := stop(); st != nil {
+					sum := st.Stop(r.Context(), "api", "gateway route")
+					if !sum.Engaged {
+						// The flag did not write: say so with an error status, so the button
+						// does not show "stopped" over a warning.
+						w.WriteHeader(http.StatusInternalServerError)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"killed": kill.Killed(), "changed": !sum.AlreadyEngaged, "summary": sum, "text": sum.Text()})
+					return
+				}
+			}
 			changed, err = kill.Engage(r.Context(), "api", "gateway route")
 		case http.MethodDelete:
 			changed, err = kill.Clear(r.Context(), "api")

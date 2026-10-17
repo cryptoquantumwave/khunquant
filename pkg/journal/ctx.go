@@ -65,7 +65,7 @@ func (c *Ctx) IdempotencyKey(name string) string {
 		seq = c.curSeq
 	}
 	c.mu.Unlock()
-	return fmt.Sprintf("%s:%d:%s", c.wf.ID, seq, name)
+	return StepKey(c.wf.ID, seq, name)
 }
 
 // StepStartedAt is when the first attempt of the running step was journaled as

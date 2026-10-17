@@ -14,12 +14,21 @@ const (
 	killOffText = "The kill switch is not available here (proactive features are off or the state could not be opened)."
 )
 
-// cmdStop engages the kill switch. In this change that is all it does: the flag
-// is read by the approval service (a risk-increasing order cannot be proposed,
-// approved or executed while it is set) and by the executors that can act on
-// their own. Cancelling what is already running is a later change's work.
+// cmdStop is /stop. With a Stopper (the gateway installs one) it runs the whole
+// sequence of Kill.Stop and replies with its summary; without one it only engages
+// the kill flag, which every executor that can act on its own reads. Either way the
+// flag is the first thing set, and a /stop while already stopped runs the sequence
+// again: it may find something new.
 func (d *Dispatcher) cmdStop(ctx context.Context, in Input) (Reply, error) {
 	st := stateOf(ctx)
+	if st.deps.Stop != nil {
+		sum := st.deps.Stop.Stop(ctx, canonicalSender(in), "/stop on "+in.Channel)
+		logger.WarnCF("control", "Kill switch run", map[string]any{"channel": in.Channel, "engaged": sum.Engaged, "pending": sum.Pending})
+		if !sum.Engaged {
+			setOutcome(ctx, outcomeError)
+		}
+		return Reply{Text: sum.Text()}, nil
+	}
 	if st.deps.Kill == nil {
 		setOutcome(ctx, outcomeOff)
 		return Reply{Text: killOffText}, nil

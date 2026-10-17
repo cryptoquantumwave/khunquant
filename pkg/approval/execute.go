@@ -204,7 +204,12 @@ func (s *Service) stepPlace(ctx context.Context, c *journal.Ctx, id string, atte
 	if err := s.stale(p); err != nil {
 		return refuse(err)
 	}
-	if attempt == 1 && s.killed() && !rc.Reducing {
+	// Every attempt reads the flag, not only the first: a retry can place (a capable
+	// adapter that finds no order by its client id places one), so after /stop an order
+	// that adds risk must not go out on a retry either. On a retry the refusal says the
+	// order may exist (refuse tags it so), and the owner is told to check the exchange.
+	// An order that only reduces risk is never stopped by the flag.
+	if s.killed() && !rc.Reducing {
 		return refuse(ErrKilled)
 	}
 	placed, err := s.o.Backend.PlaceApprovedOrder(ctx, op, c.IdempotencyKey("place"), attempt, c.StepStartedAt(), rc)

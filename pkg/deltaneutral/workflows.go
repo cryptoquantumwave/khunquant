@@ -19,6 +19,8 @@ import (
 const (
 	KindOpen    = "dn.open"
 	KindRecover = "dn.recover"
+	KindUnwind  = "dn.unwind"
+	KindResize  = "dn.resize"
 )
 
 // Bounds of the open workflow.
@@ -33,7 +35,9 @@ const (
 
 	verifyPolls         = 10 // x PollInterval (1 s) = the 10 s a fill is waited for
 	defaultPollInterval = time.Second
-	legSaveAttempts     = 3
+	// LegSaveAttempts is how many times a filled leg's row is written before the fill is
+	// declared unrecorded.
+	LegSaveAttempts = 3
 
 	// OpenWait is how long the open tool waits for dn.open before it answers "in progress"
 	// (and promises a message): an open that took at least this long tells the owner when it ends.
@@ -49,6 +53,17 @@ type LegOrder struct {
 	PositionSide string  `json:"position_side,omitempty"` // long | short, futures only
 	// Amount is a CONTRACT count for the futures leg and base units for spot.
 	Amount float64 `json:"amount"`
+	// Exit marks an order that only reduces exposure: a reduce-only futures close, a spot
+	// sell of what is held. It is placed on the real providers even in paper mode, and
+	// only trade permission and the leverage opt-in (RiskReduce) gate it.
+	Exit       bool   `json:"exit,omitempty"`
+	MarginMode string `json:"margin_mode,omitempty"` // an exit's: the live position's
+	// Op names the operation (OpOpen, OpResize, OpUnwind) for the order feed.
+	Op string `json:"op,omitempty"`
+	// PnlBefore and LivePosition describe the position a futures exit closes (its
+	// unrealised PnL and size in contracts just before), for the daily-loss accounting.
+	PnlBefore    *float64 `json:"pnl_before,omitempty"`
+	LivePosition float64  `json:"live_position,omitempty"`
 }
 
 // Order is what an exchange said about an order, reduced to what the workflow keeps
@@ -72,11 +87,18 @@ type Order struct {
 // Sizing is what validate learnt from the exchanges. It is journaled, so every later
 // step, and a replay, works from the same numbers.
 type Sizing struct {
-	Mark, SpotPrice           float64
-	ContractSize              float64 // base units per futures contract
-	MinContracts              float64 // the futures lot step
-	FirstAmount               float64 // the planned first leg, in its own unit
-	FuturesBefore, SpotBefore float64 // the account before the open: reconcile baselines
+	Mark, SpotPrice float64
+	ContractSize    float64 // base units per futures contract
+	MinContracts    float64 // the futures lot step
+	FirstAmount     float64 // the planned first leg, in its own unit
+	// FuturesBefore and SpotBefore are what the account held OUTSIDE this plan before the
+	// operation (all of it, for an open): the baselines dn.recover measures a leftover
+	// against, so a position another plan or the owner holds is never called an orphan.
+	FuturesBefore, SpotBefore float64
+	// FuturesHeld and SpotFreeHeld are an exit's baselines: what the account held in
+	// total (contracts, free base balance) when the exit began. A place step closes down
+	// to (held - amount) and no further, whatever else the account holds.
+	FuturesHeld, SpotFreeHeld float64
 }
 
 // Holdings is a fresh read of what an account holds, for the recovery.
@@ -84,6 +106,20 @@ type Holdings struct {
 	FuturesContracts float64 `json:"futures_contracts"` // absolute, on the plan's side
 	ContractSize     float64 `json:"contract_size"`
 	SpotBase         float64 `json:"spot_base"` // total balance of the spot symbol's base asset
+}
+
+// Account is what an exit reads off the exchange in the step that closes: the live
+// futures position (on the plan's side) and the spot balance. Nothing here is taken
+// from the journal.
+type Account struct {
+	Contracts    float64  `json:"contracts"` // absolute
+	PositionSide string   `json:"position_side,omitempty"`
+	MarginMode   string   `json:"margin_mode,omitempty"`
+	PnL          *float64 `json:"pnl,omitempty"` // unrealised, before a close realises it
+	ContractSize float64  `json:"contract_size"`
+	MinContracts float64  `json:"min_contracts"`
+	SpotFree     float64  `json:"spot_free"`
+	SpotTotal    float64  `json:"spot_total"` // free and locked
 }
 
 // Exchange is everything exchange-shaped the workflows need. pkg/tools implements
@@ -95,10 +131,33 @@ type Exchange interface {
 	Quote(ctx context.Context, p *Plan, first LegType) (Sizing, error)
 	// LegOrder builds the order of one leg for an amount in that leg's unit.
 	LegOrder(p *Plan, leg LegType, amount float64) (LegOrder, error)
+	// QuoteDelta sizes a resize by a notional change (USD), futures leg first: the
+	// futures contracts that hedge it (net of the spot taker fee for an increase, exactly
+	// the notional for a decrease), with the same market data as Quote.
+	QuoteDelta(ctx context.Context, p *Plan, usd float64, decrease bool) (Sizing, error)
 	// Gate runs the order gates for an order that adds risk, in this order: trade
 	// permission, the per-order cap valued in USD (unknown value refuses), the
 	// per-account daily-loss check, and for futures CheckLeverage. It spends nothing.
+	// An order with Exit set only reduces risk: it gets trade permission and
+	// CheckLeverage(RiskReduce), and neither the cap nor the daily-loss check, which
+	// must never keep a person from getting out.
 	Gate(ctx context.Context, p *Plan, sz Sizing, o LegOrder) error
+	// Exits is this exchange acting for exits: the same operations on the REAL
+	// providers (an exit stays real in paper mode, and so do its fetches and cancels),
+	// and a reduce-only futures order is allowed in paper mode.
+	Exits() Exchange
+	// Account reads the live futures position (the plan's side) and the spot balances,
+	// for an exit. It is called on the Exits() exchange.
+	Account(ctx context.Context, p *Plan) (Account, error)
+	// ExitOrder builds the order of an exit leg for an amount in that leg's unit, from
+	// the account just read: a reduce-only close on the side opposite the live
+	// position, with its margin mode (the plan's side and mode when it reports none).
+	ExitOrder(p *Plan, leg LegType, amount float64, a Account) (LegOrder, error)
+	// Lookup finds the order an earlier attempt of the same step placed, by the client
+	// order ID derived from key. supported is false for an adapter that cannot look
+	// an order up that way: nothing can then be proved about an earlier attempt, so
+	// an exit reads the position instead. Called on the Exits() exchange.
+	Lookup(ctx context.Context, p *Plan, leg LegType, key string) (o Order, found, supported bool, err error)
 	// Reserve spends the rate-limiter token of both legs' providers.
 	Reserve(p *Plan) error
 	SetLeverage(ctx context.Context, p *Plan) error
@@ -170,12 +229,19 @@ func (d *Deps) clock() journal.Clock {
 	return d.Clock
 }
 
-// Definitions are the journal definitions of dn.open and dn.recover. dn.recover is
-// Protective: the kill switch lets it run, because it only ever asks the owner.
+// Definitions are the journal definitions of dn.open, dn.recover, dn.unwind and
+// dn.resize. dn.recover is Protective: the kill switch lets it run, because it only
+// ever asks the owner. dn.unwind is Protective because it only reduces exposure and a
+// half-unwound hedge is the worst place to stop. dn.resize is one kind with a
+// direction fixed when it starts: a decrease is an exit and must finish, an increase
+// obeys the kill flag itself at every place step, and cancelling either between its
+// legs could only strand a half-resized position, so it is Protective too.
 func (d *Deps) Definitions() []journal.Definition {
 	return []journal.Definition{
 		{Kind: KindOpen, Run: d.runOpen},
 		{Kind: KindRecover, Protective: true, Run: d.runRecover},
+		{Kind: KindUnwind, Protective: true, Run: d.runUnwind},
+		{Kind: KindResize, Protective: true, Run: d.runResize},
 	}
 }
 
@@ -202,10 +268,13 @@ const (
 	placedOK      = "placed"
 	placeRefused  = "refused" // nothing was placed: a gate, the kill flag, a definite rejection
 	placeUnknown  = "unknown" // an order may exist: it could not be proven either way
+	placeNone     = "none"    // an exit with nothing to close: nothing was placed, none was needed
+	placeGone     = "gone"    // a futures exit whose position is gone from the exchange though the records show it open
 	verifyFilled  = "filled"
 	verifyPartial = "partial"
 	verifyNone    = "none" // known: nothing filled
 	verifyUnknown = "unknown"
+	verifyGone    = "gone" // the offsetting record of a position that was gone
 )
 
 type validateOut struct {
@@ -303,7 +372,7 @@ func (d *Deps) runOpen(c *journal.Ctx, raw json.RawMessage) error {
 	// 2. set_leverage: the first mutation. Gates, then the rate-limit tokens of both
 	// legs (once: not on a re-run), then the leverage.
 	var lev refusal
-	if err := c.Step("set_leverage", &lev, d.setLeverage(s.in, sz), retry...); err != nil {
+	if err := c.Step("set_leverage", &lev, d.setLeverage(s.flow()), retry...); err != nil {
 		if !isStepError(err) {
 			return err
 		}
@@ -317,7 +386,7 @@ func (d *Deps) runOpen(c *journal.Ctx, raw json.RawMessage) error {
 	}
 
 	// 3-4. the first leg.
-	if err := d.placeLeg(c, s, "place_first_leg", first, sz.FirstAmount, nil, &s.first); err != nil {
+	if err := d.placeLeg(c, s.flow(), "place_first_leg", first, sz.FirstAmount, nil, &s.first); err != nil {
 		return err
 	}
 	switch s.first.Outcome {
@@ -328,7 +397,7 @@ func (d *Deps) runOpen(c *journal.Ctx, raw json.RawMessage) error {
 		s.stop(ResultRecovery, "the first leg's outcome could not be established: "+s.first.Reason)
 		return d.finalize(c, s)
 	}
-	if err := d.verifyLeg(c, s, "verify_first_leg", first, s.first, &s.firstV); err != nil {
+	if err := d.verifyLeg(c, s.flow(), "verify_first_leg", first, s.first, &s.firstV); err != nil {
 		return err
 	}
 	// A fill whose record could not be saved is still a position: the second leg is
@@ -346,14 +415,14 @@ func (d *Deps) runOpen(c *journal.Ctx, raw json.RawMessage) error {
 	// 5-6. the second leg, sized to what the first leg ACTUALLY filled. A fill too
 	// small to hedge still runs the step (it refuses), so the journal keeps its shape.
 	amount, sizeErr := SecondAmount(first, s.firstV.FilledBase, sz)
-	if err := d.placeLeg(c, s, "place_second_leg", second, amount, sizeErr, &s.second); err != nil {
+	if err := d.placeLeg(c, s.flow(), "place_second_leg", second, amount, sizeErr, &s.second); err != nil {
 		return err
 	}
 	if s.second.Outcome != placedOK {
 		s.stop(ResultRecovery, "second leg not placed ("+s.second.Outcome+"): "+s.second.Reason)
 		return d.finalize(c, s)
 	}
-	if err := d.verifyLeg(c, s, "verify_second_leg", second, s.second, &s.secondV); err != nil {
+	if err := d.verifyLeg(c, s.flow(), "verify_second_leg", second, s.second, &s.secondV); err != nil {
 		return err
 	}
 	switch {
@@ -497,21 +566,21 @@ func (d *Deps) tag(ctx context.Context, origin, sender string) context.Context {
 }
 
 // setLeverage is step 2.
-func (d *Deps) setLeverage(in OpenInput, sz Sizing) func(context.Context, int) (any, error) {
+func (d *Deps) setLeverage(f *flow) func(context.Context, int) (any, error) {
 	return func(ctx context.Context, attempt int) (any, error) {
-		ctx = d.tag(ctx, in.Origin, in.Sender)
+		ctx = d.tag(ctx, f.origin, f.sender)
 		if d.killed() {
 			return refusal{Refused: "the kill switch is engaged"}, nil
 		}
-		plan, err := d.Store.GetPlan(ctx, in.PlanID)
+		plan, err := d.Store.GetPlan(ctx, f.planID)
 		if err != nil {
 			return nil, err
 		}
-		lo, err := d.Exchange.LegOrder(plan, LegTypeFutures, sz.firstFuturesAmount(in.FirstLeg))
+		lo, err := d.Exchange.LegOrder(plan, LegTypeFutures, f.sizing.firstFuturesAmount(f.first))
 		if err != nil {
 			return refusal{Refused: err.Error()}, nil
 		}
-		if err := d.Exchange.Gate(ctx, plan, sz, lo); err != nil {
+		if err := d.Exchange.Gate(ctx, plan, f.sizing, lo); err != nil {
 			return refusal{Refused: err.Error()}, nil
 		}
 		if attempt == 1 { // a re-run does not spend the tokens again
@@ -536,11 +605,45 @@ func (sz Sizing) firstFuturesAmount(first LegType) float64 {
 	return math.Max(sz.MinContracts, 1)
 }
 
-// placeLeg runs one place step: the gates, the kill flag, then PlaceOrderIdempotent.
-func (d *Deps) placeLeg(c *journal.Ctx, s *openState, name string, leg LegType, amount float64, bad error, out *placeOut) error {
-	in := s.in
+// flow is what the place and verify steps need of the workflow they run in: an open,
+// a resize or an unwind.
+type flow struct {
+	planID, executionID int64
+	origin, sender      string
+	sizing              Sizing
+	first               LegType // the leg that goes first
+	machine             bool    // the execution walks the two-leg machine around the legs
+	exit                bool    // risk-reducing: the exit rules of placeLeg apply
+	op                  string  // OpOpen, OpResize or OpUnwind
+}
+
+// Operations that share the leg steps.
+const (
+	OpOpen   = "open"
+	OpResize = "resize"
+	OpUnwind = "unwind"
+)
+
+func (s *openState) flow() *flow {
+	return &flow{planID: s.in.PlanID, executionID: s.v.ExecutionID, origin: s.in.Origin, sender: s.in.Sender,
+		sizing: s.v.Sizing, first: FirstLegOf(s.in), machine: true, op: OpOpen}
+}
+
+// exchange is the one the flow places on: the real providers for an exit.
+func (d *Deps) exchange(f *flow) Exchange {
+	if f.exit {
+		return d.Exchange.Exits()
+	}
+	return d.Exchange
+}
+
+// placeLeg runs one place step. An entry runs the kill flag and the order gates, then
+// PlaceOrderIdempotent. An exit (f.exit) is the other way round: nothing stops it but
+// trade permission, and what it places is decided in the step from the exchange as it
+// is (see exitOrder), not from a number the journal holds.
+func (d *Deps) placeLeg(c *journal.Ctx, f *flow, name string, leg LegType, amount float64, bad error, out *placeOut) error {
 	err := c.Step(name, out, func(ctx context.Context, attempt int) (any, error) {
-		ctx = d.tag(ctx, in.Origin, in.Sender)
+		ctx = d.tag(ctx, f.origin, f.sender)
 		// A refusal on a re-run (attempt > 1) cannot say that nothing was placed: an
 		// earlier attempt may have reached the exchange. It is "unknown", and the
 		// recovery reads the exchange to find out.
@@ -550,8 +653,8 @@ func (d *Deps) placeLeg(c *journal.Ctx, s *openState, name string, leg LegType, 
 			}
 			return placeOut{Outcome: placeRefused, Reason: why}, nil
 		}
-		if leg != FirstLegOf(in) { // the second leg: the machine moves before anything is sent
-			exec := &Execution{ID: s.v.ExecutionID}
+		if f.machine && leg != f.first { // the second leg: the machine moves before anything is sent
+			exec := &Execution{ID: f.executionID}
 			if err := d.advance(ctx, exec, func(e *Execution) error { return e.Transition(ExecutionStatePlacingSecondLeg) }); err != nil {
 				return nil, err
 			}
@@ -559,21 +662,32 @@ func (d *Deps) placeLeg(c *journal.Ctx, s *openState, name string, leg LegType, 
 		if bad != nil {
 			return refuse(bad.Error())
 		}
-		if d.killed() {
+		if !f.exit && d.killed() {
 			return refuse("the kill switch is engaged")
 		}
-		plan, err := d.Store.GetPlan(ctx, in.PlanID)
+		plan, err := d.Store.GetPlan(ctx, f.planID)
 		if err != nil {
 			return nil, err
 		}
-		lo, err := d.Exchange.LegOrder(plan, leg, amount)
-		if err != nil {
+		ex, key, att := d.exchange(f), c.IdempotencyKey(name), attempt
+		var lo LegOrder
+		if f.exit {
+			var done *placeOut
+			lo, key, att, done, err = d.exitOrder(ctx, c, ex, plan, f, leg, amount, attempt, key)
+			if err != nil {
+				return nil, err
+			}
+			if done != nil { // nothing to place, or an earlier attempt's order was found
+				return *done, nil
+			}
+		} else if lo, err = ex.LegOrder(plan, leg, amount); err != nil {
 			return refuse(err.Error())
 		}
-		if err := d.Exchange.Gate(ctx, plan, s.v.Sizing, lo); err != nil {
+		lo.Op = f.op
+		if err := ex.Gate(ctx, plan, f.sizing, lo); err != nil {
 			return refuse(err.Error())
 		}
-		order, err := d.Exchange.Place(ctx, plan, s.v.Sizing, lo, c.IdempotencyKey(name), attempt, c.StepStartedAt())
+		order, err := ex.Place(ctx, plan, f.sizing, lo, key, att, c.StepStartedAt())
 		switch {
 		case err == nil:
 			return placeOut{Outcome: placedOK, Leg: lo, Order: order}, nil
@@ -603,17 +717,24 @@ func FirstLegOf(in OpenInput) LegType {
 }
 
 // verifyLeg is a verify step: it polls the order for at most 10 s, records the leg
-// and classifies the fill.
-func (d *Deps) verifyLeg(c *journal.Ctx, s *openState, name string, leg LegType, placed placeOut, out *verifyOut) error {
-	in := s.in
+// and classifies the fill. A futures exit that found no position to close
+// (placeGone) records that instead, as an offsetting leg without an order.
+func (d *Deps) verifyLeg(c *journal.Ctx, f *flow, name string, leg LegType, placed placeOut, out *verifyOut) error {
 	err := c.Step(name, out, func(ctx context.Context, _ int) (any, error) {
-		ctx = d.tag(ctx, in.Origin, in.Sender)
-		plan, err := d.Store.GetPlan(ctx, in.PlanID)
+		ctx = d.tag(ctx, f.origin, f.sender)
+		plan, err := d.Store.GetPlan(ctx, f.planID)
 		if err != nil {
 			return nil, err
 		}
-		sz := s.v.Sizing
-		o := d.poll(ctx, plan, leg, placed)
+		sz, exec := f.sizing, &Execution{ID: f.executionID}
+		if placed.Outcome == placeGone {
+			v := verifyOut{Outcome: verifyGone}
+			if err := d.recordOffset(ctx, exec, plan, f); err != nil {
+				v.Unrecorded = true
+			}
+			return v, nil
+		}
+		o := d.poll(ctx, d.exchange(f), plan, leg, placed)
 		v := verifyOut{Order: o, FilledBase: o.Filled}
 		if leg == LegTypeFutures {
 			v.FilledBase = o.Filled * sz.ContractSize
@@ -629,11 +750,10 @@ func (d *Deps) verifyLeg(c *journal.Ctx, s *openState, name string, leg LegType,
 			v.Outcome = verifyPartial
 		}
 		if o.FilledKnown && o.Filled > 0 {
-			exec := &Execution{ID: s.v.ExecutionID}
 			if err := d.recordLeg(ctx, exec, plan, sz, placed.Leg, o, v.Outcome == verifyFilled); err != nil {
 				v.Unrecorded = true
 			}
-			if leg == FirstLegOf(in) {
+			if f.machine && leg == f.first {
 				if err := d.advance(ctx, exec, func(e *Execution) error { return e.Transition(ExecutionStateFirstLegFilled) }); err != nil {
 					return nil, err
 				}
@@ -653,13 +773,13 @@ func (d *Deps) verifyLeg(c *journal.Ctx, s *openState, name string, leg LegType,
 // poll fetches the order until it is settled (done, or filled to the threshold),
 // for at most verifyPolls polls; an order still open after that is cancelled and
 // read once more. The create response is kept where the fetch says nothing.
-func (d *Deps) poll(ctx context.Context, p *Plan, leg LegType, placed placeOut) Order {
+func (d *Deps) poll(ctx context.Context, ex Exchange, p *Plan, leg LegType, placed placeOut) Order {
 	o := placed.Order
 	settled := func() bool {
 		return o.Done || (o.FilledKnown && o.Filled >= FillThreshold*placed.Leg.Amount)
 	}
 	for i := 0; i < verifyPolls && !settled(); i++ {
-		if f, err := d.Exchange.Fetch(ctx, p, leg, o.ID); err == nil {
+		if f, err := ex.Fetch(ctx, p, leg, o.ID); err == nil {
 			o = mergeOrder(o, f)
 		}
 		if settled() {
@@ -668,10 +788,10 @@ func (d *Deps) poll(ctx context.Context, p *Plan, leg LegType, placed placeOut) 
 		d.pause(ctx)
 	}
 	if !settled() {
-		if err := d.Exchange.Cancel(ctx, p, leg, o.ID); err != nil {
+		if err := ex.Cancel(ctx, p, leg, o.ID); err != nil {
 			logger.WarnCF("deltaneutral", "Could not cancel an unfilled leg order", map[string]any{"order_id": o.ID, "error": err.Error()})
 		}
-		if f, err := d.Exchange.Fetch(ctx, p, leg, o.ID); err == nil {
+		if f, err := ex.Fetch(ctx, p, leg, o.ID); err == nil {
 			o = mergeOrder(o, f)
 		}
 	}
@@ -729,7 +849,7 @@ func mergeOrder(prior, f Order) Order {
 }
 
 // recordLeg saves the leg row of a fill, once per order. When the row cannot be
-// saved after legSaveAttempts it leaves the UNRECORDED_FILL trace on the execution
+// saved after LegSaveAttempts it leaves the UNRECORDED_FILL trace on the execution
 // and returns the error: the fill is real whatever the bookkeeping says.
 func (d *Deps) recordLeg(ctx context.Context, exec *Execution, p *Plan, sz Sizing, lo LegOrder, o Order, full bool) error {
 	legs, err := d.Store.ListExecutionLegs(ctx, exec.ID)
@@ -762,19 +882,26 @@ func (d *Deps) recordLeg(ctx context.Context, exec *Execution, p *Plan, sz Sizin
 		State: string(state), FilledQuantity: base, FilledNotionalUSDT: notional, AvgFillPrice: o.Avg,
 		FeeUSDT: -o.FeeUSDT, CreatedAt: now, UpdatedAt: now,
 	}
+	return d.persistLeg(ctx, exec, leg)
+}
+
+// persistLeg saves a leg row, LegSaveAttempts times. When it cannot it leaves the
+// UNRECORDED_FILL trace on the execution and returns the error: the fill is real
+// whatever the bookkeeping says.
+func (d *Deps) persistLeg(ctx context.Context, exec *Execution, leg *ExecutionLeg) error {
 	var saveErr error
 	save := d.SaveLeg
 	if save == nil {
 		save = func(ctx context.Context, s *Store, l *ExecutionLeg) (int64, error) { return s.SaveExecutionLeg(ctx, l) }
 	}
-	for i := 0; i < legSaveAttempts; i++ {
+	for i := 0; i < LegSaveAttempts; i++ {
 		if _, saveErr = save(ctx, d.Store, leg); saveErr == nil {
 			return nil
 		}
 	}
 	trace := fmt.Sprintf("%s order_id=%s leg=%s symbol=%s side=%s filled_qty=%.8g (leg record not saved after %d attempts: %v)",
-		UnrecordedFillMarker, o.ID, lo.Leg, symbol, lo.Side, base, legSaveAttempts, saveErr)
-	logger.ErrorCF("deltaneutral", "ORDER FILLED BUT LEG RECORD NOT SAVED", map[string]any{"order_id": o.ID, "error": saveErr.Error()})
+		UnrecordedFillMarker, leg.OrderID, leg.LegType, leg.Symbol, leg.Side, leg.FilledQuantity, LegSaveAttempts, saveErr)
+	logger.ErrorCF("deltaneutral", "ORDER FILLED BUT LEG RECORD NOT SAVED", map[string]any{"order_id": leg.OrderID, "error": saveErr.Error()})
 	if cur, gerr := d.Store.GetExecution(ctx, exec.ID); gerr == nil {
 		cur.ErrorMsg = joinMsg(cur.ErrorMsg, trace)
 		_ = d.Store.UpdateExecution(ctx, cur)
@@ -861,22 +988,7 @@ func (d *Deps) settleOpen(ctx context.Context, c *journal.Ctx, s *openState) (Op
 	}
 	res.ExecutionID = exec.ID
 	end := func(to ExecutionState, msg string, mid ...ExecutionState) error {
-		for _, m := range mid { // one persisted step at a time: the store checks each against the row
-			if err := d.advance(ctx, exec, func(e *Execution) error { return e.Transition(m) }); err != nil {
-				return err
-			}
-		}
-		return d.advance(ctx, exec, func(e *Execution) error {
-			if err := e.Transition(to); err != nil {
-				return err
-			}
-			e.ErrorMsg = joinMsg(msg, unrecordedTrace(e.ErrorMsg))
-			if IsTerminal(to) && e.CompletedAt == nil {
-				t := time.Now()
-				e.CompletedAt = &t
-			}
-			return nil
-		})
+		return d.endExec(ctx, exec, to, msg, mid...)
 	}
 	cur := ExecutionState(exec.State)
 	var toFailed []ExecutionState // placing_first_leg reaches failed by way of first_leg_failed
@@ -915,13 +1027,35 @@ func (d *Deps) settleOpen(ctx context.Context, c *journal.Ctx, s *openState) (Op
 		if err := setPlan(PlanStatusRecoveryRequired); err != nil {
 			return res, err
 		}
-		if err := d.startRecovery(ctx, s, exec); err != nil {
+		if err := d.startRecovery(ctx, RecoverInput{PlanID: s.in.PlanID, ExecutionID: exec.ID, FirstLeg: s.in.FirstLeg, Sizing: s.v.Sizing}); err != nil {
 			logger.ErrorCF("deltaneutral", "Could not start dn.recover for an execution that needs recovery",
 				map[string]any{"execution_id": exec.ID, "plan_id": s.in.PlanID, "error": err.Error()})
 			return res, err
 		}
 	}
 	return res, nil
+}
+
+// endExec moves an execution to its final state, by way of mid (one persisted step at a
+// time: the store checks each against the row), with the message and any
+// unrecorded-fill trace it already carries.
+func (d *Deps) endExec(ctx context.Context, exec *Execution, to ExecutionState, msg string, mid ...ExecutionState) error {
+	for _, m := range mid {
+		if err := d.advance(ctx, exec, func(e *Execution) error { return e.Transition(m) }); err != nil {
+			return err
+		}
+	}
+	return d.advance(ctx, exec, func(e *Execution) error {
+		if err := e.Transition(to); err != nil {
+			return err
+		}
+		e.ErrorMsg = joinMsg(msg, unrecordedTrace(e.ErrorMsg))
+		if IsTerminal(to) && e.CompletedAt == nil {
+			t := time.Now()
+			e.CompletedAt = &t
+		}
+		return nil
+	})
 }
 
 func unrecordedTrace(msg string) string {
@@ -954,13 +1088,11 @@ func (d *Deps) activate(ctx context.Context, s *openState) error {
 
 // startRecovery starts dn.recover for the execution (idempotently: the id is
 // derived from it).
-func (d *Deps) startRecovery(ctx context.Context, s *openState, exec *Execution) error {
+func (d *Deps) startRecovery(ctx context.Context, in RecoverInput) error {
 	st := d.getStarter()
 	if st == nil {
 		return errors.New("no workflow engine is attached to start dn.recover")
 	}
-	_, err := st.StartWithID(ctx, KindRecover, RecoverID(exec.ID), RecoverInput{
-		PlanID: s.in.PlanID, ExecutionID: exec.ID, FirstLeg: s.in.FirstLeg, Sizing: s.v.Sizing,
-	})
+	_, err := st.StartWithID(ctx, KindRecover, RecoverID(in.ExecutionID), in)
 	return err
 }

@@ -94,8 +94,18 @@ type RecoverInput struct {
 	PlanID      int64   `json:"plan_id"`
 	ExecutionID int64   `json:"execution_id"`
 	FirstLeg    LegType `json:"first_leg,omitempty"`
-	// Sizing carries the account baselines taken before the open.
+	// Sizing carries the account baselines taken before the operation.
 	Sizing Sizing `json:"sizing"`
+	// Op is the operation that needs recovering (OpOpen when empty).
+	Op string `json:"op,omitempty"`
+}
+
+// word names the operation in the texts the owner reads.
+func (in RecoverInput) word() string {
+	if in.Op == "" {
+		return OpOpen
+	}
+	return in.Op
 }
 
 // Assessment is what is really open, read from the exchange now.
@@ -117,8 +127,9 @@ type Assessment struct {
 // assess finds the orphan from the exchange's numbers. The exchange decides; the
 // journal's numbers are shown next to them and never trusted for what is open.
 //
-// The spot side is the change of the base asset's balance since before the open
-// (the baseline in sz), not the whole balance: the owner may hold the asset anyway.
+// Both sides are measured against the baselines in sz, what the account held outside
+// the plan before the operation, not against the whole balance or position: the owner
+// may hold the asset anyway, and another plan may hold contracts of the same symbol.
 func assess(sz Sizing, recFut, recSpot float64, h Holdings) Assessment {
 	a := Assessment{RecordedFuturesBase: recFut, RecordedSpotQty: recSpot, Held: h}
 	cs := h.ContractSize
@@ -128,7 +139,7 @@ func assess(sz Sizing, recFut, recSpot float64, h Holdings) Assessment {
 	if !(cs > 0) {
 		cs = 1
 	}
-	a.FuturesBase = h.FuturesContracts * cs
+	a.FuturesBase = math.Max(h.FuturesContracts-sz.FuturesBefore, 0) * cs
 	a.SpotDelta = math.Max(h.SpotBase-sz.SpotBefore, 0)
 	dust := orphanDustFraction * math.Max(a.FuturesBase, a.SpotDelta)
 	switch diff := a.FuturesBase - a.SpotDelta; {
@@ -335,9 +346,9 @@ func (d *Deps) closeRequest(p *Plan, in RecoverInput, a Assessment, al AlertResu
 	default:
 		return r, errors.New("nothing to close")
 	}
-	r.Rationale = fmt.Sprintf("Delta-neutral open #%d of plan %d did not complete: %.8g of the %s leg has no hedge. "+
+	r.Rationale = fmt.Sprintf("Delta-neutral %s #%d of plan %d did not complete: %.8g of the %s leg has no hedge. "+
 		"Closing exactly that quantity (%s) removes the open risk.",
-		in.ExecutionID, in.PlanID, a.OrphanAmount, a.Orphan, map[bool]string{true: "reduce-only", false: "sell"}[r.ReduceOnly])
+		in.word(), in.ExecutionID, in.PlanID, a.OrphanAmount, a.Orphan, map[bool]string{true: "reduce-only", false: "sell"}[r.ReduceOnly])
 	return r, nil
 }
 
@@ -349,7 +360,7 @@ func oppositeSide(s string) string {
 }
 
 func (d *Deps) alertText(in RecoverInput, a Assessment, round int, head string) RecoveryAlert {
-	title := fmt.Sprintf("Delta-neutral plan %d: %s position (open #%d failed)", in.PlanID, head, in.ExecutionID)
+	title := fmt.Sprintf("Delta-neutral plan %d: %s position (%s #%d failed)", in.PlanID, head, in.word(), in.ExecutionID)
 	detail := "What is open now: " + a.summary() + "."
 	if a.Orphan != "" {
 		detail += fmt.Sprintf(" Unhedged: %.8g %s.", a.OrphanAmount, a.Orphan)
@@ -412,6 +423,19 @@ func (d *Deps) settleRecovery(ctx context.Context, in RecoverInput, last Assessm
 		}
 	}
 	if !exposed {
+		// Nothing is recorded open any more. Only a plan still waiting on this recovery is
+		// settled: an unwind (or the owner) may have settled it already, and a closed plan
+		// must not be turned into a failed one. An unwound plan is closed, an open that
+		// never completed is failed.
+		plan, err := d.Store.GetPlan(ctx, in.PlanID)
+		if err != nil || plan.Status != PlanStatusRecoveryRequired {
+			return err
+		}
+		if in.Op == OpUnwind {
+			now := time.Now()
+			plan.ClosedAt, plan.Status = &now, PlanStatusClosed
+			return d.Store.UpdatePlan(ctx, plan)
+		}
 		return d.Store.UpdatePlanStatus(ctx, in.PlanID, PlanStatusFailed)
 	}
 	if d.Alerts != nil { // something is still recorded as open: say so

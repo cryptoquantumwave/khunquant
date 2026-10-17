@@ -43,12 +43,11 @@ func seedDNOpenLegs(t *testing.T, store *deltaneutral.Store, planID int64, state
 }
 
 // failLegSaves makes saveExecutionLegFn fail for every leg matching match, and returns a
-// counter of how many matching save attempts were made. Backoff is disabled.
+// counter of how many matching save attempts were made.
 func failLegSaves(t *testing.T, match func(*deltaneutral.ExecutionLeg) bool) *int {
 	t.Helper()
 	calls := 0
-	origFn, origBackoff := saveExecutionLegFn, legSaveBackoff
-	legSaveBackoff = 0
+	origFn := saveExecutionLegFn
 	saveExecutionLegFn = func(ctx context.Context, s *deltaneutral.Store, leg *deltaneutral.ExecutionLeg) (int64, error) {
 		if match(leg) {
 			calls++
@@ -56,7 +55,7 @@ func failLegSaves(t *testing.T, match func(*deltaneutral.ExecutionLeg) bool) *in
 		}
 		return origFn(ctx, s, leg)
 	}
-	t.Cleanup(func() { saveExecutionLegFn, legSaveBackoff = origFn, origBackoff })
+	t.Cleanup(func() { saveExecutionLegFn = origFn })
 	return &calls
 }
 
@@ -153,7 +152,10 @@ func TestResize_SecondLegFails_PlanRecoveryRequired(t *testing.T) {
 	if got := planStatusOf(t, store, id); got != "recovery_required" {
 		t.Fatalf("first leg resized + second failed must be recovery_required, got %q", got)
 	}
-	if e := latestExec(t, store, id, "resize_"); e.State != string(deltaneutral.ExecutionStateRecoveryRequired) {
+	// The recovery the resize starts runs on the same engine; when it finds nothing orphaned on
+	// the (static) fake exchange it closes the execution out as failed, with its own note.
+	if e := latestExec(t, store, id, "resize_"); e.State != string(deltaneutral.ExecutionStateRecoveryRequired) &&
+		!(e.State == string(deltaneutral.ExecutionStateFailed) && strings.Contains(e.ErrorMsg, "recovery finished")) {
 		t.Fatalf("resize execution must be recovery_required, got %q", e.State)
 	}
 	if len(fut.orders) != 1 {
@@ -175,8 +177,8 @@ func TestResize_LegSaveFailsAfterFill_PlanRecoveryRequired(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected an error result when a filled leg cannot be recorded")
 	}
-	if *calls != legSaveMaxAttempts {
-		t.Fatalf("leg save should be attempted %d times, got %d", legSaveMaxAttempts, *calls)
+	if *calls != deltaneutral.LegSaveAttempts {
+		t.Fatalf("leg save should be attempted %d times, got %d", deltaneutral.LegSaveAttempts, *calls)
 	}
 	if got := planStatusOf(t, store, id); got != "recovery_required" {
 		t.Fatalf("plan must be recovery_required, got %q", got)
@@ -207,8 +209,8 @@ func TestOpen_LegSaveFailsAfterFill_PlanRecoveryRequired_NoReopen(t *testing.T) 
 	if !res.IsError {
 		t.Fatal("expected an error result when a filled leg cannot be recorded")
 	}
-	if *calls != legSaveMaxAttempts {
-		t.Fatalf("leg save should be attempted %d times, got %d", legSaveMaxAttempts, *calls)
+	if *calls != deltaneutral.LegSaveAttempts {
+		t.Fatalf("leg save should be attempted %d times, got %d", deltaneutral.LegSaveAttempts, *calls)
 	}
 	if got := planStatusOf(t, store, id); got != "recovery_required" {
 		t.Fatalf("a plan with a filled order must be recovery_required, never failed; got %q", got)
@@ -336,15 +338,20 @@ func TestUnwind_CloseFails_ExecutionNotStuckUnwinding(t *testing.T) {
 
 			assertNoUnwindingExecution(t, store, id)
 			e := latestExec(t, store, id, "unwind_")
-			if e.State != string(c.wantExec) {
+			// The recovery the unwind starts runs on the same engine, and when it finds nothing
+			// orphaned on the (static) fake exchange it closes the execution out as failed with
+			// its own note: either way the execution is not stuck and not unwinding.
+			closedOutByRecovery := c.wantExec == deltaneutral.ExecutionStateRecoveryRequired &&
+				e.State == string(deltaneutral.ExecutionStateFailed) && strings.Contains(e.ErrorMsg, "recovery finished")
+			if e.State != string(c.wantExec) && !closedOutByRecovery {
 				t.Fatalf("unwind execution state = %q, want %q", e.State, c.wantExec)
 			}
 			if got := planStatusOf(t, store, id); got != c.wantPlan {
 				t.Fatalf("plan status = %q, want %q", got, c.wantPlan)
 			}
 			if saveCalls != nil {
-				if *saveCalls != legSaveMaxAttempts {
-					t.Fatalf("leg save attempts = %d, want %d", *saveCalls, legSaveMaxAttempts)
+				if *saveCalls != deltaneutral.LegSaveAttempts {
+					t.Fatalf("leg save attempts = %d, want %d", *saveCalls, deltaneutral.LegSaveAttempts)
 				}
 				if !strings.Contains(e.ErrorMsg, deltaneutral.UnrecordedFillMarker) {
 					t.Fatalf("execution must carry the unrecorded-fill trace, got %q", e.ErrorMsg)

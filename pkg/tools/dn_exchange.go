@@ -24,6 +24,8 @@ import (
 type dnExchange struct {
 	cfg *config.Config
 	now func() time.Time
+	// real: this exchange acts for exits, on the real providers whatever paper mode says.
+	real bool
 }
 
 // NewDNExchange builds the exchange the delta-neutral workflows run on. now is the
@@ -44,11 +46,167 @@ func baseAsset(symbol string) string {
 }
 
 func (e *dnExchange) spot(p *deltaneutral.Plan) (broker.TradingProvider, broker.Provider, error) {
+	if e.real { // an exit is real: a simulated sell would leave the real position open
+		prov, err := broker.CreateProviderForAccount(p.SpotProvider, p.SpotAccount, e.cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("spot provider: %w", err)
+		}
+		tp, ok := prov.(broker.TradingProvider)
+		if !ok {
+			return nil, nil, errors.New("spot provider does not support order execution")
+		}
+		return tp, prov, nil
+	}
 	tp, real, err := broker.TradingProviderFor(e.cfg, p.SpotProvider, p.SpotAccount)
 	if err != nil {
 		return nil, nil, fmt.Errorf("spot provider: %w", err)
 	}
 	return tp, real, nil
+}
+
+// Exits is this exchange acting for exits.
+func (e *dnExchange) Exits() deltaneutral.Exchange {
+	return &dnExchange{cfg: e.cfg, now: e.now, real: true}
+}
+
+// Account reads the live futures position (the plan's side) and the spot balances.
+// The contract size is the position's own, else the market's; if neither says, the
+// account is unreadable, because sizing a close in contracts without it would be a guess.
+func (e *dnExchange) Account(ctx context.Context, p *deltaneutral.Plan) (deltaneutral.Account, error) {
+	a := deltaneutral.Account{ContractSize: 1, MinContracts: 1}
+	fp, err := futuresProvider(ctx, e.cfg, p.FuturesProvider, p.FuturesAccount)
+	if err != nil {
+		return a, fmt.Errorf("futures provider: %w", err)
+	}
+	positions, err := fp.FetchFuturesPositions(ctx, []string{p.FuturesSymbol})
+	if err != nil {
+		return a, fmt.Errorf("read the futures position: %w", err)
+	}
+	// A market that no longer validates (delisted, inactive) must not keep a position open:
+	// the catalogue is read for the sizes only.
+	mkts, _ := fp.LoadFuturesMarkets(ctx)
+	mkt := mkts[p.FuturesSymbol]
+	marketSize := 0.0
+	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
+		marketSize = *mkt.ContractSize
+	}
+	if mkt.Limits.Amount.Min != nil && *mkt.Limits.Amount.Min > 0 {
+		a.MinContracts = *mkt.Limits.Amount.Min
+	}
+	a.ContractSize = marketSize
+	_, planSide, _ := futuresPositionSide(p.FuturesSide)
+	for _, pos := range positions {
+		if pos.Contracts == nil || *pos.Contracts == 0 || pos.Symbol == nil ||
+			normalizeFuturesSymbol(*pos.Symbol) != normalizeFuturesSymbol(p.FuturesSymbol) {
+			continue
+		}
+		// In hedge mode the account may hold the other side of the symbol too (the owner's
+		// own): that one is not this plan's, whatever it is worth. A position that reports
+		// no side, or "net", stands for the plan's.
+		if pos.Side != nil && planSide != "" && !strings.EqualFold(*pos.Side, "net") && !strings.EqualFold(*pos.Side, planSide) {
+			continue
+		}
+		a.Contracts, a.PnL = math.Abs(*pos.Contracts), pos.UnrealizedPnl
+		if pos.Side != nil && !strings.EqualFold(*pos.Side, "net") {
+			a.PositionSide = *pos.Side
+		}
+		if pos.MarginMode != nil {
+			a.MarginMode = *pos.MarginMode
+		}
+		if pos.ContractSize != nil && *pos.ContractSize > 0 {
+			a.ContractSize = *pos.ContractSize
+		}
+		break
+	}
+	if !positiveFinite(a.ContractSize) {
+		if a.Contracts > 0 {
+			return a, fmt.Errorf("the contract size of %s cannot be determined, so a close cannot be sized in contracts", p.FuturesSymbol)
+		}
+		a.ContractSize = 1
+	}
+	_, sp, err := e.spot(p)
+	if err != nil {
+		return a, err
+	}
+	pp, ok := sp.(broker.PortfolioProvider)
+	if !ok {
+		return a, errors.New("the spot provider cannot report balances")
+	}
+	bals, err := pp.GetBalances(ctx)
+	if err != nil {
+		return a, fmt.Errorf("read the spot balance: %w", err)
+	}
+	for _, b := range bals {
+		if strings.EqualFold(b.Asset, baseAsset(p.SpotSymbol)) {
+			a.SpotFree += b.Free
+			a.SpotTotal += b.Free + b.Locked
+		}
+	}
+	return a, nil
+}
+
+// ExitOrder builds a closing order: reduce-only futures on the side opposite the live
+// position (some responses carry no side, or "net": the plan's own position side then
+// stands for it when choosing the order side, so the recorded leg offsets the entry),
+// and a spot sell (a buy to close a spot short).
+func (e *dnExchange) ExitOrder(p *deltaneutral.Plan, leg deltaneutral.LegType, amount float64, a deltaneutral.Account) (deltaneutral.LegOrder, error) {
+	if leg == deltaneutral.LegTypeFutures {
+		of := a.PositionSide
+		if of == "" {
+			if _, planPos, err := futuresPositionSide(p.FuturesSide); err == nil {
+				of = planPos
+			}
+		}
+		mode := a.MarginMode
+		if mode == "" {
+			mode = p.FuturesMarginMode
+		}
+		return deltaneutral.LegOrder{Leg: leg, Side: futuresCloseSide(of), PositionSide: a.PositionSide, Amount: amount,
+			Exit: true, MarginMode: mode, PnlBefore: a.PnL, LivePosition: a.Contracts}, nil
+	}
+	side := "sell"
+	if strings.EqualFold(p.SpotSide, "sell") {
+		side = "buy"
+	}
+	return deltaneutral.LegOrder{Leg: leg, Side: side, Amount: amount, Exit: true}, nil
+}
+
+// Lookup finds the order an earlier attempt of a step placed, by the client order ID
+// derived from key. supported is false when the adapter cannot take a client order ID
+// and look it up.
+func (e *dnExchange) Lookup(ctx context.Context, p *deltaneutral.Plan, leg deltaneutral.LegType, key string) (deltaneutral.Order, bool, bool, error) {
+	var (
+		target      broker.Provider
+		market, sym = broker.OrderMarketSpot, p.SpotSymbol
+		legOrder    = deltaneutral.LegOrder{Leg: leg}
+	)
+	if leg == deltaneutral.LegTypeFutures {
+		fp, err := futuresProvider(ctx, e.cfg, p.FuturesProvider, p.FuturesAccount)
+		if err != nil {
+			return deltaneutral.Order{}, false, false, err
+		}
+		target, market, sym = fp, broker.OrderMarketFutures, p.FuturesSymbol
+	} else {
+		tp, _, err := e.spot(p)
+		if err != nil {
+			return deltaneutral.Order{}, false, false, err
+		}
+		target = tp
+	}
+	capable, ok := target.(broker.ClientIDCapable)
+	lookup, ok2 := target.(broker.ClientIDLookup)
+	if !ok || !ok2 {
+		return deltaneutral.Order{}, false, false, nil
+	}
+	field, maxLen, ok := capable.ClientOrderIDKey(market)
+	if !ok || field == "" || maxLen < broker.MinClientIDLen {
+		return deltaneutral.Order{}, false, false, nil
+	}
+	o, found, err := lookup.FetchOrderByClientID(ctx, market, sym, broker.ClientOrderID(key, maxLen))
+	if err != nil || !found {
+		return deltaneutral.Order{}, false, true, err
+	}
+	return dnOrderOf(o, legOrder), true, true, nil
 }
 
 // Holdings reads the futures position (on the plan's side) and the spot balance.
@@ -105,6 +263,17 @@ func (e *dnExchange) Holdings(ctx context.Context, p *deltaneutral.Plan) (deltan
 
 // Quote validates the plan against the markets and sizes the first leg.
 func (e *dnExchange) Quote(ctx context.Context, p *deltaneutral.Plan, first deltaneutral.LegType) (deltaneutral.Sizing, error) {
+	return e.quote(ctx, p, first, p.SpotNotionalUSDT, true)
+}
+
+// QuoteDelta sizes a resize, futures leg first. An increase hedges the spot quantity
+// NET of the spot taker fee, which comes off what is bought; a decrease sells exactly
+// the notional, whose fee comes out of the proceeds.
+func (e *dnExchange) QuoteDelta(ctx context.Context, p *deltaneutral.Plan, usd float64, decrease bool) (deltaneutral.Sizing, error) {
+	return e.quote(ctx, p, deltaneutral.LegTypeFutures, usd, !decrease)
+}
+
+func (e *dnExchange) quote(ctx context.Context, p *deltaneutral.Plan, first deltaneutral.LegType, notional float64, netOfFee bool) (deltaneutral.Sizing, error) {
 	var sz deltaneutral.Sizing
 	fp, err := futuresProvider(ctx, e.cfg, p.FuturesProvider, p.FuturesAccount)
 	if err != nil {
@@ -158,12 +327,15 @@ func (e *dnExchange) Quote(ctx context.Context, p *deltaneutral.Plan, first delt
 	if first == deltaneutral.LegTypeFutures {
 		// The futures leg covers the NET spot quantity after the spot taker fee,
 		// rounded down to the lot step (see contractsFromNotional).
-		sz.FirstAmount, err = contractsFromNotional(p.SpotNotionalUSDT*(1-deltaneutral.SpotTakerFee), sz.Mark, sz.ContractSize, sz.MinContracts)
+		if netOfFee {
+			notional *= 1 - deltaneutral.SpotTakerFee
+		}
+		sz.FirstAmount, err = contractsFromNotional(notional, sz.Mark, sz.ContractSize, sz.MinContracts)
 		if err != nil {
 			return sz, fmt.Errorf("contract count computation: %w", err)
 		}
 	} else {
-		sz.FirstAmount = p.SpotNotionalUSDT / sz.SpotPrice
+		sz.FirstAmount = notional / sz.SpotPrice
 	}
 	if !positiveFinite(sz.FirstAmount) {
 		return sz, fmt.Errorf("the plan's size is below one tradable step of %s", p.FuturesSymbol)
@@ -194,6 +366,12 @@ func (e *dnExchange) Gate(ctx context.Context, p *deltaneutral.Plan, sz deltaneu
 	}
 	if err := broker.CheckPermission(e.cfg, provider, account, config.ScopeTrade); err != nil {
 		return fmt.Errorf("%s leg permission denied: %w", o.Leg, err)
+	}
+	if o.Exit { // getting out: neither the cap nor the daily-loss brake may stop it
+		if o.Leg == deltaneutral.LegTypeFutures {
+			return broker.CheckLeverage(e.cfg, "exit delta-neutral position", broker.RiskReduce)
+		}
+		return nil
 	}
 	var usd float64
 	if o.Leg == deltaneutral.LegTypeFutures {
@@ -273,7 +451,7 @@ func (e *dnExchange) Place(ctx context.Context, p *deltaneutral.Plan, sz deltane
 	var target broker.Provider
 	provider, account, symbol, unit := p.SpotProvider, p.SpotAccount, p.SpotSymbol, orderfeed.UnitBase
 	if o.Leg == deltaneutral.LegTypeFutures {
-		if broker.IsPaperMode(e.cfg) {
+		if broker.IsPaperMode(e.cfg) && !o.Exit { // only a reduce-only exit may reach the real exchange
 			return deltaneutral.Order{}, fmt.Errorf("%w: futures orders have no simulation", broker.ErrPaperModeUnsupported)
 		}
 		fp, err := futuresProvider(ctx, e.cfg, p.FuturesProvider, p.FuturesAccount)
@@ -281,8 +459,14 @@ func (e *dnExchange) Place(ctx context.Context, p *deltaneutral.Plan, sz deltane
 			return deltaneutral.Order{}, err
 		}
 		target = fp
-		before := sz.FuturesBefore
-		req.Market, req.Symbol, req.PositionSide, req.MarginMode, req.PositionBefore = broker.OrderMarketFutures, p.FuturesSymbol, o.PositionSide, p.FuturesMarginMode, &before
+		before, mode := sz.FuturesBefore, p.FuturesMarginMode
+		if o.Exit {
+			before = sz.FuturesHeld
+		}
+		if o.MarginMode != "" {
+			mode = o.MarginMode
+		}
+		req.Market, req.Symbol, req.PositionSide, req.MarginMode, req.PositionBefore, req.ReduceOnly = broker.OrderMarketFutures, p.FuturesSymbol, o.PositionSide, mode, &before, o.Exit
 		provider, account, symbol, unit = p.FuturesProvider, p.FuturesAccount, p.FuturesSymbol, orderfeed.UnitContracts
 	} else {
 		tp, _, err := e.spot(p)
@@ -298,13 +482,31 @@ func (e *dnExchange) Place(ctx context.Context, p *deltaneutral.Plan, sz deltane
 	}
 	// Reported once, by the attempt that placed it: finding an earlier attempt's order places nothing.
 	if outcome == broker.OutcomePlaced || outcome == broker.OutcomePlacedAfterReconcile {
+		if o.Exit && o.Leg == deltaneutral.LegTypeFutures { // C-4: the loss this reduce realised, prorated against the position
+			filled := o.Amount
+			if order.Filled != nil && *order.Filled > 0 {
+				filled = *order.Filled
+			}
+			recordRealisedLoss(symbol, o.PnlBefore, filled, o.Amount, o.LivePosition, nil)
+		}
 		publishOrder(ctx, orderReport{
-			tool: NameOpenDeltaNeutralPosition, provider: provider, account: account, symbol: symbol, side: o.Side,
+			tool: dnToolName(o.Op), provider: provider, account: account, symbol: symbol, side: o.Side,
 			kind: "market", amount: o.Amount, unit: unit, order: order,
 			notionalUSD: derefFloat(order.Cost), notionalKnown: order.Cost != nil && *order.Cost > 0 && usdQuoted(symbol, provider),
 		})
 	}
 	return dnOrderOf(order, o), nil
+}
+
+// dnToolName is the order-feed name of the tool an operation belongs to.
+func dnToolName(op string) string {
+	switch op {
+	case deltaneutral.OpResize:
+		return NameResizeDeltaNeutralPosition
+	case deltaneutral.OpUnwind:
+		return NameUnwindDeltaNeutralPosition
+	}
+	return NameOpenDeltaNeutralPosition
 }
 
 func derefFloat(f *float64) float64 {

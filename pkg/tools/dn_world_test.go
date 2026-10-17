@@ -36,6 +36,14 @@ type dnWorld struct {
 	reject       map[string]error
 	dupRejected  int
 	onCreate     func(leg string) // called, unlocked, after an order is booked
+	// closedFut and soldSpot add up what the exits took off the exchange: contracts
+	// bought back (reduce-only or not) and base sold. reduceOnly counts the futures
+	// orders that carried the flag; overClose the contracts a reduce-only order asked
+	// for beyond the position (an exchange caps them; the test must never rely on it).
+	ownerLong           float64 // contracts of the owner's own LONG on the symbol (hedge mode), listed first
+	closedFut, soldSpot float64
+	reduceOnly          int
+	overClose           float64
 }
 
 type dnOrder struct {
@@ -86,15 +94,15 @@ func (w *dnWorld) pos() (contracts, spot float64) {
 }
 
 // create books an order and applies its fill. cid is "" for a not-capable adapter.
-func (w *dnWorld) create(leg, side string, amount float64, params map[string]any, key string) (ccxt.Order, error) {
-	o, err := w.book(leg, side, amount, params, key)
+func (w *dnWorld) create(leg, side string, amount float64, params map[string]any, key string, reduceOnly bool) (ccxt.Order, error) {
+	o, err := w.book(leg, side, amount, params, key, reduceOnly)
 	if err == nil && w.onCreate != nil {
 		w.onCreate(leg)
 	}
 	return o, err
 }
 
-func (w *dnWorld) book(leg, side string, amount float64, params map[string]any, key string) (ccxt.Order, error) {
+func (w *dnWorld) book(leg, side string, amount float64, params map[string]any, key string, reduceOnly bool) (ccxt.Order, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.reject[leg]; err != nil {
@@ -117,6 +125,13 @@ func (w *dnWorld) book(leg, side string, amount float64, params map[string]any, 
 		frac = 1
 	}
 	o.filled = amount * frac
+	if reduceOnly {
+		w.reduceOnly++
+		if o.filled > w.position {
+			w.overClose += o.filled - w.position
+			o.filled = w.position
+		}
+	}
 	if frac < 1 {
 		o.status = "canceled"
 	}
@@ -130,10 +145,12 @@ func (w *dnWorld) book(leg, side string, amount float64, params map[string]any, 
 		w.position += o.filled
 	case leg == "futures":
 		w.position -= o.filled
+		w.closedFut += o.filled
 	case side == "buy":
 		w.spotBal += o.filled * (1 - 0.001) // the fee is taken from the base received
 	default:
 		w.spotBal -= o.filled
+		w.soldSpot += o.filled
 	}
 	id := o.id
 	return ccxt.Order{Id: &id}, nil // like OKX: the answer to a placement has no fill
@@ -212,7 +229,7 @@ func (s *dnSpot) CreateOrder(_ context.Context, _, _, side string, amount float6
 	if s.w.capable {
 		key = "clientOrderId"
 	}
-	return s.w.create("spot", side, amount, params, key)
+	return s.w.create("spot", side, amount, params, key, false)
 }
 func (s *dnSpot) CancelOrder(context.Context, string, string) (ccxt.Order, error) {
 	return ccxt.Order{}, nil
@@ -270,7 +287,7 @@ func (f *dnFut) CreateFuturesOrder(_ context.Context, r broker.FuturesOrderReque
 	if f.w.capable {
 		key = "clOrdId"
 	}
-	return f.w.create("futures", r.Side, r.Amount, r.Params, key)
+	return f.w.create("futures", r.Side, r.Amount, r.Params, key, r.ReduceOnly)
 }
 func (f *dnFut) FetchFuturesOrder(_ context.Context, id, _ string) (ccxt.Order, error) {
 	return f.w.get(id)
@@ -283,11 +300,18 @@ func (f *dnFut) CancelFuturesOrder(context.Context, string, string) (ccxt.Order,
 }
 func (f *dnFut) FetchFuturesPositions(context.Context, []string) ([]ccxt.Position, error) {
 	c, _ := f.w.pos()
-	if c <= 0 {
-		return nil, nil
+	f.w.mu.Lock()
+	long := f.w.ownerLong
+	f.w.mu.Unlock()
+	sym, side, lside, margin := "BTC/USDT:USDT", "short", "long", "cross"
+	var out []ccxt.Position
+	if long > 0 {
+		out = append(out, ccxt.Position{Symbol: &sym, Side: &lside, Contracts: &long, MarginMode: &margin})
 	}
-	sym, side, margin := "BTC/USDT:USDT", "short", "cross"
-	return []ccxt.Position{{Symbol: &sym, Side: &side, Contracts: &c, MarginMode: &margin}}, nil
+	if c > 0 {
+		out = append(out, ccxt.Position{Symbol: &sym, Side: &side, Contracts: &c, MarginMode: &margin})
+	}
+	return out, nil
 }
 
 type dnFutCap struct{ dnFut }

@@ -15,8 +15,10 @@ import (
 )
 
 func init() {
-	// dn.open and dn.recover join the journal registry while the delta-neutral
-	// tools are on: the confirmed open is a durable workflow, so it needs the engine.
+	// dn.open, dn.recover, dn.unwind and dn.resize join the journal registry while the
+	// delta-neutral tools are on: a confirmed open, unwind or resize is a durable
+	// workflow, so it needs the engine. The gateway runs all four kinds (it has the
+	// owner channel and the approval service dn.recover needs).
 	journalSources = append(journalSources, func(d assemblyDeps) []journal.Definition {
 		if d.DNFlow == nil {
 			return nil
@@ -31,7 +33,7 @@ type dnFlowRuntime struct {
 	deps *deltaneutral.Deps
 }
 
-// buildDNFlow constructs the dependencies of dn.open and dn.recover, or nil when
+// buildDNFlow constructs the dependencies of the delta-neutral workflows, or nil when
 // the delta-neutral tools are off or their store could not be opened. Nothing is
 // started: attach does that once the engine exists.
 //
@@ -39,7 +41,9 @@ type dnFlowRuntime struct {
 // it, it still reads the exchange and wakes the owner with a Critical protective
 // candidate, and closes nothing. The kill flag is Deps.Killed, the SAME
 // control.State the approval service gets (controlRuntime.killer, never a second
-// instance): dn.open's place steps refuse while it is engaged, dn.recover ignores it.
+// instance): the place steps of dn.open and of a dn.resize increase refuse while it is
+// engaged; dn.recover, dn.unwind and a dn.resize decrease ignore it, because they only
+// reduce exposure or ask.
 // It is nil (never killed) only when the control state is unavailable, exactly as the
 // approval service's Killer then is.
 func buildDNFlow(d assemblyDeps, outbox *attention.Outbox, ns *notify.Service) *dnFlowRuntime {
@@ -66,16 +70,16 @@ func buildDNFlow(d assemblyDeps, outbox *attention.Outbox, ns *notify.Service) *
 		deps.Tell = func(ctx context.Context, title, body string) {
 			res, err := ns.Deliver(ctx, notify.Notification{Severity: proactive.SeverityInfo, Title: title, Body: body})
 			if err != nil || !res.Delivered {
-				logger.WarnCF("gateway", "Could not tell the owner how a delta-neutral open ended", map[string]any{"plan_title": title})
+				logger.WarnCF("gateway", "Could not tell the owner how a delta-neutral operation ended", map[string]any{"plan_title": title})
 			}
 		}
 	}
 	return &dnFlowRuntime{deps: deps}
 }
 
-// attach connects the workflows to the engine (dn.open starts dn.recover through
-// it) and opens open_delta_neutral_position. Without an engine the tool refuses
-// to open: an open that a crash could not resume is never started.
+// attach connects the workflows to the engine (they start dn.recover through it) and
+// opens the open, unwind and resize tools. Without an engine they refuse: a two-leg
+// operation that a crash could not resume is never started.
 func (rt *dnFlowRuntime) attach(j *journalRuntime) {
 	if rt == nil {
 		return

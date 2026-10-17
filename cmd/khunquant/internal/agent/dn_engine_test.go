@@ -40,9 +40,9 @@ func TestOpenKillFlag_FailsClosedWhenItCannotBeOpened(t *testing.T) {
 	}
 }
 
-// The CLI engine claims dn.open and never dn.recover (it cannot ask the owner), and
-// it stops within its bound.
-func TestRunDNEngine_ClaimsOpenNotRecover(t *testing.T) {
+// The CLI engine claims dn.open, dn.unwind and dn.resize and never dn.recover (it
+// cannot ask the owner), and it stops within its bound.
+func TestRunDNEngine_ClaimsOperationsNotRecover(t *testing.T) {
 	cfg := config.DefaultConfig()
 	store, err := deltaneutral.NewStore(t.TempDir())
 	if err != nil {
@@ -70,9 +70,22 @@ func TestRunDNEngine_ClaimsOpenNotRecover(t *testing.T) {
 	if runner == nil {
 		t.Fatal("no engine")
 	}
+	// And a workflow of each operation kind that is waiting for an engine, which the CLI
+	// engine must pick up (its input is bad on purpose, so each ends failed at once
+	// without touching an exchange).
+	for _, kind := range []string{deltaneutral.KindOpen, deltaneutral.KindUnwind, deltaneutral.KindResize} {
+		if _, err := gw.StartWithID(context.Background(), kind, "wf_"+kind, map[string]any{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	time.Sleep(1500 * time.Millisecond) // more than one scan tick
 	if w, err := gw.Get(context.Background(), "dnrec_1"); err != nil || w.Status != journal.StatusPending {
 		t.Errorf("the CLI engine must leave dn.recover to the gateway: %+v %v", w, err)
+	}
+	for _, kind := range []string{deltaneutral.KindOpen, deltaneutral.KindUnwind, deltaneutral.KindResize} {
+		if w, err := gw.Get(context.Background(), "wf_"+kind); err != nil || !w.Status.Terminal() {
+			t.Errorf("the CLI engine must carry on a %s workflow: %+v %v", kind, w, err)
+		}
 	}
 	done := make(chan struct{})
 	go func() { stop(); close(done) }()

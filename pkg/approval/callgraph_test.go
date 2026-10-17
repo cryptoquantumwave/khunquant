@@ -209,11 +209,13 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 			place = append(place, s)
 		}
 	}
-	// The second caller (MR-309) is the delta-neutral open: dnExchange.Place, reached
-	// only from the place steps of dn.open, which only the open tool starts on a
-	// user's confirm=true (the owner's decision for that path is the confirmation
-	// itself, as it is for create_order), and which the kill flag, every order gate
-	// and the paper-mode refusal precede. dn.recover never places: it asks.
+	// The second caller (MR-309) is the delta-neutral workflows: dnExchange.Place, reached
+	// only from the place steps of dn.open, dn.resize and dn.unwind, which only their
+	// tools start, on a user's confirm=true (the owner's decision for that path is the
+	// confirmation itself, as it is for create_order). An open or a resize increase has
+	// the kill flag, every order gate and the paper-mode refusal before it; an unwind or
+	// a resize decrease is an exit, which only reduces exposure and so is never stopped
+	// by the kill flag or a brake. dn.recover never places: it asks.
 	// The third caller (MR-310) is the mandated DCA run: dcaExchange.PlaceMandateBuy,
 	// reached only from the place step of dca.execute, which only StartExecute starts
 	// (from the gateway's dispatcher, on a live execute_dca candidate of a plan with an
@@ -253,7 +255,21 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 			"no model-driven path may set it", originFiles)
 	}
 	assertSites(t, "deltaneutral.Exchange.Place", callSites(srcs, "Place"), "pkg/deltaneutral/workflows.go:Deps.placeLeg")
-	assertSites(t, "the dn.open place step", callSites(srcs, "placeLeg"), "pkg/deltaneutral/workflows.go:Deps.runOpen")
+	assertSites(t, "the dn.open/dn.resize/dn.unwind place step", callSites(srcs, "placeLeg"),
+		"pkg/deltaneutral/exits.go:Deps.runResize", "pkg/deltaneutral/exits.go:Deps.runUnwind",
+		"pkg/deltaneutral/workflows.go:Deps.runOpen")
+
+	// An exit (no kill flag, no cap, no daily-loss check, real providers) is chosen in
+	// exactly these places: the leg steps' exchange for a flow marked exit, and the
+	// validate steps of the two operations that have an exit direction. Its order is
+	// built only in the place step.
+	assertSites(t, "Exchange.Exits", callSites(srcs, "Exits"),
+		"pkg/deltaneutral/exits.go:Deps.validateResize", "pkg/deltaneutral/exits.go:Deps.validateUnwind",
+		"pkg/deltaneutral/workflows.go:Deps.exchange")
+	assertSites(t, "Deps.exitOrder", callSites(srcs, "exitOrder"), "pkg/deltaneutral/workflows.go:Deps.placeLeg")
+	assertSites(t, "Deps.exchange", callSites(srcs, "exchange"),
+		"pkg/deltaneutral/exits.go:Deps.recordOffset", "pkg/deltaneutral/workflows.go:Deps.placeLeg",
+		"pkg/deltaneutral/workflows.go:Deps.verifyLeg")
 
 	assertSites(t, "OrderBackend.PlaceApprovedOrder", callSites(srcs, "PlaceApprovedOrder"),
 		"pkg/approval/execute.go:Service.stepPlace")
@@ -262,12 +278,14 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	}
 
 	// StartWithID: the approval.order workflow (startExecution) and dn.recover, started
-	// by the finalize step of an open that needs recovery (idempotent by its id).
+	// by the finalize step of an open, resize or unwind that needs recovery (idempotent
+	// by its id).
 	assertSites(t, "StartWithID", callSites(srcs, "StartWithID"),
 		"pkg/approval/service.go:Service.startExecution",
 		"pkg/dca/workflow.go:startFrom",
 		"pkg/deltaneutral/workflows.go:Deps.startRecovery")
-	assertSites(t, "Deps.startRecovery", callSites(srcs, "startRecovery"), "pkg/deltaneutral/workflows.go:Deps.settleOpen")
+	assertSites(t, "Deps.startRecovery", callSites(srcs, "startRecovery"), "pkg/deltaneutral/exits.go:Deps.settleResize",
+		"pkg/deltaneutral/exits.go:Deps.settleUnwind", "pkg/deltaneutral/workflows.go:Deps.settleOpen")
 	assertSites(t, "Service.startExecution", callSites(srcs, "startExecution"),
 		"pkg/approval/service.go:Service.Decide", "pkg/approval/service.go:Service.Recover")
 	assertSites(t, "store.decide", callSites(srcs, "decide"), "pkg/approval/service.go:Service.Decide")

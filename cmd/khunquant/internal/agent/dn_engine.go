@@ -21,8 +21,8 @@ import (
 // The engine's own shutdown wait (10 s) is shorter; this is the outer bound.
 const dnEngineStopTimeout = 15 * time.Second
 
-// startDNEngine runs a journal engine for dn.open for as long as this
-// `khunquant agent` process lives, and returns the function that stops it.
+// startDNEngine runs a journal engine for dn.open, dn.unwind and dn.resize for as long
+// as this `khunquant agent` process lives, and returns the function that stops it.
 //
 // Why: the workflows are durable and leased, so any process that knows their kinds
 // may carry one on. A gateway that died between the two legs of an open leaves a
@@ -31,10 +31,14 @@ const dnEngineStopTimeout = 15 * time.Second
 // the same idempotency key, so the second leg is placed once. The lease keeps two
 // processes from running one workflow at the same time.
 //
-// What it does not do: the CLI has no owner channel and no approval service, so it
-// never RUNS a dn.recover (it could find the orphan but not ask the owner, and
-// would only use up a round); an open that fails here starts the recovery and the
-// gateway, when it runs, carries it out. The CLI's own tool registry does not carry
+// Which kinds it runs: dn.open and dn.resize (they place orders and read the kill flag
+// below, which fails closed) and dn.unwind (an exit, which reads no flag, and which
+// is better finished by whoever is alive than left half-closed until the gateway
+// returns). What it does not do: the CLI has no owner channel and no approval service,
+// so it never RUNS a dn.recover (it could find the orphan but not ask the owner, and
+// would only use up a round); an operation that fails here starts the recovery and the
+// gateway, when it runs, carries it out. It has no way to message the owner either, so
+// an operation it finishes after the tool's wait gives no "it finished" message. The CLI's own tool registry does not carry
 // the delta-neutral tools, so what runs here is a workflow some other process
 // started and did not finish.
 //
@@ -44,7 +48,8 @@ const dnEngineStopTimeout = 15 * time.Second
 // runs out, and it resumes after that. Nothing is lost.
 func startDNEngine(cfg *config.Config) (stop func()) {
 	nop := func() {}
-	if !cfg.Tools.IsToolEnabled(tools.NameOpenDeltaNeutralPosition) {
+	if !cfg.Tools.IsToolEnabled(tools.NameOpenDeltaNeutralPosition) && !cfg.Tools.IsToolEnabled(tools.NameUnwindDeltaNeutralPosition) &&
+		!cfg.Tools.IsToolEnabled(tools.NameResizeDeltaNeutralPosition) {
 		return nop
 	}
 	// Only where delta-neutral plans have been used: a CLI session that never touched
@@ -92,10 +97,11 @@ func openKillFlag(db *sql.DB) func() bool {
 // runDNEngine builds the engines and runs the one that claims. It returns a nil
 // engine when it cannot be built.
 //
-// Two engines on one database, because the process claims dn.open but must not claim
-// dn.recover: the runner knows only dn.open (an engine claims only the kinds it
-// defines), and the starter, which never runs, knows both so that an open that fails
-// in this process can still START its recovery for the gateway to carry out.
+// Two engines on one database, because the process claims the operations but must not
+// claim dn.recover: the runner knows only dn.open, dn.unwind and dn.resize (an engine
+// claims only the kinds it defines), and the starter, which never runs, knows all four
+// so that an operation that fails in this process can still START its recovery for the
+// gateway to carry out.
 func runDNEngine(db *sql.DB, store *deltaneutral.Store, cfg *config.Config, killed func() bool) (*journal.Engine, func()) {
 	deps := &deltaneutral.Deps{
 		Store:    store,
@@ -106,10 +112,10 @@ func runDNEngine(db *sql.DB, store *deltaneutral.Store, cfg *config.Config, kill
 		},
 	}
 	all := deps.Definitions()
-	var openOnly []journal.Definition
+	var operations []journal.Definition
 	for _, def := range all {
-		if def.Kind == deltaneutral.KindOpen {
-			openOnly = append(openOnly, def)
+		if def.Kind != deltaneutral.KindRecover {
+			operations = append(operations, def)
 		}
 	}
 	starter, err := journal.New(db, all, nil)
@@ -117,7 +123,7 @@ func runDNEngine(db *sql.DB, store *deltaneutral.Store, cfg *config.Config, kill
 		logger.WarnCF("agent", "No workflow engine for delta-neutral opens", map[string]any{"error": err.Error()})
 		return nil, nil
 	}
-	runner, err := journal.New(db, openOnly, nil)
+	runner, err := journal.New(db, operations, nil)
 	if err != nil {
 		logger.WarnCF("agent", "No workflow engine for delta-neutral opens", map[string]any{"error": err.Error()})
 		return nil, nil

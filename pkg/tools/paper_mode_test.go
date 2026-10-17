@@ -598,6 +598,7 @@ func TestPaperMode_ReduceOnlyExitAllowedReal(t *testing.T) {
 		env := newPaperEnv(t, true)
 		armPolicy(t, true, defaultToolPolicies())
 		id := seedDNFakePlan(t, env.store, "mr5-unwind", "active")
+		armDNOpen(t, env.cfg, env.store) // the workflow's exchange sees paper mode too: an exit must stay real
 		// Unwind sizes only from the plan's recorded legs.
 		seedDNOpenLegs(t, env.store, id, deltaneutral.ExecutionStateBothLegsFilled, 10, 10)
 

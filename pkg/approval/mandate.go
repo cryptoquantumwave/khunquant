@@ -148,6 +148,15 @@ func verifyProposal(p Proposal) error {
 	case KindMemory:
 		_, err := VerifiedMemory(p)
 		return err
+	case KindTriggerParam:
+		_, err := VerifiedTriggerParam(p)
+		return err
+	case KindIntentCleanup:
+		_, err := VerifiedIntentCleanup(p)
+		return err
+	case KindMute:
+		_, err := VerifiedMute(p)
+		return err
 	}
 	_, err := decodeVerified(p)
 	return err

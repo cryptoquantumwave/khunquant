@@ -214,6 +214,11 @@ func enforceToolPolicy(ctx context.Context, name string, args map[string]any) *T
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
 	if !turnMayCall(ctx, name) {
+		if ToolOrigin(ctx) == OriginProactive && ProactiveTurnKind(ctx) == proactive.TurnReflection {
+			return policyRefusal(name, fmt.Sprintf("tool %q is not permitted in a reflection turn. It can read the owner's profile "+
+				"and intents and declare its suggestions with %s; it cannot message, write, trade or change anything.",
+				name, NameProposeReflection))
+		}
 		if name == NameProposeOrder {
 			return policyRefusal(name, "propose_order is not available in this turn. It is open only to the owner's own "+
 				"conversation turn and to a proactive turn whose inputs were all exchange data (a proactive turn that "+
@@ -321,6 +326,11 @@ func rowGate(ctx context.Context, name string) (kind rowKind, msg string) {
 // where it starts, and the per-tool rows already fail closed on an empty origin.
 // Like the rows, the ceiling does nothing until SetPolicyConfig has armed it.
 func turnMayCall(ctx context.Context, name string) bool {
+	// The reflection turn has its own, explicit and far smaller ceiling, decided before
+	// anything below can grant it a tool by name or by class (see reflectionTurnMayCall).
+	if ToolOrigin(ctx) == OriginProactive && ProactiveTurnKind(ctx) == proactive.TurnReflection {
+		return reflectionTurnMayCall(name)
+	}
 	// propose_order is granted by name, to the owner's own root turn and to a
 	// trusted candidate-driven proactive turn, and to nothing else (see
 	// proposeOrderOpen). It is decided before the origin shortcuts below, which

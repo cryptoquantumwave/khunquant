@@ -39,7 +39,7 @@ type policyHook struct{ engine *policy.Engine }
 // have just applied, and the kill switch and the money gates are about money; the
 // dial would only mis-handle a tool it cannot classify (every MCP tool).
 func applies(name string) bool {
-	if name == NameRemember {
+	if name == NameRemember || name == NameProposeReflection {
 		return false // a suggestion for the owner's digest: not a money action, and a tainted turn may make it
 	}
 	switch ClassOf(name) {

@@ -166,6 +166,8 @@ type MemoryDigest interface {
 // context by the tool; the fact and category are the model's, cleaned here.
 type MemoryRequest struct {
 	Fact, Category, Source string
+	// Expiry replaces MemoryExpiry when positive (the nightly reflection's is shorter).
+	Expiry time.Duration
 }
 
 // ProposeMemory stores a pending memory proposal and queues its announcement for the next
@@ -201,6 +203,9 @@ func (s *Service) ProposeMemory(ctx context.Context, r MemoryRequest) (Proposal,
 		ID: proactive.NewID(), Nonce: newNonce(), Kind: KindMemory, Params: params, Hash: hashOf(KindMemory, params),
 		Origin: OriginSuggestion, Mode: ModeLive, Lang: langOf(s.locale(ctx).Lang), Status: StatusPending,
 		CreatedAt: now, ExpiresAt: now.Add(MemoryExpiry),
+	}
+	if r.Expiry > 0 {
+		p.ExpiresAt = now.Add(r.Expiry)
 	}
 	for attempt := 0; ; attempt++ {
 		p.Code = newCode()

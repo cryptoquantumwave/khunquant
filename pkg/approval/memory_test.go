@@ -386,5 +386,6 @@ func TestMemoryCallGraph(t *testing.T) {
 		"pkg/approval/service.go:Service.Recover", "pkg/approval/service.go:Service.startExecution")
 	assertSites(t, "appendMemoryNote", callSites(srcs, "appendMemoryNote"),
 		"pkg/tools/remember.go:MemorySink.AppendApprovedMemory", "pkg/tools/remember.go:RememberTool.save")
-	assertSites(t, "MemoryDigest.QueueForDigest", callSites(srcs, "QueueForDigest"), "pkg/approval/memory.go:Service.ProposeMemory")
+	assertSites(t, "MemoryDigest.QueueForDigest", callSites(srcs, "QueueForDigest"),
+		"pkg/approval/memory.go:Service.ProposeMemory", "pkg/approval/reflection.go:Service.ProposeReflection")
 }

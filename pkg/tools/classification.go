@@ -198,6 +198,10 @@ var toolClasses = map[string]Class{
 	// to this class; rememberOpen grants it by name, bound to an owner being configured
 	// and the digest that carries the suggestion running.
 	NameRemember: ClassPropose,
+	// propose_reflection hands the nightly reflection's suggestions to code, which
+	// validates them and queues proposals the owner decides. It changes nothing itself.
+	// Per-turn tool, open to the reflection turn alone (reflectionTurnMayCall).
+	NameProposeReflection: ClassPropose,
 
 	// Orders and positions. Every exit is here as well: the previous rule that
 	// exits are never gated holds for turns a person started, not for these.

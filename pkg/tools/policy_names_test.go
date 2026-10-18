@@ -83,7 +83,7 @@ func knownToolNames() map[string]bool {
 		NameScanDeltaNeutralOpportunities, NameRenderDeltaNeutralYieldChart,
 		NameEarnOverview, NameManageEarnPosition,
 		NameGetProfile, NameUpdateProfile, NameRespondProactive,
-		NameCreateIntent, NameListIntents, NameUpdateIntent, NameProposeOrder, NameRemember,
+		NameCreateIntent, NameListIntents, NameUpdateIntent, NameProposeOrder, NameRemember, NameProposeReflection,
 	}
 
 	known := make(map[string]bool, len(names))

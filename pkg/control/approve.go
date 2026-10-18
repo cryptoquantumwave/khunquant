@@ -90,6 +90,18 @@ func decidedText(p approval.Proposal, approve bool) string {
 		}
 		return fmt.Sprintf("Approved %s. Saving it to memory now.", summary)
 	}
+	if approval.IsReflectionKind(p.Kind) {
+		// Named by code only: the change reached the owner in the digest.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was changed.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Applied %s.", summary)
+		case p.Status == approval.StatusFailed:
+			return fmt.Sprintf("Approved %s, but it could no longer be applied; nothing was changed.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Applying it now.", summary)
+	}
 	if p.Kind == approval.KindMandate {
 		// A mandate card places nothing: approving it lets code buy inside its limits.
 		switch {

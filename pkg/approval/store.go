@@ -85,6 +85,7 @@ const (
 	classOrder propClass = iota
 	classMandate
 	classMemory
+	classReflection
 )
 
 func (c propClass) sql() string {
@@ -93,8 +94,10 @@ func (c propClass) sql() string {
 		return `(kind = 'mandate' OR origin = 'mandate')`
 	case classMemory:
 		return `kind = 'memory'`
+	case classReflection:
+		return `kind IN ('trigger_param', 'intent_cleanup', 'mute')`
 	}
-	return `NOT (kind IN ('mandate', 'memory') OR origin = 'mandate')`
+	return `NOT (kind IN ('mandate', 'memory', 'trigger_param', 'intent_cleanup', 'mute') OR origin = 'mandate')`
 }
 
 // bounds are how many may be pending at once and how many may be created in the window.
@@ -104,6 +107,8 @@ func (c propClass) bounds() (maxPending, maxWindow int, window time.Duration) {
 		return MaxPendingMandate, MaxMandatePerHour, time.Hour
 	case classMemory:
 		return MaxPendingMemory, MaxMemoryPerDay, 24 * time.Hour
+	case classReflection:
+		return MaxPendingReflection, MaxReflectionPerDay, 24 * time.Hour
 	}
 	return MaxPending, MaxPerHour, time.Hour
 }
@@ -115,6 +120,8 @@ func classOf(k Kind, o Origin) propClass {
 	switch {
 	case k == KindMemory:
 		return classMemory
+	case IsReflectionKind(k):
+		return classReflection
 	case k == KindMandate || o == OriginMandate:
 		return classMandate
 	}
@@ -247,6 +254,14 @@ func (s *store) list(ctx context.Context, where string, args ...any) ([]Proposal
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// pendingWithHash reports whether a pending, unexpired proposal already holds hash.
+func (s *store) pendingWithHash(ctx context.Context, hash [32]byte, now time.Time) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM proposals WHERE hash = ? AND status = 'pending' AND expires_at_ms > ?`, hash[:], ms(now)).Scan(&n)
+	return n > 0, err
 }
 
 // pendingCodes lists the codes of the proposals that can still be decided.

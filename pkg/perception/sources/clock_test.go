@@ -105,15 +105,22 @@ func (c *clkManual) set(t time.Time) {
 	c.mu.Unlock()
 }
 
-func (c *clkManual) fire() {
+// fire wakes every pending sleep with the clock's current time. It returns the newest
+// of them (nil when none was pending) and how many After calls there had been.
+func (c *clkManual) fire() (newest chan time.Time, afters int) {
 	c.mu.Lock()
 	p := c.pending
 	c.pending = nil
 	now := c.now
+	afters = len(c.waits)
 	c.mu.Unlock()
 	for _, ch := range p {
 		ch <- now
 	}
+	if len(p) > 0 {
+		newest = p[len(p)-1]
+	}
+	return newest, afters
 }
 
 func (c *clkManual) waitPending(t *testing.T) {
@@ -132,12 +139,44 @@ func (c *clkManual) waitPending(t *testing.T) {
 }
 
 // goTo moves the clock to t, wakes the source and waits until it has finished the
-// computation and gone back to sleep.
+// computation for t and gone back to sleep.
+//
+// A source that is mid-loop when the clock moves may read the old time and register
+// its next sleep only after this wake went out: that sleep is never woken, and seeing
+// "a sleep is pending" proves nothing about it (the source also loops once more for
+// each timer wake-up it was handed before it started, so that happens). goTo
+// therefore counts a round only when the source took the wake it was sent: its newest
+// sleep channel was drained, so the pass that registered the next sleep began after
+// the clock moved. When the source left that sleep for a wake-up of its own, goTo
+// wakes the sleep it registered since and checks again.
 func (c *clkManual) goTo(t *testing.T, to time.Time) {
 	t.Helper()
 	c.set(to)
-	c.fire()
-	c.waitPending(t)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		newest, afters := c.fire()
+		if newest == nil {
+			c.waitPending(t) // between two sleeps: wait for the next one, then wake it
+			continue
+		}
+		// Wait for the source's next sleep, whoever's pass registered it.
+		for time.Now().Before(deadline) {
+			c.mu.Lock()
+			slept := len(c.waits) > afters
+			c.mu.Unlock()
+			if slept {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		c.mu.Lock()
+		slept := len(c.waits) > afters
+		c.mu.Unlock()
+		if slept && len(newest) == 0 {
+			return // the source took our wake, ran its pass for t and slept again
+		}
+	}
+	t.Fatal("the clock source never went back to sleep")
 }
 
 func (c *clkManual) lastWait() time.Duration {

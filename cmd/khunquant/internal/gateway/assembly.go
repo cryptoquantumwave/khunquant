@@ -90,6 +90,8 @@ type sharedResources struct {
 	// the mandate its dca_due spec is live for (dca_mandate_wiring.go).
 	dcaStart    atomic.Pointer[dcaStarterBox]
 	dcaPromoted sync.Map
+	// dcaMute tells the owner of a buy a mute skipped (set with dcaStart).
+	dcaMute atomic.Pointer[dcaMuteNotifier]
 
 	// portfolioStats are the portfolio triggers' counters, per process
 	// (portfolio_triggers_wiring.go).

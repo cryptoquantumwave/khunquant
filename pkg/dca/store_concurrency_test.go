@@ -140,4 +140,4 @@ func TestNewStore_OpensDatabaseCreatedByOldOpener(t *testing.T) {
 // (and the workflow-id column index) are added by the open on purpose, so they are
 // left out of the "the open changed nothing else" count.
 const legacyObjects = `name NOT LIKE '%mandate%' AND name NOT LIKE '%unproven%' AND name NOT LIKE '%slot_asks%'
-	AND name NOT LIKE '%notice_days%' AND name NOT LIKE '%workflow%'`
+	AND name NOT LIKE '%notice_days%' AND name NOT LIKE '%workflow%' AND name NOT LIKE '%muted_skips%' AND name NOT LIKE '%mute_notice%'`

@@ -87,6 +87,18 @@ CREATE TABLE IF NOT EXISTS dca_slot_asks (
     at_ms        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (plan_id, slot_ms)
 );
+
+CREATE TABLE IF NOT EXISTS dca_muted_skips (
+    plan_id  INTEGER NOT NULL,
+    slot_ms  INTEGER NOT NULL,
+    told     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (plan_id, slot_ms)
+);
+
+CREATE TABLE IF NOT EXISTS dca_mute_notice_day (
+    plan_id  INTEGER PRIMARY KEY,
+    day      TEXT    NOT NULL
+);
 `
 
 // mandateMigrations: the workflow id that wrote an execution row makes a replay of
@@ -578,6 +590,46 @@ func (s *Store) FirstToday(ctx context.Context, key, day string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// NoteMutedSkip records that a mute stopped the plan's buy for the slot and says
+// whether the owner is to be told now: true at the first skip of the plan on the
+// given owner-local day (the last-notified day is stored, so a restart does not
+// reset it). earlier is how many slots, besides this one, were skipped since the
+// last notice and not yet reported; they are marked reported. A slot already
+// reported, or a second skip on a day already told, reports false and is counted
+// for the next notice.
+func (s *Store) NoteMutedSkip(ctx context.Context, planID, slotMS int64, day string) (tell bool, earlier int, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO dca_muted_skips (plan_id, slot_ms) VALUES (?, ?)`, planID, slotMS); err != nil {
+		return false, 0, err
+	}
+	var told int
+	if err = tx.QueryRowContext(ctx, `SELECT told FROM dca_muted_skips WHERE plan_id = ? AND slot_ms = ?`, planID, slotMS).Scan(&told); err != nil {
+		return false, 0, err
+	}
+	var last string
+	if err = tx.QueryRowContext(ctx, `SELECT day FROM dca_mute_notice_day WHERE plan_id = ?`, planID).Scan(&last); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, 0, err
+	}
+	if told != 0 || last == day {
+		return false, 0, tx.Commit()
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM dca_muted_skips WHERE plan_id = ? AND told = 0 AND slot_ms <> ?`, planID, slotMS).Scan(&earlier); err != nil {
+		return false, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE dca_muted_skips SET told = 1 WHERE plan_id = ?`, planID); err != nil {
+		return false, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO dca_mute_notice_day (plan_id, day) VALUES (?, ?)
+		ON CONFLICT(plan_id) DO UPDATE SET day = excluded.day`, planID, day); err != nil {
+		return false, 0, err
+	}
+	return true, earlier, tx.Commit()
 }
 
 // ClearLegacyOff records that none of the plan's mandates has its legacy job off.

@@ -3,6 +3,7 @@ package dca
 import (
 	"fmt"
 	"strconv"
+	"time"
 )
 
 func f2(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
@@ -72,4 +73,26 @@ func ReminderNotice(thai bool, planID int64, code string) Notice {
 	return Notice{Severity: "notice", DedupKey: "dca-mandate-reminder:" + strconv.FormatInt(planID, 10),
 		Title: fmt.Sprintf("DCA plan %d is still waiting for its mandate", planID),
 		Body:  "The plan keeps running the old way (its scheduled job) until you approve the mandate with code " + code + ". Reply /approve " + code + " to approve it."}
+}
+
+// MutedSkipNotice tells the owner that a mute stopped a mandated buy. It is a template
+// over ids, a symbol and times: no model text. slot is the skipped slot in the
+// mandate's zone; earlier is how many other slots were skipped and not reported yet.
+func MutedSkipNotice(thai bool, planID int64, symbol string, slot time.Time, zone string, earlier int, day string) Notice {
+	at := slot.Format("2006-01-02 15:04") + " (" + zone + ")"
+	key := "dca-muted-skip:" + strconv.FormatInt(planID, 10) + ":" + day
+	if thai {
+		body := fmt.Sprintf("รอบซื้อ %s ของแผน DCA %d (%s) ถูกข้าม เพราะคุณปิดเสียงการแจ้งเตือนนี้ไว้ ยังไม่มีการซื้อเกิดขึ้น "+
+			"หากต้องการให้ซื้อตามปกติ ตอบ /unmute dca_due (หรือ /unmute dca_due:plan-%d ถ้าปิดเสียงเฉพาะแผนนี้) ส่วน /snooze จะหมดอายุเอง", at, planID, symbol, planID)
+		if earlier > 0 {
+			body += fmt.Sprintf(" ก่อนหน้านี้ยังมีอีก %d รอบที่ถูกข้ามโดยไม่ได้แจ้ง", earlier)
+		}
+		return Notice{Severity: "notice", DedupKey: key, Title: fmt.Sprintf("แผน DCA %d: ข้ามการซื้อเพราะปิดเสียงแจ้งเตือน", planID), Body: body}
+	}
+	body := fmt.Sprintf("The %s slot of DCA plan %d (%s) was skipped because you muted this alert. Nothing was bought. "+
+		"To buy as usual, reply /unmute dca_due (or /unmute dca_due:plan-%d if you muted only this plan); a /snooze ends by itself.", at, planID, symbol, planID)
+	if earlier > 0 {
+		body += fmt.Sprintf(" %d earlier slot(s) were also skipped and not reported.", earlier)
+	}
+	return Notice{Severity: "notice", DedupKey: key, Title: fmt.Sprintf("DCA plan %d: buy skipped because of a mute", planID), Body: body}
 }

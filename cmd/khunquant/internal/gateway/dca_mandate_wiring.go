@@ -96,6 +96,39 @@ func (r *sharedResources) promotedMandate(planID int64) string {
 	return ""
 }
 
+// dcaMuteNotifier tells the owner, once a day per plan, that a mute stopped a
+// mandated buy. The day and the count live in the DCA store, so a restart does not
+// repeat the notice. It is built by code, delivered through dcaTeller (notify.Deliver
+// directly, not the attention outbox), so the mute that caused the skip, which is on
+// the dca_due trigger's candidates, cannot silence it.
+type dcaMuteNotifier struct {
+	store *dca.Store
+	tell  func(ctx context.Context, n dca.Notice)
+	thai  func() bool
+	now   func() time.Time
+}
+
+func (n *dcaMuteNotifier) skipped(ctx context.Context, planID int64, mandateID string, dueMS int64) {
+	m, err := n.store.GetMandate(ctx, mandateID)
+	if err != nil {
+		logger.WarnCF("dca", "Could not read the mandate of a muted DCA run", map[string]any{"plan_id": planID, "error": err.Error()})
+		return
+	}
+	loc, err := time.LoadLocation(m.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	day := n.now().In(loc).Format("2006-01-02")
+	tell, earlier, err := n.store.NoteMutedSkip(ctx, planID, dueMS, day)
+	if err != nil {
+		logger.WarnCF("dca", "Could not record a muted DCA run", map[string]any{"plan_id": planID, "error": err.Error()})
+		return
+	}
+	if tell && n.tell != nil {
+		n.tell(ctx, dca.MutedSkipNotice(n.thai != nil && n.thai(), planID, m.Symbol, time.UnixMilli(dueMS).In(loc), loc.String(), earlier, day))
+	}
+}
+
 // ---- dispatcher ----
 
 // dcaDispatcher hands a live execute_dca candidate to the dca.execute workflow and
@@ -109,8 +142,11 @@ func (r *sharedResources) promotedMandate(planID int64) string {
 // repeat harmless). The exceptions are the ones the owner chose with a switch: an
 // explicit mute of the trigger (/mute dca_due...) stops the run, and so do attention
 // modes off and shadow (the sync promotes a plan only while attention and triggers
-// are live, so those two appear only in a race with a reload). A muted run is logged
-// and not retried; nobody is told, since the owner asked for silence. The receipt of
+// are live, so those two appear only in a race with a reload). A skipped run is not
+// retried. A MUTE skip tells the owner once a day per plan (dcaMuteNotifier): a standing
+// mandate not buying is news to the person who approved it, however they muted. Attention
+// off or shadow is a configuration state the status page already shows, so it is only
+// logged. The receipt of
 // a run that goes ahead is the workflow's own silent Info notice, not an attention
 // message, so quiet hours and the digest do not apply to it. /snooze mutes one exact
 // dedup key (one slot's), so it can only stop that slot.
@@ -122,6 +158,7 @@ type dcaDispatcher struct {
 func (x dcaDispatcher) Dispatch(ctx context.Context, ds []attention.Decision) error {
 	var rest []attention.Decision
 	var errs []error
+	var muted []mutedSkip
 	for _, dec := range ds {
 		c := dec.Candidate
 		if a, _ := c.Evidence["action"].(string); a != "execute_dca" || c.Shadow {
@@ -141,6 +178,9 @@ func (x dcaDispatcher) Dispatch(ctx context.Context, ds []attention.Decision) er
 		case attention.ReasonMuted, attention.ReasonOff, attention.ReasonShadow:
 			logger.InfoCF("dca", "A due mandated DCA run was not started: attention did not let it through",
 				map[string]any{"plan_id": planID, "reason": dec.Reason})
+			if dec.Reason == attention.ReasonMuted {
+				muted = append(muted, mutedSkip{planID, mandateID, evidenceInt(c.Evidence, "due_at_ms")})
+			}
 			continue
 		}
 		st := x.shared.dcaStarter()
@@ -158,7 +198,26 @@ func (x dcaDispatcher) Dispatch(ctx context.Context, ds []attention.Decision) er
 			errs = append(errs, err)
 		}
 	}
+	// After the batch: the notice is a network send, and a buy in the same batch must not wait for it.
+	if n := x.shared.muteNotifier(); n != nil {
+		for _, m := range muted {
+			n.skipped(ctx, m.planID, m.mandateID, m.dueMS)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+type mutedSkip struct {
+	planID    int64
+	mandateID string
+	dueMS     int64
+}
+
+func (r *sharedResources) muteNotifier() *dcaMuteNotifier {
+	if r == nil {
+		return nil
+	}
+	return r.dcaMute.Load()
 }
 
 // ---- the flow ----
@@ -234,6 +293,10 @@ func (rt *dcaFlowRuntime) attach(d assemblyDeps, j *journalRuntime, p *perceptio
 		return
 	}
 	rt.shared.setDCAStarter(j.engine)
+	if rt.deps.Tell != nil {
+		rt.shared.dcaMute.Store(&dcaMuteNotifier{store: rt.store, tell: rt.deps.Tell, now: time.Now,
+			thai: func() bool { return rt.deps.Lang != nil && rt.deps.Lang() == "th" }})
+	}
 	y := &dcaMandateSync{store: rt.store, jobs: jobs, shared: d.Shared, now: time.Now, tell: rt.deps.Tell, killed: rt.deps.Killed,
 		canPromote: func() bool {
 			e := d.Cfg.Proactive.Effective()
@@ -262,6 +325,7 @@ func (rt *dcaFlowRuntime) stop() {
 	}
 	rt.shared.setDCAStarter(nil)
 	if rt.shared != nil { // the next generation promotes again on its first pass
+		rt.shared.dcaMute.Store(nil)
 		rt.shared.dcaPromoted.Range(func(k, _ any) bool { rt.shared.dcaPromoted.Delete(k); return true })
 	}
 	if rt.cancel == nil {

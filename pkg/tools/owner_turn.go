@@ -89,3 +89,14 @@ func checkOwnerTurn(ctx context.Context, cfg *config.Config, rootOnly bool) (by 
 func canonicalSender(ctx context.Context) string {
 	return identity.CanonicalSender(ToolSender(ctx), ToolChannel(ctx))
 }
+
+// isOwnerRootTurn is checkOwnerTurn(rootOnly) plus the sub-turn test it lacks for an
+// internal turn: a sub-turn started from the owner's console is a model's delegation,
+// not the owner. Memory is written directly only here.
+func isOwnerRootTurn(ctx context.Context, cfg *config.Config) bool {
+	if IsSubTurn(ctx) {
+		return false
+	}
+	_, v := checkOwnerTurn(ctx, cfg, true)
+	return v == ownerYes
+}

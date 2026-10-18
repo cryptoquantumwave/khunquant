@@ -46,6 +46,8 @@ const AllProactiveTools = config.AllToolsName
 //	web_search                 template: news for held assets
 //	web_fetch                  template: reading a result (heartbeat kind only)
 //	load_skill                 a skill the owner's HEARTBEAT.md names
+//	remember                   suggest a memory (the owner confirms it in the digest); a heartbeat can no
+//	                           longer write memory/ itself, and the v1 template kept a ledger there
 //
 // respond_proactive is not in the table: it is always present.
 var heartbeatTools = []string{
@@ -71,6 +73,7 @@ var heartbeatTools = []string{
 	tools.NameWebSearch,
 	tools.NameWebFetch,
 	tools.NameLoadSkill,
+	tools.NameRemember,
 }
 
 // candidateTools is the tool subset of a candidate-driven turn when the request

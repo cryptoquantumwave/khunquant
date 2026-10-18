@@ -219,6 +219,11 @@ func enforceToolPolicy(ctx context.Context, name string, args map[string]any) *T
 				"conversation turn and to a proactive turn whose inputs were all exchange data (a proactive turn that "+
 				"has read the web, a file or a skill cannot propose); approvals must also be switched on.")
 		}
+		if name == NameRemember {
+			return policyRefusal(name, fmt.Sprintf("tool %q is not permitted in an autonomous (%s) turn: memories cannot be "+
+				"suggested without an owner (proactive.owner) to confirm them in the daily digest, and the digest and "+
+				"approvals must be running.", name, describeOrigin(ToolOrigin(ctx))))
+		}
 		if ToolOrigin(ctx) == OriginProactive {
 			return policyRefusal(name, fmt.Sprintf(
 				"tool %q is not permitted in an autonomous (%s) turn. A proactive turn can read data and "+
@@ -322,6 +327,9 @@ func turnMayCall(ctx context.Context, name string) bool {
 	// would give a proactive turn the read class only and a person's turn everything.
 	if name == NameProposeOrder {
 		return proposeOrderOpen(ctx)
+	}
+	if name == NameRemember {
+		return rememberOpen(ctx)
 	}
 	origin := ToolOrigin(ctx)
 

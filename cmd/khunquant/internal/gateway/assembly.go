@@ -403,7 +403,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Order approvals: the service is built first, because its workflow definition
 	// goes to the engine below, and attached after, because it needs the engine to
 	// start workflows. With approvals off none of it exists.
-	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager)
+	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager, s.Attention)
 	d.Approval = s.Approval
 	s.Policy.attachMandates(s.Approval) // the engine's read-only mandate lookup
 

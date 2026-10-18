@@ -79,6 +79,17 @@ func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, c
 
 func decidedText(p approval.Proposal, approve bool) string {
 	summary := firstLine(p.Summary, 200)
+	if p.Kind == approval.KindMemory {
+		// The reply names the suggestion by code and category only: the fact reached the
+		// owner in the digest, and is not repeated into a conversation a model reads.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was saved to memory.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Saved %s to memory.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Saving it to memory now.", summary)
+	}
 	if p.Kind == approval.KindMandate {
 		// A mandate card places nothing: approving it lets code buy inside its limits.
 		switch {

@@ -76,14 +76,50 @@ func newStore(ctx context.Context, db *sql.DB) (*store, error) {
 	return &store{db: db}, nil
 }
 
-// The two classes of proposal for the pending and hourly bounds.
+// propClass is the bound a proposal is counted against. Each class has its own pending
+// and rolling-window limits, so that one kind can never keep another from being proposed:
+// a stream of memory suggestions must not hold an exit back.
+type propClass int
+
 const (
-	sqlMandateClass = `(kind = 'mandate' OR origin = 'mandate')`
-	sqlOrderClass   = `NOT (kind = 'mandate' OR origin = 'mandate')`
+	classOrder propClass = iota
+	classMandate
+	classMemory
 )
 
-// mandateClass says a proposal is a mandate card or a mandated run's question.
-func mandateClass(k Kind, o Origin) bool { return k == KindMandate || o == OriginMandate }
+func (c propClass) sql() string {
+	switch c {
+	case classMandate:
+		return `(kind = 'mandate' OR origin = 'mandate')`
+	case classMemory:
+		return `kind = 'memory'`
+	}
+	return `NOT (kind IN ('mandate', 'memory') OR origin = 'mandate')`
+}
+
+// bounds are how many may be pending at once and how many may be created in the window.
+func (c propClass) bounds() (maxPending, maxWindow int, window time.Duration) {
+	switch c {
+	case classMandate:
+		return MaxPendingMandate, MaxMandatePerHour, time.Hour
+	case classMemory:
+		return MaxPendingMemory, MaxMemoryPerDay, 24 * time.Hour
+	}
+	return MaxPending, MaxPerHour, time.Hour
+}
+
+// classOf says which bound a proposal is held to: mandate cards and the questions of a
+// mandated run live for hours and are made by code, memory suggestions are free text a
+// background turn wrote, and orders are everything else.
+func classOf(k Kind, o Origin) propClass {
+	switch {
+	case k == KindMemory:
+		return classMemory
+	case k == KindMandate || o == OriginMandate:
+		return classMandate
+	}
+	return classOrder
+}
 
 func boolInt(b bool) int {
 	if b {
@@ -146,14 +182,10 @@ var errCodeTaken = errors.New("approval: code already pending")
 // insert stores a new pending proposal if both bounds hold, in ONE statement so
 // two proposers racing cannot both pass a count that only one fits under.
 func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
-	hourAgo := now.Add(-time.Hour)
-	// Mandate cards and the questions of a mandated run live for hours and are made by
-	// code, so they are counted on their own: they must never fill the bound an order
-	// proposal (an exit among them) is held to.
-	cls, maxPending, maxHour := sqlOrderClass, MaxPending, MaxPerHour
-	if mandateClass(p.Kind, p.Origin) {
-		cls, maxPending, maxHour = sqlMandateClass, MaxPendingMandate, MaxMandatePerHour
-	}
+	class := classOf(p.Kind, p.Origin)
+	cls := class.sql()
+	maxPending, maxWindow, window := class.bounds()
+	windowStart := now.Add(-window)
 	res, err := s.db.ExecContext(ctx, `INSERT INTO proposals
 		(id, code, nonce, kind, params, hash, summary, rationale, origin, mode, reducing, candidate_id, intent_id,
 		 intervention_id, lang, status, created_at_ms, expires_at_ms)
@@ -162,7 +194,7 @@ func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
 		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND `+cls+`) < ?`,
 		p.ID, p.Code, p.Nonce, string(p.Kind), string(p.Params), p.Hash[:], p.Summary, p.Rationale, string(p.Origin),
 		p.Mode, boolInt(p.Reducing), p.CandidateID, p.IntentID, p.InterventionID, p.Lang, ms(p.CreatedAt), ms(p.ExpiresAt),
-		ms(now), maxPending, ms(hourAgo), maxHour)
+		ms(now), maxPending, ms(windowStart), maxWindow)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return errCodeTaken
@@ -218,13 +250,9 @@ func (s *store) list(ctx context.Context, where string, args ...any) ([]Proposal
 }
 
 // pendingCodes lists the codes of the proposals that can still be decided.
-func (s *store) pendingCodes(ctx context.Context, now time.Time, mandate bool) ([]string, error) {
-	cls := sqlOrderClass
-	if mandate {
-		cls = sqlMandateClass
-	}
+func (s *store) pendingCodes(ctx context.Context, now time.Time, class propClass) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT code FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND `+cls+` ORDER BY created_at_ms`, ms(now))
+		`SELECT code FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND `+class.sql()+` ORDER BY created_at_ms`, ms(now))
 	if err != nil {
 		return nil, fmt.Errorf("approval: list pending: %w", err)
 	}

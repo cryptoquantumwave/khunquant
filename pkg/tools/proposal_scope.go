@@ -108,7 +108,7 @@ func ProposalScopeFrom(ctx context.Context) *ProposalScope {
 // may hold fetched pages), list_intents (inferred intents, written by a model that
 // may have read a page), the tool-search tools, and every MCP tool.
 var trustedDataTools = map[string]bool{
-	NameRespondProactive: true, NameProposeOrder: true,
+	NameRespondProactive: true, NameProposeOrder: true, NameRemember: true,
 
 	NameGetAssetsList: true, NameGetTotalValue: true, NameListPortfolios: true, NameQuerySnapshots: true,
 	NameSnapshotSummary: true, NameGetPnLSummary: true, NameGetPnLDetail: true, NamePortfolioAllocation: true,

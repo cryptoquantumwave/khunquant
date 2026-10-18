@@ -341,11 +341,48 @@ func setMeta(ctx context.Context, tx *sql.Tx, key, value string) error {
 // order their best item ranks, and the rest are summarised as "and N more".
 // Titles and subjects can carry text from outside the process, so each is
 // reduced to one clean line here: a newline in a title never becomes a second
-// item line. The message carries no actions and no footer.
+// item line. The message carries no footer; the one kind of item that needs the
+// owner's answer, a memory suggestion, is rendered apart (see renderMemoryBlock).
 func RenderDigest(items []Decision) (title, body string) {
+	title, body, _ = renderDigest(items)
+	return title, body
+}
+
+// renderDigest is RenderDigest plus the session form of the body. It is non-empty only
+// when the digest carries a memory suggestion: the suggested fact is shown to the owner
+// in the chat and is not kept in the session a model reads (SessionWithheld stands in
+// for it), so that a fact nobody approved is in no prompt.
+func renderDigest(items []Decision) (title, body, sessionBody string) {
 	n := len(items)
 	if n == 0 {
-		return "", ""
+		return "", "", ""
+	}
+	var memory, others []Decision
+	for _, d := range items {
+		if isMemoryItem(d) {
+			memory = append(memory, d)
+		} else {
+			others = append(others, d)
+		}
+	}
+	body = renderOthers(others)
+	if len(memory) > 0 {
+		// First, so that a body cut to the channel's length loses the end of the ordinary
+		// items and never the end of a fact the owner is about to approve.
+		sessionBody = joinBlocks(renderMemoryBlock(memory, false), SessionWithheld, body)
+		body = joinBlocks(renderMemoryBlock(memory, true), body)
+	}
+	noun := "items"
+	if n == 1 {
+		noun = "item"
+	}
+	return "Daily digest — " + strconv.Itoa(n) + " " + noun, body, sessionBody
+}
+
+func renderOthers(items []Decision) string {
+	n := len(items)
+	if n == 0 {
+		return ""
 	}
 	ranked := append([]Decision(nil), items...)
 	sort.SliceStable(ranked, func(i, j int) bool { return ranksBefore(ranked[i], ranked[j]) })
@@ -384,12 +421,69 @@ func RenderDigest(items []Decision) (title, body string) {
 	if n > maxDigestItems {
 		b.WriteString("\n\nand " + strconv.Itoa(n-maxDigestItems) + " more")
 	}
+	return b.String()
+}
 
-	noun := "items"
-	if n == 1 {
-		noun = "item"
+// maxDigestMemory is how many memory suggestions a digest shows: each is answered with
+// two buttons, and a message carries at most bus.MaxActions of them.
+const maxDigestMemory = 4
+
+// isMemoryItem reports whether d announces a memory suggestion, and has the fact to show.
+func isMemoryItem(d Decision) bool {
+	return strings.HasPrefix(d.Candidate.TriggerID, proactive.MemoryTriggerPrefix) && strings.TrimSpace(d.Candidate.Quote) != ""
+}
+
+// MemorySuggestion is a memory suggestion as a digest shows it: its proposal code and the
+// fact, exactly as rendered.
+type MemorySuggestion struct{ Code, Fact string }
+
+// MemorySuggestions returns the suggestions a digest shows, in the order it shows them, so
+// that a deliverer can attach buttons only where the stored proposal says what the owner
+// was shown.
+func MemorySuggestions(decisions []Decision) []MemorySuggestion {
+	var out []MemorySuggestion
+	for _, d := range rankedMemory(decisions) {
+		out = append(out, MemorySuggestion{Code: memoryCode(d), Fact: memoryFact(d)})
 	}
-	return "Daily digest — " + strconv.Itoa(n) + " " + noun, b.String()
+	return out
+}
+
+func memoryCode(d Decision) string {
+	return oneLine(strings.TrimPrefix(d.Candidate.TriggerID, proactive.MemoryTriggerPrefix), 16)
+}
+
+func memoryFact(d Decision) string { return oneLine(d.Candidate.Quote, proactive.MaxQuoteRunes) }
+
+func rankedMemory(decisions []Decision) []Decision {
+	var out []Decision
+	for _, d := range decisions {
+		if isMemoryItem(d) {
+			out = append(out, d)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return ranksBefore(out[i], out[j]) })
+	return out[:min(len(out), maxDigestMemory)]
+}
+
+// renderMemoryBlock lists the memory suggestions of a digest: the headline built by code,
+// the fact as a quoted block, and how to answer. The fact is shown whole (it was cleaned
+// to one line of at most MaxQuoteRunes when it was suggested, and is stored as shown), so
+// that what the owner approves is exactly what is saved. withFacts=false is the session form.
+func renderMemoryBlock(memory []Decision, withFacts bool) string {
+	shown := rankedMemory(memory)
+	lines := []string{"Memory suggestions - saved only if you approve them:"}
+	for _, d := range shown {
+		lines = append(lines, "• "+oneLine(d.Candidate.Title, maxDigestLineRune))
+		if withFacts {
+			lines = append(lines, "  > "+memoryFact(d))
+		}
+		code := memoryCode(d)
+		lines = append(lines, "  Save: /approve "+code+"   Discard: /reject "+code)
+	}
+	if extra := len(memory) - len(shown); extra > 0 {
+		lines = append(lines, "and "+strconv.Itoa(extra)+" more memory suggestions, shown in a later digest")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ranksBefore orders decisions by severity (high first), salience (high first),

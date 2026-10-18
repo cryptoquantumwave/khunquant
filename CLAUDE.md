@@ -154,7 +154,8 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
 - **Every new tool must be classified in `pkg/tools/classification.go`** (`ClassOf`: read,
   notify, local state, automation, propose, trade, funds, system), choosing the more restrictive class when
   in doubt. Autonomous turns (heartbeat, scheduled jobs, and anything spawned from them) may call
-  read, notify and local-state tools only, with ONE named opening: `propose_order` (class `propose`),
+  read, notify and local-state tools only, with two named openings (the second, `remember`, only
+  suggests a memory and is described in the memory bullet below). The first: `propose_order` (class `propose`),
   open to a candidate-driven proactive turn (`TurnProactive`, never a heartbeat, sweep, cron or
   sub-turn) whose candidates are all of at least `TrustExchange`, that attention decided to
   deliver now, and that has read no outside text (`web_search`, `web_fetch`, files, skills, news,
@@ -180,6 +181,13 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
   code or system prompt must be on it. A new tool that writes a file at a model-chosen path must
   call `guardAutonomousWrite`. Job-name prefixes that select a handler are defined once in
   `pkg/tools/reserved_jobs.go`; a new one is added there so the `cron` tool refuses it.
+- **Memory writes from autonomous turns go through `remember`, never a file tool.** `memory/` (all of it) and
+  `HEARTBEAT.md` are on `autonomousProtectedPaths`; `memory/` is also `OwnerOnly`, so while an owner is
+  configured a person's turn other than the owner's own root turn is refused too. `remember`
+  (`pkg/tools/remember.go`) saves directly only in the owner's root turn; everywhere else it creates an
+  `approval.Proposal` of kind `memory` that reaches the owner in the next digest (the fact travels only as
+  `Candidate.Quote`, never in a title, summary or tool result) and is appended by code on Save. A new
+  code path that puts model-written text into `MEMORY.md` or a prompt file needs the same shape.
 
 - **A tool that moves money gets a row in `defaultToolPolicies()`** (`pkg/tools/policy.go`),
   keyed by its `Name*` constant: `BlockedOrigins: {OriginCron}`, and `RefuseUnderPaperMode` unless

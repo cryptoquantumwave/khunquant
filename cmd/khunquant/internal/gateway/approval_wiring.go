@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
+	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
@@ -44,6 +45,8 @@ type approvalRuntime struct {
 	// mandateStore is the DCA plan store handle mandates live in (nil while mandates
 	// are off). It is closed by closeStores, after the workflow engine has stopped.
 	mandateStore *dca.Store
+	// memory is whether memory suggestions can reach the owner (a live digest exists).
+	memory bool
 	cancel       context.CancelFunc
 	done   chan struct{}
 }
@@ -64,7 +67,7 @@ func (rt *approvalRuntime) closeStores() {
 // when there is nobody to deliver a card to, or when the shared database cannot be
 // opened. It touches no table and starts nothing; attach does that once the
 // workflow engine exists. A failure is logged and never stops the gateway.
-func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *approvalRuntime {
+func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob *attention.Outbox) *approvalRuntime {
 	if !d.Cfg.Proactive.Effective().Approvals {
 		return nil
 	}
@@ -89,6 +92,10 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *a
 		Events: d.Shared.eventBus(),
 		Locale: profileLocale(db),
 	}
+	// Memory suggestions: an approved one is appended to MEMORY.md, and the suggestion
+	// reaches the owner in the daily digest, so they need the live digest.
+	opts.Memories = tools.NewMemorySink(d.Cfg.WorkspacePath())
+	opts.Digest = memoryDigestFor(d.Cfg, ob)
 	if mgr != nil {
 		opts.Editor = channelCardEditor{mgr: mgr}
 	}
@@ -118,7 +125,7 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager) *a
 		}
 		return nil
 	}
-	return &approvalRuntime{svc: svc, mandateStore: mandateStore}
+	return &approvalRuntime{svc: svc, mandateStore: mandateStore, memory: opts.Digest != nil}
 }
 
 // attach connects the service to the workflow engine, starts the sweeper (whose
@@ -140,6 +147,10 @@ func (rt *approvalRuntime) attach(j *journalRuntime) {
 		rt.svc.Run(ctx)
 	}()
 	tools.SetOrderProposer(rt.svc)
+	setDigestButtons(rt.svc)
+	if rt.memory { // without a live digest a suggestion could never reach the owner: the tool stays closed
+		tools.SetMemoryProposer(rt.svc)
+	}
 	if rt.mandateStore != nil {
 		tools.SetMandateProposer(rt.svc)
 	}
@@ -151,6 +162,8 @@ func (rt *approvalRuntime) stop() {
 		return
 	}
 	tools.SetOrderProposer(nil)
+	tools.SetMemoryProposer(nil)
+	setDigestButtons(nil)
 	tools.SetMandateProposer(nil)
 	if rt.cancel == nil {
 		return

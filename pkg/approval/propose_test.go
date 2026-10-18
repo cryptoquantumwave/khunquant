@@ -246,7 +246,7 @@ func TestPropose_Bounds(t *testing.T) {
 			}(i)
 		}
 		wg.Wait()
-		codes, _ := a.svc.st.pendingCodes(context.Background(), a.clock.Now(), false)
+		codes, _ := a.svc.st.pendingCodes(context.Background(), a.clock.Now(), classOrder)
 		if len(codes) != MaxPending {
 			t.Errorf("%d pending proposals, want exactly %d", len(codes), MaxPending)
 		}
@@ -336,7 +336,7 @@ func TestPropose_UndeliveredCardCancels(t *testing.T) {
 	if len(rows) != 1 || rows[0].Status != StatusCancelled {
 		t.Fatalf("rows = %+v, want one cancelled proposal", rows)
 	}
-	if codes, _ := p.svc.st.pendingCodes(context.Background(), p.clock.Now(), false); len(codes) != 0 {
+	if codes, _ := p.svc.st.pendingCodes(context.Background(), p.clock.Now(), classOrder); len(codes) != 0 {
 		t.Errorf("an undelivered card still holds %v", codes)
 	}
 }

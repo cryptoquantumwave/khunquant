@@ -193,6 +193,11 @@ var toolClasses = map[string]Class{
 	// so the tool is propose, not read: the ceiling refuses it everywhere except
 	// where proposeOrderOpen grants it.
 	NameProposeOrder: ClassPropose,
+	// remember stores a suggestion for the owner to confirm (or, in the owner's own
+	// conversation, the owner's own note). The ceiling does not admit autonomous turns
+	// to this class; rememberOpen grants it by name, bound to an owner being configured
+	// and the digest that carries the suggestion running.
+	NameRemember: ClassPropose,
 
 	// Orders and positions. Every exit is here as well: the previous rule that
 	// exits are never gated holds for turns a person started, not for these.

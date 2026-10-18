@@ -116,6 +116,9 @@ func turnTrust(ctx context.Context, actor policy.Actor) proactive.Trust {
 // context - into the engine's request. It does no I/O.
 func buildActionRequest(ctx context.Context, name string, args map[string]any) policy.ActionRequest {
 	class := ClassOf(name)
+	if name == NameRemember {
+		class = ClassLocalState // the engine is about money; see applies
+	}
 	r := policy.ActionRequest{Tool: name, Class: policy.Class(class.String()), IsProposal: name == NameProposeOrder}
 	r.TurnKind, r.Actor = turnIdentity(ctx)
 	r.Trust = turnTrust(ctx, r.Actor)

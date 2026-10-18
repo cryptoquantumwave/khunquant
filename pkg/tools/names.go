@@ -103,6 +103,10 @@ const (
 	// Order proposals (pkg/approval): the model suggests, the owner decides.
 	NameProposeOrder = "propose_order"
 
+	// Memory: the owner's conversation saves a fact at once; any other turn only
+	// suggests it, and the owner confirms it in the next digest.
+	NameRemember = "remember"
+
 	// Proactive turns. respond_proactive is registered per turn on a clone of
 	// the agent's registry and never globally, so it has no catalog entry.
 	NameRespondProactive = "respond_proactive"

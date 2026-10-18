@@ -13,7 +13,39 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
-type stubButtons struct{ shown []approval.ShownMemory }
+type stubButtons struct {
+	shown   []approval.ShownMemory
+	changes []approval.ShownReflection
+	room    int
+}
+
+func (s *stubButtons) ReflectionActions(_ context.Context, shown []approval.ShownReflection, max int) []bus.Action {
+	s.changes, s.room = shown, max
+	return []bus.Action{{ID: "approve", Label: "Save " + shown[0].Code}, {ID: "reject", Label: "Discard " + shown[0].Code}}
+}
+
+// A digest with a memory suggestion and a reflection change carries both pairs of buttons,
+// the change's built against what the owner read and sized to the room the memories leave.
+func TestAttentionDeliverer_DigestCarriesReflectionButtons(t *testing.T) {
+	b := &stubButtons{}
+	setDigestButtons(b)
+	t.Cleanup(func() { setDigestButtons(nil) })
+	m := memoryDigestMessage()
+	m.Decisions = append(m.Decisions, attention.Decision{Candidate: proactive.Candidate{
+		TriggerID: proactive.ReflectionTriggerPrefix + "ZX9Q", DedupKey: "reflection:01Y", Title: "Suggestion ZX9Q (mute)",
+		Quote: `Mute alerts starting "move_vs_vol:" for 7 days`,
+	}})
+	n := &capturingNotifier{}
+	if ok, err := (attentionDeliverer{svc: n}).Deliver(context.Background(), m); err != nil || !ok {
+		t.Fatalf("Deliver = %v, %v", ok, err)
+	}
+	if got := n.got[0].Actions; len(got) != 4 {
+		t.Fatalf("actions = %+v, want the memory pair and the change pair", got)
+	}
+	if len(b.changes) != 1 || b.changes[0].Code != "ZX9Q" || b.changes[0].Change != `Mute alerts starting "move_vs_vol:" for 7 days` || b.room != bus.MaxActions-2 {
+		t.Errorf("changes = %+v room %d", b.changes, b.room)
+	}
+}
 
 func (s *stubButtons) MemoryActions(_ context.Context, shown []approval.ShownMemory) []bus.Action {
 	s.shown = shown

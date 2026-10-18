@@ -403,7 +403,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Order approvals: the service is built first, because its workflow definition
 	// goes to the engine below, and attached after, because it needs the engine to
 	// start workflows. With approvals off none of it exists.
-	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager, s.Attention)
+	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager, s.Attention, s.Perception.triggerRegistry())
 	d.Approval = s.Approval
 	s.Policy.attachMandates(s.Approval) // the engine's read-only mandate lookup
 
@@ -427,6 +427,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 
 	s.journalLive.Store(buildJournal(d))
 	s.Approval.attach(s.journalLive.Load())
+	s.Reflection = startReflection(d, s) // after the approval service it proposes through
 	s.DNFlow.attach(s.journalLive.Load())
 	if s.CronService != nil {
 		s.DCAFlow.attach(d, s.journalLive.Load(), s.Perception, s.CronService)
@@ -576,6 +577,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// Then the turn scheduler: every service below is one a running job uses, so
 	// the jobs go first (queued ones finish for a while, then the rest is cancelled)
 	// and a producer that submits afterwards is refused and degrades to its template.
+	s.Reflection.stop() // before the scheduler: its one job a day is submitted there
+	s.Reflection = nil
 	s.Cognition.stop(shutdownTimeout)
 	s.Cognition = nil
 

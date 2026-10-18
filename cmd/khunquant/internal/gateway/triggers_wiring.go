@@ -162,7 +162,7 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 	if have[triggers.KindExternal] != nil {
 		ensureExternalSpec(ctx, reg)
 	}
-	ensurePortfolioSpecs(ctx, reg, cfg, have)
+	ensurePortfolioSpecsCounted(ctx, reg, cfg, have, rt.portfolioStats)
 	opts.Evaluator = triggerStage{r: reg}
 	d.Demands = reg
 }

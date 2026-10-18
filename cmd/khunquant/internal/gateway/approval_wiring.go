@@ -16,6 +16,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 func init() {
@@ -47,8 +48,10 @@ type approvalRuntime struct {
 	mandateStore *dca.Store
 	// memory is whether memory suggestions can reach the owner (a live digest exists).
 	memory bool
-	cancel       context.CancelFunc
-	done   chan struct{}
+	// reflect is whether the nightly reflection's changes can be applied once approved.
+	reflect bool
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 // closeStores releases the plan store handle. Safe on nil.
@@ -67,7 +70,7 @@ func (rt *approvalRuntime) closeStores() {
 // when there is nobody to deliver a card to, or when the shared database cannot be
 // opened. It touches no table and starts nothing; attach does that once the
 // workflow engine exists. A failure is logged and never stops the gateway.
-func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob *attention.Outbox) *approvalRuntime {
+func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob *attention.Outbox, reg *triggers.Registry) *approvalRuntime {
 	if !d.Cfg.Proactive.Effective().Approvals {
 		return nil
 	}
@@ -96,6 +99,7 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob
 	// reaches the owner in the daily digest, so they need the live digest.
 	opts.Memories = tools.NewMemorySink(d.Cfg.WorkspacePath())
 	opts.Digest = memoryDigestFor(d.Cfg, ob)
+	opts.Reflections = reflectionSinkFor(d, db, ob, reg, opts.Digest != nil)
 	if mgr != nil {
 		opts.Editor = channelCardEditor{mgr: mgr}
 	}
@@ -125,7 +129,7 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob
 		}
 		return nil
 	}
-	return &approvalRuntime{svc: svc, mandateStore: mandateStore, memory: opts.Digest != nil}
+	return &approvalRuntime{svc: svc, mandateStore: mandateStore, memory: opts.Digest != nil, reflect: opts.Reflections != nil}
 }
 
 // attach connects the service to the workflow engine, starts the sweeper (whose

@@ -109,8 +109,9 @@ func (s *PortfolioStats) Snapshot() map[string]uint64 {
 		"snapshot_invalid": s.SnapshotInvalid.Load(), "snapshot_not_latest": s.SnapshotNotLatest.Load(),
 		"move_no_reference": s.MoveNoReference.Load(), "move_floor_only": s.MoveFloorOnly.Load(),
 		"move_market_closed": s.MoveMarketClosed.Load(), "move_unknown_class": s.MoveUnknownClass.Load(),
-		"move_fired":           s.MoveFired.Load(),
-		"drawdown_no_baseline": s.DrawdownNoBaseline.Load(), "drawdown_inconsistent": s.DrawdownInconsistent.Load(),
+		"move_fired":             s.MoveFired.Load(),
+		"specs_reflection_tuned": s.SpecsReflectionTuned.Load(),
+		"drawdown_no_baseline":   s.DrawdownNoBaseline.Load(), "drawdown_inconsistent": s.DrawdownInconsistent.Load(),
 		"drawdown_source_degraded": s.DrawdownSourceDegraded.Load(), "drawdown_fired": s.DrawdownFired.Load(),
 		"drawdown_rebased": s.DrawdownRebased.Load(), "rebase_notices": s.RebaseNotices.Load(),
 		"drift_no_targets": s.DriftNoTargets.Load(), "drift_bad_targets": s.DriftBadTargets.Load(),
@@ -138,6 +139,10 @@ type PortfolioStats struct {
 	LiqStale, LiqDegraded, LiqUntrusted, LiqNoSide, LiqNoMark, LiqNoLiqPrice, LiqBadMargin, LiqEvaluated, LiqFired atomic.Uint64
 	// data_stale.
 	StaleFired, StaleRecovered atomic.Uint64
+	// SpecsReflectionTuned is how many builtin specs the last start or reload found tuned
+	// by an approved reflection and so did not re-assert from the config (a gauge). An owner
+	// who edits proactive.triggers.params and sees no change can find out why here.
+	SpecsReflectionTuned atomic.Uint64
 }
 
 func (c PortfolioConfig) stats() *PortfolioStats {

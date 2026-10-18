@@ -42,16 +42,18 @@ func memoryDigestFor(cfg *config.Config, ob *attention.Outbox) approval.MemoryDi
 	return memoryDigest{ob: ob}
 }
 
-// memoryButtons builds the buttons of the memory suggestions in a digest.
-type memoryButtons interface {
+// digestButtonSource builds the buttons of the suggestions in a digest: memories and the
+// changes the nightly reflection proposes (*approval.Service).
+type digestButtonSource interface {
 	MemoryActions(ctx context.Context, shown []approval.ShownMemory) []bus.Action
+	ReflectionActions(ctx context.Context, shown []approval.ShownReflection, max int) []bus.Action
 }
 
 // digestButtons is the approval service the attention deliverer asks for the digest's
 // buttons; set while approvals run, cleared when they stop.
-var digestButtons atomic.Pointer[memoryButtons]
+var digestButtons atomic.Pointer[digestButtonSource]
 
-func setDigestButtons(b memoryButtons) {
+func setDigestButtons(b digestButtonSource) {
 	if b == nil {
 		digestButtons.Store(nil)
 		return
@@ -59,8 +61,8 @@ func setDigestButtons(b memoryButtons) {
 	digestButtons.Store(&b)
 }
 
-// digestActions returns the Save and Discard buttons for the memory suggestions a digest
-// message carries, or none when there are none or approvals are not running.
+// digestActions returns the Save and Discard buttons for the memory suggestions and the
+// reflection changes a digest message carries, or none when there are none or approvals are not running.
 func digestActions(ctx context.Context, m attention.Message) []bus.Action {
 	if !m.Digest {
 		return nil
@@ -69,12 +71,22 @@ func digestActions(ctx context.Context, m attention.Message) []bus.Action {
 	for _, s := range attention.MemorySuggestions(m.Decisions) {
 		shown = append(shown, approval.ShownMemory{Code: s.Code, Fact: s.Fact})
 	}
-	if len(shown) == 0 {
-		return nil
+	var changes []approval.ShownReflection
+	for _, s := range attention.ReflectionSuggestions(m.Decisions) {
+		changes = append(changes, approval.ShownReflection{Code: s.Code, Change: s.Change})
 	}
 	b := digestButtons.Load()
-	if b == nil {
+	if b == nil || len(shown)+len(changes) == 0 {
 		return nil
 	}
-	return (*b).MemoryActions(ctx, shown)
+	// A message carries at most bus.MaxActions buttons; memories come first, and a change
+	// left without buttons is answered with the /approve and /reject the digest prints.
+	var out []bus.Action
+	if len(shown) > 0 {
+		out = (*b).MemoryActions(ctx, shown)
+	}
+	if room := bus.MaxActions - len(out); len(changes) > 0 && room >= 2 {
+		out = append(out, (*b).ReflectionActions(ctx, changes, room)...)
+	}
+	return out
 }

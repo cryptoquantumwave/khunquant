@@ -16,12 +16,14 @@ import (
 // reads outside text has been called, and propose_order records what it created.
 // Nothing a model passes in an argument reaches it.
 type ProposalScope struct {
-	base         proactive.Trust
 	deliverNow   bool
 	candidateID  string
 	intervention string
 
-	tainted atomic.Bool
+	// taint is the turn's trust floor: it starts at the candidates' minimum and is
+	// lowered by the tool loop. WithProposalScope puts the same holder in the
+	// context, so the policy engine and propose_order read one definition.
+	taint *proactive.Taint
 
 	mu      sync.Mutex
 	created map[string]bool
@@ -44,24 +46,23 @@ func NewProposalScope(candidates []proactive.Candidate, deliverNow bool, interve
 		}
 	}
 	s := &ProposalScope{
-		base: proactive.MinTrust(trusts...), deliverNow: deliverNow, candidateID: first,
+		taint: proactive.NewTaint(proactive.MinTrust(trusts...)), deliverNow: deliverNow, candidateID: first,
 		intervention: interventionID, created: map[string]bool{},
 	}
-	s.tainted.Store(tainted)
+	if tainted {
+		s.taint.Lower(proactive.TrustUntrusted)
+	}
 	return s
 }
 
 // Trust is the turn's trust floor now: the candidates' minimum, dropped to
 // untrusted once the turn has called a tool that reads outside text.
 func (s *ProposalScope) Trust() proactive.Trust {
-	if s == nil || s.tainted.Load() {
+	if s == nil {
 		return proactive.TrustUntrusted
 	}
-	return s.base
+	return s.taint.Trust()
 }
-
-// Tainted reports whether the turn has read outside text.
-func (s *ProposalScope) Tainted() bool { return s == nil || s.tainted.Load() }
 
 // NoteCreated records the code of a proposal the turn created.
 func (s *ProposalScope) NoteCreated(code string) {
@@ -79,8 +80,12 @@ func (s *ProposalScope) Created(code string) bool {
 
 type proposalScopeKey struct{}
 
-// WithProposalScope returns a context carrying s.
+// WithProposalScope returns a context carrying s and the turn's taint, so that
+// NoteToolCalls (which lowers the taint of the context) acts on the scope's trust.
 func WithProposalScope(ctx context.Context, s *ProposalScope) context.Context {
+	if s != nil {
+		ctx = proactive.WithTaint(ctx, s.taint)
+	}
 	return context.WithValue(ctx, proposalScopeKey{}, s)
 }
 
@@ -131,13 +136,13 @@ func readsTrustedData(name string) bool { return trustedDataTools[name] }
 // for the call itself. A tool that is not known to return only trusted data lowers
 // the turn's trust for the rest of the turn.
 func NoteToolCalls(ctx context.Context, names ...string) {
-	s := ProposalScopeFrom(ctx)
-	if s == nil {
+	t := proactive.TaintFrom(ctx)
+	if t == nil {
 		return
 	}
 	for _, n := range names {
 		if !readsTrustedData(n) {
-			s.tainted.Store(true)
+			t.Lower(proactive.TrustUntrusted)
 			return
 		}
 	}

@@ -232,6 +232,24 @@ func (al *AgentLoop) RunProactiveTurn(
 	if req.Kind == proactive.TurnProactive && len(req.Candidates) > 0 {
 		ctx = tools.WithProposalScope(ctx, tools.NewProposalScope(
 			req.Candidates, req.DeliverNow, req.InterventionID, len(req.ForcedSkills) > 0))
+	} else {
+		// Every other proactive turn carries a taint too, so that the policy engine
+		// reads the same provenance floor whatever the turn: what its candidates
+		// were worth (none: the legacy heartbeat's own checklist, system), dropped
+		// to untrusted by forced skills and by any tool that reads outside text.
+		start := proactive.TrustSystem
+		if len(req.Candidates) > 0 {
+			trusts := make([]proactive.Trust, 0, len(req.Candidates))
+			for _, c := range req.Candidates {
+				trusts = append(trusts, c.Trust)
+			}
+			start = proactive.MinTrust(trusts...)
+		}
+		taint := proactive.NewTaint(start)
+		if len(req.ForcedSkills) > 0 {
+			taint.Lower(proactive.TrustUntrusted)
+		}
+		ctx = proactive.WithTaint(ctx, taint)
 	}
 
 	nonce := newFenceNonce()

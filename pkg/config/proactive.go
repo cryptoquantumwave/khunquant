@@ -140,6 +140,12 @@ type LearningConfig struct {
 }
 
 // ModeConfig is a single off | shadow | live mode.
+//
+// For proactive.policy it selects the policy engine (pkg/policy): off records
+// nothing; shadow records, in policy_decisions and as policy.decision events, what
+// the engine would have decided for each tool call while the existing checks keep
+// deciding; live is accepted but behaves exactly like shadow until the engine's
+// tool hooks ship - nothing in this release is enforced by the engine.
 type ModeConfig struct {
 	Mode string `json:"mode" env:"MODE"`
 }
@@ -495,6 +501,10 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 // off and shadow values are returned as configured, an unknown mode string
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
+//
+// PolicyMode "live" is returned as configured but is enforced as shadow: until the
+// policy engine's tool hooks ship, it only records (see ModeConfig). The engine
+// records only while Enabled is also true; PolicyMode alone does not turn it on.
 func (c ProactiveConfig) Effective() EffectiveModes {
 	valid := ValidateProactive(c) == nil
 	route, haveOwner := c.OwnerRoute()
@@ -699,4 +709,32 @@ func redactOwnerValues(c ProactiveConfig, s string) string {
 		}
 	}
 	return s
+}
+
+// ValidateTradingRisk reports every problem in the policy engine's brakes as one
+// joined error, or nil: a negative or non-finite value, or a share above 100.
+func ValidateTradingRisk(t TradingRiskConfig) error {
+	var errs []error
+	if t.MaxOrdersPer10Min < 0 {
+		errs = append(errs, fmt.Errorf("trading_risk.max_orders_per_10min must not be negative (got %d)", t.MaxOrdersPer10Min))
+	}
+	if p := t.MaxSymbolSharePct; math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 100 {
+		errs = append(errs, fmt.Errorf("trading_risk.max_symbol_share_pct must be between 0 and 100 (got %v)", p))
+	}
+	for _, s := range t.SymbolAllowlist {
+		if strings.TrimSpace(s) == "" {
+			errs = append(errs, errors.New("trading_risk.symbol_allowlist must not contain an empty symbol"))
+			break
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// reportTradingRisk is called by both loaders, beside reportProactive. It never
+// fails the load; an invalid brake is logged once per process and the engine
+// treats the invalid value as off.
+func reportTradingRisk(t TradingRiskConfig) {
+	if err := ValidateTradingRisk(t); err != nil {
+		logProactiveOnce(proactiveErrorLog, "trading_risk: invalid policy brake, ignoring it: "+err.Error())
+	}
 }

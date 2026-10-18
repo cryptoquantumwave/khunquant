@@ -196,6 +196,16 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 // The refusal sets ForUser as well as ForLLM: a block the operator never sees
 // is indistinguishable from the tool quietly doing nothing.
 func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
+	refusal := enforceToolPolicy(ctx, name, args)
+	// Shadow: the policy engine is asked about the call and its verdict recorded
+	// beside what the checks above decided. It cannot change the outcome.
+	observeShadow(ctx, name, args, refusal == nil)
+	return refusal
+}
+
+// enforceToolPolicy is the enforcement: the class ceiling, the per-tool rows and
+// the approval hold.
+func enforceToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
 	// The class ceiling comes first and answers one question for autonomous
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
@@ -218,6 +228,30 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 			name, describeOrigin(ToolOrigin(ctx))))
 	}
 
+	switch kind, msg := rowGate(ctx, name); kind {
+	case rowBlocked:
+		return policyRefusal(name, msg)
+	case rowHold:
+		// Approval runs last: a call that would be refused anyway must not cost the
+		// operator an approval they then cannot use.
+		return checkApproval(ctx, name, args)
+	}
+	return nil
+}
+
+type rowKind int
+
+const (
+	rowPass rowKind = iota
+	rowBlocked
+	rowHold
+)
+
+// rowGate is the tool's own policy row, without side effects: whether a blocked
+// origin, paper mode or a required approval stands in the call's way. It is the
+// whole of the row logic - enforceToolPolicy and the policy engine both ask it - so
+// the two cannot disagree. For rowBlocked msg is the refusal text.
+func rowGate(ctx context.Context, name string) (kind rowKind, msg string) {
 	policyMu.RLock()
 	enabled, paper := policyEnabled, policyPaper
 	policy, declared := policyTable[name]
@@ -225,7 +259,7 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	policyMu.RUnlock()
 
 	if !enabled || (!declared && !needsApproval) {
-		return nil
+		return rowPass, ""
 	}
 
 	origin := ToolOrigin(ctx)
@@ -234,33 +268,30 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 		// lost its tag is a turn we cannot vouch for, and "unknown" must not be
 		// the one value that slips past a financial gate.
 		if origin == blocked || origin == "" {
-			return policyRefusal(name, fmt.Sprintf(
+			return rowBlocked, fmt.Sprintf(
 				"%s is not available to %s turns. A scheduled job runs with nobody present to "+
 					"answer for it, so financial actions must be started by a person.",
-				name, describeOrigin(origin)))
+				name, describeOrigin(origin))
 		}
 	}
 
 	if policy.RefuseUnderPaperMode && paper {
-		return policyRefusal(name, fmt.Sprintf(
+		return rowBlocked, fmt.Sprintf(
 			"%s is blocked while paper_trading_mode is on. This tool has no simulated mode, so "+
 				"running it would place real orders despite paper mode. Disable paper_trading_mode "+
-				"to use it.", name))
+				"to use it.", name)
 	}
 
-	// Approval runs last: a call that would be refused anyway must not cost the
-	// operator an approval they then cannot use.
 	if needsApproval {
 		// An approval request is a message to the operator's chat. A proactive
 		// turn delivers nothing, and nobody is waiting on it to answer one.
 		if origin == OriginProactive {
-			return policyRefusal(name, fmt.Sprintf(
-				"%s requires operator approval, which a proactive turn cannot ask for.", name))
+			return rowBlocked, fmt.Sprintf(
+				"%s requires operator approval, which a proactive turn cannot ask for.", name)
 		}
-		return checkApproval(ctx, name, args)
+		return rowHold, ""
 	}
-
-	return nil
+	return rowPass, ""
 }
 
 // turnMayCall is the one predicate for "may the turn carried by ctx call this

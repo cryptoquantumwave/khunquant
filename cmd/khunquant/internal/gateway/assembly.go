@@ -190,6 +190,10 @@ type assemblyDeps struct {
 	// the caller never sets it.
 	Control *controlRuntime
 
+	// Policy is the policy engine's shadow record (policy_wiring.go); buildServices sets it
+	// on its own copy of the deps right after the control path, and the caller never sets it.
+	Policy *policyRuntime
+
 	// DNFlow is the delta-neutral workflow side (dn_workflows_wiring.go); buildServices
 	// sets it on its own copy of the deps before the workflow engine is built.
 	DNFlow *dnFlowRuntime
@@ -313,6 +317,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.Control = buildControl(d, s.ChannelManager)
 	d.Control = s.Control
 
+	// The policy engine records what it would decide for each tool call, beside the
+	// existing checks. It needs the kill flag, so it follows the control path, and
+	// perception's housekeeper trims its table, so it precedes perception.
+	s.Policy = buildPolicy(d)
+	d.Policy = s.Policy
+
 	// Inject channel manager and media store into the agent loop.
 	al.SetChannelManager(s.ChannelManager)
 	al.SetMediaStore(s.MediaStore)
@@ -383,6 +393,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// start workflows. With approvals off none of it exists.
 	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager)
 	d.Approval = s.Approval
+	s.Policy.attachMandates(s.Approval) // the engine's read-only mandate lookup
 
 	// The workflow engine: built only when a definition is registered (the approval
 	// one is, while approvals are on), so a gateway without one gains no goroutine
@@ -552,6 +563,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// on the channels until they have stopped (below): taking it off earlier would
 	// hand a late /approve or /stop to the agent instead.
 	s.Control.detach()
+	s.Policy.stop() // before the approval side closes the mandate store it reads
+	s.Policy = nil
 
 	// The approval sweeper and propose_order go before the engine: no new proposal
 	// may start while the services it needs are being stopped, and the sweeper edits

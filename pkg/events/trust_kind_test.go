@@ -95,7 +95,7 @@ func TestKnownKindsContainsPerception(t *testing.T) {
 		"perception.news.item", "perception.source.health",
 		"worldmodel.diff", "trigger.candidate", "attention.decision", "notify.delivered",
 		"approval.created", "approval.decided", "approval.expired",
-		"journal.step", "journal.workflow", "control.command",
+		"journal.step", "journal.workflow", "control.command", "policy.decision",
 	} {
 		if !known[want] {
 			t.Errorf("KnownKinds() does not contain %q", want)
@@ -109,7 +109,7 @@ func TestKnownKindsContainsPerception(t *testing.T) {
 			t.Errorf("KnownKinds() lost %q", k)
 		}
 	}
-	if got := len(known); got != 46+24+1 {
-		t.Errorf("KnownKinds() has %d kinds, want 71 (46 existing + 24 new + the clock timer)", got)
+	if got := len(known); got != 46+24+1+1 {
+		t.Errorf("KnownKinds() has %d kinds, want 72 (46 existing + 24 new + the clock timer + policy.decision)", got)
 	}
 }

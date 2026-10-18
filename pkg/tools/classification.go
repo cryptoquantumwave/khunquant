@@ -1,5 +1,7 @@
 package tools
 
+import "sort"
+
 // Class says what a tool can DO, independent of how it is named or configured.
 //
 // It exists for one purpose today: the ceiling on autonomous turns (a heartbeat,
@@ -236,4 +238,17 @@ var toolClasses = map[string]Class{
 // is not in the table (an MCP tool, a tool added without being classified).
 func ClassOf(name string) Class {
 	return toolClasses[name]
+}
+
+// ClassifiedNames returns every tool name that has a class, sorted. It is the set
+// a test over "every tool" starts from: the registry cannot hold a tool outside it
+// (TestClassOf_AllRegisteredToolsClassified), and it includes the tools only the
+// gateway registers.
+func ClassifiedNames() []string {
+	names := make([]string, 0, len(toolClasses))
+	for n := range toolClasses {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

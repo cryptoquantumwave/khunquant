@@ -47,6 +47,7 @@ const (
 	classStale       = "stale"
 	classDCA         = "dca"
 	classExternal    = "external" // whatever the sender said: the key only
+	classGoal        = "goal"     // a goal's expectation stopped holding: the key only
 	classReminder    = "reminder"
 )
 
@@ -81,6 +82,7 @@ var kinds = map[string]kindInfo{
 	"dca_due":              {classDCA, subjPlan, 1},          // dca_due:<plan>:<due ms>
 	"external":             {classExternal, subjNone, 0},     // external:<name>:<hash>
 	"time_at":              {classReminder, subjNone, 0},     // time_at:<intent>:<due ms>
+	"goal_discrepancy":     {classGoal, subjNone, 0},         // goal_discrepancy:<intent>:goal
 }
 
 // KnownKinds lists the trigger kinds the sweep has a class for, sorted.

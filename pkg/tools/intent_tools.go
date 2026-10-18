@@ -20,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers/intents"
+	"github.com/cryptoquantumwave/khunquant/pkg/worldmodel"
 )
 
 // The intent tools. An intent is what the owner wants the assistant to keep doing
@@ -190,6 +191,32 @@ func (t *CreateIntentTool) Parameters() map[string]any {
 				},
 				"required": []string{"kind"},
 			},
+			"expected": map[string]any{
+				"type": "object",
+				"description": "Goals only: the assumption behind the goal, as a true/false test the assistant checks against the world model " +
+					"and says when it stops holding. For example weight(\"crypto\") < 30, or plan_funding_apy(12) > 10. " +
+					"Functions: " + strings.Join(worldmodel.ExprFunctions(), ", ") + ". The expression is checked now and a bad one is refused. " +
+					"It is told only after the test has been false for several checks in a row, and only after it was seen to hold once. " +
+					"A fact that is missing or stale makes a check unknown, which counts for nothing. price() sees only symbols something " +
+					"else already watches, and plan_*() only plans that are being monitored.",
+				"properties": map[string]any{
+					"expr":        map[string]any{"type": "string", "description": "The test, at most 500 characters."},
+					"description": map[string]any{"type": "string", "description": "Optional: what the test means, in the owner's words."},
+					"severity": map[string]any{
+						"type": "string", "enum": []string{"info", "notice", "warning"},
+						"description": "How it is told: info (digest), notice (the default) or warning. Never critical.",
+					},
+					"consecutive": map[string]any{
+						"type":        "integer",
+						"description": fmt.Sprintf("False checks in a row before it is told, 1-%d. Default 2.", intent.MaxExpectConsecutive),
+					},
+					"every_minutes": map[string]any{
+						"type":        "integer",
+						"description": fmt.Sprintf("Least minutes between two checks, 1-%d. Default 10.", intent.MaxExpectEveryMinutes),
+					},
+				},
+				"required": []string{"expr"},
+			},
 			"fire_budget": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many times it may fire, 1-%d; 0 means without limit. Default: once for a watch or reminder, "+
@@ -302,6 +329,12 @@ func (t *CreateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 		in.Trigger = &intent.TriggerSpec{Kind: argString(tm, "kind"), Params: tp}
 	}
 
+	if raw, present := args["expected"]; present && raw != nil {
+		if in.Expected, err = parseExpected(raw); err != nil {
+			return ErrorResult(err.Error() + "; nothing was stored")
+		}
+	}
+
 	triggered := typ == intent.TypeWatch || typ == intent.TypeReminder
 	if triggered {
 		in.FireBudget, in.Lifetime = defaultTriggerBudget, defaultTriggerLifetime
@@ -349,6 +382,45 @@ func (t *CreateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 	requestCompile(t.comp)
 	return NewToolResult(describeIntent(stored, time.Now(), resolveCompiler(t.comp)))
+}
+
+// parseExpected reads the expected argument. It checks the shape and the bounds; the
+// expression itself is compiled by validateIntent.
+func parseExpected(raw any) (*intent.Expectation, error) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("expected must be an object with an expr")
+	}
+	e := &intent.Expectation{Expr: argString(m, "expr"), Description: argString(m, "description"), Severity: proactive.SeverityNotice}
+	if strings.TrimSpace(e.Expr) == "" {
+		return nil, errors.New("expected needs an expr, a true/false test")
+	}
+	if s := strings.ToLower(strings.TrimSpace(argString(m, "severity"))); s != "" {
+		sev, err := proactive.ParseSeverity(s)
+		if err != nil || sev > proactive.SeverityWarning {
+			return nil, errors.New("an expectation's severity is info, notice or warning: a goal that no longer holds is not a safety alarm")
+		}
+		e.Severity = sev
+	}
+	for _, f := range []struct {
+		key string
+		max int
+		dst *int
+	}{{"consecutive", intent.MaxExpectConsecutive, &e.Consecutive}, {"every_minutes", intent.MaxExpectEveryMinutes, &e.EveryMinutes}} {
+		v, present := m[f.key]
+		if !present || v == nil {
+			continue
+		}
+		n, err := wholeNumber(f.key, v)
+		if err != nil {
+			return nil, err
+		}
+		if n < 1 || n > f.max {
+			return nil, fmt.Errorf("%s must be from 1 to %d", f.key, f.max)
+		}
+		*f.dst = n
+	}
+	return e, nil
 }
 
 func argString(args map[string]any, key string) string {
@@ -693,7 +765,7 @@ func listRow(it intent.Intent, now time.Time) listedIntent {
 func (t *ListIntentsTool) addNote(ctx context.Context, r *listedIntent, it intent.Intent) {
 	comp := resolveCompiler(t.comp)
 	switch {
-	case it.Status == intent.StatusActive && liveNeedsTrigger(it.Type) && intents.Compilable(it.Type):
+	case it.Status == intent.StatusActive && intents.Compiles(it):
 		if comp == nil || !comp.Running() || comp.Mode() == triggers.ModeOff {
 			r.Live = "recorded; nothing watches it (triggers are off)"
 			return
@@ -731,6 +803,12 @@ func newListNonce() string {
 // to act (and so does nothing until intents are compiled into triggers).
 func liveNeedsTrigger(t intent.IntentType) bool {
 	return t == intent.TypeWatch || t == intent.TypeReminder || t == intent.TypeStandingOrder
+}
+
+// needsTrigger is liveNeedsTrigger for a whole intent: a goal that carries an
+// expectation is carried out by a trigger too.
+func needsTrigger(it intent.Intent) bool {
+	return liveNeedsTrigger(it.Type) || (it.Type == intent.TypeGoal && it.Expected != nil)
 }
 
 func typeWord(t intent.IntentType) string { return strings.ReplaceAll(string(t), "_", " ") }
@@ -834,7 +912,7 @@ func describeIntent(it intent.Intent, now time.Time, comp IntentCompiler) string
 	if it.Trigger != nil {
 		fmt.Fprintf(&b, " [trigger %s]", describeTrigger(it.Trigger))
 	}
-	if liveNeedsTrigger(it.Type) || it.FireBudget > 0 {
+	if needsTrigger(it) || it.FireBudget > 0 {
 		fmt.Fprintf(&b, ", %s", describeBudget(it))
 	}
 	if it.Status.Open() {
@@ -853,7 +931,7 @@ func describeIntent(it intent.Intent, now time.Time, comp IntentCompiler) string
 		switch {
 		case it.Type == intent.TypePreference:
 			b.WriteString(" " + intentPreferenceNote)
-		case liveNeedsTrigger(it.Type):
+		case needsTrigger(it):
 			b.WriteString(" " + liveNote(it, comp))
 		default:
 			b.WriteString(" " + intentContextNote)

@@ -426,7 +426,7 @@ func (c *Compiler) Reconcile(ctx context.Context) Report {
 	want := map[string]bool{}   // intents that keep a spec
 	timers := map[string]bool{} // specs whose timer must exist
 	for _, it := range open {
-		if !Compilable(it.Type) || (it.Status != intent.StatusActive && it.Status != intent.StatusPaused) {
+		if !Compiles(it) || (it.Status != intent.StatusActive && it.Status != intent.StatusPaused) {
 			continue
 		}
 		want[it.ID] = true

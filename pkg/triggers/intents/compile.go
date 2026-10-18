@@ -5,10 +5,12 @@
 // always be rebuilt from it. An ACTIVE watch becomes a price_cross or
 // indicator_cross spec, an ACTIVE reminder a time_at spec with a timer on the clock
 // source, an ACTIVE standing order its trigger as a Notice that proposes nothing and
-// acts on nothing. A paused intent's spec is switched off (its state is kept); the
-// spec of a cancelled, done or expired intent is removed; a spec with an intent
-// origin and no live intent is an orphan and is removed. Goals and preferences
-// compile to nothing: they are context.
+// acts on nothing, an ACTIVE goal that carries an expectation a goal_discrepancy spec
+// (it fires when the world no longer matches what the goal assumed). A paused
+// intent's spec is switched off (its state is kept); the spec of a cancelled, done or
+// expired intent is removed; a spec with an intent origin and no live intent is an
+// orphan and is removed. A goal without an expectation, and a preference, compile to
+// nothing: they are context.
 //
 // It lives here, next to pkg/triggers/migrate, and not in pkg/intent because it must
 // see both: pkg/triggers does not import pkg/intent, and pkg/intent must not import
@@ -27,6 +29,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
@@ -40,6 +43,12 @@ const defaultZone = "Asia/Bangkok"
 // Compilable reports whether an intent of this type is compiled into a trigger.
 func Compilable(t intent.IntentType) bool {
 	return t == intent.TypeWatch || t == intent.TypeStandingOrder || t == intent.TypeReminder
+}
+
+// Compiles reports whether this intent is compiled into a trigger: a watch, a standing
+// order or a reminder, or a goal that carries an expectation.
+func Compiles(it intent.Intent) bool {
+	return Compilable(it.Type) || (it.Type == intent.TypeGoal && it.Expected != nil)
 }
 
 // TriggerKinds are the trigger kinds a watch or a standing order can use.
@@ -87,8 +96,31 @@ func Compile(it intent.Intent, env Env) (Plan, error) {
 		return compileWatch(it)
 	case intent.TypeReminder:
 		return compileReminder(it, env)
+	case intent.TypeGoal:
+		if it.Expected != nil {
+			return compileGoal(it)
+		}
 	}
 	return Plan{}, ErrNotCompiled
+}
+
+// compileGoal makes the goal_discrepancy spec of a goal's expectation. The expectation
+// is compiled here (the same way the trigger's factory will), so a bad one is heard
+// about when the goal is made. The goal's title and description travel in the params
+// for the candidate's Quote and nowhere else.
+func compileGoal(it intent.Intent) (Plan, error) {
+	e := it.Expected
+	if e.Severity < proactive.SeverityInfo || e.Severity > proactive.SeverityWarning {
+		return Plan{}, errors.New("an expectation's severity is info, notice or warning")
+	}
+	p := triggers.GoalParams{
+		Expr: e.Expr, Severity: e.Severity.String(), Consecutive: e.Consecutive, EveryMinutes: e.EveryMinutes,
+		Title: triggers.CleanAlertMessage(it.Title), Description: triggers.CleanAlertMessage(e.Description),
+	}
+	if err := p.Validate(); err != nil {
+		return Plan{}, fmt.Errorf("the expectation is not valid: %s", errText(err))
+	}
+	return Plan{Kind: triggers.KindGoalDiscrepancy, Params: p.JSON(), Origin: originFor(it)}, nil
 }
 
 func originFor(it intent.Intent) string {

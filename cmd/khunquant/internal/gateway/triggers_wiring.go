@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/worldmodel"
 )
@@ -23,10 +25,64 @@ var triggerFactories = func(d assemblyDeps) map[string]triggers.Factory {
 	f[triggers.KindTimeAt] = triggers.TimeAtFactory(triggers.CrossConfig{Language: ownerLanguage(d)})
 	f[triggers.KindDCADue] = dcaDueFactory(d)
 	f[triggers.KindDNHealth] = dnHealthFactory(d)
+	f[triggers.KindGoalDiscrepancy] = goalDiscrepancyFactory(d)
 	for kind, fac := range portfolioTriggerFactories(d) {
 		f[kind] = fac
 	}
 	return f
+}
+
+// goalDiscrepancyFactory is the goal_discrepancy kind: the owner's language and zone, and
+// the providers price() looks a symbol up on (every provider with a configured account;
+// a price is only there when something already demands it). It reads the world model
+// and nothing else.
+func goalDiscrepancyFactory(d assemblyDeps) triggers.Factory {
+	cfg := triggers.GoalConfig{Language: ownerLanguage(d)}
+	if d.Cfg != nil {
+		var providers []string
+		seen := map[string]bool{}
+		for _, a := range broker.ListConfiguredAccounts(d.Cfg) {
+			if !seen[a.ProviderID] {
+				seen[a.ProviderID] = true
+				providers = append(providers, a.ProviderID)
+			}
+		}
+		cfg.Providers = func() []string { return providers }
+		cfg.Location = cachedZone(d)
+	}
+	return triggers.GoalDiscrepancyFactory(cfg)
+}
+
+// goalZoneTTL is how long the owner's zone is cached for hour_local(): the profile is a
+// local database read, and a trigger's Evaluate must not make one per check.
+const goalZoneTTL = 5 * time.Minute
+
+// cachedZone is profileZone read lazily (nothing is opened until an expression uses
+// hour_local) and at most once per goalZoneTTL, as ownerTargets reads the targets.
+func cachedZone(d assemblyDeps) func() *time.Location {
+	var (
+		mu     sync.Mutex
+		read   func() *time.Location
+		opened bool
+		at     time.Time
+		cached *time.Location
+	)
+	return func() *time.Location {
+		mu.Lock()
+		defer mu.Unlock()
+		if now := time.Now(); !at.IsZero() && now.Sub(at) < goalZoneTTL {
+			return cached
+		}
+		at = time.Now()
+		if !opened {
+			opened = true
+			read = profileZone(d)
+		}
+		if read != nil {
+			cached = read()
+		}
+		return cached
+	}
 }
 
 // triggerBuildTimeout bounds the one-off work of opening the registry.

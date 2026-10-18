@@ -132,6 +132,10 @@ type perceptionRuntime struct {
 	// (dn_wiring.go).
 	dnPlans *sources.DNPlans
 
+	// news is the quarantined news source, when news is on and everything it needs
+	// exists (news_wiring.go).
+	news *sources.News
+
 	// worldModel is the belief store the pipeline applies events to; nil when it
 	// could not be built (worldmodel_wiring.go).
 	worldModel *worldModelRuntime
@@ -197,6 +201,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	rt.attachFinance(d)
 	rt.attachDCADue(d)
 	rt.attachDNPlans(d)      // after the triggers, whose demands say which plans to watch
+	rt.attachNews(d)         // after the triggers and the world model it reads
 	rt.startIntentCompiler() // after the sources: it schedules reminders on the clock
 
 	engCtx, engCancel := context.WithCancel(context.Background())
@@ -253,6 +258,8 @@ type perceptionStatsResponse struct {
 	Triggers *triggerStats `json:"triggers,omitempty"`
 	// DNPlans is present only while the delta-neutral plan-health source is running.
 	DNPlans *dnPlansStats `json:"dn_plans,omitempty"`
+	// News is present only while the news source is running.
+	News *sources.NewsStats `json:"news,omitempty"`
 	// Sweep is present only while the heartbeat runs as a sweep. Its counters are the
 	// process's: a reload keeps them.
 	Sweep    *sweepStats           `json:"sweep,omitempty"`
@@ -318,6 +325,10 @@ func (rt *perceptionRuntime) stats() *perceptionStatsResponse {
 	out.Triggers = rt.triggerStats()
 	out.DNPlans = rt.dnPlansStats()
 	out.Sweep = rt.sweepStats()
+	if rt.news != nil {
+		ns := rt.news.Stats()
+		out.News = &ns
+	}
 	out.Clock = rt.clockStats()
 	rt.fillFinanceStats(&out.Finance)
 

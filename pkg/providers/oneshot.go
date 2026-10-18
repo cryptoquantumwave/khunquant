@@ -18,7 +18,14 @@ type CompleteOptions struct {
 	CacheKey string
 	// System, when non-empty, is sent as a leading system message.
 	System string
+	// NoNativeTools asks the provider not to add tools of its own (a provider-side web
+	// search). With no tools passed, a reply is then pure text. A caller that reads
+	// text somebody else wrote sets it; a provider without native tools ignores it.
+	NoNativeTools bool
 }
+
+// OptionNoNativeTools is the Chat option CompleteOptions.NoNativeTools sets.
+const OptionNoNativeTools = "no_native_tools"
 
 // Complete is the plain "prompt in, text out" LLM call: one user message (plus
 // an optional system message), no tools, and no tool loop. It lives here, with
@@ -50,6 +57,9 @@ func Complete(
 	options := map[string]any{
 		"max_tokens":  o.MaxTokens,
 		"temperature": o.Temperature,
+	}
+	if o.NoNativeTools {
+		options[OptionNoNativeTools] = true
 	}
 	if o.CacheKey != "" {
 		options["prompt_cache_key"] = o.CacheKey

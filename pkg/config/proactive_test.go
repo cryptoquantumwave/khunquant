@@ -37,6 +37,7 @@ func TestProactiveDefaults(t *testing.T) {
 		Approvals:  ApprovalsConfig{ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: "off"},
+		News:       NewsConfig{IntervalMinutes: 60, MaxAssets: 8, MaxParsesPerRun: 3, MaxParsesPerDay: 12, RunSeconds: 300},
 		Reflection: ReflectionConfig{AtLocal: "21:00"},
 		Learning:   LearningConfig{HoldoutRate: 0.05},
 	}

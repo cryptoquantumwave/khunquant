@@ -49,6 +49,7 @@ const (
 	classExternal    = "external" // whatever the sender said: the key only
 	classGoal        = "goal"     // a goal's expectation stopped holding: the key only
 	classReminder    = "reminder"
+	classNews        = "news" // a corroborated report about an asset: the key only
 )
 
 // What a topic's subject is, for the classes that are about one.
@@ -83,6 +84,7 @@ var kinds = map[string]kindInfo{
 	"external":             {classExternal, subjNone, 0},     // external:<name>:<hash>
 	"time_at":              {classReminder, subjNone, 0},     // time_at:<intent>:<due ms>
 	"goal_discrepancy":     {classGoal, subjNone, 0},         // goal_discrepancy:<intent>:goal
+	"news_relevant":        {classNews, subjAsset, 1},        // news_relevant:<asset>:<event type>:<direction>
 }
 
 // KnownKinds lists the trigger kinds the sweep has a class for, sorted.

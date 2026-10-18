@@ -326,6 +326,8 @@ func TestSweepTopicSubject_RealKeyFormatsOfAllTenKinds(t *testing.T) {
 		triggers.KindDNHealth: {triggers.DNHealthKey("3", "margin_critical"), "", "", "3"},
 		triggers.KindDCADue:   {triggers.DCADueKey(12, 1773118800000), "", "", "12"},
 		triggers.KindExternal: {triggers.ExternalKey("deploy-42", hash), "", "", ""},
+		// only the asset: the event type and the direction are not read as subjects
+		triggers.KindNewsRelevant: {triggers.NewsKey("SOL", "security", "down"), "", "SOL", ""},
 		// the intent's id is not an asset or a plan: the sweep reads no subject from it
 		triggers.KindGoalDiscrepancy: {triggers.GoalKey("01HABCDEF"), "", "", ""},
 	} {

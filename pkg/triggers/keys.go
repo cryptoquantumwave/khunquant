@@ -72,3 +72,9 @@ func IndicatorCrossKey(provider, symbol, timeframe, indicator string, period int
 func ExternalKey(name string, hash []byte) string {
 	return "external:" + name + ":" + hex.EncodeToString(hash)
 }
+
+// NewsKey is news_relevant:<asset>:<event type>:<direction>: the asset symbol and two
+// closed enumerations, nothing from an article.
+func NewsKey(asset, eventType, direction string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", KindNewsRelevant, asset, eventType, direction)
+}

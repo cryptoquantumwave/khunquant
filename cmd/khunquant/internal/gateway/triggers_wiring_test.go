@@ -149,7 +149,7 @@ func TestTriggers_BuiltWhenOnAndTheMarketSourceReadsItsDemands(t *testing.T) {
 // the delta-neutral health kind and the goal discrepancy kind, and nothing else.
 func TestTriggerFactories_ProductionRegistersTheCrossingKinds(t *testing.T) {
 	got := triggerFactories(assemblyDeps{})
-	if len(got) != 12 || got[triggers.KindGoalDiscrepancy] == nil || got[triggers.KindTimeAt] == nil || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
+	if len(got) != 13 || got[triggers.KindNewsRelevant] == nil || got[triggers.KindGoalDiscrepancy] == nil || got[triggers.KindTimeAt] == nil || got[triggers.KindPriceCross] == nil || got[triggers.KindIndicatorCross] == nil ||
 		got[triggers.KindExternal] == nil || got[triggers.KindDCADue] == nil || got[triggers.KindDNHealth] == nil {
 		t.Fatalf("production registers %d trigger kinds: %v", len(got), got)
 	}

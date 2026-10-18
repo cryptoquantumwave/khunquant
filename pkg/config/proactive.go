@@ -51,7 +51,7 @@ type ProactiveConfig struct {
 	Mandates   MandatesConfig           `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
 	Cognition  CognitionConfig          `json:"cognition"`
 	Policy     ModeConfig               `json:"policy"     envPrefix:"KHUNQUANT_PROACTIVE_POLICY_"`
-	News       ToggleConfig             `json:"news"       envPrefix:"KHUNQUANT_PROACTIVE_NEWS_"`
+	News       NewsConfig               `json:"news"       envPrefix:"KHUNQUANT_PROACTIVE_NEWS_"`
 	Reflection ReflectionConfig         `json:"reflection"`
 	Learning   LearningConfig           `json:"learning"`
 }
@@ -172,6 +172,35 @@ type ToggleConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
 }
 
+// NewsConfig is proactive.news: the quarantined news source (pkg/perception/sources,
+// news.go). It is off by default, and it needs proactive.cognition: every article is
+// read by a tool-less model call that is a budgeted cognition job, so with cognition
+// off news does not run at all (Effective reports it as a downgrade, not a silent
+// no-op). The limits below bound what one run and one day may spend; 0 for either
+// parse limit means no parsing (as in proactive.cognition, 0 is never "unlimited").
+type NewsConfig struct {
+	Enabled bool `json:"enabled" env:"ENABLED"`
+	// IntervalMinutes is the time between runs (60); a run happens only in the owner's
+	// active hours. At least NewsMinIntervalMinutes.
+	IntervalMinutes int `json:"interval_minutes" env:"INTERVAL_MINUTES"`
+	// MaxAssets is how many assets one run looks at (8): the held ones of weight at
+	// least 2% and the symbols of the owner's active watches, biggest holding first.
+	MaxAssets int `json:"max_assets" env:"MAX_ASSETS"`
+	// MaxParsesPerRun and MaxParsesPerDay bound the model calls (articles read) per run
+	// and per owner-local day. Each is one wake of proactive.cognition.wakes_per_hour,
+	// which the composer shares, so the defaults are small.
+	MaxParsesPerRun int `json:"max_parses_per_run" env:"MAX_PARSES_PER_RUN"`
+	MaxParsesPerDay int `json:"max_parses_per_day" env:"MAX_PARSES_PER_DAY"`
+	// RunSeconds is the wall time one run may take (300).
+	RunSeconds int `json:"run_seconds" env:"RUN_SECONDS"`
+}
+
+// Defaults and floor of proactive.news.
+const (
+	NewsMinIntervalMinutes = 10
+	NewsMaxAssetsCap       = 20
+)
+
 // MandatesConfig is proactive.mandates: standing permissions for deterministic DCA runs.
 type MandatesConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
@@ -204,6 +233,7 @@ func defaultProactiveConfig() ProactiveConfig {
 		Triggers:   TriggersConfig{Mode: ProactiveModeOff},
 		Approvals:  ApprovalsConfig{Enabled: false, ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
+		News:       NewsConfig{IntervalMinutes: 60, MaxAssets: 8, MaxParsesPerRun: 3, MaxParsesPerDay: 12, RunSeconds: 300},
 		Policy:     ModeConfig{Mode: ProactiveModeOff},
 		Reflection: ReflectionConfig{Enabled: false, AtLocal: "21:00"},
 		Learning:   LearningConfig{Enabled: false, HoldoutRate: 0.05},
@@ -328,6 +358,11 @@ func ValidateProactive(c ProactiveConfig) error {
 		{"proactive.cognition.max_concurrent_llm", c.Cognition.MaxConcurrentLLM},
 		{"proactive.cognition.wakes_per_hour", c.Cognition.WakesPerHour},
 		{"proactive.cognition.tokens_per_day", c.Cognition.TokensPerDay},
+		{"proactive.news.interval_minutes", c.News.IntervalMinutes},
+		{"proactive.news.max_assets", c.News.MaxAssets},
+		{"proactive.news.max_parses_per_run", c.News.MaxParsesPerRun},
+		{"proactive.news.max_parses_per_day", c.News.MaxParsesPerDay},
+		{"proactive.news.run_seconds", c.News.RunSeconds},
 	} {
 		if n.v < 0 {
 			errs = append(errs, fmt.Errorf("%s must not be negative (got %d)", n.field, n.v))
@@ -539,6 +574,14 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Learning = c.Enabled && c.Learning.Enabled
 	e.Approvals = c.Enabled && c.Approvals.Enabled
 	e.Mandates = c.Enabled && c.Mandates.Enabled
+
+	// Every article is read by a budgeted cognition job: without the scheduler there
+	// is no budget to spend, so news does not run (and does not run unbudgeted).
+	if e.News && !e.Cognition {
+		e.News = false
+		e.Downgrades = append(e.Downgrades,
+			"proactive: cognition is off; news.enabled true → false (reading an article is a budgeted cognition job)")
+	}
 
 	if c.Enabled && ownerOK {
 		// A sweep is a governed heartbeat that is started by what changed, so it

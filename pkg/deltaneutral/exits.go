@@ -238,6 +238,10 @@ type UnwindResult struct {
 	// FuturesGone: the futures position was gone from the exchange (closed by hand or
 	// liquidated), so the record was offset without an order.
 	FuturesGone bool `json:"futures_gone,omitempty"`
+	// RecoveryStillExecuting lists the codes of recovery proposals the owner had approved
+	// before the plan closed: they were not withdrawn and are still executing. Message
+	// says so, and what was withdrawn.
+	RecoveryStillExecuting []string `json:"recovery_still_executing,omitempty"`
 }
 
 // unwindPlan is the output of validate: what the exit will close, as read when it began.
@@ -452,6 +456,10 @@ func (d *Deps) finalizeUnwind(c *journal.Ctx, s *unwindState) error {
 		res, err := d.settleUnwind(ctx, c, s)
 		if err == nil {
 			d.tellIfLong(ctx, s.started, s.in.PlanID, OpUnwind, res.Result, res.Message)
+			// tellIfLong already sent the message of an unwind that outlasted the wait.
+			if len(res.RecoveryStillExecuting) > 0 && d.Tell != nil && d.clock().Now().Sub(s.started) < OpenWait {
+				d.Tell(ctx, fmt.Sprintf("Delta-neutral plan %d: closed, a recovery close is still executing", s.in.PlanID), res.Message)
+			}
 		}
 		return res, err
 	}, journal.Retries(5), journal.Backoff(5*time.Second))
@@ -500,6 +508,12 @@ func (d *Deps) settleUnwind(ctx context.Context, c *journal.Ctx, s *unwindState)
 			res.Result, res.Message = ResultRecovery, fmt.Sprintf("both legs were closed but the plan could not be updated to closed (%v)", err)
 		} else {
 			res.Result = ResultClosed
+			// The plan is closed: end its recoveries and withdraw their open proposals.
+			w, err := d.endRecoveries(ctx, s.in.PlanID)
+			if err != nil {
+				return res, fmt.Errorf("the plan is closed but its recovery could not be ended: %w", err)
+			}
+			res.Message, res.RecoveryStillExecuting = w.note(), w.StillExecuting
 		}
 		return res, nil
 	}

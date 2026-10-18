@@ -170,9 +170,14 @@ type Exchange interface {
 	Holdings(ctx context.Context, p *Plan) (Holdings, error)
 }
 
-// Starter starts a workflow of a derived id; *journal.Engine satisfies it.
+// Starter starts a workflow of a derived id, and reads and cancels the recoveries it
+// started (a completed unwind ends them); *journal.Engine satisfies it.
 type Starter interface {
 	StartWithID(ctx context.Context, kind, id string, input any) (created bool, err error)
+	Get(ctx context.Context, id string) (journal.Workflow, error)
+	Steps(ctx context.Context, id string) ([]journal.StepRecord, error)
+	Cancel(ctx context.Context, id, reason string) error
+	Wait(ctx context.Context, id string) (journal.Workflow, error)
 }
 
 // Deps are the dependencies of the workflows.

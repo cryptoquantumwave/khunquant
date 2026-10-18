@@ -286,6 +286,13 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 		"pkg/deltaneutral/workflows.go:Deps.startRecovery")
 	assertSites(t, "Deps.startRecovery", callSites(srcs, "startRecovery"), "pkg/deltaneutral/exits.go:Deps.settleResize",
 		"pkg/deltaneutral/exits.go:Deps.settleUnwind", "pkg/deltaneutral/workflows.go:Deps.settleOpen")
+	// The only other thing a delta-neutral unwind does to a proposal is withdraw a pending
+	// one (CancelForClosedPlan, never an approval and never an order); the wiring is the
+	// approval-side closer, called only from the unwind's finalize (endRecoveries).
+	assertSites(t, "Service.CancelForClosedPlan", callSites(srcs, "CancelForClosedPlan"),
+		"pkg/tools/dn_exchange.go:ApprovalCloser.WithdrawProposals")
+	assertSites(t, "CloseProposer.WithdrawProposals", callSites(srcs, "WithdrawProposals"), "pkg/deltaneutral/recover_cancel.go:Deps.endRecoveries")
+	assertSites(t, "Deps.endRecoveries", callSites(srcs, "endRecoveries"), "pkg/deltaneutral/exits.go:Deps.settleUnwind")
 	assertSites(t, "Service.startExecution", callSites(srcs, "startExecution"),
 		"pkg/approval/service.go:Service.Decide", "pkg/approval/service.go:Service.Recover")
 	assertSites(t, "store.decide", callSites(srcs, "decide"), "pkg/approval/service.go:Service.Decide")

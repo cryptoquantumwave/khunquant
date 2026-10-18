@@ -31,11 +31,51 @@ func (s *Service) CancelPending(ctx context.Context, reason string) ([]Cancelled
 	if err != nil {
 		return nil, err
 	}
+	return s.cancelAll(ctx, pending, reason, func(lang string) string { return OutcomeText(lang, StatusCancelled) })
+}
+
+// ReasonPlanClosed is the outcome CancelForClosedPlan records.
+const ReasonPlanClosed = "plan closed"
+
+// CancelForClosedPlan is CancelPending narrowed to the given proposal ids, for the
+// recovery proposals of a delta-neutral plan an unwind has closed: asking the owner to
+// close a position that no longer exists is noise, and approving the old proposal
+// could still sell coins held outside the plan. Only a PENDING proposal is touched
+// (the cancel is conditional on it, so an approval that wins the race stands); an
+// approved one is an exit the owner chose and keeps running. An unknown id is skipped.
+// Each card is edited once to say the plan was closed.
+func (s *Service) CancelForClosedPlan(ctx context.Context, ids []string) ([]Cancelled, error) {
+	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	defer cancel()
+	var (
+		pending []Proposal
+		errs    []error
+	)
+	for _, id := range ids {
+		p, err := s.st.get(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if p.Status == StatusPending {
+			pending = append(pending, p)
+		}
+	}
+	out, err := s.cancelAll(ctx, pending, ReasonPlanClosed, func(lang string) string { return wordsFor[langOf(lang)].planClosed })
+	return out, errors.Join(append(errs, err)...)
+}
+
+// cancelAll cancels each proposal of ps that is still pending and edits its card to
+// card(lang). A failure on one does not stop the others.
+func (s *Service) cancelAll(ctx context.Context, ps []Proposal, reason string, card func(lang string) string) ([]Cancelled, error) {
 	var (
 		out  []Cancelled
 		errs []error
 	)
-	for _, p := range pending {
+	for _, p := range ps {
 		changed, err := s.st.cancel(ctx, p.ID, reason, s.now())
 		if err != nil {
 			errs = append(errs, err)
@@ -45,7 +85,7 @@ func (s *Service) CancelPending(ctx context.Context, reason string) ([]Cancelled
 			continue
 		}
 		p.Status, p.Outcome = StatusCancelled, reason
-		s.editCard(ctx, p, OutcomeText(p.Lang, StatusCancelled))
+		s.editCard(ctx, p, card(p.Lang))
 		out = append(out, Cancelled{Code: p.Code, Kind: p.Kind})
 	}
 	if len(out) > 0 {

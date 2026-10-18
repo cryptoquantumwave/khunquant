@@ -194,3 +194,43 @@ func TestFlowOrders_ApprovalOrder(t *testing.T) {
 		}
 	})
 }
+
+// CancelForClosedPlan is CancelPending narrowed to the given ids: another pending
+// proposal, a decided one and an unknown id are left alone, each cancelled card is
+// edited once to say the plan was closed, and a second call finds nothing.
+func TestCancelForClosedPlan_CancelsOnlyTheGivenPendingProposals(t *testing.T) {
+	w := newWorld(t)
+	p := w.newProc(t0)
+	mine := p.propose(sellBTC())
+	other := p.propose(buyBTC())
+	decided := p.propose(buyBTC())
+	if _, err := decide(p, decided, decided.Nonce, true, ownerID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := p.svc.CancelForClosedPlan(context.Background(), []string{mine.ID, decided.ID, "no-such-id"})
+	if err != nil || len(got) != 1 || got[0].Code != mine.Code {
+		t.Fatalf("cancelled %+v, %v", got, err)
+	}
+	if cur := p.get(mine.ID); cur.Status != StatusCancelled || cur.Outcome != ReasonPlanClosed {
+		t.Errorf("proposal: %s / %q", cur.Status, cur.Outcome)
+	}
+	if cur := p.get(other.ID); cur.Status != StatusPending {
+		t.Errorf("a proposal outside the list changed: %s", cur.Status)
+	}
+	if cur := p.get(decided.ID); cur.Status == StatusCancelled {
+		t.Error("an approved proposal was cancelled")
+	}
+	edited := 0
+	for _, e := range w.editor.all() {
+		if strings.Contains(e, "the plan was closed") {
+			edited++
+		}
+	}
+	if edited != 1 {
+		t.Errorf("%d cards say the plan was closed, want 1: %v", edited, w.editor.all())
+	}
+	if again, err := p.svc.CancelForClosedPlan(context.Background(), []string{mine.ID}); err != nil || len(again) != 0 {
+		t.Errorf("second call = %+v, %v", again, err)
+	}
+}

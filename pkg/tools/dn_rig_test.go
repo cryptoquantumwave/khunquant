@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +35,30 @@ func (f *fakeAlerts) Alert(_ context.Context, a deltaneutral.RecoveryAlert) (del
 
 func (f *fakeAlerts) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.got) }
 
+// fakeCardEdits records the card edits.
+type fakeCardEdits struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (f *fakeCardEdits) EditCard(_ context.Context, _, _, messageID, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.got = append(f.got, messageID+": "+text)
+	return nil
+}
+
+func (f *fakeCardEdits) containing(sub string) (n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.got {
+		if strings.Contains(e, sub) {
+			n++
+		}
+	}
+	return n
+}
+
 // dnRig is a delta-neutral plan on a simulated exchange, with the journal engines
 // ("processes") that run its workflows, over ONE shared database and one fake clock.
 type dnRig struct {
@@ -42,6 +67,7 @@ type dnRig struct {
 	world  *dnWorld
 	clock  *perceptiontest.Clock
 	alerts *fakeAlerts
+	edits  *fakeCardEdits // the card edits the owner's chat received
 	tg     *fakeTelegram
 	dir    string // delta-neutral workspace
 	dbPath string // the shared proactive database
@@ -70,7 +96,7 @@ func newDNRig(t *testing.T, capable bool) *dnRig {
 
 	r := &dnRig{
 		t: t, cfg: cfg, clock: perceptiontest.NewClock(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)),
-		alerts: &fakeAlerts{}, tg: &fakeTelegram{}, dir: t.TempDir(), dbPath: filepath.Join(t.TempDir(), "proactive.db"),
+		alerts: &fakeAlerts{}, edits: &fakeCardEdits{}, tg: &fakeTelegram{}, dir: t.TempDir(), dbPath: filepath.Join(t.TempDir(), "proactive.db"),
 	}
 	r.world = newDNWorld(t, "dnw-"+fmt.Sprint(time.Now().UnixNano()), capable)
 	st := r.node().store
@@ -112,7 +138,7 @@ func (r *dnRig) node() *dnNode {
 	}
 	svc, err := approval.New(context.Background(), approval.Options{
 		DB: db, Cfg: r.cfg, Backend: NewApprovalOrderBackend(r.cfg), Notifier: r.tg, Clock: r.clock,
-		VerifyPollInterval: -1, Killer: ctl,
+		VerifyPollInterval: -1, Killer: ctl, Editor: r.edits,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -638,3 +638,27 @@ func (a *ApprovalCloser) Status(ctx context.Context, id string) (string, error) 
 	}
 	return string(p.Status), nil
 }
+
+// WithdrawProposals cancels the still-pending recovery proposals among ids because an
+// unwind closed their plan, through the approval service's narrow cancel (it edits each
+// card once). A proposal already approved is not touched: it is reported as still
+// executing, so the owner knows that exit is theirs. Both lists come from the status
+// read afterwards, so a repeated call (finalize ran again) reports the same.
+func (a *ApprovalCloser) WithdrawProposals(ctx context.Context, ids []string) (deltaneutral.Withdrawal, error) {
+	var w deltaneutral.Withdrawal
+	_, err := a.svc.CancelForClosedPlan(ctx, ids)
+	for _, id := range ids {
+		p, gerr := a.svc.Get(ctx, id)
+		if gerr != nil {
+			err = errors.Join(err, gerr)
+			continue
+		}
+		switch {
+		case p.Status == approval.StatusCancelled && p.Outcome == approval.ReasonPlanClosed:
+			w.Cancelled = append(w.Cancelled, p.Code)
+		case p.Status == approval.StatusApproved || p.Status == approval.StatusExecuting:
+			w.StillExecuting = append(w.StillExecuting, p.Code)
+		}
+	}
+	return w, err
+}

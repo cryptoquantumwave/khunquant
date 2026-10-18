@@ -82,6 +82,15 @@ const (
 type CloseProposer interface {
 	ProposeClose(ctx context.Context, r CloseRequest) (Proposed, error)
 	Status(ctx context.Context, proposalID string) (string, error)
+	// WithdrawProposals cancels the still-pending ones among the proposals (the plan was
+	// closed) and reports, by code, those cancelled for that reason (also by an earlier
+	// call) and those already approved, which keep executing: the owner chose that exit.
+	WithdrawProposals(ctx context.Context, proposalIDs []string) (Withdrawal, error)
+}
+
+// Withdrawal is the outcome of WithdrawProposals, by proposal code.
+type Withdrawal struct {
+	Cancelled, StillExecuting []string
 }
 
 type proposeOut struct {
@@ -122,6 +131,9 @@ type Assessment struct {
 	OrphanAmount float64 `json:"orphan_amount"`
 	// Unreadable is set instead of the numbers when the exchange could not be read.
 	Unreadable string `json:"unreadable,omitempty"`
+	// PlanClosed is set instead of the numbers when the plan is closed (an unwind
+	// finished): there is nothing left to offer to close.
+	PlanClosed bool `json:"plan_closed,omitempty"`
 }
 
 // assess finds the orphan from the exchange's numbers. The exchange decides; the
@@ -164,6 +176,9 @@ func assess(sz Sizing, recFut, recSpot float64, h Holdings) Assessment {
 }
 
 func (a Assessment) summary() string {
+	if a.PlanClosed {
+		return "the plan was closed"
+	}
 	if a.Unreadable != "" {
 		return "the exchange could not be read (" + a.Unreadable + ")"
 	}
@@ -196,6 +211,10 @@ func (d *Deps) runRecover(c *journal.Ctx, raw json.RawMessage) error {
 			a = Assessment{Unreadable: err.Error()}
 		}
 		last = a
+		if a.PlanClosed {
+			reason = reasonPlanClosed
+			break
+		}
 		if a.Unreadable == "" && a.Orphan == "" {
 			reason = "nothing_to_close"
 			break
@@ -235,6 +254,9 @@ func (d *Deps) assessStep(in RecoverInput) func(context.Context, int) (any, erro
 		plan, err := d.Store.GetPlan(ctx, in.PlanID)
 		if err != nil {
 			return nil, err
+		}
+		if plan.Status == PlanStatusClosed {
+			return Assessment{PlanClosed: true}, nil
 		}
 		recFut, recSpot, err := d.Store.OpenLegQuantities(ctx, in.PlanID)
 		if err != nil {
@@ -280,6 +302,9 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 		plan, perr := d.Store.GetPlan(ctx, in.PlanID)
 		if perr != nil {
 			return nil, perr
+		}
+		if plan.Status == PlanStatusClosed { // an unwind closed it since the assessment
+			return proposeOut{Error: "the plan was closed"}, nil
 		}
 		req, rerr := d.closeRequest(plan, in, a, al)
 		if rerr != nil {
@@ -391,7 +416,7 @@ func (d *Deps) settleRecovery(ctx context.Context, in RecoverInput, last Assessm
 		return err
 	}
 	unrecorded := strings.Contains(exec.ErrorMsg, UnrecordedFillMarker)
-	if reason == "exhausted" || last.Unreadable != "" || unrecorded {
+	if reason != reasonPlanClosed && (reason == "exhausted" || last.Unreadable != "" || unrecorded) {
 		// Still open and unanswered, or filled but never recorded (unwind cannot size an
 		// unrecorded leg): the execution stays recovery_required and the owner is told
 		// once more what is open. These are the two ways an execution outlives its

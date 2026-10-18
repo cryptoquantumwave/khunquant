@@ -164,12 +164,16 @@ func (t *UnwindDeltaNeutralPositionTool) unwindResult(ctx context.Context, plan 
 		if res.FuturesGone {
 			external = "\n  (futures position was already closed externally)"
 		}
+		recovery := ""
+		if res.Message != "" { // what became of the plan's recovery proposals
+			recovery = "\n" + res.Message
+		}
 		return UserResult(fmt.Sprintf(
 			"Delta-neutral position successfully closed:\n"+
 				"  Plan:       %s (ID %d)\n"+
 				"  Status:     closed\n"+
-				"  Closed At:  %s\n%s%s",
-			plan.Name, plan.ID, closedAt.Format(time.RFC3339), external, conflictNote))
+				"  Closed At:  %s\n%s%s%s",
+			plan.Name, plan.ID, closedAt.Format(time.RFC3339), external, conflictNote, recovery))
 	case deltaneutral.ResultRefused:
 		return refusedResult(res.Message)
 	case deltaneutral.ResultNothingClosed:

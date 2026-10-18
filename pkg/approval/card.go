@@ -60,6 +60,8 @@ type words struct {
 	// strings taking the reference price (and the collar for the first).
 	priceAbort, priceExitMarket, priceExitLimit string
 	cancelled, executing                        string
+	// planClosed is the card line of a recovery proposal withdrawn because an unwind closed its plan.
+	planClosed string
 }
 
 var wordsFor = map[string]words{
@@ -75,6 +77,7 @@ var wordsFor = map[string]words{
 		rejected:  "REJECTED - nothing was placed.",
 		expired:   "EXPIRED - nothing was placed.",
 		cancelled: "CANCELLED - nothing was placed.",
+		planClosed: "CANCELLED - the plan was closed, so this close is no longer needed. Nothing was placed.",
 		executing: "APPROVED - the order is being checked and placed.",
 	},
 	"th": {
@@ -89,6 +92,7 @@ var wordsFor = map[string]words{
 		rejected:  "ปฏิเสธแล้ว - ไม่มีการส่งคำสั่ง",
 		expired:   "หมดอายุ - ไม่มีการส่งคำสั่ง",
 		cancelled: "ยกเลิก - ไม่มีการส่งคำสั่ง",
+		planClosed: "ยกเลิก - แผนถูกปิดแล้ว จึงไม่ต้องปิดสถานะนี้อีก ไม่มีการส่งคำสั่ง",
 		executing: "อนุมัติแล้ว - กำลังตรวจสอบและส่งคำสั่ง",
 	},
 }

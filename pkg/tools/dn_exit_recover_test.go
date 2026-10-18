@@ -13,7 +13,8 @@ import (
 
 // A recovery that outlives the unwind which settled the plan must not overwrite it, and
 // one that finishes the job of an unwind (the owner approved the spot sale) leaves the
-// plan closed, not failed.
+// plan closed, not failed. A second unwind that closes the plan ends the recovery itself
+// (F17: it is cancelled and its proposal withdrawn).
 func TestDNRecover_AfterAnUnwind_LeavesThePlanClosed(t *testing.T) {
 	for _, how := range []string{"owner_runs_unwind_again", "owner_approves_the_proposal"} {
 		t.Run(how, func(t *testing.T) {
@@ -40,8 +41,12 @@ func TestDNRecover_AfterAnUnwind_LeavesThePlanClosed(t *testing.T) {
 				r.drive(n, approval.WorkflowID(p.ID), true)
 			}
 			r.clock.Advance(15 * time.Minute) // past the proposal's expiry: the recovery looks again
-			if w := r.drive(n, rec, true); w.Status != journal.StatusSucceeded {
-				t.Fatalf("dn.recover: %+v", w)
+			want := journal.StatusSucceeded
+			if how == "owner_runs_unwind_again" {
+				want = journal.StatusCancelled
+			}
+			if w := r.drive(n, rec, true); w.Status != want {
+				t.Fatalf("dn.recover: %+v, want %s", w, want)
 			}
 			if p := r.plan(n); p.Status != deltaneutral.PlanStatusClosed || p.ClosedAt == nil {
 				t.Errorf("plan %q: a recovery must not turn a flat, closed plan into a failed one", p.Status)

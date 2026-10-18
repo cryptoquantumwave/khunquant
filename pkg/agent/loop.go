@@ -122,6 +122,11 @@ type processOptions struct {
 	NoOutbound bool
 	// Report, when set, receives the provider usage and the model of the turn.
 	Report *turnReport
+	// UsageSink, when set, is called once as the turn finishes (also when it
+	// fails) with the provider usage summed over every LLM call of the turn and
+	// of the sub-turns that ran inside it. A sub-turn that outlives the turn is
+	// not counted. nil = nothing is collected.
+	UsageSink func(providers.UsageInfo)
 }
 
 // modelOverride selects the model tier of a turn.
@@ -1420,6 +1425,9 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	ctx, reportDone := reportUsage(ctx, opts.UsageSink)
+	defer reportDone()
+
 	// A turn with tools of its own runs on a per-turn copy of the agent whose
 	// registry is a clone with those tools added. The shared registry never
 	// sees them, and every agent.Tools use below - definitions, execution, the
@@ -2138,6 +2146,7 @@ func (al *AgentLoop) runLLMIteration(
 		if opts.Report != nil {
 			opts.Report.add(response.Usage, calledModel)
 		}
+		addTurnUsage(ctx, response.Usage)
 
 		// Save finishReason to turnState for SubTurn truncation detection
 		if ts := turnStateFromContext(ctx); ts != nil {

@@ -115,7 +115,10 @@ type ApprovalsConfig struct {
 	ExpiryMinutes int  `json:"expiry_minutes" env:"KHUNQUANT_PROACTIVE_APPROVALS_EXPIRY_MINUTES"`
 }
 
-// CognitionConfig bounds proactive LLM use.
+// CognitionConfig bounds proactive LLM use. WakesPerHour and TokensPerDay limit
+// background (budgeted) model use; 0 is not "unlimited" but "no budgeted work":
+// every such job runs its fallback instead. Negative values are refused by
+// validation.
 type CognitionConfig struct {
 	Enabled          bool   `json:"enabled"            env:"KHUNQUANT_PROACTIVE_COGNITION_ENABLED"`
 	MaxConcurrentLLM int    `json:"max_concurrent_llm" env:"KHUNQUANT_PROACTIVE_COGNITION_MAX_CONCURRENT_LLM"`

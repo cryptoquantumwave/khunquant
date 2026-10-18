@@ -504,6 +504,14 @@ func (s *Scheduler) broadcastLocked() {
 	s.wake = make(chan struct{})
 }
 
+// Pending is how many jobs are queued or running. It takes the lock only, so it
+// is cheap enough to poll (Stats reads the database).
+func (s *Scheduler) Pending() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.queued + len(s.running)
+}
+
 // Stats is a point-in-time view of the scheduler. It holds no secrets.
 type Stats struct {
 	Workers int

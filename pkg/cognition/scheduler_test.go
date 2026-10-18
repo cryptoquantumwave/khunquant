@@ -790,3 +790,29 @@ func TestScheduler_QueueBound(t *testing.T) {
 		t.Fatalf("a user job was refused: %v", err)
 	}
 }
+
+// Pending counts queued and running jobs, without reading the database.
+func TestScheduler_PendingCountsQueuedAndRunning(t *testing.T) {
+	s := start(t, cfgOf(1), nil, nil)
+	ev := &events{}
+	g := newGate()
+	if n := s.Pending(); n != 0 {
+		t.Fatalf("Pending = %d on an idle scheduler", n)
+	}
+	r1 := submit(t, s, g.job(ev, "a", PriUser, "s"))
+	recv(t, g.started, "the first job")
+	r2 := submit(t, s, Job{ID: "b", Priority: PriUser, SessionKey: "s", Run: func(context.Context) (Usage, error) { return Usage{}, nil }})
+	if n := s.Pending(); n != 2 {
+		t.Fatalf("Pending = %d with one running and one queued, want 2", n)
+	}
+	close(g.release)
+	result(t, r1)
+	result(t, r2)
+	deadline := time.Now().Add(waitFor)
+	for s.Pending() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if n := s.Pending(); n != 0 {
+		t.Fatalf("Pending = %d after both finished", n)
+	}
+}

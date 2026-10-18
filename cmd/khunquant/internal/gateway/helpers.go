@@ -80,6 +80,7 @@ type gatewayServices struct {
 	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
 	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
 	journalLive      *atomic.Pointer[journalRuntime]    // the workflow engine, nil until a definition is registered; what the stats route reads and stopServices stops
+	Cognition        *cognitionRuntime                  // the turn scheduler; nil unless cognition is effectively on and the shared database opened
 	Control          *controlRuntime                    // the kill flag and the control-command dispatcher (control_wiring.go); built on every generation
 	Policy           *policyRuntime                     // the policy engine's shadow record (policy_wiring.go); nil unless proactive is on and proactive.policy.mode is shadow or live
 	Approval         *approvalRuntime                   // order approvals (pkg/approval); nil unless approvals are effectively on and the workflow engine runs

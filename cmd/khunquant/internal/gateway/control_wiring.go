@@ -65,6 +65,7 @@ func (rt *controlRuntime) attachStop(d assemblyDeps, j *journalRuntime, ns *noti
 	if d.AgentLoop != nil {
 		k.Turns = d.AgentLoop
 	}
+	k.Queue = d.Cognition.canceller() // nil unless cognition is on
 	if j != nil {
 		k.Flows = j.engine
 	}

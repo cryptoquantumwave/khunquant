@@ -23,6 +23,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
@@ -190,6 +191,11 @@ type assemblyDeps struct {
 	// the caller never sets it.
 	Control *controlRuntime
 
+	// Cognition is the turn scheduler of this generation (cognition_wiring.go);
+	// buildServices sets it on its own copy of the deps before anything that runs
+	// a turn starts, and the caller never sets it.
+	Cognition *cognitionRuntime
+
 	// Policy is the policy engine's shadow record (policy_wiring.go); buildServices sets it
 	// on its own copy of the deps right after the control path, and the caller never sets it.
 	Policy *policyRuntime
@@ -263,6 +269,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Sub-turn events go to the shared event bus, on a first start and on every
 	// reload (the agent loop outlives both).
 	wireEventBus(d)
+
+	// The turn scheduler, before anything that runs a model turn (cron, channels,
+	// heartbeat) starts. Off, it builds nothing and clears what a previous generation
+	// installed on the agent loop.
+	s.Cognition = buildCognition(d)
+	d.Cognition = s.Cognition
 
 	s.LossGuard = lossGuardStarter(cfg)
 
@@ -500,6 +512,9 @@ func heartbeatHandler(al *agent.AgentLoop) heartbeat.HeartbeatHandler {
 		}
 		// Use ProcessHeartbeat - no session history, each heartbeat is independent
 		response, err := al.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
+		if errors.Is(err, proactive.ErrTurnSkipped) {
+			return tools.SilentResult("Heartbeat skipped") // over the cognition budget: not an error
+		}
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
 		}
@@ -523,7 +538,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
 		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
-		withPolicyStats())
+		withCognitionStats(s.Cognition.stats), withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
 	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
 
@@ -557,6 +572,12 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// Then the turn scheduler: every service below is one a running job uses, so
+	// the jobs go first (queued ones finish for a while, then the rest is cancelled)
+	// and a producer that submits afterwards is refused and degrades to its template.
+	s.Cognition.stop(shutdownTimeout)
+	s.Cognition = nil
 
 	// The control path lets go of the services it acts on before they stop, so that
 	// an /approve that arrives while they do is told approvals are unavailable and

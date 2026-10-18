@@ -299,6 +299,12 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// The child has its own timeout for self-protection.
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// Under a scheduled job a synchronous child runs inside it: when the job's
+	// deadline or a /stop cancels its context, the child stops too, instead of
+	// holding the worker until its own timeout. Without a scheduler nothing changes.
+	if !cfg.Async && inScheduledJob(ctx) {
+		defer context.AfterFunc(ctx, cancel)()
+	}
 
 	childID := al.generateSubTurnID()
 	childTS := newTurnState(childCtx, childID, parentTS)

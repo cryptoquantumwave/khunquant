@@ -501,3 +501,17 @@ func TestHeartbeatContract_Selection(t *testing.T) {
 		}
 	}
 }
+
+// A turn the cognition budget skipped is not a failure: nothing is delivered, the
+// tick is reported as skipped (not as an error), and the next tick runs as usual.
+func TestGovernedHeartbeat_BudgetSkipIsNotAnError(t *testing.T) {
+	r := &fakeRunner{err: fmt.Errorf("proactive turn: %w (budget_exhausted)", proactive.ErrTurnSkipped)}
+	s := &fakeSubmitter{}
+	res := governedHeartbeatHandler(r, s, 30*time.Minute, proactive.ModelTierPrimary, nil)(context.Background(), "the prompt", "", "")
+	if res == nil || res.IsError {
+		t.Fatalf("a skipped tick returned %+v, want a silent result", res)
+	}
+	if len(s.submitted()) != 0 {
+		t.Errorf("a skipped tick delivered %d item(s)", len(s.submitted()))
+	}
+}

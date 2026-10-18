@@ -574,6 +574,12 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Learning = c.Enabled && c.Learning.Enabled
 	e.Approvals = c.Enabled && c.Approvals.Enabled
 	e.Mandates = c.Enabled && c.Mandates.Enabled
+	// The reflection is a budgeted cognition job: without the scheduler it has no budget
+	// to run under, and it is never run around one.
+	if e.Reflection && !e.Cognition {
+		e.Reflection = false
+		e.Downgrades = append(e.Downgrades, "proactive: cognition is off; reflection.enabled true → false")
+	}
 
 	// Every article is read by a budgeted cognition job: without the scheduler there
 	// is no budget to spend, so news does not run (and does not run unbudgeted).

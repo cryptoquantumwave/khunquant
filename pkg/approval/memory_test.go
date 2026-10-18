@@ -379,7 +379,8 @@ func TestCleanFact(t *testing.T) {
 // (executeMemory, started by Decide through startExecution and by Recover).
 func TestMemoryCallGraph(t *testing.T) {
 	srcs := goSources(t)
-	assertSites(t, "Service.ProposeMemory", callSites(srcs, "ProposeMemory"), "pkg/tools/remember.go:RememberTool.suggest")
+	assertSites(t, "Service.ProposeMemory", callSites(srcs, "ProposeMemory"),
+		"pkg/reflection/service.go:Service.RunDay", "pkg/tools/remember.go:RememberTool.suggest")
 	assertSites(t, "MemorySink.AppendApprovedMemory", callSites(srcs, "AppendApprovedMemory"),
 		"pkg/approval/memory.go:Service.executeMemory")
 	assertSites(t, "Service.executeMemory", callSites(srcs, "executeMemory"),

@@ -12,6 +12,7 @@ import (
 // in pkg/reflection names the order side of approval.
 func TestReflectionCallGraph(t *testing.T) {
 	srcs := goSources(t)
+	assertSites(t, "Service.ProposeReflection", callSites(srcs, "ProposeReflection"), "pkg/reflection/service.go:Service.RunDay")
 	assertSites(t, "ReflectionSink.ApplyApprovedReflection", callSites(srcs, "ApplyApprovedReflection"),
 		"pkg/approval/reflection.go:Service.executeReflection")
 	assertSites(t, "Service.executeReflection", callSites(srcs, "executeReflection"),
@@ -36,7 +37,7 @@ func TestReflectionCallGraph(t *testing.T) {
 			return true
 		})
 	}
-	if checked < 2 {
+	if checked < 4 {
 		t.Errorf("only %d reflection files were scanned", checked)
 	}
 }

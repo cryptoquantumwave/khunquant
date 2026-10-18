@@ -47,6 +47,12 @@ var migrations = []sqlitex.Migration{{
 	legacy_allowed INTEGER NOT NULL,
 	reasons_json   TEXT NOT NULL
 );`,
+}, {
+	// enforced is 1 when the verdict was applied to the call (the live tool hook)
+	// and 0 when it only records what the engine would have decided.
+	Component: Component,
+	Version:   2,
+	SQL:       `ALTER TABLE policy_decisions ADD COLUMN enforced INTEGER NOT NULL DEFAULT 0;`,
 }}
 
 // Decision is one recorded verdict, with what the existing checks did with the
@@ -59,7 +65,10 @@ type Decision struct {
 	Tier          Tier
 	Mode          Mode
 	LegacyAllowed bool
-	Reasons       []string
+	// Enforced is true when Mode was applied to the call, false when it was only
+	// recorded beside what the existing checks decided.
+	Enforced bool
+	Reasons  []string
 }
 
 // Store keeps the decisions in the shared proactive database.
@@ -90,14 +99,16 @@ func (s *Store) Add(ctx context.Context, d Decision) error {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
 	defer cancel()
-	legacy := 0
-	if d.LegacyAllowed {
-		legacy = 1
+	flag := func(b bool) int {
+		if b {
+			return 1
+		}
+		return 0
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO policy_decisions (at_ms, tool, turn_kind, trust, tier, mode, legacy_allowed, reasons_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.At.UnixMilli(), d.Tool, d.TurnKind, d.Trust.String(), d.Tier.String(), string(d.Mode), legacy, string(reasons)); err != nil {
+		`INSERT INTO policy_decisions (at_ms, tool, turn_kind, trust, tier, mode, legacy_allowed, enforced, reasons_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.At.UnixMilli(), d.Tool, d.TurnKind, d.Trust.String(), d.Tier.String(), string(d.Mode), flag(d.LegacyAllowed), flag(d.Enforced), string(reasons)); err != nil {
 		return fmt.Errorf("policy: record decision: %w", err)
 	}
 	if s.inserts.Add(1)%pruneEvery == 0 {
@@ -134,7 +145,7 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) {
 // Recent returns up to n of the newest decisions, newest first.
 func (s *Store) Recent(ctx context.Context, n int) ([]Decision, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT at_ms, tool, turn_kind, trust, tier, mode, legacy_allowed, reasons_json
+		`SELECT at_ms, tool, turn_kind, trust, tier, mode, legacy_allowed, enforced, reasons_json
 		 FROM policy_decisions ORDER BY id DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, fmt.Errorf("policy: read decisions: %w", err)
@@ -145,11 +156,11 @@ func (s *Store) Recent(ctx context.Context, n int) ([]Decision, error) {
 		var d Decision
 		var ms int64
 		var trust, tier, mode, reasons string
-		var legacy int
-		if err := rows.Scan(&ms, &d.Tool, &d.TurnKind, &trust, &tier, &mode, &legacy, &reasons); err != nil {
+		var legacy, enforced int
+		if err := rows.Scan(&ms, &d.Tool, &d.TurnKind, &trust, &tier, &mode, &legacy, &enforced, &reasons); err != nil {
 			return nil, fmt.Errorf("policy: read decisions: %w", err)
 		}
-		d.At, d.Mode, d.LegacyAllowed = time.UnixMilli(ms), Mode(mode), legacy == 1
+		d.At, d.Mode, d.LegacyAllowed, d.Enforced = time.UnixMilli(ms), Mode(mode), legacy == 1, enforced == 1
 		d.Trust, _ = proactive.ParseTrust(trust)
 		for t := T0Read; t <= T4Funds; t++ {
 			if t.String() == tier {
@@ -167,4 +178,25 @@ func (s *Store) Count(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM policy_decisions`).Scan(&n)
 	return n, err
+}
+
+// CountsSince returns how many decisions each mode has among those recorded at or
+// after since. Only counts leave the table: no tool, no reason.
+func (s *Store) CountsSince(ctx context.Context, since time.Time) (map[Mode]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT mode, COUNT(*) FROM policy_decisions WHERE at_ms >= ? GROUP BY mode`, since.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("policy: count decisions: %w", err)
+	}
+	defer rows.Close()
+	out := map[Mode]int{}
+	for rows.Next() {
+		var m string
+		var n int
+		if err := rows.Scan(&m, &n); err != nil {
+			return nil, fmt.Errorf("policy: count decisions: %w", err)
+		}
+		out[Mode(m)] = n
+	}
+	return out, rows.Err()
 }

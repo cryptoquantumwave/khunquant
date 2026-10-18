@@ -38,7 +38,9 @@ func TestValidateTradingRisk(t *testing.T) {
 		c    TradingRiskConfig
 		want string // substring of the error, "" for valid
 	}{
-		{"valid", TradingRiskConfig{MaxOrdersPer10Min: 6, MaxSymbolSharePct: 100, SymbolAllowlist: []string{"BTC/USDT"}}, ""},
+		{"valid", TradingRiskConfig{MaxOrdersPer10Min: 6, SymbolAllowlist: []string{"BTC/USDT"}}, ""},
+		{"share cap while no portfolio source is wired", TradingRiskConfig{MaxSymbolSharePct: 25}, "not supported yet"},
+		{"share cap of 100 is still a cap", TradingRiskConfig{MaxSymbolSharePct: 100}, "max_symbol_share_pct"},
 		{"negative rate", TradingRiskConfig{MaxOrdersPer10Min: -1}, "max_orders_per_10min"},
 		{"negative share", TradingRiskConfig{MaxSymbolSharePct: -5}, "max_symbol_share_pct"},
 		{"share over 100", TradingRiskConfig{MaxSymbolSharePct: 101}, "max_symbol_share_pct"},
@@ -57,15 +59,28 @@ func TestValidateTradingRisk(t *testing.T) {
 	}
 }
 
-// live is accepted by validation and reported as configured; it is enforced as
-// shadow until the engine's tool hooks ship (see ModeConfig).
+// live is accepted by validation and, with proactive on and a valid owner, reported
+// as configured; without them it runs as shadow and says so.
 func TestPolicyMode_LiveIsAcceptedAndReported(t *testing.T) {
 	c := DefaultConfig().Proactive
 	c.Policy.Mode = ProactiveModeLive
 	if err := ValidateProactive(c); err != nil {
 		t.Fatalf("live was rejected: %v", err)
 	}
-	if got := c.Effective().PolicyMode; got != ProactiveModeLive {
-		t.Fatalf("effective policy mode = %q", got)
+	if e := c.Effective(); e.PolicyMode != ProactiveModeShadow || !contains(e.Downgrades, "proactive: proactive disabled; policy.mode live → shadow") {
+		t.Fatalf("live without proactive: %q %q", e.PolicyMode, e.Downgrades)
+	}
+	c.Enabled = true
+	if e := c.Effective(); e.PolicyMode != ProactiveModeShadow || !contains(e.Downgrades, "proactive: owner not configured; policy.mode live → shadow") {
+		t.Fatalf("live without an owner: %q %q", e.PolicyMode, e.Downgrades)
+	}
+	c.Owner = validOwner()
+	if e := c.Effective(); e.PolicyMode != ProactiveModeLive || contains(e.Downgrades, "policy.mode live → shadow") {
+		t.Fatalf("live with proactive on and an owner: %q %q", e.PolicyMode, e.Downgrades)
+	}
+	c.Policy.Mode = ProactiveModeShadow
+	c.Owner = OwnerConfig{}
+	if e := c.Effective(); e.PolicyMode != ProactiveModeShadow {
+		t.Fatalf("shadow stays shadow: %q", e.PolicyMode)
 	}
 }

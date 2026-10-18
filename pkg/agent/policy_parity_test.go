@@ -154,6 +154,7 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 	trusts := []proactive.Trust{proactive.TrustSystem, proactive.TrustExchange, proactive.TrustUntrusted}
 	bools := []bool{false, true}
 	var checked, bothAct, stricter int
+	var liveAct, liveStricter, liveHeld, liveOwnerActs int
 	var failures []string
 	for _, ownerless := range bools {
 		for _, approvals := range bools {
@@ -183,6 +184,10 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 						for _, killed := range bools {
 							isKilled := killed
 							eng := tools.NewPolicyEngine(func() *config.Config { return c }, func() bool { return isKilled }, nil, nil)
+							// Live counts an allowed order, so each live probe gets an engine of its own.
+							liveEng := func() *policy.Engine {
+								return tools.NewPolicyEngine(func() *config.Config { return c }, func() bool { return isKilled }, nil, nil)
+							}
 							for _, tc := range parityCases() {
 								if tc.ownerless && !ownerless {
 									continue
@@ -202,6 +207,37 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 												isOwner := tc.name == "owner at the console" || (tc.name == "owner user root" && !ownerless)
 												if isOwner && len(v.Reasons) > 0 && strings.HasPrefix(v.Reasons[0], "K:") && len(failures) < 20 {
 													failures = append(failures, fmt.Sprintf("KILL: %s / kill %v / tool %q: the kill switch decided the owner's own turn", tc.name, killed, name))
+												}
+												// Live: the outcome is today's refusal OR the engine's, never an
+												// allow that either refused. (A held tool whose approval was granted
+												// is today's decision: the engine's L-ask for it is answered.)
+												liveLegacy, liveOK, lv := tools.PolicyProbeLive(ctx, liveEng(), name, args(name))
+												held := v.Mode == policy.ModeAsk && len(v.Reasons) > 0 && v.Reasons[0] == "L: the tool requires operator approval"
+												switch {
+												case liveLegacy != legacy:
+													failures = append(failures, fmt.Sprintf("LIVE-PROBE: %s / tool %q: legacy %v vs %v", tc.name, name, legacy, liveLegacy))
+												case liveOK && !legacy:
+													failures = append(failures, fmt.Sprintf("LIVE-LOOSER: %s / trust %s / tool %q: today refuses, live allows (%v)", tc.name, trust, name, lv.Reasons))
+												case liveOK && v.Mode != policy.ModeAct && !held && tools.ClassOf(name) != tools.ClassUnknown && moneyClass(name):
+													failures = append(failures, fmt.Sprintf("LIVE-LOOSER-THAN-ENGINE: %s / trust %s / tool %q: the engine says %s %v, live allows", tc.name, trust, name, v.Mode, v.Reasons))
+												case liveOK:
+													liveAct++
+													if held && v.Mode != policy.ModeAct {
+														liveHeld++
+													}
+												case legacy:
+													liveStricter++
+												}
+												// The owner keeps their hands: the owner's own root turn (no taint
+												// holder) is refused by nothing in live but gate B's limits the owner
+												// configured, and exits never.
+												if isOwner && !holder && !brakes && legacy {
+													if !liveOK && len(failures) < 20 {
+														failures = append(failures, fmt.Sprintf("OWNER-REFUSED: %s / kill %v / tool %q: %s %v", tc.name, killed, name, lv.Mode, lv.Reasons))
+													}
+													if liveOK {
+														liveOwnerActs++
+													}
 												}
 												switch {
 												case !legacy && v.Mode == policy.ModeAct:
@@ -232,6 +268,21 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 	if bothAct == 0 || stricter == 0 {
 		t.Fatalf("the matrix is vacuous: %d calls both allow, %d the engine is stricter on", bothAct, stricter)
 	}
+	if liveAct == 0 || liveStricter == 0 || liveOwnerActs == 0 {
+		t.Fatalf("the live matrix is vacuous: live acts on %d, stricter on %d, owner acts on %d", liveAct, liveStricter, liveOwnerActs)
+	}
+	t.Logf("live: acts where both act on %d calls (%d of them held tools whose approval was granted), refuses %d calls today allows, owner root turn acts on %d",
+		liveAct, liveHeld, liveStricter, liveOwnerActs)
 	t.Logf("checked %d cases over %d tool names: both act on %d, the engine is stricter on %d allowed calls, looser on %d",
 		checked, len(names), bothAct, stricter, len(failures))
+}
+
+// moneyClass is whether the live hook is asked about the tool at all (the classes
+// that move money); for every other class live is exactly today's decision.
+func moneyClass(name string) bool {
+	switch tools.ClassOf(name) {
+	case tools.ClassTrade, tools.ClassFunds, tools.ClassPropose:
+		return true
+	}
+	return false
 }

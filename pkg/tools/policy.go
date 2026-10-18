@@ -198,8 +198,12 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
 	refusal := enforceToolPolicy(ctx, name, args)
 	// Shadow: the policy engine is asked about the call and its verdict recorded
-	// beside what the checks above decided. It cannot change the outcome.
-	observeShadow(ctx, name, args, refusal == nil)
+	// beside what the checks above decided. It cannot change the outcome. In live,
+	// a money call the checks allowed is decided and recorded by the hook instead
+	// (policyHook), so that it is neither asked twice nor counted twice.
+	if refusal != nil || livePolicy.Load() == nil || !applies(name) {
+		observeShadow(ctx, name, args, refusal == nil)
+	}
 	return refusal
 }
 

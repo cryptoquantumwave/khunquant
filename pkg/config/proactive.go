@@ -144,8 +144,9 @@ type LearningConfig struct {
 // For proactive.policy it selects the policy engine (pkg/policy): off records
 // nothing; shadow records, in policy_decisions and as policy.decision events, what
 // the engine would have decided for each tool call while the existing checks keep
-// deciding; live is accepted but behaves exactly like shadow until the engine's
-// tool hooks ship - nothing in this release is enforced by the engine.
+// deciding; live ENFORCES the engine's verdict through a tool hook, strictly on top
+// of the existing checks (it adds refusals and never allows what they refuse). Live
+// needs proactive on and a valid owner, else it runs as shadow (Effective says so).
 type ModeConfig struct {
 	Mode string `json:"mode" env:"MODE"`
 }
@@ -502,9 +503,14 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
 //
-// PolicyMode "live" is returned as configured but is enforced as shadow: until the
-// policy engine's tool hooks ship, it only records (see ModeConfig). The engine
-// records only while Enabled is also true; PolicyMode alone does not turn it on.
+// policy.mode live takes the owner away from nobody, so it needs one: the owner
+// column of the autonomy dial is the owner's own turn, and with no owner every
+// user turn is someone else's and could not trade. Without proactive on and a valid
+// owner:
+//
+//	policy.mode     live     -> shadow
+//
+// The engine records only while Enabled is also true; PolicyMode alone does not turn it on.
 func (c ProactiveConfig) Effective() EffectiveModes {
 	valid := ValidateProactive(c) == nil
 	route, haveOwner := c.OwnerRoute()
@@ -587,6 +593,10 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	if e.TriggersMode == ProactiveModeLive {
 		e.TriggersMode = ProactiveModeShadow
 		down("triggers.mode live → shadow")
+	}
+	if e.PolicyMode == ProactiveModeLive {
+		e.PolicyMode = ProactiveModeShadow
+		down("policy.mode live → shadow")
 	}
 	if e.HeartbeatMode != HeartbeatModeLegacy {
 		down(fmt.Sprintf("heartbeat.mode %s → legacy", e.HeartbeatMode))
@@ -712,7 +722,8 @@ func redactOwnerValues(c ProactiveConfig, s string) string {
 }
 
 // ValidateTradingRisk reports every problem in the policy engine's brakes as one
-// joined error, or nil: a negative or non-finite value, or a share above 100.
+// joined error, or nil: a negative or non-finite value, a share above 100, or a share
+// cap at all (see below).
 func ValidateTradingRisk(t TradingRiskConfig) error {
 	var errs []error
 	if t.MaxOrdersPer10Min < 0 {
@@ -720,6 +731,13 @@ func ValidateTradingRisk(t TradingRiskConfig) error {
 	}
 	if p := t.MaxSymbolSharePct; math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 100 {
 		errs = append(errs, fmt.Errorf("trading_risk.max_symbol_share_pct must be between 0 and 100 (got %v)", p))
+	} else if p > 0 {
+		// No portfolio source is wired into the engine yet, and a cap whose share
+		// cannot be measured refuses the order, so enforcing it would block every buy.
+		// A later change that passes an Exposure to tools.NewPolicyEngine (the gateway
+		// builds the engine in policy_wiring.go) lifts this check; until then live mode
+		// is not armed while the cap is set.
+		errs = append(errs, fmt.Errorf("trading_risk.max_symbol_share_pct is not supported yet (got %v): no portfolio source is wired, so the cap cannot be measured; leave it 0", p))
 	}
 	for _, s := range t.SymbolAllowlist {
 		if strings.TrimSpace(s) == "" {

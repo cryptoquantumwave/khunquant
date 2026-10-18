@@ -131,6 +131,22 @@ const (
 //	D  utility (Horvitz thresholds, MR-503): not built. It would sit after C and
 //	   could only degrade act -> ask -> notify, never loosen.
 func (e *Engine) Authorize(ctx context.Context, r ActionRequest) Verdict {
+	return e.evaluate(ctx, r, false)
+}
+
+// Enforce is Authorize for the live tool hook, which runs only on a call that
+// today's checks (gate L's ceiling and rows, and the approval hold they resolve)
+// have already allowed. It therefore skips gate L - a held tool whose approval was
+// granted would otherwise be asked about again - and it makes the rate throttle and
+// the duplicate guard atomic with the decision: when the verdict is act and the call
+// places an order, the order is counted in the same critical section that checked
+// the brakes, so two concurrent calls cannot both pass, and an order the later
+// gates refuse is never counted. Callers must not also Note the order.
+func (e *Engine) Enforce(ctx context.Context, r ActionRequest) Verdict {
+	return e.evaluate(ctx, r, true)
+}
+
+func (e *Engine) evaluate(ctx context.Context, r ActionRequest, live bool) Verdict {
 	covered := e.covered(ctx, r)
 	v := Verdict{Tier: tierOf(r, covered)}
 
@@ -147,8 +163,10 @@ func (e *Engine) Authorize(ctx context.Context, r ActionRequest) Verdict {
 		return verdictOf(gate, m, why)
 	}
 
-	if m, why := e.legacy(ctx, r); m != ModeAct {
-		return verdictOf("L", m, why)
+	if !live {
+		if m, why := e.legacy(ctx, r); m != ModeAct {
+			return verdictOf("L", m, why)
+		}
 	}
 	// The kill switch stops the assistant acting on its own; it does not take the
 	// owner's hands off. So it does not apply to the owner's own root conversation
@@ -159,11 +177,40 @@ func (e *Engine) Authorize(ctx context.Context, r ActionRequest) Verdict {
 	if m, why := provenance(r, v.Tier); m != ModeAct {
 		return verdictOf("A", m, why)
 	}
-	if m, why := e.limits(ctx, r); m != ModeAct {
+	if m, why := e.limits(ctx, r, live); m != ModeAct {
 		return verdictOf("B", m, why)
 	}
-	m, why := dial(r, v.Tier, covered)
-	return proposal("C", m, why)
+	final := func() Verdict {
+		m, why := dial(r, v.Tier, covered)
+		return proposal("C", m, why)
+	}
+	if !live || !countsTowardBrakes(r) {
+		return final()
+	}
+	// The last step of a live decision, under one lock: the order brakes, then gate
+	// C (pure), then the count. Valuation, which may call the network, is done.
+	cfg := e.cfg()
+	if cfg == nil {
+		return verdictOf("B", ModeDeny, "no configuration to check the limits against")
+	}
+	now := e.d.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.trimLocked(now)
+	if fails := e.recentFailsLocked(now, cfg.TradingRisk.MaxOrdersPer10Min, r.Order); len(fails) > 0 {
+		return verdictOf("B", ModeDeny, strings.Join(fails, "; "))
+	}
+	out := final()
+	if out.Mode == ModeAct {
+		e.appendLocked(now, r.Order)
+	}
+	return out
+}
+
+// countsTowardBrakes is whether a placing order is counted by the rate and
+// duplicate brakes: risk-increasing money actions that carry an order and place it.
+func countsTowardBrakes(r ActionRequest) bool {
+	return r.Class.movesMoney() && r.Order != nil && r.Order.Placing && !r.ReduceOnly && !r.Protective
 }
 
 func (e *Engine) killed() bool { return e.d.Killed != nil && e.d.Killed() }
@@ -270,7 +317,7 @@ func dial(r ActionRequest, t Tier, covered bool) (Mode, string) {
 // limits is gate B: permission, the USD cap and the brakes. Every brake is off
 // unless configured, and reduce-only and protective actions are exempt from all
 // of them: a safety brake never blocks an exit.
-func (e *Engine) limits(ctx context.Context, r ActionRequest) (Mode, string) {
+func (e *Engine) limits(ctx context.Context, r ActionRequest, live bool) (Mode, string) {
 	if !r.Class.movesMoney() {
 		return ModeAct, ""
 	}
@@ -292,7 +339,7 @@ func (e *Engine) limits(ctx context.Context, r ActionRequest) (Mode, string) {
 	if r.ReduceOnly || r.Protective {
 		return ModeAct, ""
 	}
-	if fails := e.brakes(ctx, cfg, r); len(fails) > 0 {
+	if fails := e.brakes(ctx, cfg, r, live); len(fails) > 0 {
 		return ModeDeny, strings.Join(fails, "; ")
 	}
 	return ModeAct, ""
@@ -306,7 +353,10 @@ func (e *Engine) cfg() *config.Config {
 }
 
 // brakes are the checks that apply to a risk-increasing action only.
-func (e *Engine) brakes(ctx context.Context, cfg *config.Config, r ActionRequest) []string {
+//
+// In live the rate throttle and the duplicate guard are not run here: Enforce runs
+// them atomically with the count, after the valuation below.
+func (e *Engine) brakes(ctx context.Context, cfg *config.Config, r ActionRequest, live bool) []string {
 	tr := cfg.TradingRisk
 	var fails []string
 	if r.Futures {
@@ -353,7 +403,7 @@ func (e *Engine) brakes(ctx context.Context, cfg *config.Config, r ActionRequest
 			fails = append(fails, "share: the symbol would exceed max_symbol_share_pct")
 		}
 	}
-	if o.Placing {
+	if o.Placing && !live {
 		fails = append(fails, e.recentFails(tr.MaxOrdersPer10Min, o)...)
 	}
 	return fails
@@ -389,6 +439,10 @@ func (e *Engine) recentFails(limit int, o *Order) []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.trimLocked(now)
+	return e.recentFailsLocked(now, limit, o)
+}
+
+func (e *Engine) recentFailsLocked(now time.Time, limit int, o *Order) []string {
 	var fails []string
 	if limit > 0 && len(e.recent) >= limit {
 		fails = append(fails, fmt.Sprintf("rate: %d orders in the last %d minutes (max_orders_per_10min)", len(e.recent), int(rateWindow.Minutes())))
@@ -417,14 +471,17 @@ func (e *Engine) trimLocked(now time.Time) {
 // that the rate and duplicate brakes see it. The caller notes only placements it
 // knows were allowed; reduce-only and protective orders are never counted.
 func (e *Engine) Note(r ActionRequest) {
-	o := r.Order
-	if o == nil || !o.Placing || r.ReduceOnly || r.Protective {
+	if !countsTowardBrakes(r) {
 		return
 	}
 	now := e.d.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.trimLocked(now)
+	e.appendLocked(now, r.Order)
+}
+
+func (e *Engine) appendLocked(now time.Time, o *Order) {
 	if len(e.recent) >= maxRecentKept {
 		e.recent = e.recent[1:]
 	}

@@ -71,7 +71,7 @@ func TestPolicyDecisions_OnlyWhenProactiveOn(t *testing.T) {
 		{"proactive on, mode off", config.ProactiveModeOff, true, false},
 		{"proactive on, mode unset", "", true, false},
 		{"proactive on, mode shadow", config.ProactiveModeShadow, true, true},
-		{"proactive on, mode live behaves as shadow", config.ProactiveModeLive, true, true},
+		{"proactive on, mode live records too", config.ProactiveModeLive, true, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newAssemblyFixture(t, withPolicy(tt.mode, tt.proactive))

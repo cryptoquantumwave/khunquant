@@ -218,6 +218,12 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
   save. The name list is what keeps them out of API responses and logs.
 - **Anything that builds a context from `context.Background()` and then runs tools** must carry
   `tools.WithToolOrigin` / `tools.WithToolSender` over from the parent. Untagged turns fail closed.
+- **New tools are covered by the policy hook automatically.** `ToolRegistry.ExecuteWithContext` runs
+  the hooks (`Hook`, `AddHook`; the live policy hook is `tools.SetPolicyLive`) for every tool, MCP
+  and runtime-discovered ones included; a trade/funds/propose class tool needs nothing extra. A new
+  trade path must go through `ExecuteWithContext`: one that calls a tool's `Execute` directly
+  bypasses the hook (as the executors `approval.order`, `dca.execute` and `dn.*` do, which keep
+  their own gates). The hook only adds refusals and never creates a proposal.
 - **Package-level state armed from config must be re-armed on reload**, not just at startup —
   see `armToolPolicy`, called from both `NewAgentLoop` and `ReloadProviderAndConfig`.
 

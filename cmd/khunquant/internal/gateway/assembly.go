@@ -522,7 +522,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
-		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
+		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
+		withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
 	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
 

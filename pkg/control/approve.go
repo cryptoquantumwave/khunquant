@@ -52,6 +52,9 @@ func (d *Dispatcher) decideCommand(ctx context.Context, in Input, approve bool) 
 // service checks the owner again, and the proposal's own conditions (pending,
 // unexpired, the right nonce when there is one, the kill switch).
 func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, code, nonce string, approve bool) Reply {
+	if isWebOwner(deps, in) {
+		ctx = approval.WithWebDecider(ctx) // Decide checks the route again
+	}
 	p, err := deps.Approvals.Decide(ctx, code, nonce, approve, canonicalSender(in))
 	var se *approval.StatusError
 	switch {

@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/identity"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -97,9 +98,12 @@ func readTurn(ctx context.Context, cfg *config.Config) turnInfo {
 		t.prov.SessionKey = channel + ":" + ToolChatID(ctx)
 	}
 	if t.kind == proactive.TurnUser {
-		if origin == OriginInternal {
+		switch {
+		case origin == OriginInternal:
 			t.prov.SenderID = cliChannel
-		} else {
+		case t.owner && t.by == identity.WebOwner:
+			t.prov.SenderID = identity.WebOwner // the audit says the web chat acted
+		default:
 			t.prov.SenderID = canonicalSender(ctx)
 		}
 	}

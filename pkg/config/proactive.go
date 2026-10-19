@@ -62,6 +62,18 @@ type OwnerConfig struct {
 	Channel  string `json:"channel"   env:"KHUNQUANT_PROACTIVE_OWNER_CHANNEL"`   // "telegram"
 	ChatID   string `json:"chat_id"   env:"KHUNQUANT_PROACTIVE_OWNER_CHAT_ID"`   // the owner's DM chat id
 	SenderID string `json:"sender_id" env:"KHUNQUANT_PROACTIVE_OWNER_SENDER_ID"` // canonical "telegram:123456"
+	// WebIsOwner makes the authenticated web launcher chat a second owner route
+	// (see web_owner.go). Unset means true; false restores "only the configured
+	// route is the owner". It has no effect without a valid owner above.
+	WebIsOwner *bool `json:"web_is_owner,omitempty" env:"KHUNQUANT_PROACTIVE_OWNER_WEB_IS_OWNER"`
+}
+
+// WithWebFrom returns o carrying prev's web_is_owner choice. A write path that
+// builds a fresh OwnerConfig (ValidateOwnerInput, a clear) calls it so that
+// changing or clearing the route cannot silently turn an explicit false back on.
+func (o OwnerConfig) WithWebFrom(prev OwnerConfig) OwnerConfig {
+	o.WebIsOwner = prev.WebIsOwner
+	return o
 }
 
 // ProactiveHeartbeatConfig selects how the heartbeat behaves.

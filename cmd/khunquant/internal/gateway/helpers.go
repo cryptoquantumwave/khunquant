@@ -192,6 +192,7 @@ func gatewayCmd(debug bool) error {
 	// Startup-only: reload does not re-run this. A reload that adds an account with
 	// no explicit permissions therefore goes unwarned until the next start (known gap).
 	warnOpenPermissions(cfg)
+	armWebOwner(configPath, cfg)
 
 	// Setup and start all services
 	services, err := buildServices(context.Background(), assemblyDeps{

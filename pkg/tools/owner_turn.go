@@ -44,6 +44,10 @@ const (
 //     (channel "cli"); a system or subagent turn is not.
 //   - A remote turn is the owner only when an owner is configured and the turn's
 //     sender is that owner. With no owner configured nothing a chat sends counts.
+//   - The one second route: a root turn from the authenticated web launcher chat
+//     (channel pico, a token-authenticated connection, config.IsWebOwnerTurn) is the
+//     owner too, and its author is identity.WebOwner ("web"), so the audit says which
+//     surface acted. Every consumer of this function gets it; none checks it itself.
 //
 // rootOnly additionally refuses a sub-turn: a context tagged by WithSubTurn, or a
 // remote turn with no channel. A sub-turn (spawn, delegate, subagent) keeps the
@@ -76,6 +80,9 @@ func checkOwnerTurn(ctx context.Context, cfg *config.Config, rootOnly bool) (by 
 			return "", ownerNoOwner
 		}
 		if !identity.SameSender(sender, route.SenderID) {
+			if cfg.IsWebOwnerTurn(ToolChannel(ctx), webAuthenticated(ctx)) {
+				return identity.WebOwner, ownerYes
+			}
 			return "", ownerOther
 		}
 		return sender, ownerYes
@@ -94,9 +101,15 @@ func canonicalSender(ctx context.Context) string {
 // internal turn: a sub-turn started from the owner's console is a model's delegation,
 // not the owner. Memory is written directly only here.
 func isOwnerRootTurn(ctx context.Context, cfg *config.Config) bool {
+	_, ok := ownerRootAuthor(ctx, cfg)
+	return ok
+}
+
+// ownerRootAuthor is isOwnerRootTurn and the author checkOwnerTurn names.
+func ownerRootAuthor(ctx context.Context, cfg *config.Config) (by string, ok bool) {
 	if IsSubTurn(ctx) {
-		return false
+		return "", false
 	}
-	_, v := checkOwnerTurn(ctx, cfg, true)
-	return v == ownerYes
+	by, v := checkOwnerTurn(ctx, cfg, true)
+	return by, v == ownerYes
 }

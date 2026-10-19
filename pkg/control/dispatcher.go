@@ -252,7 +252,7 @@ func (d *Dispatcher) TryHandle(ctx context.Context, in Input) (Reply, bool) {
 
 	st := &callState{cmd: c, deps: deps, outcome: outcomeOK}
 	sender := canonicalSender(in)
-	st.owner = ownerRoute(deps) != "" && identity.SameSender(sender, ownerRoute(deps))
+	st.owner = (ownerRoute(deps) != "" && identity.SameSender(sender, ownerRoute(deps))) || isWebOwner(deps, in)
 
 	// 10 actions a minute per sender. /stop is exempt for the owner: it must always
 	// work. Anybody else saying it is limited like any other command.
@@ -357,6 +357,9 @@ func (d *Dispatcher) standing(deps *Deps, in Input) standing {
 		return standNoOwner
 	}
 	if !identity.SameSender(canonicalSender(in), route.SenderID) {
+		if isWebOwner(deps, in) {
+			return standOwner // the dashboard chat is a direct chat and its own owner chat
+		}
 		return standOther
 	}
 	if whoami.IsGroupChat(in.Channel, in.ChatID, in.PeerKind) ||
@@ -364,6 +367,14 @@ func (d *Dispatcher) standing(deps *Deps, in Input) standing {
 		return standElsewhere
 	}
 	return standOwner
+}
+
+// isWebOwner is the second owner route: a message from the authenticated web
+// launcher chat while config.IsWebOwnerTurn holds. The rule lives in pkg/config so
+// that this, the tools and the approval service answer the same.
+func isWebOwner(deps *Deps, in Input) bool {
+	return deps != nil && !whoami.IsGroupChat(in.Channel, in.ChatID, in.PeerKind) &&
+		deps.Cfg.IsWebOwnerTurn(in.Channel, in.Sender.WebAuthenticated)
 }
 
 // refuseNonOwner returns the reply for a sender who may not give an owner-only

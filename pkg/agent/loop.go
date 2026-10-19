@@ -86,6 +86,7 @@ type processOptions struct {
 	ReplyToMessageID        string              // Current inbound reply target message ID
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
+	WebAuthenticated        bool                // The message came over a pico connection authenticated with the pico token (never set for a sub-turn or follow-up)
 	UserMessage             string              // User message content (may include prefix)
 	ForcedSkills            []string            // Skills to carry in full in a light prompt (PromptFull already has them all)
 	PromptMode              PromptMode          // PromptFull (default: user turns), PromptLight (background turns) or PromptProactive
@@ -1184,6 +1185,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ReplyToMessageID:        inboundMetadata(msg, metadataKeyReplyToMessage),
 		SenderID:                msg.SenderID,
 		SenderDisplayName:       msg.Sender.DisplayName,
+		WebAuthenticated:        msg.Channel == config.WebChannel && msg.Sender.WebAuthenticated,
 		UserMessage:             msg.Content,
 		Media:                   msg.Media,
 		DefaultResponse:         defaultResponse,
@@ -1537,6 +1539,9 @@ func (al *AgentLoop) runAgentLoop(
 		// The sender is what an operator approval is bound to: only the person
 		// who made a request can approve it.
 		ctx = tools.WithToolSender(ctx, opts.SenderID)
+		if opts.WebAuthenticated {
+			ctx = tools.WithWebAuth(ctx)
+		}
 
 		rootTS.ctx = ctx
 

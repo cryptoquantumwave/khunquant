@@ -13,6 +13,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/identity"
 	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 )
 
@@ -127,8 +128,11 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	cfg := armedConfig.Load()
 	_, ownerConfigured := ownerOf(cfg)
 	if !IsAutonomousOrigin(ToolOrigin(ctx)) {
+		by, isOwner := ownerRootAuthor(ctx, cfg)
 		switch {
-		case isOwnerRootTurn(ctx, cfg):
+		case isOwner && by == identity.WebOwner:
+			return t.save(fact, category, "owner-web")
+		case isOwner:
 			return t.save(fact, category, "owner")
 		case !ownerConfigured:
 			// Nobody is the owner, so nobody is refused: a default install keeps what it

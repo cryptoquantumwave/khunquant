@@ -221,6 +221,25 @@ A tool listed as `tools.policies.<tool>.require_approval: true` does not run on 
 - `/approve` from the `system` or `subagent` channels, from `async:*` senders (async tool results are re-published inbound with model-influenced content) or from the `cron` sender outside the CLI is refused before the store is consulted.
 - Off by default. Risk-reducing tools cannot be flagged. Approvals are in memory, so a restart drops pending ones (the model's retry simply asks again). A call inside a sub-turn cannot be approved — it has no chat to bind to — and is refused.
 
+### Who the owner is (`proactive.owner`), and the web launcher chat
+
+With `proactive.owner` set there are two routes by which a message is the owner's. **One definition** answers for all of them (`checkOwnerTurn` in `pkg/tools/owner_turn.go`, `config.IsWebOwnerTurn` / `OwnerDecider` in `pkg/config/web_owner.go`): tools, the control path (`/approve`, `/stop`, the owner chat rule), approvals, memory writes, the policy dial, live policy, the kill-switch exemption, `propose_order`, intents and `update_profile`. Sub-turns are never the owner, on either route.
+
+1. **The configured route** (`proactive.owner.channel` / `chat_id` / `sender_id`), as before. Notices to the owner still go only here.
+2. **The authenticated web launcher chat** (the `pico` channel), unless `proactive.owner.web_is_owner` is `false` (default `true`; env `KHUNQUANT_PROACTIVE_OWNER_WEB_IS_OWNER`). It is a second route, not a replacement, and what it does is recorded as the web: an approval has `DecidedBy: "web"`, memory is stamped `by:owner-web`, intents and profile versions are authored `web`.
+
+What makes the web chat the owner is **the pico token plus the launcher's own authentication**. The dashboard never holds the token: the launcher's `/pico/ws` proxy (`web/backend/api/pico.go`) injects it server-side after the dashboard password / session check, and `GET /api/config` withholds it. So whoever passes the launcher's auth on `/pico/ws` acts as the owner, and so does anyone who can read the token from `config.json` / `.security.yml` or who sets a new one through an authenticated config save. **The launcher token and the dashboard password are therefore owner credentials.**
+
+The web chat is the owner **only while all of these hold, each checked when the question is asked, none cached from startup**; otherwise it is an ordinary non-owner sender (memory writes become suggestions, owner-only tools refuse, `/approve` answers "Not authorized."):
+
+- **(a)** `proactive.owner` is a complete, valid owner and `web_is_owner` is not `false`.
+- **(b)** The WebSocket authenticated with the pico token in the `Authorization` header or the `token.<value>` subprotocol (the launcher uses the latter). A connection authenticated by the `?token=` query (`allow_token_query`) is never the owner: URLs are logged, cached and sent in Referer headers. The pico channel sets the fact (`bus.SenderInfo.WebAuthenticated`, never serialised) from the connection alone; the turn carries it as a context value that sub-turns and follow-up turns do not copy; and it only counts on the `pico` channel.
+- **(c)** The launcher requires its dashboard authentication: a dashboard password is set (`khunquant launcher set-password`), **or** the launcher is not `public`, trusts no `trusted_proxy_cidrs`, and `gateway.host` is a loopback address. The gateway reads `launcher-config.json` beside `config.json` for this (a stat per question, re-read when it changes); an unreadable file, or a gate nobody armed, is "not established".
+
+If (a) holds and the switch is on but (c) does not, the gateway logs one `SECURITY:` WARN at start naming what is missing, and the web chat is not the owner. An approval the web gave is re-proven before the order is placed (`OwnerDecider`): turning the route off, or losing (c), between the approval and the placement stops the order.
+
+Accepted limits: with no dashboard password on a loopback-only setup, any local process or user that can reach the launcher is the owner (loopback callers get a session without a password; this is the launcher's existing rule, C-6). The launcher's `-public` flag overrides the file and the gateway cannot see it, and a same-host tunnel or reverse proxy looks like loopback; only a dashboard password closes both. Set one if the machine has other users or the launcher is exposed. To turn the route off entirely: `proactive.owner.web_is_owner: false`.
+
 ### Mandates (opt-in: `proactive.mandates.enabled`)
 
 A mandate is a standing permission the owner approves once ("buy BTC/THB on bitkub: at most 2000 THB per run and 8000 THB per month, until 2027-04-14"). With one active, each due run of that DCA plan is executed by the `dca.execute` journal workflow in code, with no model anywhere in the path (`pkg/dca` imports no provider, agent or tool package).
@@ -299,6 +318,7 @@ Known limitations:
 
 ## Upgrade Notes (breaking changes)
 
+- **The authenticated web launcher chat is now the owner** (when `proactive.owner` is set): `proactive.owner.web_is_owner` defaults to `true`. Messages from the dashboard chat can now write memory, change the profile, activate intents, `/approve` proposals and act under live policy, where before they counted as a non-owner. Set it to `false` to restore the old behaviour. See "Who the owner is" above.
 - `option_create_order` is disabled by default — set `tools.option_create_order.enabled: true` to place option orders.
 - `-public` no longer moves the gateway onto `0.0.0.0` — set `gateway.host` explicitly.
 - CSRF protection covers every mutating `/api/` route — scripts must send a matching `Origin`.

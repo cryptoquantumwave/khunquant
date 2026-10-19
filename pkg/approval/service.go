@@ -323,7 +323,9 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 // Decide records the owner's decision on the pending proposal that holds code.
 //
 // The sender must be the configured owner (the same comparison tools.checkOwnerTurn
-// makes), the proposal pending and unexpired, and nonce, when given, the one stored
+// makes), or the call must come from the control path for a message from the
+// authenticated web launcher chat (WithWebDecider) while that route is active, in
+// which case DecidedBy is "web"; the proposal pending and unexpired, and nonce, when given, the one stored
 // (compared in constant time); button callbacks carry the nonce, the text command
 // does not and relies on the owner check and the code's uniqueness. The transition
 // is one conditional UPDATE, so a double tap, two channels, or a race with the
@@ -338,6 +340,11 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, senderID string) (Proposal, error) {
 	ownerID, ok := s.owner()
 	canonical := identity.CanonicalSender(senderID, "")
+	if ok && !identity.SameSender(canonical, ownerID) && IsWebDecider(ctx) && s.o.Cfg.WebOwnerActive() {
+		// The second owner route: the authenticated web launcher chat. The decision is
+		// recorded as the web's, and every later step re-proves it (OwnerDecider).
+		canonical, ownerID = identity.WebOwner, identity.WebOwner
+	}
 	if !ok || !identity.SameSender(canonical, ownerID) {
 		logger.WarnCF(logComponent, "SECURITY: approval decision from a sender who is not the owner", nil)
 		return Proposal{}, ErrNotOwner

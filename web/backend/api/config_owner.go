@@ -108,16 +108,28 @@ func restoreOwnerIDs(doc map[string]any, stored config.OwnerConfig, fillAbsent b
 // clears the owner; anything else must satisfy config.ValidateOwnerInput and is
 // stored in the normalised form that route would store.
 func resolveOwnerSave(stored, incoming config.OwnerConfig) (config.OwnerConfig, error) {
-	if incoming == stored {
-		return stored, nil
+	// web_is_owner is a switch, not part of the identity: a pointer, so compared by
+	// value, and carried through whatever is stored below.
+	web := incoming.WebIsOwner
+	same := func(a, b *bool) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+	incNoWeb, stNoWeb := incoming, stored
+	incNoWeb.WebIsOwner, stNoWeb.WebIsOwner = nil, nil
+	if incNoWeb == stNoWeb {
+		if same(web, stored.WebIsOwner) {
+			return stored, nil
+		}
+		out := stored
+		out.WebIsOwner = web
+		return out, nil
 	}
 	if strings.TrimSpace(incoming.Channel) == "" && strings.TrimSpace(incoming.ChatID) == "" &&
 		strings.TrimSpace(incoming.SenderID) == "" {
-		return config.OwnerConfig{}, nil
+		return config.OwnerConfig{WebIsOwner: web}, nil
 	}
 	owner, err := config.ValidateOwnerInput(incoming.Channel, incoming.ChatID, incoming.SenderID)
 	if err != nil {
 		return config.OwnerConfig{}, errors.New("proactive.owner not saved: " + err.Error())
 	}
+	owner.WebIsOwner = web
 	return owner, nil
 }

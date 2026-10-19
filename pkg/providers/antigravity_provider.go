@@ -32,7 +32,7 @@ const (
 	// erroring with an invalid-host response, so the failure looks like
 	// account quota exhaustion when it is actually just the wrong endpoint.
 	antigravityGenerateBaseURL = "https://daily-cloudcode-pa.googleapis.com"
-	antigravityDefaultModel    = "gemini-3-flash"
+	antigravityDefaultModel    = "gemini-3.8-flash-medium"
 	antigravityUserAgent       = "antigravity"
 	antigravityXGoogClient     = "google-cloud-sdk vscode_cloudshelleditor/0.1"
 	// antigravityVersion is sent in the User-Agent (antigravity/<version>) and is
@@ -788,18 +788,17 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		})
 	}
 
-	// Ensure gemini-3-flash is in the list — it is the Antigravity default and always valid.
-	// Note: gemini-3-flash-preview is a Gemini CLI quota model (separate API) and is NOT valid here.
+	// Ensure gemini-3.8-flash-medium is in the list — it is the Antigravity default and always valid.
 	hasFlash := false
 	for _, m := range models {
-		if m.ID == "gemini-3-flash" {
+		if m.ID == "gemini-3.8-flash-medium" {
 			hasFlash = true
 		}
 	}
 	if !hasFlash {
 		models = append(models, AntigravityModelInfo{
-			ID:          "gemini-3-flash",
-			DisplayName: "Gemini 3 Flash",
+			ID:          "gemini-3.8-flash-medium",
+			DisplayName: "Gemini 3.8 Flash (Medium)",
 		})
 	}
 

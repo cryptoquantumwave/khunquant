@@ -962,6 +962,8 @@ func modelNameFromPreset(provider, modelID string) string {
 		if p.ModelID == modelID {
 			slug := strings.ToLower(p.Label)
 			slug = strings.ReplaceAll(slug, " ", "-")
+			slug = strings.ReplaceAll(slug, "(", "")
+			slug = strings.ReplaceAll(slug, ")", "")
 			return slug
 		}
 	}

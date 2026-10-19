@@ -288,8 +288,8 @@ func DefaultConfig() *Config {
 
 			// Antigravity (Google Cloud Code Assist) - OAuth only
 			{
-				ModelName:  "gemini-flash",
-				Model:      "antigravity/gemini-3-flash",
+				ModelName:  DefaultAntigravityModelName,
+				Model:      DefaultAntigravityModel,
 				AuthMethod: "oauth",
 			},
 

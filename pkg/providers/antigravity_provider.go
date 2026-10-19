@@ -35,13 +35,14 @@ const (
 	antigravityDefaultModel    = "gemini-3.8-flash-medium"
 	antigravityUserAgent       = "antigravity"
 	antigravityXGoogClient     = "google-cloud-sdk vscode_cloudshelleditor/0.1"
-	// antigravityVersion is sent in the User-Agent (antigravity/<version>) and is
-	// the value Google's Cloud Code Assist backend uses to gate clients. When it
-	// falls below the server's minimum, the backend does NOT return an HTTP error
-	// — it returns 200 with the model "reply" replaced by "This version of
-	// Antigravity is no longer supported. Please upgrade...". Bump this to a
-	// current Antigravity release when that message starts appearing.
-	antigravityVersion = "2.2.1"
+	// antigravityCLIVersion and antigravityHTTPUserAgent match the User-Agent sent
+	// by the official Antigravity CLI (`agy`). Google's Cloud Code Assist backend
+	// gates client versions AND model availability (e.g. gemini-3.8-flash-low/medium/high,
+	// gemini-4-argon-low/medium/high) based on this User-Agent: sending an older
+	// "antigravity/2.x" header causes streamGenerateContent to return 404 NOT_FOUND
+	// for newer models and omits them from fetchAvailableModels.
+	antigravityCLIVersion    = "1.4.2"
+	antigravityHTTPUserAgent = "antigravity/cli/" + antigravityCLIVersion + " (aidev_client; os_type=darwin; arch=arm64; cl=1001591392; auth_method=consumer)"
 )
 
 // AntigravityProvider implements LLMProvider using Google's Cloud Code Assist (Antigravity) API.
@@ -140,7 +141,7 @@ func (p *AntigravityProvider) Chat(
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", fmt.Sprintf("antigravity/%s linux/amd64", antigravityVersion))
+	req.Header.Set("User-Agent", antigravityHTTPUserAgent)
 	req.Header.Set("X-Goog-Api-Client", antigravityXGoogClient)
 	req.Header.Set("Client-Metadata", string(clientMetadata))
 
@@ -693,13 +694,13 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		},
 	})
 
-	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(reqBody))
+	req, err := http.NewRequest("POST", antigravityGenerateBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", antigravityUserAgent)
+	req.Header.Set("User-Agent", antigravityHTTPUserAgent)
 	req.Header.Set("X-Goog-Api-Client", antigravityXGoogClient)
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -737,13 +738,13 @@ func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelIn
 		"project": projectID,
 	})
 
-	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:fetchAvailableModels", bytes.NewReader(reqBody))
+	req, err := http.NewRequest("POST", antigravityGenerateBaseURL+"/v1internal:fetchAvailableModels", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", antigravityUserAgent)
+	req.Header.Set("User-Agent", antigravityHTTPUserAgent)
 	req.Header.Set("X-Goog-Api-Client", antigravityXGoogClient)
 
 	client := &http.Client{Timeout: 15 * time.Second}

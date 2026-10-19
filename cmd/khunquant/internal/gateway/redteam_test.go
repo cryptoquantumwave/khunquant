@@ -41,6 +41,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
@@ -49,6 +50,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/skills"
+	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex/sqlitextest"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -573,6 +575,29 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	r.reg.Register(tools.NewCreateDCAPlanTool(r.f.initial, store, cronSvc))
 	r.reg.Register(tools.NewSetPriceAlertTool(r.f.initial, cronSvc))
+	snapStore, err := snapshot.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { snapStore.Close() })
+	dnStore, err := deltaneutral.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dnStore.Close() })
+	draftID, err := dnStore.SavePlan(context.Background(), &deltaneutral.Plan{
+		Name: "draft", Asset: "BTC", Status: deltaneutral.PlanStatusDraft, Mode: deltaneutral.ExecutionModeApproval,
+		SpotProvider: "binance", SpotSymbol: "BTC/USDT", SpotSide: "buy", FuturesProvider: "okx", FuturesSymbol: "BTC/USDT:USDT",
+		FuturesSide: "short", FuturesMarginMode: "isolated", FuturesLeverage: 2, CapitalUSDT: 1000, SpotNotionalUSDT: 400,
+		FuturesNotionalUSDT: 400, ReserveMarginUSDT: 100, MonitorInterval: "5m", RiskPolicy: deltaneutral.DefaultRiskPolicy(),
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.reg.Register(tools.NewTakeSnapshotTool(r.f.initial, snapStore))
+	r.reg.Register(tools.NewPrepareDeltaNeutralPlanTool(r.f.initial, dnStore))
+	prepare := map[string]any{"plan_id": float64(draftID)}
 
 	plan := map[string]any{
 		"plan_name": "buy BTC", "provider": "rtfakedca", "symbol": "BTC/USDT", "amount_per_order": 100.0,
@@ -586,8 +611,17 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 		return tools.WithToolSender(tools.WithToolOrigin(context.Background(), tools.OriginRemote), sender)
 	}
 	wording := map[string]string{
-		tools.NameCreateDCAPlan: "DCA plans are changed only in the owner's own conversation",
-		tools.NameSetPriceAlert: "alerts are changed only in the owner's own conversation",
+		tools.NameCreateDCAPlan:           "DCA plans are changed only in the owner's own conversation",
+		tools.NameSetPriceAlert:           "alerts are changed only in the owner's own conversation",
+		tools.NameTakeSnapshot:            "snapshots are changed only in the owner's own conversation",
+		tools.NamePrepareDeltaNeutralPlan: "delta-neutral plans are changed only in the owner's own conversation",
+	}
+	draftStatus := func() string {
+		p, err := dnStore.GetPlan(context.Background(), draftID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Status
 	}
 	state := func() (plans, jobs int) {
 		p, err := store.ListPlans(context.Background(), dca.QueryFilter{})
@@ -599,10 +633,12 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 
 	for _, ctx := range []context.Context{remote("telegram:999"), tools.WithSubTurn(remote(rtOwner))} {
 		got := map[string]*tools.ToolResult{
-			tools.NameCreateDCAPlan: r.reg.ExecuteWithContext(ctx, tools.NameCreateDCAPlan, plan, "telegram", "chat", nil),
-			tools.NameSetPriceAlert: r.reg.ExecuteWithContext(ctx, tools.NameSetPriceAlert, alert, "telegram", "chat", nil),
+			tools.NameCreateDCAPlan:           r.reg.ExecuteWithContext(ctx, tools.NameCreateDCAPlan, plan, "telegram", "chat", nil),
+			tools.NameSetPriceAlert:           r.reg.ExecuteWithContext(ctx, tools.NameSetPriceAlert, alert, "telegram", "chat", nil),
+			tools.NameTakeSnapshot:            r.reg.ExecuteWithContext(ctx, tools.NameTakeSnapshot, map[string]any{"label": "x"}, "telegram", "chat", nil),
+			tools.NamePrepareDeltaNeutralPlan: r.reg.ExecuteWithContext(ctx, tools.NamePrepareDeltaNeutralPlan, prepare, "telegram", "chat", nil),
 		}
-		r.assertRefused(got, tools.NameCreateDCAPlan, tools.NameSetPriceAlert)
+		r.assertRefused(got, tools.NameCreateDCAPlan, tools.NameSetPriceAlert, tools.NameTakeSnapshot, tools.NamePrepareDeltaNeutralPlan)
 		for name, want := range wording {
 			if res := got[name]; res != nil && !strings.Contains(res.ForLLM, want) {
 				t.Errorf("%s: refusal has the wrong wording: %s", name, res.ForLLM)
@@ -612,6 +648,12 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 	if plans, jobs := state(); plans != 0 || jobs != 0 {
 		t.Fatalf("after the attempts: %d plan(s) and %d job(s)/alert(s) exist", plans, jobs)
 	}
+	if snaps, _ := snapStore.QuerySnapshots(context.Background(), snapshot.QueryFilter{Limit: 10}); len(snaps) != 0 {
+		t.Fatalf("a refused take_snapshot left %d snapshot(s)", len(snaps))
+	}
+	if st := draftStatus(); st != deltaneutral.PlanStatusDraft {
+		t.Fatalf("a refused prepare_delta_neutral_plan left the plan %q", st)
+	}
 
 	// The owner's own turn still makes the plan.
 	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameCreateDCAPlan, plan, "telegram", "chat", nil); res == nil || res.IsError {
@@ -619,6 +661,12 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 	}
 	if plans, jobs := state(); plans != 1 || jobs != 1 {
 		t.Errorf("after the owner's create_dca_plan: %d plan(s), %d job(s), want 1 and 1", plans, jobs)
+	}
+	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NamePrepareDeltaNeutralPlan, prepare, "telegram", "chat", nil); res == nil || res.IsError {
+		t.Fatalf("the owner's own prepare_delta_neutral_plan failed: %+v", res)
+	}
+	if st := draftStatus(); st != deltaneutral.PlanStatusReady {
+		t.Errorf("after the owner's prepare_delta_neutral_plan the plan is %q, want ready", st)
 	}
 	r.assertNothingHappened()
 }

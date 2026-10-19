@@ -548,7 +548,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
 		withCognitionStats(s.Cognition.stats), withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
-	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
+	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken, cfg)
 	registerManageAPI(mux, s.Control, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {

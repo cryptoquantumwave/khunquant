@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -155,6 +156,7 @@ func TestControlWiring_AttachAndDetach(t *testing.T) {
 // The gateway route: loopback, the management token and no browser, and a refusal
 // whatever the middleware does when no token is configured.
 func TestControlWiring_KillRoute(t *testing.T) {
+	armGate(t, true) // the web owner is active: clearing (DELETE) needs it
 	f := newAssemblyFixture(t, withOwner("1001"))
 	url := f.url("/api/control/kill")
 	state := f.services.Control.state
@@ -197,7 +199,7 @@ func TestControlWiring_KillRoute(t *testing.T) {
 func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 	kill := &memKill{}
 	mux := http.NewServeMux()
-	registerControlAPI(mux, kill, nil, "")
+	registerControlAPI(mux, kill, nil, "", config.DefaultConfig())
 
 	for _, method := range []string{http.MethodPost, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/api/control/kill", nil)
@@ -215,7 +217,7 @@ func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 	// Sanity: the same request with a token configured and presented goes through,
 	// so the refusal above is the token's doing and not the harness's.
 	mux = http.NewServeMux()
-	registerControlAPI(mux, kill, nil, "t0ken")
+	registerControlAPI(mux, kill, nil, "t0ken", config.DefaultConfig())
 	req := httptest.NewRequest(http.MethodPost, "/api/control/kill", nil)
 	req.RemoteAddr = "127.0.0.1:50000"
 	req.Header.Set("Authorization", "Bearer t0ken")
@@ -239,7 +241,7 @@ func TestControlWiring_KillRouteRefusesWithoutAToken(t *testing.T) {
 
 func TestControlWiring_KillRouteWithoutAKillSwitch(t *testing.T) {
 	mux := http.NewServeMux()
-	registerControlAPI(mux, nil, nil, "t0ken")
+	registerControlAPI(mux, nil, nil, "t0ken", config.DefaultConfig())
 	req := httptest.NewRequest(http.MethodPost, "/api/control/kill", nil)
 	req.RemoteAddr = "127.0.0.1:50000"
 	req.Header.Set("Authorization", "Bearer t0ken")
@@ -278,12 +280,12 @@ func TestControlWiring_KillRouteRunsTheWholeStop(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerControlAPI(mux, kill, get, "")
+	registerControlAPI(mux, kill, get, "", config.DefaultConfig())
 	if rec := do(mux, ""); rec.Code != http.StatusServiceUnavailable || stopper.runs != 0 {
 		t.Errorf("no token configured: %d, runs %d", rec.Code, stopper.runs)
 	}
 	mux = http.NewServeMux()
-	registerControlAPI(mux, kill, get, "t0ken")
+	registerControlAPI(mux, kill, get, "t0ken", config.DefaultConfig())
 	if rec := do(mux, "wrong"); rec.Code != http.StatusUnauthorized || stopper.runs != 0 {
 		t.Errorf("wrong token: %d, runs %d", rec.Code, stopper.runs)
 	}
@@ -314,7 +316,7 @@ func TestControlWiring_KillRouteRunsTheWholeStop(t *testing.T) {
 
 	// No stopper attached yet (or any more): the flag alone.
 	mux = http.NewServeMux()
-	registerControlAPI(mux, kill, func() control.Stopper { return nil }, "t0ken")
+	registerControlAPI(mux, kill, func() control.Stopper { return nil }, "t0ken", config.DefaultConfig())
 	if rec := do(mux, "t0ken"); rec.Code != http.StatusOK || !kill.engaged {
 		t.Errorf("without a stopper: %d engaged=%v", rec.Code, kill.engaged)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 )
@@ -57,6 +58,7 @@ func ownerWriteCases(t *testing.T) []ownerWriteCase {
 	}
 	t.Cleanup(func() { dnStore.Close() })
 	dnID := seedDNPlan(t, dnStore, "seed-dn", deltaneutral.PlanStatusDraft)
+	prepID := seedDNPlan(t, dnStore, "seed-prepare", deltaneutral.PlanStatusDraft) // prepare_delta_neutral_plan promotes it
 	snapStore := newTestSnapshotStore(t)
 	snapID, err := snapStore.SaveSnapshot(ctx, &snapshot.Snapshot{TakenAt: time.Now().UTC(), Quote: "USDT", TotalValue: 1, Label: "seed"})
 	if err != nil {
@@ -130,6 +132,13 @@ func ownerWriteCases(t *testing.T) []ownerWriteCase {
 		{"webull_reconnect", "account sessions are " + ownerOnlyMarker, func(c context.Context) *ToolResult {
 			return NewWebullReconnectTool(cfg).Execute(c, map[string]any{})
 		}, func() string { return "" }, false},
+		// F27: take_snapshot cannot succeed here (no exchange), so it is only "not refused".
+		{"take_snapshot", "snapshots are " + ownerOnlyMarker, func(c context.Context) *ToolResult {
+			return NewTakeSnapshotTool(cfg, snapStore).Execute(c, map[string]any{"label": "x"})
+		}, snapState, false},
+		{"prepare_delta_neutral_plan", dnR, func(c context.Context) *ToolResult {
+			return NewPrepareDeltaNeutralPlanTool(cfg, dnStore).Execute(c, map[string]any{"plan_id": float64(prepID)})
+		}, dnState, true},
 		{"delete_dca_plan", dcaR, func(c context.Context) *ToolResult {
 			return NewDeleteDCAPlanTool(dcaStore, cronSvc).Execute(c, map[string]any{"plan_id": float64(planID)})
 		}, dcaState, true},
@@ -209,5 +218,54 @@ func TestOwnerOnlyWrites_AlertListStaysOpen(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// take_snapshot keeps the autonomous origins the class ceiling gives it: the legacy
+// heartbeat (as a proactive turn of that kind, or the older "heartbeat" origin) and a
+// scheduled job have no sender to check. A proactive kind the ceiling denies never
+// reaches the tool at all.
+func TestOwnerOnlyWrites_TakeSnapshotHeartbeatStaysAllowed(t *testing.T) {
+	armWebGate(t, true)
+	armOwner(t, true)
+	tool := NewTakeSnapshotTool(config.DefaultConfig(), newTestSnapshotStore(t))
+	for name, ctx := range map[string]context.Context{
+		"legacy heartbeat (proactive)": WithProactiveTurn(context.Background(), proactive.TurnHeartbeatLegacy),
+		"heartbeat origin":             WithToolOrigin(context.Background(), OriginHeartbeat),
+		"scheduled job":                WithToolOrigin(context.Background(), OriginCron),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := tool.Execute(ctx, map[string]any{"label": "heartbeat"}); strings.Contains(res.ForLLM, ownerOnlyMarker) {
+				t.Fatalf("refused: %s", res.ForLLM)
+			}
+		})
+	}
+	if ctx := WithProactiveTurn(context.Background(), proactive.TurnProactive); TurnMayCall(ctx, NameTakeSnapshot) {
+		t.Fatal("the ceiling lets a candidate-driven proactive turn take a snapshot")
+	}
+	if !TurnMayCall(WithProactiveTurn(context.Background(), proactive.TurnHeartbeatLegacy), NameTakeSnapshot) {
+		t.Fatal("the ceiling no longer lets the legacy heartbeat take a snapshot")
+	}
+}
+
+// Validation of a draft is a read and stays open to every turn; only the promotion to
+// "ready" is the owner's.
+func TestOwnerOnlyWrites_PrepareValidationStaysOpen(t *testing.T) {
+	armWebGate(t, true)
+	armOwner(t, true)
+	store, err := deltaneutral.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	id := seedDNPlan(t, store, "bad", deltaneutral.PlanStatusDraft)
+	p, _ := store.GetPlan(context.Background(), id)
+	p.CapitalUSDT = 0
+	if err := store.UpdatePlan(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	res := NewPrepareDeltaNeutralPlanTool(config.DefaultConfig(), store).Execute(remoteTurn("telegram:999", "telegram"), map[string]any{"plan_id": float64(id)})
+	if strings.Contains(res.ForLLM, ownerOnlyMarker) || !strings.Contains(res.ForLLM, "FAILED") {
+		t.Fatalf("validation report: %s", res.ForLLM)
 	}
 }

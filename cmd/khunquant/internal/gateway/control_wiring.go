@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -233,15 +234,17 @@ func (rt *controlRuntime) detach() {
 // change). Like the other management routes they accept loopback callers carrying
 // the management token and refuse requests a browser could have made. Unlike the
 // token middleware, which lets everything through when the configured token is
-// empty, they refuse every request while no token is configured.
-func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string) {
-	h := controlKillHandler(kill, stop, token)
+// empty, they refuse every request while no token is configured. Clearing (DELETE)
+// additionally needs cfg.WebOwnerActive(), as POST /api/proactive/resume does:
+// engaging the brake is never gated, letting the assistant act again is.
+func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string, cfg *config.Config) {
+	h := controlKillHandler(kill, stop, token, cfg)
 	guarded := loopbackOnly(bearerTokenMiddleware(token, noBrowser(h)))
 	mux.Handle("POST /api/control/kill", guarded)
 	mux.Handle("DELETE /api/control/kill", guarded)
 }
 
-func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, token string) http.Handler {
+func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, token string, cfg *config.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if token == "" {
@@ -273,6 +276,10 @@ func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, to
 			}
 			changed, err = kill.Engage(r.Context(), "api", "gateway route")
 		case http.MethodDelete:
+			if !cfg.WebOwnerActive() { // nil-safe: no configuration is no web owner
+				refuseNotWebOwner(w, cfg)
+				return
+			}
 			changed, err = kill.Clear(r.Context(), "api")
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)

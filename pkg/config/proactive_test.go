@@ -347,6 +347,11 @@ func TestEffective_DowngradesWithoutOwner(t *testing.T) {
 		t.Errorf("a disabled section must run none of them: %+v", e)
 	}
 	c.Enabled = true
+	// Learning records the owner's responses, so it needs an owner (a downgrade line says so).
+	if e := c.Effective(); e.Learning || !contains(e.Downgrades, "proactive: owner not configured; learning.enabled true → false") {
+		t.Errorf("learning without an owner must be off with a downgrade line: %+v", e)
+	}
+	c.Owner = validOwner()
 	if e := c.Effective(); !e.Intents || !e.News || !e.Perception || !e.Cognition || !e.Reflection || !e.Learning {
 		t.Errorf("enabled section must keep them: %+v", e)
 	}

@@ -170,6 +170,9 @@ const (
 	// call (shadow mode: the call itself is decided by the existing checks). It carries
 	// ids, names, the mode and the tier only: never a call's arguments or amounts.
 	KindPolicyDecision Kind = "policy.decision"
+	// KindFeedbackRecorded is emitted when a response of the owner to a proactive message
+	// is recorded (pkg/feedback). It carries ids and the kind only, never the value.
+	KindFeedbackRecorded Kind = "feedback.recorded"
 )
 
 var knownKinds = []Kind{
@@ -246,6 +249,7 @@ var knownKinds = []Kind{
 	KindJournalWorkflow,
 	KindControlCommand,
 	KindPolicyDecision,
+	KindFeedbackRecorded,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

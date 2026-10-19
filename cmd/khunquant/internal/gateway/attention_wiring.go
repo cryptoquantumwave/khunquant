@@ -25,8 +25,9 @@ type ownerNotifier interface {
 
 // attentionDeliverer adapts the notify service to attention.Deliverer, so that
 // pkg/attention does not import pkg/notify. A message carries no footer and, except
-// for the memory suggestions of a digest (digestActions), no actions; a digest is sent
-// without a notification sound.
+// for the memory suggestions of a digest (digestActions) and the feedback buttons while
+// proactive.learning is on (feedbackActions), no actions; a digest is sent without a
+// notification sound.
 type attentionDeliverer struct{ svc ownerNotifier }
 
 func (a attentionDeliverer) Deliver(ctx context.Context, m attention.Message) (bool, error) {
@@ -39,6 +40,7 @@ func (a attentionDeliverer) Deliver(ctx context.Context, m attention.Message) (b
 		DisableNotification: m.Silent,
 	}
 	n.Actions = digestActions(ctx, m) // Save and Discard for the memory suggestions of a digest
+	n.Actions = append(n.Actions, feedbackActions(m, len(n.Actions))...) // the feedback buttons, when learning is on
 	if m.SessionRestricted {
 		// The owner is sent the message as it is; the session, which the model reads
 		// on the owner's next turn, gets the form without text from outside.

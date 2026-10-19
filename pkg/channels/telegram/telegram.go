@@ -138,6 +138,14 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 		return c.handleCallbackQuery(ctx, &query)
 	}, th.AnyCallbackQuery())
 
+	// With learning on, a thumbs reaction is the owner's verdict on a message (see
+	// reaction.go). Without it the bot does not ask for these updates at all.
+	if c.learningOn() {
+		bh.HandleMessageReaction(func(ctx *th.Context, r telego.MessageReactionUpdated) error {
+			return c.handleReaction(ctx, &r)
+		}, th.AnyMessageReaction())
+	}
+
 	c.SetRunning(true)
 	logger.InfoCF("telegram", "Telegram bot connected", map[string]any{
 		"username": c.bot.Username(),
@@ -162,10 +170,15 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 // explicit because Telegram otherwise keeps the previous setting, and a bot that
 // has never set one receives every type: the handlers registered in Start cover
 // exactly these two (a message, and a tap on an inline button), so asking for
-// more would only deliver updates that are dropped. A fresh slice each call, as
+// more would only deliver updates that are dropped; with proactive learning on, a
+// reaction to a message is the third (reaction.go). A fresh slice each call, as
 // telego keeps the one it is given.
-func allowedUpdates() []string {
-	return []string{telego.MessageUpdates, telego.CallbackQueryUpdates}
+func allowedUpdates(learning bool) []string {
+	u := []string{telego.MessageUpdates, telego.CallbackQueryUpdates}
+	if learning {
+		u = append(u, telego.MessageReactionUpdates)
+	}
+	return u
 }
 
 // SupportsActions implements channels.ActionRenderer: bus.Action buttons are
@@ -194,7 +207,7 @@ func (c *TelegramChannel) runPollingWithBackoff(ctx context.Context, proxyUpdate
 		// closes immediately on error, giving us full control over backoff.
 		updates, err := c.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 			Timeout:        30,
-			AllowedUpdates: allowedUpdates(),
+			AllowedUpdates: allowedUpdates(c.learningOn()),
 		}, telego.WithLongPollingRetryTimeout(0))
 
 		if err != nil {

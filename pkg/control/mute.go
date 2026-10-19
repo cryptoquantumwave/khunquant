@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/feedback"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
@@ -78,7 +79,7 @@ func (d *Dispatcher) cmdSnooze(ctx context.Context, in Input) (Reply, error) {
 		setOutcome(ctx, outcomeUsage)
 		return Reply{Text: "Usage: /snooze [1h|4h|1d], as a reply to one of my alerts."}, nil
 	}
-	keys, _, text := d.subjectKeys(ctx, in)
+	keys, iid, text := d.subjectKeys(ctx, in)
 	if text != "" {
 		return Reply{Text: text}, nil
 	}
@@ -92,12 +93,17 @@ func (d *Dispatcher) cmdSnooze(ctx context.Context, in Input) (Reply, error) {
 			return Reply{}, fmt.Errorf("snooze: %w", err)
 		}
 	}
+	path, event := tapOrCommand(in, label)
+	d.record(ctx, st.deps, in, iid, feedback.KindSnooze, label, path, event)
 	return Reply{Text: fmt.Sprintf("Snoozed for %s: I will not repeat this alert until then. (/mute TRIGGER silences a whole kind.)", label)}, nil
 }
 
 // cmdMute is "/mute TRIGGER": it silences a trigger kind or ID for 30 days.
 func (d *Dispatcher) cmdMute(ctx context.Context, in Input) (Reply, error) {
 	st := stateOf(ctx)
+	if st.cmd.viaCallback && len(st.cmd.args) == 0 {
+		return d.muteMessage(ctx, in)
+	}
 	trigger, usage := triggerArg(st.cmd.args, "/mute")
 	if usage != "" {
 		setOutcome(ctx, outcomeUsage)
@@ -110,8 +116,38 @@ func (d *Dispatcher) cmdMute(ctx context.Context, in Input) (Reply, error) {
 	if err := st.deps.Attention.Mute(ctx, trigger, d.now().Add(muteDuration), "muted by the owner"); err != nil {
 		return Reply{}, fmt.Errorf("mute: %w", err)
 	}
+	// A /mute typed as a reply to an alert also tells the feedback store which one.
+	if st.deps.Feedback != nil {
+		if iid, ok := d.interventionOf(ctx, st.deps, in.Channel, in.ReplyToMessageID); ok {
+			d.record(ctx, st.deps, in, iid, feedback.KindMute, "30d", "command", in.MessageID+":"+trigger)
+		}
+	}
 	return Reply{Text: fmt.Sprintf("Muted %s for 30 days. A protective critical alert still gets through unless you "+
 		"muted its exact id. /unmute %s undoes it.", trigger, trigger)}, nil
+}
+
+// muteMessage is the [Mute] button: it silences exactly the dedup keys of the alert the
+// button was on for 30 days (an exact mute, like a snooze, so it needs no trigger name
+// and silences nothing but this alert's own keys).
+func (d *Dispatcher) muteMessage(ctx context.Context, in Input) (Reply, error) {
+	st := stateOf(ctx)
+	keys, iid, text := d.subjectKeys(ctx, in)
+	if text != "" {
+		return Reply{Text: text}, nil
+	}
+	if len(keys) == 0 {
+		setOutcome(ctx, outcomeNotFound)
+		return Reply{Text: notAnAlertText}, nil
+	}
+	until := d.now().Add(muteDuration)
+	for _, k := range keys {
+		if err := st.deps.Attention.MuteExact(ctx, k, until, "muted by the owner"); err != nil {
+			return Reply{}, fmt.Errorf("mute: %w", err)
+		}
+	}
+	path, event := tapOrCommand(in, "mute")
+	d.record(ctx, st.deps, in, iid, feedback.KindMute, "30d", path, event)
+	return Reply{Text: "Muted this alert for 30 days. (/mute TRIGGER silences a whole kind.)"}, nil
 }
 
 // cmdUnmute is "/unmute TRIGGER".
@@ -139,8 +175,8 @@ func triggerArg(args []string, verb string) (trigger, usage string) {
 	return args[0], ""
 }
 
-// cmdUseful records the owner's verdict on an alert. Before the feedback store
-// exists (a later change) it is a log line, and the reply says so.
+// cmdUseful records the owner's verdict on an alert in the feedback store. With
+// learning off there is no store: it is a log line, and the reply says so.
 func (d *Dispatcher) cmdUseful(useful bool) Handler {
 	return func(ctx context.Context, in Input) (Reply, error) {
 		st := stateOf(ctx)
@@ -167,6 +203,15 @@ func (d *Dispatcher) cmdUseful(useful bool) Handler {
 		verdict := "not_useful"
 		if useful {
 			verdict = "useful"
+		}
+		if st.deps.Feedback != nil {
+			kind := feedback.KindNotUseful
+			if useful {
+				kind = feedback.KindUseful
+			}
+			path, event := tapOrCommand(in, verdict)
+			d.record(ctx, st.deps, in, id, kind, "", path, event)
+			return Reply{Text: "Noted as " + strings.ReplaceAll(verdict, "_", " ") + "."}, nil
 		}
 		logger.InfoCF("control", "Alert feedback", map[string]any{"intervention_id": id, "verdict": verdict})
 		return Reply{Text: "Noted as " + strings.ReplaceAll(verdict, "_", " ") +

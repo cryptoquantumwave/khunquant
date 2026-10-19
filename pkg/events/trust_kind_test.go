@@ -109,7 +109,7 @@ func TestKnownKindsContainsPerception(t *testing.T) {
 			t.Errorf("KnownKinds() lost %q", k)
 		}
 	}
-	if got := len(known); got != 46+24+1+1 {
-		t.Errorf("KnownKinds() has %d kinds, want 72 (46 existing + 24 new + the clock timer + policy.decision)", got)
+	if got := len(known); got != 46+24+1+1+1 {
+		t.Errorf("KnownKinds() has %d kinds, want 73 (46 existing + 24 new + the clock timer + policy.decision + feedback.recorded)", got)
 	}
 }

@@ -672,6 +672,10 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	// Reaching here means Enabled is false or there is no valid owner, so both
 	// are off whatever was asked for.
 	e.Approvals, e.Mandates = false, false
+	e.Learning = false
+	if c.Learning.Enabled {
+		down("learning.enabled true → false")
+	}
 	if c.Approvals.Enabled {
 		down("approvals.enabled true → false")
 	}

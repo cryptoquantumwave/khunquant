@@ -439,6 +439,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
 
+	// The owner's responses to proactive messages, recorded only with proactive.learning
+	// on. After the control path (taps and replies reach it) and the outbox (whose
+	// messages carry the buttons), and after approvals (whose decisions it links).
+	s.Feedback = buildFeedback(d, s.NotifyService)
+	s.Control.attachFeedback(s.Feedback)
+
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
 	// run is scheduled. The run time is kept in the shared state manager, so a
@@ -588,6 +594,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// on the channels until they have stopped (below): taking it off earlier would
 	// hand a late /approve or /stop to the agent instead.
 	s.Control.detach()
+	s.Feedback.stop() // the buttons go before the outbox does; nothing is recorded after this
+	s.Feedback = nil
 	s.Policy.stop() // before the approval side closes the mandate store it reads
 	s.Policy = nil
 

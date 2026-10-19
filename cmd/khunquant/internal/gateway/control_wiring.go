@@ -198,6 +198,16 @@ func (rt *controlRuntime) attach(d assemblyDeps, ns *notify.Service, at *attenti
 	rt.disp.SetDeps(deps)
 }
 
+// attachFeedback gives the dispatcher the response recorder, when there is one.
+func (rt *controlRuntime) attachFeedback(f *feedbackRuntime) {
+	if rt == nil || f == nil || f.svc == nil {
+		return
+	}
+	deps := rt.disp.Deps()
+	deps.Feedback = f.svc
+	rt.disp.SetDeps(deps)
+}
+
 // detach takes the approval, notify and attention services away from the
 // dispatcher. stopServices calls it before it stops them, so that an /approve
 // arriving during shutdown is answered "not available" rather than approving an
@@ -209,7 +219,7 @@ func (rt *controlRuntime) detach() {
 		return
 	}
 	deps := rt.disp.Deps()
-	deps.Approvals, deps.Sent, deps.Attention, deps.Stop = nil, nil, nil, nil
+	deps.Approvals, deps.Sent, deps.Attention, deps.Stop, deps.Feedback = nil, nil, nil, nil, nil
 	rt.stop.Store(nil)
 	rt.disp.SetDeps(deps)
 }

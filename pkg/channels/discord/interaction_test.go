@@ -66,12 +66,12 @@ func TestDiscord_ComponentsPayloadFormat(t *testing.T) {
 			}
 			actions = append(actions, bus.Action{ID: id, Label: id, Payload: payload})
 		}
-		require.Len(t, actions, 7)
+		require.Len(t, actions, 8)
 		rows, err := buildComponents(actions)
 		require.NoError(t, err)
 		require.Len(t, rows, 2)
 		assert.Len(t, rows[0].(discordgo.ActionsRow).Components, 5)
-		assert.Len(t, rows[1].(discordgo.ActionsRow).Components, 2)
+		assert.Len(t, rows[1].(discordgo.ActionsRow).Components, 3)
 	})
 
 	t.Run("the same button twice is refused: Discord rejects repeated custom ids", func(t *testing.T) {

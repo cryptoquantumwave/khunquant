@@ -52,11 +52,11 @@ func TestModelNameFromPreset(t *testing.T) {
 		want     string
 	}{
 		// Known preset → label slug
-		{oauthProviderOpenAI, "openai/gpt-5.5", "gpt-5.5"},
-		{oauthProviderOpenAI, "openai/gpt-5.4-mini", "gpt-5.4-mini"},
-		{oauthProviderAnthropic, "anthropic/claude-fable-5", "claude-fable-5"},
-		{oauthProviderAnthropic, "anthropic/claude-sonnet-4.6", "claude-sonnet-4.6"},
-		{oauthProviderGoogleAntigravity, "antigravity/gemini-3.5-flash", "gemini-3.5-flash"},
+		{oauthProviderOpenAI, "openai/gpt-6.1-sol", "gpt-6.1-sol"},
+		{oauthProviderOpenAI, "openai/gpt-6-astra", "gpt-6-astra"},
+		{oauthProviderAnthropic, "anthropic/claude-opus-5-5", "claude-opus-5.5"},
+		{oauthProviderAnthropic, "anthropic/claude-sonnet-5-5", "claude-sonnet-5.5"},
+		{oauthProviderGoogleAntigravity, "antigravity/gemini-3.8-flash-medium", "gemini-3.8-flash-medium"},
 		// Not in presets → suffix after last /
 		{oauthProviderOpenAI, "openai/future-model", "future-model"},
 		// No / → returned as-is
@@ -79,9 +79,9 @@ func TestDefaultModelConfigForProvider(t *testing.T) {
 		wantModel  string
 		wantName   string
 	}{
-		{oauthProviderOpenAI, "oauth", "openai/gpt-5.6-sol", "gpt-5.6-sol"},
-		{oauthProviderAnthropic, "token", "anthropic/claude-sonnet-5", "claude-sonnet-5"},
-		{oauthProviderGoogleAntigravity, "oauth", "antigravity/gemini-3-flash", "gemini-3-flash"},
+		{oauthProviderOpenAI, "oauth", "openai/gpt-6.1-sol", "gpt-6.1-sol"},
+		{oauthProviderAnthropic, "token", "anthropic/claude-sonnet-5-5", "claude-sonnet-5.5"},
+		{oauthProviderGoogleAntigravity, "oauth", "antigravity/gemini-3.8-flash-medium", "gemini-3.8-flash-medium"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {

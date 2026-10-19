@@ -11,11 +11,11 @@ package config
 // default, so cmd/khunquant, cmd/khunquant-launcher-tui, and the web launcher
 // backend all pick up the change without hunting down scattered literals.
 const (
-	DefaultOpenAIModelName      = "gpt-5.6-sol"
+	DefaultOpenAIModelName      = "gpt-6.1-sol"
 	DefaultOpenAIModel          = "openai/" + DefaultOpenAIModelName
-	DefaultAnthropicModelName   = "claude-sonnet-5"
-	DefaultAnthropicModel       = "anthropic/" + DefaultAnthropicModelName
-	DefaultAntigravityModelName = "gemini-3-flash"
+	DefaultAnthropicModelName   = "claude-sonnet-5.5"
+	DefaultAnthropicModel       = "anthropic/claude-sonnet-5-5"
+	DefaultAntigravityModelName = "gemini-3.8-flash-medium"
 	DefaultAntigravityModel     = "antigravity/" + DefaultAntigravityModelName
 	DefaultGeminiModelName      = "gemini-flash-codeassist"
 	DefaultGeminiModel          = "gemini-code-assist/gemini-2.5-flash"

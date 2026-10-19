@@ -502,6 +502,12 @@ func (b *BinanceExchange) paginateEarnPositions(
 			"size":    pageSize,
 		}
 		res := fetchPage(params)
+		if ep, ok := res.(ccxt.EndpointResult[map[string]interface{}]); ok {
+			if ep.Err != nil {
+				return nil, fmt.Errorf("%s: %w", errorContext, compactCCXTError(ep.Err))
+			}
+			res = ep.Boxed()
+		}
 		if ccxt.IsError(res) {
 			return nil, fmt.Errorf("%s: %w", errorContext, compactCCXTError(ccxt.CreateReturnError(res)))
 		}

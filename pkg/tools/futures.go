@@ -716,8 +716,8 @@ func formatFundingHistory(history []ccxt.FundingHistory) string {
 		if h.Amount != nil {
 			total += *h.Amount
 		}
-		if currency == "" && h.Currency != nil {
-			currency = *h.Currency
+		if currency == "" && h.Code != nil {
+			currency = *h.Code
 		}
 	}
 	var sb strings.Builder
@@ -727,7 +727,7 @@ func formatFundingHistory(history []ccxt.FundingHistory) string {
 			sb.WriteString("  ...\n")
 			break
 		}
-		sb.WriteString(fmt.Sprintf("  %s  %s %s\n", futuresStrPtr(h.Datetime), futuresFloatPtr(h.Amount), futuresStrPtr(h.Currency)))
+		sb.WriteString(fmt.Sprintf("  %s  %s %s\n", futuresStrPtr(h.Datetime), futuresFloatPtr(h.Amount), futuresStrPtr(h.Code)))
 	}
 	return sb.String()
 }

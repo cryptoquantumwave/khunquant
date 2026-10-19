@@ -31,6 +31,25 @@ var migrations = []sqlitex.Migration{{
 );
 CREATE INDEX idx_feedback_responses_intervention ON feedback_responses (intervention_id);
 CREATE INDEX idx_feedback_responses_at ON feedback_responses (at_ms);`,
+}, {
+	Component: Component,
+	Version:   2,
+	// The acceptance posteriors (posterior.go). responses counts what a row rests on and
+	// does not decay; feedback_posterior_applied holds the id of each response already
+	// applied, so that one is never applied twice.
+	SQL: `CREATE TABLE feedback_posteriors (
+	kind          TEXT    NOT NULL,
+	bucket        INTEGER NOT NULL,
+	alpha         REAL    NOT NULL,
+	beta          REAL    NOT NULL,
+	responses     INTEGER NOT NULL DEFAULT 0,
+	updated_at_ms INTEGER NOT NULL,
+	PRIMARY KEY (kind, bucket)
+);
+CREATE TABLE feedback_posterior_applied (
+	response_id   TEXT    PRIMARY KEY,
+	applied_at_ms INTEGER NOT NULL
+);`,
 }}
 
 // migrate creates the table and returns when it was created (the housekeeper never

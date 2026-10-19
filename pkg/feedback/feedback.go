@@ -2,8 +2,10 @@
 // useful or not, snoozed or muted it, replied to it, acted on it, approved or rejected
 // the proposal it carried, or did nothing at all.
 //
-// It RECORDS. Nothing here changes a disposition, a budget, a trigger or a delivery;
-// a later change reads these rows.
+// It RECORDS, and keeps the acceptance posteriors the rows add up to (posterior.go).
+// Nothing here changes a disposition, a budget, a trigger or a delivery; attention reads
+// a posterior and, only with proactive.learning.adapt on, lets it move a Notice to the
+// digest.
 //
 // # What is stored
 //
@@ -120,6 +122,10 @@ type Options struct {
 	// Changes, when set, is read by the housekeeper for plan and intent changes that
 	// count as acting on an alert (see ObserveChange).
 	Changes ChangeSource
+	// Zone is the owner's time zone, which gives the hour bucket of a posterior. It must
+	// fall back the way attention does (the default profile's zone when the profile
+	// cannot be read, UTC when the zone cannot be loaded); nil means UTC.
+	Zone func(ctx context.Context) *time.Location
 }
 
 // Change is a plan or an intent that changed.
@@ -147,6 +153,7 @@ type Service struct {
 	since   time.Time
 	changes ChangeSource
 	polled  time.Time // changes up to here have been looked at; guarded by mu
+	post    *Store
 
 	sem chan struct{}
 	wg  sync.WaitGroup
@@ -171,6 +178,7 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 		s.clock = time.Now
 	}
 	s.polled = s.clock()
+	s.post = &Store{db: db, clock: s.clock, zone: o.Zone, pub: o.Events}
 	return s, nil
 }
 
@@ -196,6 +204,11 @@ func (s *Service) Record(ctx context.Context, r Response) (bool, error) {
 	added, err := insert(ctx, s.db, id, r, at)
 	if err != nil || !added {
 		return false, err
+	}
+	// The response teaches the acceptance posterior, once. A failure here is logged: the
+	// response itself is recorded, and a later Update for the intervention applies it.
+	if err := s.post.Update(ctx, r.InterventionID); err != nil {
+		logger.WarnCF("feedback", "Could not update the acceptance posterior", map[string]any{"error": err.Error()})
 	}
 	if s.pub != nil {
 		s.pub.PublishNonBlocking(events.Event{

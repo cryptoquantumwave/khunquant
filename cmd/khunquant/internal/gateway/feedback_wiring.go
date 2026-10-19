@@ -10,6 +10,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/feedback"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -22,6 +23,7 @@ import (
 // built, the table is not created, and no message carries a feedback button.
 type feedbackRuntime struct {
 	svc *feedback.Service
+	ob  *attention.Outbox // whose governor reads the posteriors; cleared on stop
 }
 
 // feedbackButtons says whether the attention deliverer may put the feedback buttons on
@@ -32,7 +34,11 @@ var feedbackButtons atomic.Bool
 // buildFeedback creates the recorder, subscribes it to the event bus (order fills,
 // approval decisions) and starts its housekeeper. It returns nil when learning is off or
 // the shared database is unavailable.
-func buildFeedback(d assemblyDeps, ns *notify.Service) *feedbackRuntime {
+//
+// With the recorder up it also hands the governor behind ob its learning settings
+// (attentionLearning): the posteriors to read, the holdout rate and the candidate policy.
+// Attention is built before this, so the governor is given them here.
+func buildFeedback(d assemblyDeps, ns *notify.Service, ob *attention.Outbox) *feedbackRuntime {
 	if !d.Cfg.Proactive.Effective().Learning {
 		return nil
 	}
@@ -48,6 +54,12 @@ func buildFeedback(d assemblyDeps, ns *notify.Service) *feedbackRuntime {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	opts := feedback.Options{Changes: intentChanges{db: db}}
+	if profiles, err := intent.NewStore(ctx, db); err == nil {
+		opts.Zone = ownerZone(profiles)
+	} else {
+		logger.WarnCF("feedback", "Posteriors will use UTC hour buckets: cannot open the profile store",
+			map[string]any{"error": err.Error()})
+	}
 	eb := d.Shared.eventBus()
 	if eb != nil { // a nil *EventBus in the interface would not read as nil
 		opts.Events = eb
@@ -62,7 +74,40 @@ func buildFeedback(d assemblyDeps, ns *notify.Service) *feedbackRuntime {
 		return nil
 	}
 	feedbackButtons.Store(true)
-	return &feedbackRuntime{svc: svc}
+	rt := &feedbackRuntime{svc: svc, ob: ob}
+	if ob != nil && !ob.SetLearning(attentionLearning(d.Cfg.Proactive, svc)) {
+		logger.WarnCF("feedback", "Learning is not applied: the attention gate is not the governor", nil)
+	}
+	return rt
+}
+
+// ownerZone is the owner's time zone as attention reads it (the default profile's zone
+// when the profile cannot be read, UTC when the zone cannot be loaded), so that the hour
+// bucket a response is filed under is the bucket a later decision looks up.
+func ownerZone(p *intent.Store) func(context.Context) *time.Location {
+	return func(ctx context.Context) *time.Location {
+		prof, err := p.Profile(ctx)
+		if err != nil {
+			prof = intent.DefaultProfile()
+		}
+		loc, _ := prof.Location()
+		return loc
+	}
+}
+
+// attentionLearning is the governor's learning configuration for an effectively-on
+// proactive.learning: the posteriors of svc, the holdout rate, a production random
+// source, and the candidate policy. Adapt is the effective switch (it needs learning).
+func attentionLearning(pc config.ProactiveConfig, svc *feedback.Service) attention.Learning {
+	eff := pc.Effective()
+	return attention.Learning{
+		Enabled:     eff.Learning,
+		Adapt:       eff.LearningAdapt,
+		HoldoutRate: pc.Learning.HoldoutRate,
+		Candidate:   pc.Learning.CandidatePolicy,
+		Source:      svc.Posteriors(),
+		Rand:        attention.CryptoRand(),
+	}
 }
 
 // intentChanges lists the changes made to price and indicator intents (a watch or a
@@ -109,6 +154,9 @@ func (rt *feedbackRuntime) stop() {
 		return
 	}
 	feedbackButtons.Store(false)
+	if rt.ob != nil {
+		rt.ob.SetLearning(attention.Learning{}) // the posteriors go with the recorder
+	}
 	rt.svc.Stop()
 }
 

@@ -173,6 +173,10 @@ const (
 	// KindFeedbackRecorded is emitted when a response of the owner to a proactive message
 	// is recorded (pkg/feedback). It carries ids and the kind only, never the value.
 	KindFeedbackRecorded Kind = "feedback.recorded"
+	// KindFeedbackPosterior is emitted when an owner response changes an acceptance
+	// posterior (pkg/feedback). It carries the trigger kind, the hour bucket and the mean
+	// rounded to two decimals, nothing else.
+	KindFeedbackPosterior Kind = "feedback.posterior"
 )
 
 var knownKinds = []Kind{
@@ -250,6 +254,7 @@ var knownKinds = []Kind{
 	KindControlCommand,
 	KindPolicyDecision,
 	KindFeedbackRecorded,
+	KindFeedbackPosterior,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

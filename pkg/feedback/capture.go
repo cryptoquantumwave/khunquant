@@ -247,6 +247,7 @@ func (s *Service) Housekeep(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("feedback: prune: %w", err)
 	} else if n > 0 {
 		logger.InfoCF("feedback", "Pruned old responses", map[string]any{"rows": n})
+		_ = dropOrphanMarkers(ctx, s.db)
 	}
 	from := now.Add(-scanWindow)
 	if s.since.After(from) {

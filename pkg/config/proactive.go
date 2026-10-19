@@ -152,10 +152,40 @@ type ReflectionConfig struct {
 }
 
 // LearningConfig controls learning from owner feedback.
+//
+// Two switches. Enabled records the owner's responses and keeps the acceptance
+// posteriors; it changes no delivery, and what learning WOULD have done is only
+// logged (attention_decisions.learned_disposition). Adapt, which needs Enabled, is
+// the only thing that lets learning change a disposition: a Notice the owner has
+// found less useful moves to the digest, and HoldoutRate of the Notices that would
+// have been delivered are held for the digest at random. Learning never touches a
+// Warning, a Critical, a protective candidate or an alert the owner set, and nothing
+// it learns makes a message more interruptive.
 type LearningConfig struct {
 	Enabled     bool    `json:"enabled"      env:"KHUNQUANT_PROACTIVE_LEARNING_ENABLED"`
+	Adapt       bool    `json:"adapt"        env:"KHUNQUANT_PROACTIVE_LEARNING_ADAPT"`
 	HoldoutRate float64 `json:"holdout_rate" env:"KHUNQUANT_PROACTIVE_LEARNING_HOLDOUT_RATE"`
+	// CandidatePolicy is an optional alternative to the attention parameters it names.
+	// It is evaluated next to the live policy on the same facts, its disposition is
+	// stored in attention_decisions.shadow_disposition, and it never affects delivery.
+	// It is used only while learning is effectively on.
+	CandidatePolicy *CandidatePolicy `json:"candidate_policy,omitempty"`
 }
+
+// CandidatePolicy holds alternative values for the parameters the attention rule
+// table reads and a shadow evaluation can vary. A nil field keeps the live value.
+type CandidatePolicy struct {
+	DailyBudget            *int     `json:"daily_budget,omitempty"`
+	LowAcceptanceThreshold *float64 `json:"low_acceptance_threshold,omitempty"`
+	HoldoutRate            *float64 `json:"holdout_rate,omitempty"`
+}
+
+// The bounds of a CandidatePolicy.
+const (
+	MaxCandidateDailyBudget  = 50
+	MaxCandidateLowThreshold = 0.5
+	MaxCandidateHoldoutRate  = 0.2
+)
 
 // ModeConfig is a single off | shadow | live mode.
 //
@@ -404,6 +434,21 @@ func ValidateProactive(c ProactiveConfig) error {
 		errs = append(errs, fmt.Errorf("proactive.learning.holdout_rate must be within [0, 1] (got %v)", r))
 	}
 
+	if p := c.Learning.CandidatePolicy; p != nil {
+		if b := p.DailyBudget; b != nil && (*b < 0 || *b > MaxCandidateDailyBudget) {
+			errs = append(errs, fmt.Errorf("proactive.learning.candidate_policy.daily_budget must be within [0, %d] (got %d)",
+				MaxCandidateDailyBudget, *b))
+		}
+		if t := p.LowAcceptanceThreshold; t != nil && (math.IsNaN(*t) || *t < 0 || *t > MaxCandidateLowThreshold) {
+			errs = append(errs, fmt.Errorf("proactive.learning.candidate_policy.low_acceptance_threshold must be within [0, %v] (got %v)",
+				MaxCandidateLowThreshold, *t))
+		}
+		if r := p.HoldoutRate; r != nil && (math.IsNaN(*r) || *r < 0 || *r > MaxCandidateHoldoutRate) {
+			errs = append(errs, fmt.Errorf("proactive.learning.candidate_policy.holdout_rate must be within [0, %v] (got %v)",
+				MaxCandidateHoldoutRate, *r))
+		}
+	}
+
 	if at := strings.TrimSpace(c.Reflection.AtLocal); at != "" && !validClock(at) {
 		errs = append(errs, fmt.Errorf("proactive.reflection.at_local %q must be HH:MM (24-hour)", c.Reflection.AtLocal))
 	}
@@ -510,6 +555,9 @@ type EffectiveModes struct {
 	Cognition  bool
 	Reflection bool
 	Learning   bool
+	// LearningAdapt is proactive.learning.adapt, and only while Learning is on: the one
+	// switch that lets learning change a disposition.
+	LearningAdapt bool
 
 	// Downgrades describes, one entry per change, each mode or switch that was
 	// lowered from what the config asked for. It never contains owner IDs.
@@ -590,6 +638,10 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Cognition = c.Enabled && c.Cognition.Enabled
 	e.Reflection = c.Enabled && c.Reflection.Enabled
 	e.Learning = c.Enabled && c.Learning.Enabled
+	e.LearningAdapt = e.Learning && c.Learning.Adapt
+	if c.Learning.Adapt && !c.Learning.Enabled {
+		e.Downgrades = append(e.Downgrades, "proactive: learning.enabled is off; learning.adapt true → false")
+	}
 	e.Approvals = c.Enabled && c.Approvals.Enabled
 	e.Mandates = c.Enabled && c.Mandates.Enabled
 	// The reflection is a budgeted cognition job: without the scheduler it has no budget
@@ -672,9 +724,12 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	// Reaching here means Enabled is false or there is no valid owner, so both
 	// are off whatever was asked for.
 	e.Approvals, e.Mandates = false, false
-	e.Learning = false
+	e.Learning, e.LearningAdapt = false, false
 	if c.Learning.Enabled {
 		down("learning.enabled true → false")
+		if c.Learning.Adapt {
+			down("learning.adapt true → false")
+		}
 	}
 	if c.Approvals.Enabled {
 		down("approvals.enabled true → false")

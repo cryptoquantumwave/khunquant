@@ -481,6 +481,89 @@
         "to_hint": "Optional. Specific recipient user ID or identifier for the message."
       },
       "proactive": {
+        "manage": {
+          "title": "Intents, proposals and mandates",
+          "description": "What the assistant is keeping track of and asking permission for. Refreshes every 10 seconds.",
+          "refresh": "Refresh",
+          "tabs": {
+            "intents": "Intents",
+            "proposals": "Proposals",
+            "mandates": "Mandates"
+          },
+          "loading": "Loading...",
+          "unreachable": "The gateway is not reachable, so there is nothing to show. Start the gateway and this page fills in.",
+          "unavailable": "Not available right now.",
+          "web_owner_blocked": "The web launcher is not the owner right now: {{reason}}",
+          "confirm": "Confirm",
+          "cancel": "Cancel",
+          "done": "Done",
+          "failed": "That did not work",
+          "suggested_by_assistant": "Suggested by the assistant",
+          "quote_fact": "Fact it wants to remember",
+          "quote_rationale": "Its reason",
+          "intents": {
+            "empty": "No open intents.",
+            "kind": "Kind",
+            "status": "Status",
+            "created_by": "Created by",
+            "expires": "Expires",
+            "never": "Does not expire",
+            "triggers": "Triggers: {{count}}",
+            "via_web": "confirmed or changed from the web",
+            "source": {
+              "explicit": "you",
+              "inferred": "the assistant (inferred)",
+              "reflection": "the nightly reflection"
+            },
+            "state": {
+              "proposed": "suggested",
+              "active": "active",
+              "paused": "paused"
+            },
+            "pause": "Pause",
+            "resume": "Resume",
+            "cancel_intent": "Cancel intent",
+            "confirm_intent": "Confirm",
+            "pause_description": "The intent stops watching until you resume it.",
+            "resume_description": "The intent becomes active again and may notify you.",
+            "cancel_description": "The intent is ended for good.",
+            "confirm_description": "The suggestion becomes active and starts working."
+          },
+          "proposals": {
+            "empty": "Nothing is waiting for your decision.",
+            "kind": {
+              "order": "Order",
+              "mandate": "Mandate",
+              "memory": "Memory",
+              "trigger_param": "Reflection: trigger setting",
+              "intent_cleanup": "Reflection: intent clean-up",
+              "mute": "Reflection: mute"
+            },
+            "code": "Code",
+            "expires_in": "Expires in {{time}}",
+            "expired": "Expired",
+            "pending": "pending",
+            "reducing": "Only reduces risk",
+            "approve": "Approve",
+            "reject": "Reject",
+            "approve_title": "Approve this?",
+            "reject_title": "Reject this?",
+            "approve_description": "The assistant will act on it once you approve.",
+            "reject_description": "Nothing will be done."
+          },
+          "mandates": {
+            "empty": "No mandates.",
+            "per_period": "Per {{period}} cap",
+            "used": "Used this period",
+            "usage_unknown": "Usage could not be read",
+            "per_run": "Per run cap",
+            "expires": "Expires",
+            "valid_from": "Valid from",
+            "revoke": "Revoke",
+            "revoke_title": "Revoke this mandate?",
+            "revoke_description": "Scheduled runs stop buying until you approve a new mandate."
+          }
+        },
         "stop": {
           "title": "Stop",
           "description": "Stops the assistant acting at once: cancels running turns, workflows, mandates, pending proposals and the open orders it placed. Monitoring and notifications stay on. Send /resume to allow approvals again.",

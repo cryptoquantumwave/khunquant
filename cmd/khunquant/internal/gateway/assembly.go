@@ -438,6 +438,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// the same rule propose_order is: approvals stay unavailable.
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
+	s.Control.attachManage(d, s.Perception)
 
 	// The owner's responses to proactive messages, recorded only with proactive.learning
 	// on. After the control path (taps and replies reach it) and the outbox (whose
@@ -548,6 +549,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 		withCognitionStats(s.Cognition.stats), withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
 	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
+	registerManageAPI(mux, s.Control, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)

@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import { getProactiveStatus } from "@/api/proactive"
 import { PageHeader } from "@/components/page-header"
 import { DecisionsSection } from "@/components/proactive/decisions-section"
+import { ManageSection } from "@/components/proactive/manage-section"
 import { ModesSection } from "@/components/proactive/modes-section"
 import { OwnerSection } from "@/components/proactive/owner-section"
 import { ProfileSection } from "@/components/proactive/profile-section"
@@ -43,6 +44,7 @@ export function ProactivePage() {
             </>
           )}
           <StopSection />
+          <ManageSection />
           <ProfileSection />
           <DecisionsSection />
         </div>

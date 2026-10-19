@@ -39,6 +39,9 @@ type controlRuntime struct {
 	// and cleared by detach. The gateway route reads it at request time, because the
 	// route is registered before the services are built.
 	stop atomic.Pointer[control.Kill]
+	// manage is what the launcher's management routes act on (manage_api.go), set by
+	// attachManage and withdrawn by detach.
+	manage atomic.Pointer[manageDeps]
 }
 
 // stopper is the /stop sequence, or nil while none is attached. Safe on nil.
@@ -221,6 +224,7 @@ func (rt *controlRuntime) detach() {
 	deps := rt.disp.Deps()
 	deps.Approvals, deps.Sent, deps.Attention, deps.Stop, deps.Feedback = nil, nil, nil, nil, nil
 	rt.stop.Store(nil)
+	rt.manage.Store(nil)
 	rt.disp.SetDeps(deps)
 }
 

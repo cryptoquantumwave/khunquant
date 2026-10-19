@@ -116,6 +116,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Proactive agent settings: owner, modes, profile and recent attention
 	// decisions (profile and decisions in workspace/memory/proactive/proactive.db)
 	h.registerAgentProactiveRoutes(mux)
+	h.registerAgentProactiveManageRoutes(mux)
 
 	// Kill switch: /stop from the dashboard, forwarded to the gateway
 	h.registerControlRoutes(mux)

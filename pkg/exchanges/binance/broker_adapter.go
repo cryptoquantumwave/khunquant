@@ -302,15 +302,11 @@ func (a *BinanceBrokerAdapter) SetFuturesLeverage(_ context.Context, symbol stri
 		}
 	}
 	err = catchPanic(func() error {
-		res := <-a.usdm.Core.SetLeverage(leverage, symbol, params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res, e := a.usdm.SetLeverage(leverage, ccxt.WithSetLeverageSymbol(symbol), ccxt.WithSetLeverageParams(params))
+		if e != nil {
+			return e
 		}
-		if m, ok := res.(map[string]interface{}); ok {
-			out = m
-			return nil
-		}
-		out = map[string]interface{}{"response": res}
+		out = res
 		return nil
 	})
 	if err != nil {

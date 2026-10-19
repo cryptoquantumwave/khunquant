@@ -58,16 +58,13 @@ func TestPinnedCCXT_MapsClientOrderIDToClOrdId(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ex := ccxt.NewOkx(map[string]any{})
-			ex.Core.SetMarkets(map[string]any{c.sym: testMarket(c.sym, c.id, c.swap)})
+			ex.SetMarkets(map[string]any{c.sym: testMarket(c.sym, c.id, c.swap)})
 			cid := broker.ClientOrderID("wf1:1:place", 32)
 			params := map[string]any{"clientOrderId": cid}
 			for k, v := range c.params {
 				params[k] = v
 			}
-			req, ok := ex.Core.CreateOrderRequest(c.sym, "limit", "buy", 0.01, 100.0, params).(map[string]any)
-			if !ok {
-				t.Fatal("request is not a map")
-			}
+			req := ex.CreateOrderRequest(c.sym, "limit", "buy", 0.01, 100.0, params)
 			if req["clOrdId"] != cid {
 				t.Fatalf("clOrdId = %v, want %s (request %v)", req["clOrdId"], cid, req)
 			}

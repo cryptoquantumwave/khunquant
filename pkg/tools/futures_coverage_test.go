@@ -320,7 +320,7 @@ func TestFormatFundingHistory_WithData(t *testing.T) {
 	cur := "USDT"
 	dt := "2026-01-01"
 	got := formatFundingHistory([]ccxt.FundingHistory{
-		{Amount: &amt, Currency: &cur, Datetime: &dt},
+		{Amount: &amt, Code: &cur, Datetime: &dt},
 	})
 	if !strings.Contains(got, "5") {
 		t.Errorf("formatFundingHistory = %q", got)

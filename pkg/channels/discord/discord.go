@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/net/http/httpproxy"
 	"github.com/gorilla/websocket"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
@@ -629,7 +630,11 @@ func applyDiscordProxy(session *discordgo.Session, proxyAddr string) error {
 		}
 		proxyFunc = http.ProxyURL(proxyURL)
 	} else if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
-		proxyFunc = http.ProxyFromEnvironment
+		// Read the environment now, as the check above did. http.ProxyFromEnvironment
+		// caches it once per process, so an earlier call anywhere in the process
+		// would make this channel ignore the proxy the check just saw.
+		envProxy := httpproxy.FromEnvironment().ProxyFunc()
+		proxyFunc = func(r *http.Request) (*url.URL, error) { return envProxy(r.URL) }
 	}
 
 	if proxyFunc == nil {

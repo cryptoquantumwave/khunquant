@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	// Must be imported first so HTTP_PROXY/HTTPS_PROXY are set before any
+	// transitive package init() calls http.ProxyFromEnvironment.
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/e2e/internal/proxyenv"
+
 	// Ensure all exchange factories are registered
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binance"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/exchanges/binanceth"
@@ -82,9 +86,14 @@ func NewProxyRecorder() *ProxyRecorder {
 
 // Start begins listening.
 func (p *ProxyRecorder) Start() error {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
+	listener := proxyenv.Listener
+	proxyenv.Listener = nil
+	if listener == nil {
+		var err error
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
 	}
 	p.listener = listener
 

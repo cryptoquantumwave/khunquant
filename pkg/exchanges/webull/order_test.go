@@ -71,7 +71,11 @@ func TestCreateOrderMarket(t *testing.T) {
 	}
 
 	// Verify order_id is in Info (Info is map[string]any)
-	if orderID, found := order.Info["order_id"]; !found {
+	infoMap, ok := order.Info.(map[string]any)
+	if !ok {
+		t.Fatalf("expected order.Info to be map[string]any, got %T", order.Info)
+	}
+	if orderID, found := infoMap["order_id"]; !found {
 		t.Errorf("order_id not in Info")
 	} else if orderID != "9876543210" {
 		t.Errorf("order_id incorrect value: expected 9876543210, got %v", orderID)

@@ -58,16 +58,16 @@ func TestPinnedCCXT_MapsClientOrderIDToNewClientOrderId(t *testing.T) {
 	}{
 		{"spot", func() (func(any) any, func(string, map[string]any) any) {
 			ex := ccxt.NewBinance(map[string]any{})
-			return func(m any) any { return ex.Core.SetMarkets(m) },
+			return func(m any) any { return ex.SetMarkets(m) },
 				func(s string, p map[string]any) any {
-					return ex.Core.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
+					return ex.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
 				}
 		}, "BTC/USDT", false},
 		{"usdm swap", func() (func(any) any, func(string, map[string]any) any) {
 			ex := ccxt.NewBinanceusdm(map[string]any{})
-			return func(m any) any { return ex.Core.SetMarkets(m) },
+			return func(m any) any { return ex.SetMarkets(m) },
 				func(s string, p map[string]any) any {
-					return ex.Core.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
+					return ex.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
 				}
 		}, "BTC/USDT:USDT", true},
 	}
@@ -80,7 +80,7 @@ func TestPinnedCCXT_MapsClientOrderIDToNewClientOrderId(t *testing.T) {
 			if !ok {
 				t.Fatalf("request is not a map")
 			}
-			if req["newClientOrderId"] != cid {
+			if requestString(req["newClientOrderId"]) != cid {
 				t.Fatalf("newClientOrderId = %v, want %s (request %v)", req["newClientOrderId"], cid, req)
 			}
 			if _, leaked := req["clientOrderId"]; leaked {
@@ -88,9 +88,23 @@ func TestPinnedCCXT_MapsClientOrderIDToNewClientOrderId(t *testing.T) {
 			}
 			// Without the param ccxt invents its own: the request is otherwise the same.
 			other, _ := build(c.sym, map[string]any{}).(map[string]any)
-			if other["newClientOrderId"] == cid || other["newClientOrderId"] == nil {
+			if requestString(other["newClientOrderId"]) == cid || other["newClientOrderId"] == nil {
 				t.Errorf("without the param ccxt should generate its own id, got %v", other["newClientOrderId"])
 			}
 		})
 	}
+}
+
+// requestString reads a request value as ccxt v4.5.85 builds it: a string, or a
+// *string it dereferences itself when it encodes the request.
+func requestString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case *string:
+		if s != nil {
+			return *s
+		}
+	}
+	return ""
 }

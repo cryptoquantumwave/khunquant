@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
+	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
@@ -56,6 +57,7 @@ type manageRig struct {
 	mux      *http.ServeMux
 	compiles atomic.Int32
 	plan     dca.Plan
+	gov      *attention.Governor
 }
 
 func armGate(t *testing.T, ok bool) {
@@ -108,10 +110,14 @@ func newManageRig(t *testing.T, opening bool) *manageRig {
 		t.Fatal(err)
 	}
 
-	disp := control.New(control.Deps{Cfg: cfg, Approvals: r.svc, Kill: r.kill})
+	r.gov, err = attention.New(sqlitextest.Open(t), r.intents, config.AttentionConfig{}, "live", r.clk.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disp := control.New(control.Deps{Cfg: cfg, Approvals: r.svc, Kill: r.kill, Attention: r.gov})
 	rt := &controlRuntime{disp: disp}
 	rt.manage.Store(&manageDeps{
-		cfg: cfg, disp: disp, approvals: r.svc, mandates: store, intents: r.intents,
+		cfg: cfg, disp: disp, approvals: r.svc, mandates: store, intents: r.intents, profile: r.intents,
 		compile: func() { r.compiles.Add(1) },
 	})
 	r.mux = http.NewServeMux()
@@ -172,6 +178,11 @@ var manageRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/proactive/proposals/ABCD/reject"},
 	{http.MethodGet, "/api/proactive/mandates"},
 	{http.MethodPost, "/api/proactive/mandates/m1/revoke"},
+	{http.MethodGet, "/api/proactive/autonomy"},
+	{http.MethodPut, "/api/proactive/autonomy"},
+	{http.MethodPost, "/api/proactive/resume"},
+	{http.MethodGet, "/api/proactive/mutes"},
+	{http.MethodDelete, "/api/proactive/mutes/abc"},
 }
 
 // Every route is guarded as /api/control/kill is: the token, loopback, no browser,

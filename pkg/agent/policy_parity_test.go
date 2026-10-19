@@ -184,6 +184,11 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 						for _, killed := range bools {
 							isKilled := killed
 							eng := tools.NewPolicyEngine(func() *config.Config { return c }, func() bool { return isKilled }, nil, nil)
+							// The same engine with the owner's autonomy dial, whose setting rotates
+							// over the cases: it may only tighten, and never touches the owner's turn.
+							dialSetting := "default"
+							dialEng := tools.NewPolicyEngine(func() *config.Config { return c }, func() bool { return isKilled }, nil, nil)
+							dialEng.SetOwnerDial(func(context.Context, policy.Tier) (string, error) { return dialSetting, nil })
 							// Live counts an allowed order, so each live probe gets an engine of its own.
 							liveEng := func() *policy.Engine {
 								return tools.NewPolicyEngine(func() *config.Config { return c }, func() bool { return isKilled }, nil, nil)
@@ -202,6 +207,14 @@ func TestPolicyEngine_NeverLooserThanToday(t *testing.T) {
 												}
 												legacy, v := tools.PolicyProbe(ctx, eng, name, args(name))
 												checked++
+												dialSetting = []string{"ask", "notify", "off"}[checked%3]
+												_, dv := tools.PolicyProbe(ctx, dialEng, name, args(name))
+												if dv.Mode.Rank() < v.Mode.Rank() && len(failures) < 20 {
+													failures = append(failures, fmt.Sprintf("DIAL-LOOSER: %s / tool %q / dial %s: %s -> %s (%v)", tc.name, name, dialSetting, v.Mode, dv.Mode, dv.Reasons))
+												}
+												if (tc.name == "owner at the console" || (tc.name == "owner user root" && !ownerless)) && dv.Mode != v.Mode && len(failures) < 20 {
+													failures = append(failures, fmt.Sprintf("DIAL-OWNER: %s / tool %q / dial %s changed the owner's own turn: %s -> %s", tc.name, name, dialSetting, v.Mode, dv.Mode))
+												}
 												// The kill switch does not take the owner's hands off: it never
 												// decides the owner's own root turn or the console.
 												isOwner := tc.name == "owner at the console" || (tc.name == "owner user root" && !ownerless)

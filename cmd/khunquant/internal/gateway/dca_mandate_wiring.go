@@ -253,6 +253,10 @@ func buildDCAFlow(d assemblyDeps, ns *notify.Service) *dcaFlowRuntime {
 		},
 		Tell: dcaTeller(ns),
 	}
+	// The owner's autonomy setting for mandated buys (T2) is checked by the workflow
+	// itself, whatever proactive.policy.mode is: a mandated run is not a tool call.
+	readDial := autonomyReader(d)
+	deps.OwnerDial = func(ctx context.Context) (string, error) { return readDial(ctx, "T2") }
 	if k := d.Control.killer(); k != nil {
 		deps.Killed = k.Killed
 	}

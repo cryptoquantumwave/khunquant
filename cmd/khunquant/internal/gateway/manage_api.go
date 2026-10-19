@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
@@ -39,8 +40,9 @@ import (
 //	approve a proposal, reject a proposal, confirm a proposed intent, resume a paused intent
 //
 // An action that only reduces risk needs the launcher's dashboard authentication
-// alone, as the kill switch does: pause or cancel an intent, revoke a mandate. All
-// are recorded as "web".
+// alone, as the kill switch does: pause or cancel an intent, revoke a mandate, tighten
+// the autonomy dial, remove a mute. Resume (clear the kill switch) and a loosening of
+// the dial need the web owner. All are recorded as "web".
 
 // manageDeps is what the routes act on, for one generation of services. Nothing is
 // opened here: each store is the one the running services already use. A part that
@@ -52,6 +54,10 @@ type manageDeps struct {
 	mandates  *dca.Store
 	intents   *intent.Store
 	compile   func() // asks the intent compiler for a pass; nil without one
+	// profile is the owner's profile, where the autonomy dial lives; it is open whenever
+	// proactive is, whatever proactive.intents says. dialMu orders the dial's writes.
+	profile *intent.Store
+	dialMu  sync.Mutex
 }
 
 // attachManage gives the routes the services of this generation. Called after the
@@ -69,14 +75,15 @@ func (rt *controlRuntime) attachManage(d assemblyDeps, p *perceptionRuntime) {
 	if d.Approval != nil {
 		m.mandates = d.Approval.mandateStore
 	}
-	if d.Cfg.Proactive.Effective().Intents {
-		if db, err := proactiveDB(d); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			st, err := intent.NewStore(ctx, db)
-			cancel()
-			if err != nil {
-				logger.WarnCF("gateway", "Intent management is unavailable: the store could not be opened", map[string]any{"error": err.Error()})
-			} else {
+	if db, err := proactiveDB(d); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		st, err := intent.NewStore(ctx, db)
+		cancel()
+		if err != nil {
+			logger.WarnCF("gateway", "Intent and autonomy management are unavailable: the store could not be opened", map[string]any{"error": err.Error()})
+		} else {
+			m.profile = st
+			if d.Cfg.Proactive.Effective().Intents {
 				m.intents = st
 			}
 		}
@@ -106,6 +113,11 @@ func registerManageAPI(mux handleMux, rt *controlRuntime, token string) {
 	mux.Handle("POST /api/proactive/proposals/{code}/{action}", guard(rt.handleProposalAction))
 	mux.Handle("GET /api/proactive/mandates", guard(rt.handleMandatesList))
 	mux.Handle("POST /api/proactive/mandates/{id}/revoke", guard(rt.handleMandateRevoke))
+	mux.Handle("GET /api/proactive/autonomy", guard(rt.handleAutonomyGet))
+	mux.Handle("PUT /api/proactive/autonomy", guard(rt.handleAutonomyPut))
+	mux.Handle("POST /api/proactive/resume", guard(rt.handleResume))
+	mux.Handle("GET /api/proactive/mutes", guard(rt.handleMutesList))
+	mux.Handle("DELETE /api/proactive/mutes/{id}", guard(rt.handleMuteDelete))
 }
 
 // requireManagementToken refuses every request while no token is configured: the

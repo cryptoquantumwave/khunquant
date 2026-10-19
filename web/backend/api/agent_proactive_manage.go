@@ -24,6 +24,9 @@ import (
 
 var manageIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,80}$`)
 
+// muteIDPattern is the opaque id the gateway gives a mute (base64url of its stored key).
+var muteIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,400}$`)
+
 func (h *Handler) registerAgentProactiveManageRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agent/proactive/intents", h.manageGet("/api/proactive/intents", ""))
 	mux.HandleFunc("GET /api/agent/proactive/proposals", h.manageGet("/api/proactive/proposals", "status=pending"))
@@ -35,6 +38,53 @@ func (h *Handler) registerAgentProactiveManageRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/proactive/proposals/{code}/approve", h.manageProposalAction("approve"))
 	mux.HandleFunc("POST /api/agent/proactive/proposals/{code}/reject", h.manageProposalAction("reject"))
 	mux.HandleFunc("POST /api/agent/proactive/mandates/{id}/revoke", h.manageMandateRevoke)
+
+	// The owner's autonomy dial (tighten-only), the kill switch and the mutes. The gateway
+	// decides who may loosen the dial or resume (the web owner); the launcher forwards.
+	mux.HandleFunc("GET /api/agent/proactive/autonomy", h.manageGet("/api/proactive/autonomy", ""))
+	mux.HandleFunc("PUT /api/agent/proactive/autonomy", h.manageAutonomyPut)
+	// Kill is the existing launcher kill route, not a second handler.
+	mux.HandleFunc("POST /api/agent/proactive/kill", h.handleControlKill)
+	mux.HandleFunc("POST /api/agent/proactive/resume", h.manageResume)
+	mux.HandleFunc("GET /api/agent/proactive/mutes", h.manageGet("/api/proactive/mutes", ""))
+	mux.HandleFunc("DELETE /api/agent/proactive/mutes/{id}", h.manageMuteDelete)
+}
+
+// autonomyPutLimit bounds the dial's body: three short words.
+const autonomyPutLimit = 4 << 10
+
+// manageAutonomyPut forwards the owner's dial, the one write here that carries a body.
+func (h *Handler) manageAutonomyPut(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+	base, token, err := h.gatewayManagementAPI()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the launcher configuration could not be read"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, autonomyPutLimit)
+	proxyToGateway(w, r, base+"/api/proactive/autonomy", token)
+}
+
+// manageResume clears the kill switch. The gateway requires the web owner for it.
+func (h *Handler) manageResume(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+	h.proxyManage(w, r, "/api/proactive/resume")
+}
+
+func (h *Handler) manageMuteDelete(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if !muteIDPattern.MatchString(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a mute id"})
+		return
+	}
+	h.proxyManage(w, r, "/api/proactive/mutes/"+url.PathEscape(id))
 }
 
 // manageGet proxies a read. The query is fixed here, never taken from the browser.

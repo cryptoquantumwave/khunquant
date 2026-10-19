@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"sync"
@@ -235,6 +236,11 @@ func (t *UpdateProfileTool) Execute(ctx context.Context, args map[string]any) *T
 	after, err := before.ApplyPatch(patch)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("profile not changed: %v", err))
+	}
+	// The autonomy dial is the owner's, set from the launcher only: not a patch field,
+	// and checked here again so no change to ApplyPatch can let the model move it.
+	if !maps.Equal(before.Autonomy, after.Autonomy) {
+		return ErrorResult("profile not changed: the autonomy setting can only be changed by the owner from the web launcher")
 	}
 	changed := changedProfileFields(before, after)
 	if len(changed) == 0 {

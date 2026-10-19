@@ -81,6 +81,9 @@ const (
 type Engine struct {
 	d Deps
 
+	// ownerDial is the owner's tighten-only autonomy dial; nil means none (see dial.go).
+	ownerDial func(ctx context.Context, t Tier) (string, error)
+
 	mu     sync.Mutex
 	recent []stamp
 }
@@ -180,8 +183,15 @@ func (e *Engine) evaluate(ctx context.Context, r ActionRequest, live bool) Verdi
 	if m, why := e.limits(ctx, r, live); m != ModeAct {
 		return verdictOf("B", m, why)
 	}
+	// The owner's dial is read here, before the lock below: it may touch the database,
+	// and gate C inside the lock stays pure.
+	owned := e.ownerChoice(ctx, r, v.Tier)
 	final := func() Verdict {
 		m, why := dial(r, v.Tier, covered)
+		if owned.set {
+			// Tighten only: the owner's setting can raise today's restriction, never lower it.
+			m, why = Tighten(m, owned.mode), why+"; owner dial "+owned.label
+		}
 		return proposal("C", m, why)
 	}
 	if !live || !countsTowardBrakes(r) {
@@ -295,6 +305,12 @@ func columnOf(r ActionRequest) column {
 // ask: there is no automatic protective recovery.
 func dial(r ActionRequest, t Tier, covered bool) (Mode, string) {
 	col := columnOf(r)
+	return baseMode(t, col, covered), fmt.Sprintf("dial %s, column %d", t, col)
+}
+
+// baseMode is gate C's mode before the owner's dial: a pure function of tier, column
+// and mandate cover.
+func baseMode(t Tier, col column, covered bool) Mode {
 	m := ModeAct
 	switch {
 	case t == T0Read || col == colUser:
@@ -311,7 +327,7 @@ func dial(r ActionRequest, t Tier, covered bool) (Mode, string) {
 	default: // T2, T3 on a tainted, untrusted or foreign turn
 		m = ModeNotifyOnly
 	}
-	return m, fmt.Sprintf("dial %s, column %d", t, col)
+	return m
 }
 
 // limits is gate B: permission, the USD cap and the brakes. Every brake is off

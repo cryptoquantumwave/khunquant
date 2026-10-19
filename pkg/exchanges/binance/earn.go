@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	ccxt "github.com/ccxt/ccxt/go/v4"
-
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -95,11 +93,11 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asse
 			if asset != "" {
 				params["asset"] = asset
 			}
-			res := <-a.spot.Core.SapiGetSimpleEarnFlexibleList(params)
-			if ccxt.IsError(res) {
-				return ccxt.CreateReturnError(res)
+			res := <-a.spot.SapiGetSimpleEarnFlexibleList(params)
+			if res.Err != nil {
+				return res.Err
 			}
-			rows := earnRows(res)
+			rows := earnRows(res.Boxed())
 			for _, row := range rows {
 				products = append(products, broker.EarnProduct{
 					Exchange:      Name,
@@ -132,11 +130,11 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]
 	err := catchPanic(func() error {
 		const size = 100
 		for current := 1; ; current++ {
-			res := <-a.spot.Core.SapiGetSimpleEarnFlexiblePosition(map[string]interface{}{"current": current, "size": size})
-			if ccxt.IsError(res) {
-				return ccxt.CreateReturnError(res)
+			res := <-a.spot.SapiGetSimpleEarnFlexiblePosition(map[string]interface{}{"current": current, "size": size})
+			if res.Err != nil {
+				return res.Err
 			}
-			rows := earnRows(res)
+			rows := earnRows(res.Boxed())
 			for _, row := range rows {
 				positions = append(positions, broker.EarnPosition{
 					Exchange:      Name,
@@ -193,11 +191,11 @@ func (a *BinanceBrokerAdapter) SubscribeFlexibleEarn(ctx context.Context, produc
 			"amount":        strconv.FormatFloat(amount, 'f', -1, 64),
 			"autoSubscribe": autoSubscribe,
 		}
-		res := <-a.spot.Core.SapiPostSimpleEarnFlexibleSubscribe(params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.spot.SapiPostSimpleEarnFlexibleSubscribe(params)
+		if res.Err != nil {
+			return res.Err
 		}
-		if m, ok := res.(map[string]interface{}); ok {
+		if m, ok := res.Boxed().(map[string]interface{}); ok {
 			txID = earnAsString(m["purchaseId"])
 		}
 		return nil
@@ -225,11 +223,11 @@ func (a *BinanceBrokerAdapter) RedeemFlexibleEarn(ctx context.Context, productID
 		} else {
 			params["amount"] = strconv.FormatFloat(amount, 'f', -1, 64)
 		}
-		res := <-a.spot.Core.SapiPostSimpleEarnFlexibleRedeem(params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.spot.SapiPostSimpleEarnFlexibleRedeem(params)
+		if res.Err != nil {
+			return res.Err
 		}
-		if m, ok := res.(map[string]interface{}); ok {
+		if m, ok := res.Boxed().(map[string]interface{}); ok {
 			txID = earnAsString(m["redeemId"])
 		}
 		return nil
@@ -251,9 +249,9 @@ func (a *BinanceBrokerAdapter) SetFlexibleAutoSubscribe(ctx context.Context, pro
 	}
 	err = catchPanic(func() error {
 		params := map[string]interface{}{"productId": pid, "autoSubscribe": enable}
-		res := <-a.spot.Core.SapiPostSimpleEarnFlexibleSetAutoSubscribe(params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.spot.SapiPostSimpleEarnFlexibleSetAutoSubscribe(params)
+		if res.Err != nil {
+			return res.Err
 		}
 		return nil
 	})
@@ -287,11 +285,11 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnRateHistory(ctx context.Context,
 	var points []broker.EarnRatePoint
 	const size = 100
 	appendPage := func(params map[string]interface{}) (int, error) {
-		res := <-a.spot.Core.SapiGetSimpleEarnFlexibleHistoryRateHistory(params)
-		if ccxt.IsError(res) {
-			return 0, ccxt.CreateReturnError(res)
+		res := <-a.spot.SapiGetSimpleEarnFlexibleHistoryRateHistory(params)
+		if res.Err != nil {
+			return 0, res.Err
 		}
-		rows := earnRows(res)
+		rows := earnRows(res.Boxed())
 		for _, row := range rows {
 			points = append(points, broker.EarnRatePoint{
 				Rate:      earnAsFloat(row["annualPercentageRate"]),

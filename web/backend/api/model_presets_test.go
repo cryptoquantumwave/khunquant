@@ -7,9 +7,9 @@ func TestDefaultModelForProvider(t *testing.T) {
 		provider string
 		want     string
 	}{
-		{oauthProviderOpenAI, "openai/gpt-5.6-sol"},
-		{oauthProviderAnthropic, "anthropic/claude-sonnet-5"},
-		{oauthProviderGoogleAntigravity, "antigravity/gemini-3-flash"},
+		{oauthProviderOpenAI, "openai/gpt-6.1-sol"},
+		{oauthProviderAnthropic, "anthropic/claude-sonnet-5-5"},
+		{oauthProviderGoogleAntigravity, "antigravity/gemini-3.8-flash-medium"},
 		{oauthProviderGoogleGemini, "gemini-code-assist/gemini-2.5-flash"},
 		{"unknown", ""},
 		{"", ""},
@@ -25,7 +25,7 @@ func TestDefaultModelForProvider(t *testing.T) {
 }
 
 // TestDefaultIsListedInPresets ensures each provider's default model ID appears somewhere in its
-// preset list. Anthropic's default (sonnet) is intentionally not the first preset (fable-5 is
+// preset list. Anthropic's default (sonnet) is intentionally not the first preset (opus-5.5 is
 // listed first as the most capable), but it must still appear so users can select it via the UI.
 func TestDefaultIsListedInPresets(t *testing.T) {
 	providers := []string{

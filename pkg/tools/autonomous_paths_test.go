@@ -440,3 +440,129 @@ func TestPromptFiles_NoOwnerUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// protectedProbe is a file under a protected entry: the entry itself when it names a
+// file (state.json, USER.md), a file inside it when it names a directory.
+func protectedProbe(entry string) string {
+	if filepath.Ext(entry) != "" {
+		return entry
+	}
+	return entry + "/probe.txt"
+}
+
+// seededProbes builds a workspace holding a seeded file under every entry of
+// autonomousProtectedPaths, so that a new entry is covered by the tests below at once.
+func seededProbes(t *testing.T) string {
+	t.Helper()
+	ws := t.TempDir()
+	seen := map[string]bool{}
+	for _, e := range autonomousProtectedPaths {
+		if seen[e.Path] {
+			t.Fatalf("duplicate protected path %q", e.Path)
+		}
+		seen[e.Path] = true
+		full := filepath.Join(ws, filepath.FromSlash(protectedProbe(e.Path)))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(seedText), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ws
+}
+
+// While an owner is configured EVERY protected entry is owner-only for the three file
+// tools: the owner's root turn (route or authenticated web chat) writes it, no other
+// turn does, and a refusal carries its category's wording and leaves the file alone.
+func TestOwnerConfigured_EveryProtectedPathIsOwnerOnly(t *testing.T) {
+	armWebGate(t, true)
+	armOwner(t, true)
+	owner := remoteTurn(proposeOwner, "telegram")
+	allowed := map[string]context.Context{"owner": owner, "web owner": webTurn(true)}
+	refused := map[string]context.Context{
+		"another sender":         remoteTurn("telegram:999", "telegram"),
+		"sub-turn of the owner":  WithSubTurn(owner),
+		"web, not authenticated": webTurn(false),
+		"untagged":               context.Background(),
+		"system turn":            WithToolContext(WithToolOrigin(context.Background(), OriginInternal), "telegram", "1001"),
+	}
+	if len(autonomousProtectedPaths) < 19 {
+		t.Fatalf("only %d protected entries: the list shrank", len(autonomousProtectedPaths))
+	}
+	for _, e := range autonomousProtectedPaths {
+		rel := protectedProbe(e.Path)
+		for _, tool := range fileTools {
+			for name, ctx := range allowed {
+				ws := seededProbes(t)
+				if res := fileCall(ctx, tool, ws, true, rel); res.IsError {
+					t.Errorf("%s %s %s: refused: %s", name, tool, rel, res.ForLLM)
+				}
+				if got := readSeed(t, ws, rel); !strings.Contains(got, "CHANGED") {
+					t.Errorf("%s %s %s: not written: %q", name, tool, rel, got)
+				}
+			}
+			for name, ctx := range refused {
+				ws := seededProbes(t)
+				what := name + " " + tool + " " + rel
+				res := fileCall(ctx, tool, ws, true, rel)
+				switch {
+				case e.Path == "memory":
+					mustRefuseWrite(t, what, res, "memory is written only in the owner's own conversation")
+					if res != nil && !strings.Contains(res.ForLLM, rememberHint) {
+						t.Errorf("%s: the memory refusal lost its hint: %s", what, res.ForLLM)
+					}
+				case e.PromptFile:
+					mustRefuseWrite(t, what, res, "the assistant's prompt files are changed only in the owner's own conversation")
+					if res != nil && strings.Contains(res.ForLLM, "remember") {
+						t.Errorf("%s: a prompt-file refusal points at remember: %s", what, res.ForLLM)
+					}
+				default:
+					mustRefuseWrite(t, what, res, "holds the assistant's scheduler, safety or session state")
+					if res != nil && e.Use != "" && !strings.Contains(res.ForLLM, "Use the "+e.Use+" tool") {
+						t.Errorf("%s: the refusal does not name %s: %s", what, e.Use, res.ForLLM)
+					}
+				}
+				if got := readSeed(t, ws, rel); got != seedText {
+					t.Errorf("%s: modified: %q", what, got)
+				}
+			}
+		}
+	}
+}
+
+// With no owner configured another sender writes every protected entry as it always did;
+// an autonomous turn is refused with the autonomous wording whether or not one is.
+func TestNoOwner_EveryProtectedPathUnchanged(t *testing.T) {
+	armOwner(t, false)
+	other := remoteTurn("telegram:999", "telegram")
+	for _, e := range autonomousProtectedPaths {
+		rel := protectedProbe(e.Path)
+		for _, ctx := range []context.Context{other, WithSubTurn(other), context.Background()} {
+			for _, tool := range fileTools {
+				ws := seededProbes(t)
+				if res := fileCall(ctx, tool, ws, true, rel); res.IsError {
+					t.Errorf("%s %s: refused with no owner configured: %s", tool, rel, res.ForLLM)
+				}
+				if got := readSeed(t, ws, rel); !strings.Contains(got, "CHANGED") {
+					t.Errorf("%s %s: not written: %q", tool, rel, got)
+				}
+			}
+		}
+	}
+	for _, owner := range []bool{false, true} {
+		armOwner(t, owner)
+		for name, ctx := range autonomousFileContexts() {
+			for _, e := range autonomousProtectedPaths {
+				rel := protectedProbe(e.Path)
+				for _, tool := range fileTools {
+					ws := seededProbes(t)
+					mustRefuseWrite(t, name+" "+tool+" "+rel, fileCall(ctx, tool, ws, true, rel), "autonomous ("+name+") turns")
+					if got := readSeed(t, ws, rel); got != seedText {
+						t.Errorf("%s %s %s: modified: %q", name, tool, rel, got)
+					}
+				}
+			}
+		}
+	}
+}

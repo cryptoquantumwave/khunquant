@@ -72,11 +72,15 @@ func TestPlaceOptionOrder_Success(t *testing.T) {
 	if order.Symbol == nil || *order.Symbol == "" {
 		t.Errorf("expected OCC-encoded symbol, got %v", order.Symbol)
 	}
-	if order.Info["order_id"] != "1234567890" {
-		t.Errorf("expected order_id in Info, got %v", order.Info["order_id"])
+	infoMap, ok := order.Info.(map[string]any)
+	if !ok {
+		t.Fatalf("expected order.Info to be map[string]any, got %T", order.Info)
 	}
-	if order.Info["option_strategy"] != "SINGLE" {
-		t.Errorf("expected option_strategy=SINGLE in Info, got %v", order.Info["option_strategy"])
+	if infoMap["order_id"] != "1234567890" {
+		t.Errorf("expected order_id in Info, got %v", infoMap["order_id"])
+	}
+	if infoMap["option_strategy"] != "SINGLE" {
+		t.Errorf("expected option_strategy=SINGLE in Info, got %v", infoMap["option_strategy"])
 	}
 }
 

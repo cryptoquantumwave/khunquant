@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"strconv"
 
-	ccxt "github.com/ccxt/ccxt/go/v4"
-
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -92,11 +90,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asset st
 		if asset != "" {
 			params["ccy"] = asset
 		}
-		res := <-a.publicClient.Core.PublicGetFinanceSavingsLendingRateHistory(params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.publicClient.PublicGetFinanceSavingsLendingRateHistory(params)
+		if res.Err != nil {
+			return res.Err
 		}
-		for _, row := range okxData(res) {
+		for _, row := range okxData(res.Boxed()) {
 			products = append(products, broker.EarnProduct{
 				Exchange:     Name,
 				Asset:        okxString(row["ccy"]),
@@ -117,11 +115,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asset st
 			if asset != "" {
 				params["ccy"] = asset
 			}
-			res := <-a.client.Core.PrivateGetFinanceStakingDefiOffers(params)
-			if ccxt.IsError(res) {
+			res := <-a.client.PrivateGetFinanceStakingDefiOffers(params)
+			if res.Err != nil {
 				return nil // supplemental: ignore auth/permission errors
 			}
-			for _, row := range okxData(res) {
+			for _, row := range okxData(res.Boxed()) {
 				if okxString(row["state"]) != "purchasable" {
 					continue
 				}
@@ -179,11 +177,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 
 	// ── Source 1: old Savings / Simple Earn lending pool ─────────────────
 	_ = catchPanic(func() error {
-		res := <-a.client.Core.PrivateGetFinanceSavingsBalance(map[string]interface{}{})
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.client.PrivateGetFinanceSavingsBalance(map[string]interface{}{})
+		if res.Err != nil {
+			return res.Err
 		}
-		for _, row := range okxData(res) {
+		for _, row := range okxData(res.Boxed()) {
 			asset := okxString(row["ccy"])
 			if !has(asset) {
 				positions = append(positions, broker.EarnPosition{
@@ -203,11 +201,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 	// cashBal = freely tradable; frozenBal = locked in earn/orders.
 	// We add frozenBal only when the asset isn't already counted from savings.
 	_ = catchPanic(func() error {
-		res := <-a.client.Core.PrivateGetAccountBalance(map[string]interface{}{})
-		if ccxt.IsError(res) {
+		res := <-a.client.PrivateGetAccountBalance(map[string]interface{}{})
+		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		m, ok := res.(map[string]interface{})
+		m, ok := res.Boxed().(map[string]interface{})
 		if !ok {
 			return nil
 		}
@@ -237,11 +235,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 	// OKX Simple Earn Flexible draws from the funding account; the subscribed
 	// amount appears as frozenBal in /api/v5/asset/balances.
 	_ = catchPanic(func() error {
-		res := <-a.client.Core.PrivateGetAssetBalances(map[string]interface{}{})
-		if ccxt.IsError(res) {
+		res := <-a.client.PrivateGetAssetBalances(map[string]interface{}{})
+		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		for _, row := range okxData(res) {
+		for _, row := range okxData(res.Boxed()) {
 			asset := okxString(row["ccy"])
 			frozen := okxFloat(row["frozenBal"])
 			if frozen > 0 && !has(asset) {
@@ -261,11 +259,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 	// The subscribed amount is nested: investData[i].amt (not a top-level field).
 	// State values: 8=Pending, 13=Cancelling, 9=Onchain, 1=Earning, 2=Redeeming.
 	_ = catchPanic(func() error {
-		res := <-a.client.Core.PrivateGetFinanceStakingDefiOrdersActive(map[string]interface{}{})
-		if ccxt.IsError(res) {
+		res := <-a.client.PrivateGetFinanceStakingDefiOrdersActive(map[string]interface{}{})
+		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		for _, row := range okxData(res) {
+		for _, row := range okxData(res.Boxed()) {
 			asset := okxString(row["ccy"])
 			state := okxString(row["state"])
 			// Skip terminal/exit states (2=Redeeming, 13=Cancelling); count all others.
@@ -312,11 +310,11 @@ func (a *OKXBrokerAdapter) purchaseRedempt(asset string, amount float64, side st
 			"amt":  strconv.FormatFloat(amount, 'f', -1, 64),
 			"side": side,
 		}
-		res := <-a.client.Core.PrivatePostFinanceSavingsPurchaseRedempt(params)
-		if ccxt.IsError(res) {
-			return ccxt.CreateReturnError(res)
+		res := <-a.client.PrivatePostFinanceSavingsPurchaseRedempt(params)
+		if res.Err != nil {
+			return res.Err
 		}
-		for _, row := range okxData(res) {
+		for _, row := range okxData(res.Boxed()) {
 			txID = okxString(row["ccy"]) + ":" + okxString(row["side"])
 		}
 		return nil
@@ -390,11 +388,11 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnRateHistory(_ context.Context, _ /*p
 			if cursor != "" {
 				params["after"] = cursor
 			}
-			res := <-a.publicClient.Core.PublicGetFinanceSavingsLendingRateHistory(params)
-			if ccxt.IsError(res) {
-				return ccxt.CreateReturnError(res)
+			res := <-a.publicClient.PublicGetFinanceSavingsLendingRateHistory(params)
+			if res.Err != nil {
+				return res.Err
 			}
-			rows := okxData(res)
+			rows := okxData(res.Boxed())
 			if len(rows) == 0 {
 				break
 			}

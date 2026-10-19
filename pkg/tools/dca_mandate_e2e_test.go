@@ -276,9 +276,9 @@ func TestMandateFromApprovedProposal(t *testing.T) {
 }
 
 // Only the owner's own root conversation turn can ask for a mandate. A cron turn, a
-// chat turn from somebody else, a sub-turn and a model's background turn get the plan
-// as they always did and no card; a sell plan, a contract symbol and a plan with an
-// indicator trigger get none either.
+// chat turn from somebody else, a sub-turn and a model's background turn are refused
+// the plan altogether (F26) and get no card; a sell plan, a contract symbol and a plan
+// with an indicator trigger get none either.
 func TestMandate_OnlyTheOwnersOwnTurnAsks(t *testing.T) {
 	e := newMandateE2E(t, true)
 	stranger := WithToolContext(WithToolSender(WithToolOrigin(context.Background(), OriginRemote), "telegram:999"), "telegram", "999")
@@ -291,7 +291,8 @@ func TestMandate_OnlyTheOwnersOwnTurnAsks(t *testing.T) {
 		"sub-turn":  WithSubTurn(e.ownerCtx()),
 	}
 	for name, ctx := range turns {
-		if res := e.createPlan(ctx, nil); res.IsError || !strings.Contains(res.ForLLM, "No mandate was proposed") {
+		// F26: with an owner configured these turns no longer get the plan at all.
+		if res := e.createPlan(ctx, nil); !res.IsError || !strings.Contains(res.ForLLM, "changed only in the owner's own conversation") {
 			t.Errorf("%s: %q", name, res.ForLLM)
 		}
 	}

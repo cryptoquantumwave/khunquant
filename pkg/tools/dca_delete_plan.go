@@ -35,6 +35,11 @@ func (t *DeleteDCAPlanTool) Parameters() map[string]any {
 }
 
 func (t *DeleteDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Removing a plan removes its job and mandate: owner only.
+	if res := refuseNonOwnerChange(ctx, NameDeleteDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {

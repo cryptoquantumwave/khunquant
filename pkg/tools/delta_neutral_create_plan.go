@@ -177,6 +177,11 @@ func (t *CreateDeltaNeutralPlanTool) Parameters() map[string]any {
 }
 
 func (t *CreateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// A plan gets a monitor job on the owner's accounts: owner only.
+	if res := refuseNonOwnerChange(ctx, NameCreateDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	planName, _ := args["plan_name"].(string)
 	asset, _ := args["asset"].(string)
 	spotProvider, _ := args["spot_provider"].(string)

@@ -34,17 +34,20 @@ import (
 	"testing"
 	"time"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex/sqlitextest"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
@@ -513,6 +516,109 @@ func TestRedTeam_NonOwnerCannotScheduleOrInstall(t *testing.T) {
 	// The owner's own turn still schedules.
 	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameCron, add, "telegram", "chat", nil); res == nil || res.IsError {
 		t.Errorf("the owner's own cron add failed: %+v", res)
+	}
+	r.assertNothingHappened()
+}
+
+// rtFakeExchange is the exchange edge of the DCA red-team case: it resolves as a trading
+// provider so create_dca_plan accepts it, and places nothing.
+type rtFakeExchange struct{}
+
+func (rtFakeExchange) ID() string                     { return "rtfakedca" }
+func (rtFakeExchange) Category() broker.AssetCategory { return broker.CategoryCrypto }
+func (rtFakeExchange) GetMarketStatus(context.Context, string) (broker.MarketStatus, error) {
+	return broker.MarketOpen, nil
+}
+
+func (rtFakeExchange) CreateOrder(context.Context, string, string, string, float64, *float64, map[string]any) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+
+func (rtFakeExchange) CancelOrder(context.Context, string, string) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+
+func (rtFakeExchange) FetchOrder(context.Context, string, string) (ccxt.Order, error) {
+	return ccxt.Order{}, nil
+}
+
+func (rtFakeExchange) FetchOpenOrders(context.Context, string) ([]ccxt.Order, error) {
+	return nil, nil
+}
+
+func (rtFakeExchange) FetchClosedOrders(context.Context, string, *int64, int) ([]ccxt.Order, error) {
+	return nil, nil
+}
+
+func (rtFakeExchange) FetchMyTrades(context.Context, string, *int64, int) ([]ccxt.Trade, error) {
+	return nil, nil
+}
+
+// A person who is not the owner talks to the agent, and the model obeys: it cannot make a DCA
+// plan (a dca: job that buys on the owner's accounts) or set a price alert (a job that posts
+// caller-written text to a chat the caller names). Both are refused with the owner-only
+// wording, and no plan, job or alert exists afterwards. The owner's own create_dca_plan
+// succeeds as the positive control.
+func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
+	r := newRedTeam(t)
+	broker.RegisterFactory("rtfakedca", func(*config.Config) (broker.Provider, error) { return rtFakeExchange{}, nil })
+	t.Cleanup(func() { broker.RegisterFactory("rtfakedca", nil) })
+
+	storePath := filepath.Join(r.f.workspace, "cron", "jobs.json")
+	cronSvc := cron.NewCronService(storePath, nil)
+	store, err := dca.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	r.reg.Register(tools.NewCreateDCAPlanTool(r.f.initial, store, cronSvc))
+	r.reg.Register(tools.NewSetPriceAlertTool(r.f.initial, cronSvc))
+
+	plan := map[string]any{
+		"plan_name": "buy BTC", "provider": "rtfakedca", "symbol": "BTC/USDT", "amount_per_order": 100.0,
+		"schedule": map[string]any{"cron": "0 9 * * 1"},
+	}
+	alert := map[string]any{
+		"action": "create", "provider": "rtfakedca", "symbol": "BTC/USDT", "condition": "above", "threshold": 1.0,
+		"channel": "telegram", "chat_id": "1001", "message": attackText,
+	}
+	remote := func(sender string) context.Context {
+		return tools.WithToolSender(tools.WithToolOrigin(context.Background(), tools.OriginRemote), sender)
+	}
+	wording := map[string]string{
+		tools.NameCreateDCAPlan: "DCA plans are changed only in the owner's own conversation",
+		tools.NameSetPriceAlert: "alerts are changed only in the owner's own conversation",
+	}
+	state := func() (plans, jobs int) {
+		p, err := store.ListPlans(context.Background(), dca.QueryFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(p), len(cron.NewCronService(storePath, nil).ListJobs(true))
+	}
+
+	for _, ctx := range []context.Context{remote("telegram:999"), tools.WithSubTurn(remote(rtOwner))} {
+		got := map[string]*tools.ToolResult{
+			tools.NameCreateDCAPlan: r.reg.ExecuteWithContext(ctx, tools.NameCreateDCAPlan, plan, "telegram", "chat", nil),
+			tools.NameSetPriceAlert: r.reg.ExecuteWithContext(ctx, tools.NameSetPriceAlert, alert, "telegram", "chat", nil),
+		}
+		r.assertRefused(got, tools.NameCreateDCAPlan, tools.NameSetPriceAlert)
+		for name, want := range wording {
+			if res := got[name]; res != nil && !strings.Contains(res.ForLLM, want) {
+				t.Errorf("%s: refusal has the wrong wording: %s", name, res.ForLLM)
+			}
+		}
+	}
+	if plans, jobs := state(); plans != 0 || jobs != 0 {
+		t.Fatalf("after the attempts: %d plan(s) and %d job(s)/alert(s) exist", plans, jobs)
+	}
+
+	// The owner's own turn still makes the plan.
+	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameCreateDCAPlan, plan, "telegram", "chat", nil); res == nil || res.IsError {
+		t.Fatalf("the owner's own create_dca_plan failed: %+v", res)
+	}
+	if plans, jobs := state(); plans != 1 || jobs != 1 {
+		t.Errorf("after the owner's create_dca_plan: %d plan(s), %d job(s), want 1 and 1", plans, jobs)
 	}
 	r.assertNothingHappened()
 }

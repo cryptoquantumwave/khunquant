@@ -63,6 +63,13 @@ func (t *SetIndicatorAlertTool) Parameters() map[string]any {
 func (t *SetIndicatorAlertTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	action, _ := args["action"].(string)
 
+	if action == "create" || action == "cancel" {
+		// An alert outlives the turn and speaks to the owner; list stays open.
+		if res := refuseNonOwnerChange(ctx, NameSetIndicatorAlert, "alerts"); res != nil {
+			return res
+		}
+	}
+
 	switch action {
 	case "list":
 		// The price alert tool's list logic — same job prefix pattern.

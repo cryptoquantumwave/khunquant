@@ -51,7 +51,7 @@ func TestAlerts_OwnerAlertCrossingInQuietHoursIsDeliveredNotDigested(t *testing.
 	rt := f.services.Perception
 	quietNowProfile(t, f)
 
-	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(context.Background(), "telegram", "-100group"),
+	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(ownerCtx(), "telegram", "-100group"),
 		map[string]any{"action": "create", "provider": "okx", "symbol": "BTC/USDT", "condition": "above", "threshold": 60000.0})
 	if res.IsError {
 		t.Fatal(res.ForLLM)

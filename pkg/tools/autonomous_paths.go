@@ -26,7 +26,9 @@ import (
 // could rewrite HEARTBEAT.md could rewrite its own instructions. A background turn may
 // SUGGEST a memory with the remember tool; the owner confirms it (remember.go). The
 // memory entry is also OwnerOnly: while an owner is configured, a turn a person started
-// writes memory only if it is the owner's own conversation.
+// writes memory only if it is the owner's own conversation. So are the prompt files
+// (AGENTS.md, IDENTITY.md, SOUL.md, USER.md) and HEARTBEAT.md: every later turn reads
+// them as its prompt, so what another sender plants there lasts.
 var autonomousProtectedPaths = []struct {
 	// Path is relative to the workspace, slash-separated, lower case. A
 	// directory protects everything under it.
@@ -49,16 +51,16 @@ var autonomousProtectedPaths = []struct {
 	{Path: "memory/snapshots", Why: "the portfolio snapshot store"},
 	{Path: "memory/proactive", Why: "the proactive-agent store (proactive.db): attention budgets, intents, proposals and the journal that gate what the agent says and does unprompted"},
 	{Path: "memory", Why: "the agent's memory (MEMORY.md and notes): later turns trust it, so only the owner's confirmation may add to it", OwnerOnly: true},
-	{Path: "heartbeat.md", Why: "the heartbeat's own instructions: a background turn must not rewrite them"},
+	{Path: "heartbeat.md", Why: "the heartbeat's own instructions: a background turn must not rewrite them", OwnerOnly: true},
 	{Path: "sandbox", Why: "sandbox fixtures and the stored Webull session"},
 	{Path: "whatsapp", Why: "the WhatsApp session store (credentials)"},
 	{Path: "pairing", Why: "pending channel pairing requests (pairing/requests.json): access-control state, so a background turn must not plant or alter a pairing code"},
 	{Path: "calendar", Why: "market holiday lists (set_holidays.json, us_holidays.json): the clock source gates market evaluation on them, so a background turn that could write one could switch evaluation off on a trading day"},
 	{Path: "replay", Why: "recorded pipeline events (replay/<YYYYMMDD>.jsonl): a replay of them is how a change to a trigger or an attention rule is judged, so a background turn must not be able to poison one"},
-	{Path: "agents.md", Why: "system prompt of every user turn"},
-	{Path: "identity.md", Why: "system prompt of every user turn"},
-	{Path: "soul.md", Why: "system prompt of every user turn"},
-	{Path: "user.md", Why: "system prompt of every user turn"},
+	{Path: "agents.md", Why: "system prompt of every user turn", OwnerOnly: true},
+	{Path: "identity.md", Why: "system prompt of every user turn", OwnerOnly: true},
+	{Path: "soul.md", Why: "system prompt of every user turn", OwnerOnly: true},
+	{Path: "user.md", Why: "system prompt of every user turn", OwnerOnly: true},
 }
 
 // The phrases of the two heartbeat templates (pkg/heartbeat: V1Marker and V2Marker,
@@ -90,8 +92,8 @@ func isV1HeartbeatFile(workspace string) bool {
 
 // guardAutonomousWrite is the file-write gate for write_file, edit_file and
 // append_file. For a turn a person started it returns the path unchanged and no
-// refusal, except for a path under an OwnerOnly entry (memory/) while an owner is
-// configured and the turn is not the owner's own root turn. For an autonomous turn it
+// refusal, except for a path under an OwnerOnly entry (memory/ and the prompt files)
+// while an owner is configured and the turn is not the owner's own root turn. For an autonomous turn it
 // returns the absolute path the tool must use - the path that was checked is the
 // path that gets written - or a refusal.
 //
@@ -108,7 +110,7 @@ func guardAutonomousWrite(
 ) (string, *ToolResult) {
 	origin := ToolOrigin(ctx)
 	autonomous := IsAutonomousOrigin(origin)
-	if !autonomous && !memoryOwnerOnly(ctx) {
+	if !autonomous && !ownerOnlyApplies(ctx) {
 		return path, nil
 	}
 	outside := func() (string, *ToolResult) {
@@ -118,12 +120,17 @@ func guardAutonomousWrite(
 		return "", policyRefusal(tool, fmt.Sprintf(
 			"autonomous (%s) turns may not write %q: it is outside the workspace", origin, path))
 	}
-	protected := func(why string, isMemory bool) (string, *ToolResult) {
+	protected := func(entry string) (string, *ToolResult) {
+		isMemory := entry == "memory"
 		switch {
-		case !autonomous:
+		case !autonomous && isMemory:
 			return "", policyRefusal(tool, fmt.Sprintf(
 				"this turn may not write %q: an owner is configured, and memory is written only in the owner's own "+
 					"conversation. %s", path, rememberHint))
+		case !autonomous:
+			return "", policyRefusal(tool, fmt.Sprintf(
+				"this turn may not write %q: an owner is configured, and the assistant's prompt files are changed "+
+					"only in the owner's own conversation", path))
 		case isMemory:
 			hint := ""
 			if origin == OriginHeartbeat && isV1HeartbeatFile(workspace) {
@@ -171,7 +178,7 @@ func guardAutonomousWrite(
 			if !autonomous && !p.OwnerOnly {
 				continue
 			}
-			return protected(p.Why, p.OwnerOnly)
+			return protected(p.Path)
 		}
 	}
 	if !autonomous {
@@ -191,11 +198,11 @@ func guardAutonomousWrite(
 	return absTarget, nil
 }
 
-// memoryOwnerOnly reports whether the OwnerOnly rule applies to this person's turn:
+// ownerOnlyApplies reports whether the OwnerOnly rule applies to this person's turn:
 // an owner is configured and the turn is not the owner's own root conversation turn.
 // An untagged turn is not the owner's (fail closed). With no config armed, or no owner
 // configured, it is false: nothing changes for an install that never set an owner.
-func memoryOwnerOnly(ctx context.Context) bool {
+func ownerOnlyApplies(ctx context.Context) bool {
 	cfg := armedConfig.Load()
 	if cfg == nil {
 		return false

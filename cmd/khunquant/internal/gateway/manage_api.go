@@ -58,6 +58,10 @@ type manageDeps struct {
 	// proactive is, whatever proactive.intents says. dialMu orders the dial's writes.
 	profile *intent.Store
 	dialMu  sync.Mutex
+	// db is the shared proactive database the dashboard reads (dashboard_api.go); now is
+	// its clock, nil for the wall clock.
+	db  *sql.DB
+	now func() time.Time
 }
 
 // attachManage gives the routes the services of this generation. Called after the
@@ -76,6 +80,7 @@ func (rt *controlRuntime) attachManage(d assemblyDeps, p *perceptionRuntime) {
 		m.mandates = d.Approval.mandateStore
 	}
 	if db, err := proactiveDB(d); err == nil {
+		m.db = db
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		st, err := intent.NewStore(ctx, db)
 		cancel()
@@ -118,6 +123,11 @@ func registerManageAPI(mux handleMux, rt *controlRuntime, token string) {
 	mux.Handle("POST /api/proactive/resume", guard(rt.handleResume))
 	mux.Handle("GET /api/proactive/mutes", guard(rt.handleMutesList))
 	mux.Handle("DELETE /api/proactive/mutes/{id}", guard(rt.handleMuteDelete))
+	// The dashboard's reads (dashboard_api.go).
+	mux.Handle("GET /api/proactive/interventions", guard(rt.handleInterventions))
+	mux.Handle("GET /api/proactive/metrics", guard(rt.handleMetrics))
+	mux.Handle("GET /api/proactive/changes", guard(rt.handleChanges))
+	mux.Handle("GET /api/proactive/state", guard(rt.handleState))
 }
 
 // requireManagementToken refuses every request while no token is configured: the

@@ -18,10 +18,22 @@ export class ManageError extends Error {
   }
 }
 
-async function manageRequest<T>(path: string, method = "GET"): Promise<T> {
+export async function manageRequest<T>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`${BASE}${path}`, { method })
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+    })
   } catch {
     throw new ManageError("network error", 0)
   }
@@ -29,15 +41,15 @@ async function manageRequest<T>(path: string, method = "GET"): Promise<T> {
     let message = `API error: ${res.status} ${res.statusText}`
     let missing: string | undefined
     try {
-      const body = (await res.json()) as {
+      const err = (await res.json()) as {
         error?: string
         web_owner_missing?: string
       }
-      if (typeof body.error === "string" && body.error.trim() !== "") {
-        message = body.error
+      if (typeof err.error === "string" && err.error.trim() !== "") {
+        message = err.error
       }
-      if (res.status === 403 && typeof body.web_owner_missing === "string") {
-        missing = body.web_owner_missing
+      if (res.status === 403 && typeof err.web_owner_missing === "string") {
+        missing = err.web_owner_missing
       }
     } catch {
       // not a JSON error body; keep the status line

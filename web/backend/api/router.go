@@ -117,6 +117,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// decisions (profile and decisions in workspace/memory/proactive/proactive.db)
 	h.registerAgentProactiveRoutes(mux)
 	h.registerAgentProactiveManageRoutes(mux)
+	h.registerAgentProactiveDashboardRoutes(mux)
 
 	// Kill switch: /stop from the dashboard, forwarded to the gateway
 	h.registerControlRoutes(mux)

@@ -183,6 +183,10 @@ var manageRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/proactive/resume"},
 	{http.MethodGet, "/api/proactive/mutes"},
 	{http.MethodDelete, "/api/proactive/mutes/abc"},
+	{http.MethodGet, "/api/proactive/interventions"},
+	{http.MethodGet, "/api/proactive/metrics"},
+	{http.MethodGet, "/api/proactive/changes"},
+	{http.MethodGet, "/api/proactive/state"},
 }
 
 // Every route is guarded as /api/control/kill is: the token, loopback, no browser,
@@ -236,7 +240,8 @@ func TestManageAPI_EveryRouteIsGuardedLikeTheKillSwitch(t *testing.T) {
 func TestManageAPI_NothingAttachedIsOneEmptyState(t *testing.T) {
 	mux := http.NewServeMux()
 	registerManageAPI(mux, &controlRuntime{}, testMgmtToken)
-	for _, path := range []string{"/api/proactive/intents", "/api/proactive/proposals", "/api/proactive/mandates"} {
+	for _, path := range []string{"/api/proactive/intents", "/api/proactive/proposals", "/api/proactive/mandates",
+		"/api/proactive/interventions", "/api/proactive/metrics", "/api/proactive/changes", "/api/proactive/state"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.RemoteAddr = "127.0.0.1:50000"
 		req.Header.Set("Authorization", "Bearer "+testMgmtToken)

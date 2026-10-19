@@ -1,0 +1,18 @@
+{
+  "specs": [
+    {
+      "id": "stale",
+      "kind": "data_stale",
+      "params": {
+        "factor": 3
+      }
+    }
+  ],
+  "stale_sources": [
+    {
+      "name": "portfolio",
+      "expected_every_seconds": 900,
+      "market": "crypto"
+    }
+  ]
+}

@@ -41,6 +41,12 @@ const (
 type ProactiveConfig struct {
 	Enabled bool `json:"enabled" env:"KHUNQUANT_PROACTIVE_ENABLED"`
 
+	// RecordEvents makes the perception pipeline append the market and portfolio
+	// events it takes to <workspace>/replay/<YYYYMMDD>.jsonl (30 files kept), for
+	// `khunquant replay`. Off by default; it has an effect only while perception runs.
+	// The files hold market and portfolio data and are not in any backup.
+	RecordEvents bool `json:"record_events" env:"KHUNQUANT_PROACTIVE_RECORD_EVENTS"`
+
 	Owner      OwnerConfig              `json:"owner"`
 	Heartbeat  ProactiveHeartbeatConfig `json:"heartbeat"`
 	Attention  AttentionConfig          `json:"attention"`

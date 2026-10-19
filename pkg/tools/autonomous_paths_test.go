@@ -18,7 +18,7 @@ func writeWorkspace(t *testing.T) string {
 	for _, rel := range []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md", "reports/today.md",
 	} {
@@ -95,7 +95,7 @@ func TestAutonomousWrite_ProtectedPathsRefused(t *testing.T) {
 	protected := []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md",
 	}

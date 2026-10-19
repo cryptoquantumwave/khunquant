@@ -54,6 +54,7 @@ var autonomousProtectedPaths = []struct {
 	{Path: "whatsapp", Why: "the WhatsApp session store (credentials)"},
 	{Path: "pairing", Why: "pending channel pairing requests (pairing/requests.json): access-control state, so a background turn must not plant or alter a pairing code"},
 	{Path: "calendar", Why: "market holiday lists (set_holidays.json, us_holidays.json): the clock source gates market evaluation on them, so a background turn that could write one could switch evaluation off on a trading day"},
+	{Path: "replay", Why: "recorded pipeline events (replay/<YYYYMMDD>.jsonl): a replay of them is how a change to a trigger or an attention rule is judged, so a background turn must not be able to poison one"},
 	{Path: "agents.md", Why: "system prompt of every user turn"},
 	{Path: "identity.md", Why: "system prompt of every user turn"},
 	{Path: "soul.md", Why: "system prompt of every user turn"},

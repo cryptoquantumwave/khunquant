@@ -16,6 +16,11 @@
 // ("telegram:button", "web:reply", "order_fill", "approval"); "web" is the authenticated
 // web launcher chat, the second owner route. Rows older than 180 days are deleted.
 //
+// Beside the responses, the daily hindsight job (hindsight.go) measures whether each
+// market alert was right, in feedback_hindsight, from prices, snapshots and the log of
+// the owner's fills (feedback_fills: a time and a symbol); harm.go turns the same rows
+// into the harm guardrail metric. Both only measure.
+//
 // # Who may
 //
 // The package knows no owner. Its callers apply the owner rule: the control path records
@@ -147,21 +152,27 @@ type ChangeSource interface {
 
 // Service records responses. Build one with New only when learning is effectively on.
 type Service struct {
-	db      *sql.DB
-	pub     Publisher
-	clock   func() time.Time
-	since   time.Time
-	changes ChangeSource
-	polled  time.Time // changes up to here have been looked at; guarded by mu
-	post    *Store
+	db    *sql.DB
+	pub   Publisher
+	clock func() time.Time
+	since time.Time
+	// fillsSince is when the fills log began; fills before it are not in it.
+	fillsSince time.Time
+	changes    ChangeSource
+	polled     time.Time // changes up to here have been looked at; guarded by mu
+	post       *Store
+	zone       func(ctx context.Context) *time.Location
 
 	sem chan struct{}
 	wg  sync.WaitGroup
 
-	mu     sync.Mutex
-	sub    events.Subscription
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu      sync.Mutex
+	sub     events.Subscription
+	cancel  context.CancelFunc
+	done    chan struct{}
+	hind    *Hindsight // the running hindsight job, if any
+	hcancel context.CancelFunc
+	hdone   chan struct{}
 }
 
 // New migrates the table and returns the service. db is the shared handle from sqlitex.
@@ -169,11 +180,12 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 	if db == nil {
 		return nil, errors.New("feedback: nil database")
 	}
-	since, err := migrate(ctx, db)
+	since, fillsSince, err := migrate(ctx, db)
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{db: db, pub: o.Events, clock: o.Clock, since: since, changes: o.Changes, sem: make(chan struct{}, maxAsync)}
+	s := &Service{db: db, pub: o.Events, clock: o.Clock, since: since, fillsSince: fillsSince, changes: o.Changes,
+		sem: make(chan struct{}, maxAsync), zone: o.Zone}
 	if s.clock == nil {
 		s.clock = time.Now
 	}

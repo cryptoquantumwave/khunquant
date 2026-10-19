@@ -55,8 +55,13 @@ func (s *Service) Stop() {
 	}
 	s.mu.Lock()
 	sub, cancel, done := s.sub, s.cancel, s.done
-	s.sub, s.cancel, s.done = nil, nil, nil
+	hcancel, hdone := s.hcancel, s.hdone
+	s.sub, s.cancel, s.done, s.hind, s.hcancel, s.hdone = nil, nil, nil, nil, nil, nil
 	s.mu.Unlock()
+	if hcancel != nil {
+		hcancel()
+		<-hdone
+	}
 	if sub != nil {
 		_ = sub.Close()
 	}
@@ -126,7 +131,21 @@ func (s *Service) onFill(ctx context.Context, ev events.Event) {
 	if key == "" {
 		key = ev.ID
 	}
+	s.logFill(ctx, key, o.Symbol, at)
 	s.ObserveChange(ctx, SourceOrderFill, o.Symbol, at, key)
+}
+
+// logFill keeps the fill's time and symbol, and nothing else, in feedback_fills for the
+// hindsight job and the harm metric. A repeat of the same order is one row.
+func (s *Service) logFill(ctx context.Context, key, symbol string, at time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, dbTimeout)
+	defer cancel()
+	id := responseID(Response{InterventionID: key, Kind: "fill", Source: SourceOrderFill})
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO feedback_fills (id, at_ms, symbol) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+		id, at.UnixMilli(), clip(symbol, maxSourceRunes)); err != nil {
+		logger.DebugCF("feedback", "Could not log a fill", map[string]any{"error": err.Error()})
+	}
 }
 
 func scheduledOrder(o orderfeed.OrderEvent) bool {

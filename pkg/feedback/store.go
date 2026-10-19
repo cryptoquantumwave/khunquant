@@ -50,21 +50,50 @@ CREATE TABLE feedback_posterior_applied (
 	response_id   TEXT    PRIMARY KEY,
 	applied_at_ms INTEGER NOT NULL
 );`,
+}, {
+	Component: Component,
+	Version:   3,
+	// The hindsight job (hindsight.go). pct_change and portfolio_pct are percents and are
+	// NULL when nothing reliable was found; trades is NULL when the fills log (below) did
+	// not cover the 24 hours. feedback_fills is the owner's real, unscheduled order fills
+	// as the order feed reported them (an id, a time and a symbol, no size, price, side or
+	// account), the only persisted record of them there is.
+	SQL: `CREATE TABLE feedback_hindsight (
+	intervention_id TEXT    NOT NULL,
+	horizon         TEXT    NOT NULL,
+	pct_change      REAL,
+	portfolio_pct   REAL,
+	trades          INTEGER,
+	computed_at_ms  INTEGER NOT NULL,
+	PRIMARY KEY (intervention_id, horizon)
+);
+CREATE INDEX idx_feedback_hindsight_computed ON feedback_hindsight (computed_at_ms);
+CREATE TABLE feedback_fills (
+	id     TEXT    PRIMARY KEY,
+	at_ms  INTEGER NOT NULL,
+	symbol TEXT    NOT NULL
+);
+CREATE INDEX idx_feedback_fills_at ON feedback_fills (at_ms);`,
 }}
 
-// migrate creates the table and returns when it was created (the housekeeper never
-// marks an intervention delivered before that as unanswered: the table did not exist
-// to hear the answer).
-func migrate(ctx context.Context, db *sql.DB) (since time.Time, err error) {
+// migrate creates the tables and returns when the first was created (the housekeeper
+// never marks an intervention delivered before that as unanswered: the table did not
+// exist to hear the answer) and when the fills log was (what happened before is not in
+// it).
+func migrate(ctx context.Context, db *sql.DB) (since, fillsSince time.Time, err error) {
 	if err := sqlitex.Migrate(ctx, db, migrations...); err != nil {
-		return time.Time{}, fmt.Errorf("feedback: migrate: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("feedback: migrate: %w", err)
 	}
-	var ms int64
+	var ms, fms int64
 	if err := db.QueryRowContext(ctx,
 		`SELECT applied_at FROM schema_migrations WHERE component = ? AND version = 1`, Component).Scan(&ms); err != nil {
-		return time.Time{}, fmt.Errorf("feedback: read migration time: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("feedback: read migration time: %w", err)
 	}
-	return time.UnixMilli(ms), nil
+	if err := db.QueryRowContext(ctx,
+		`SELECT applied_at FROM schema_migrations WHERE component = ? AND version = 3`, Component).Scan(&fms); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("feedback: read migration time: %w", err)
+	}
+	return time.UnixMilli(ms), time.UnixMilli(fms), nil
 }
 
 // insert writes one row and reports whether it was new.
@@ -80,13 +109,21 @@ func insert(ctx context.Context, db *sql.DB, id string, r Response, at time.Time
 	return n > 0, nil
 }
 
-// prune deletes the responses recorded before cutoff.
+// prune deletes the responses recorded before cutoff, and the hindsight rows computed
+// and the fills logged before it.
 func prune(ctx context.Context, db *sql.DB, cutoff time.Time) (int64, error) {
 	res, err := db.ExecContext(ctx, `DELETE FROM feedback_responses WHERE at_ms < ?`, cutoff.UnixMilli())
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	for _, q := range []string{
+		`DELETE FROM feedback_hindsight WHERE computed_at_ms < ?`, `DELETE FROM feedback_fills WHERE at_ms < ?`,
+	} {
+		if _, err := db.ExecContext(ctx, q, cutoff.UnixMilli()); err != nil {
+			return n, err
+		}
+	}
 	return n, nil
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
+	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
 )
 
 // feedbackRuntime is the response recorder of one generation of services
@@ -24,6 +25,8 @@ import (
 type feedbackRuntime struct {
 	svc *feedback.Service
 	ob  *attention.Outbox // whose governor reads the posteriors; cleared on stop
+
+	snapshots *snapshot.Store // read by the hindsight job; nil when it has none
 }
 
 // feedbackButtons says whether the attention deliverer may put the feedback buttons on
@@ -38,7 +41,7 @@ var feedbackButtons atomic.Bool
 // With the recorder up it also hands the governor behind ob its learning settings
 // (attentionLearning): the posteriors to read, the holdout rate and the candidate policy.
 // Attention is built before this, so the governor is given them here.
-func buildFeedback(d assemblyDeps, ns *notify.Service, ob *attention.Outbox) *feedbackRuntime {
+func buildFeedback(d assemblyDeps, ns *notify.Service, ob *attention.Outbox, pr *perceptionRuntime) *feedbackRuntime {
 	if !d.Cfg.Proactive.Effective().Learning {
 		return nil
 	}
@@ -75,6 +78,7 @@ func buildFeedback(d assemblyDeps, ns *notify.Service, ob *attention.Outbox) *fe
 	}
 	feedbackButtons.Store(true)
 	rt := &feedbackRuntime{svc: svc, ob: ob}
+	rt.startHindsight(d, pr)
 	if ob != nil && !ob.SetLearning(attentionLearning(d.Cfg.Proactive, svc)) {
 		logger.WarnCF("feedback", "Learning is not applied: the attention gate is not the governor", nil)
 	}
@@ -157,7 +161,10 @@ func (rt *feedbackRuntime) stop() {
 	if rt.ob != nil {
 		rt.ob.SetLearning(attention.Learning{}) // the posteriors go with the recorder
 	}
-	rt.svc.Stop()
+	rt.svc.Stop() // also ends the hindsight job, which reads the snapshot store
+	if rt.snapshots != nil {
+		_ = rt.snapshots.Close()
+	}
 }
 
 // feedbackActions returns the [Useful] [Not useful] [Snooze] [Mute] buttons for a message

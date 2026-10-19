@@ -443,7 +443,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// The owner's responses to proactive messages, recorded only with proactive.learning
 	// on. After the control path (taps and replies reach it) and the outbox (whose
 	// messages carry the buttons), and after approvals (whose decisions it links).
-	s.Feedback = buildFeedback(d, s.NotifyService, s.Attention)
+	s.Feedback = buildFeedback(d, s.NotifyService, s.Attention, s.Perception)
 	s.Control.attachFeedback(s.Feedback)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the

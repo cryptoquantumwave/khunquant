@@ -47,6 +47,13 @@ func TestFeedback_OffBuildsNothing(t *testing.T) {
 			if hasFeedbackTable(t, f) {
 				t.Fatal("feedback_responses was created while learning is off")
 			}
+			db, err := proactiveDB(assemblyDeps{Cfg: f.initial, Shared: f.shared})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hasTable(t, db, "feedback_hindsight") || hasTable(t, db, "feedback_fills") {
+				t.Fatal("the hindsight tables were created while learning is off")
+			}
 			if f.services.Control.disp.Deps().Feedback != nil {
 				t.Fatal("the control path holds a recorder while learning is off")
 			}
@@ -61,6 +68,13 @@ func TestFeedback_OnBuildsAttachesAndStops(t *testing.T) {
 	}
 	if f.services.Control.disp.Deps().Feedback == nil {
 		t.Fatal("the control path was not given the recorder")
+	}
+	db, err := proactiveDB(assemblyDeps{Cfg: f.initial, Shared: f.shared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasTable(t, db, "feedback_hindsight") {
+		t.Fatal("feedback_hindsight was not created while learning is on")
 	}
 
 	// A reload that turns learning off takes the buttons and the recorder away.

@@ -177,6 +177,10 @@ const (
 	// posterior (pkg/feedback). It carries the trigger kind, the hour bucket and the mean
 	// rounded to two decimals, nothing else.
 	KindFeedbackPosterior Kind = "feedback.posterior"
+	// KindFeedbackHindsight is emitted when the daily hindsight job stores a horizon for
+	// an intervention (pkg/feedback). It carries the intervention id, the horizon
+	// ("1h", "24h", "7d") and whether a price change was found, and no price.
+	KindFeedbackHindsight Kind = "feedback.hindsight"
 )
 
 var knownKinds = []Kind{
@@ -255,6 +259,7 @@ var knownKinds = []Kind{
 	KindPolicyDecision,
 	KindFeedbackRecorded,
 	KindFeedbackPosterior,
+	KindFeedbackHindsight,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

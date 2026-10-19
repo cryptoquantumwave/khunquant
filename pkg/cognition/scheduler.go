@@ -1,7 +1,8 @@
 // Package cognition schedules every LLM turn in one place: user messages
-// first, protective explanations next, background composition and reflection on
-// what is left within a daily token budget, every turn under a deadline, and the
-// turns of one session never interleaved.
+// first, protective explanations next, then the owner's scheduled jobs, then
+// background composition and reflection on what is left within a daily token
+// budget, every turn under a deadline, and the turns of one session never
+// interleaved.
 //
 // This package only schedules. It does not build a turn, route a message or
 // decide what a job says; callers wrap their work in a Job and Submit it. With
@@ -25,13 +26,31 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
-// Priority orders jobs: a lower value runs first.
+// Priority orders jobs: a lower value runs first. It lives only in memory (the
+// queues are slices indexed by it; nothing persists it), so the order below can
+// change without a migration.
+//
+// The agent loop's entry points (pkg/agent/cognition.go) map onto it as:
+//
+//	user message, CLI turn                  PriUser              unbudgeted
+//	protective explanation                  PriProtective        (no producer yet)
+//	system follow-up (approval, subagent)   PriApprovalFollowUp  unbudgeted
+//	cron agent turn (cron_legacy, incl.     PriScheduled         unbudgeted
+//	  the owner's scheduled dca: buys)
+//	proactive composition                   PriProactive         budgeted
+//	nightly reflection, news parse          PriReflection        budgeted
+//	legacy heartbeat tick                   PriLegacy            budgeted
+//
+// A scheduled job is something the owner set up and expects on time, so it runs
+// before the assistant's own background work; the heartbeat is that background
+// work and stays last.
 type Priority int
 
 const (
 	PriUser Priority = iota
 	PriProtective
 	PriApprovalFollowUp
+	PriScheduled
 	PriProactive
 	PriReflection
 	PriLegacy
@@ -40,7 +59,7 @@ const (
 const numPriorities = int(PriLegacy) + 1
 
 var priorityNames = [numPriorities]string{
-	"user", "protective", "approval_followup", "proactive", "reflection", "legacy",
+	"user", "protective", "approval_followup", "scheduled", "proactive", "reflection", "legacy",
 }
 
 // String names the priority for logs and Stats.

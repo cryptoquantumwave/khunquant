@@ -184,12 +184,13 @@ func TestScheduler_UserBeforeProactive(t *testing.T) {
 		submit(t, s, quick(&ev, "reflection", PriReflection, "s2")),
 		submit(t, s, quick(&ev, "proactive1", PriProactive, "s3")),
 		submit(t, s, quick(&ev, "proactive2", PriProactive, "s4")),
+		submit(t, s, quick(&ev, "scheduled", PriScheduled, "s8")),
 		submit(t, s, quick(&ev, "followup", PriApprovalFollowUp, "s5")),
 		submit(t, s, quick(&ev, "protective", PriProtective, "s6")),
 		submit(t, s, quick(&ev, "user", PriUser, "s7")),
 	}
 	st := s.Stats()
-	if st.Running != 1 || st.Queued["user"] != 1 || st.Queued["proactive"] != 2 || st.Queued["legacy"] != 1 {
+	if st.Running != 1 || st.Queued["user"] != 1 || st.Queued["scheduled"] != 1 || st.Queued["proactive"] != 2 || st.Queued["legacy"] != 1 {
 		t.Fatalf("Stats while blocked = %+v", st)
 	}
 	close(g.release)
@@ -199,11 +200,59 @@ func TestScheduler_UserBeforeProactive(t *testing.T) {
 	}
 	want := []string{
 		"start blocker", "end blocker",
-		"run user", "run protective", "run followup", "run proactive1", "run proactive2",
+		"run user", "run protective", "run followup", "run scheduled", "run proactive1", "run proactive2",
 		"run reflection", "run legacy",
 	}
 	if got := ev.all(); !slices.Equal(got, want) {
 		t.Fatalf("order = %v\nwant    %v", got, want)
+	}
+}
+
+// A scheduled job (an owner's cron turn) goes before queued background
+// composition, reflection and the legacy heartbeat, and a user message goes
+// before it.
+func TestScheduler_ScheduledBeforeBackground(t *testing.T) {
+	s := start(t, cfgOf(1), nil, nil)
+	var ev events
+	g := newGate()
+	first := submit(t, s, g.job(&ev, "blocker", PriProactive, "s0"))
+	recv(t, g.started, "blocker")
+
+	cron := quick(&ev, "cron", PriScheduled, "c1")
+	cron.Kind = proactive.TurnCronLegacy
+	chans := []<-chan Result{
+		submit(t, s, quick(&ev, "proactive", PriProactive, "p1")),
+		submit(t, s, quick(&ev, "reflection", PriReflection, "r1")),
+		submit(t, s, quick(&ev, "heartbeat", PriLegacy, "h1")),
+		submit(t, s, cron),
+		submit(t, s, quick(&ev, "user", PriUser, "u1")),
+	}
+	close(g.release)
+	result(t, first)
+	for _, ch := range chans {
+		result(t, ch)
+	}
+	want := []string{
+		"start blocker", "end blocker",
+		"run user", "run cron", "run proactive", "run reflection", "run heartbeat",
+	}
+	if got := ev.all(); !slices.Equal(got, want) {
+		t.Fatalf("order = %v\nwant    %v", got, want)
+	}
+}
+
+func TestPriority_String(t *testing.T) {
+	want := map[Priority]string{
+		PriUser: "user", PriProtective: "protective", PriApprovalFollowUp: "approval_followup",
+		PriScheduled: "scheduled", PriProactive: "proactive", PriReflection: "reflection", PriLegacy: "legacy",
+	}
+	for p, name := range want {
+		if p.String() != name {
+			t.Errorf("Priority(%d) = %q, want %q", int(p), p.String(), name)
+		}
+	}
+	if !(PriApprovalFollowUp < PriScheduled && PriScheduled < PriProactive) {
+		t.Errorf("PriScheduled must sit after the follow-up and before proactive")
 	}
 }
 

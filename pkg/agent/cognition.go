@@ -253,11 +253,14 @@ func (al *AgentLoop) inboundSpec(msg bus.InboundMessage) turnSpec {
 }
 
 // directSpec is the job of a ProcessDirect* call: a cron job's agent turn is a
-// legacy one, anything else (the CLI, an internal caller) is the user's.
+// legacy one, anything else (the CLI, an internal caller) is the user's. The
+// cron turn runs at PriScheduled: the owner set the job up, so it goes before
+// the assistant's own background composition and reflection (and the legacy
+// heartbeat), after any user message. It is not budgeted, as before.
 func (al *AgentLoop) directSpec(msg bus.InboundMessage, cronOrigin bool) turnSpec {
 	spec := al.inboundSpec(msg)
 	if cronOrigin {
-		return turnSpec{Kind: proactive.TurnCronLegacy, Priority: cognition.PriLegacy, Session: spec.Session, Deadline: legacyTurnDeadline}
+		return turnSpec{Kind: proactive.TurnCronLegacy, Priority: cognition.PriScheduled, Session: spec.Session, Deadline: legacyTurnDeadline}
 	}
 	spec.Fallback = nil
 	return spec

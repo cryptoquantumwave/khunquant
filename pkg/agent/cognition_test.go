@@ -402,6 +402,22 @@ func TestScheduler_EntryPointsCarryTheDirectCallsContext(t *testing.T) {
 		kind proactive.TurnKind // the job's kind when scheduled
 		run  func(t *testing.T, al *AgentLoop, token string)
 	}
+	// What the scheduler is told about each entry point: its priority and
+	// whether it counts against the background budget.
+	type queueing struct {
+		pri      cognition.Priority
+		budgeted bool
+	}
+	wantQueueing := map[string]queueing{
+		"user message via Run":               {cognition.PriUser, false},
+		"cron ProcessDirect":                 {cognition.PriScheduled, false},
+		"CLI ProcessDirect":                  {cognition.PriUser, false},
+		"legacy heartbeat":                   {cognition.PriLegacy, true},
+		"proactive turn with candidates":     {cognition.PriProactive, true},
+		"proactive turn with a forced skill": {cognition.PriProactive, true},
+		"governed heartbeat":                 {cognition.PriProactive, true},
+		"system follow-up of a cron turn":    {cognition.PriApprovalFollowUp, false},
+	}
 	cronCtx := func() context.Context {
 		ctx := tools.WithToolOrigin(context.Background(), tools.OriginCron)
 		ctx = tools.WithAutomationScope(ctx, tools.AutomationScope{JobName: "nightly"})
@@ -505,6 +521,12 @@ func TestScheduler_EntryPointsCarryTheDirectCallsContext(t *testing.T) {
 			jobs := cs.submitted()
 			if len(jobs) != 1 || jobs[0].Kind != e.kind {
 				t.Errorf("jobs = %+v, want exactly one of kind %s", jobs, e.kind)
+			}
+			if w, ok := wantQueueing[e.name]; !ok {
+				t.Errorf("no expected queueing for entry %q", e.name)
+			} else if len(jobs) == 1 && (jobs[0].Priority != w.pri || jobs[0].Budgeted != w.budgeted) {
+				t.Errorf("job priority %s budgeted %v, want %s budgeted %v",
+					jobs[0].Priority, jobs[0].Budgeted, w.pri, w.budgeted)
 			}
 		})
 	}

@@ -103,8 +103,8 @@ func (t *OptionGetOrderTool) Execute(ctx context.Context, args map[string]any) *
   Price:     %.4f
 `, id, symbol, side, orderType, status, amount, filled, price)
 
-	if order.Info != nil {
-		if orderID, ok := order.Info["order_id"].(string); ok {
+	if infoMap, ok := order.Info.(map[string]any); ok {
+		if orderID, ok := infoMap["order_id"].(string); ok {
 			out += fmt.Sprintf("  Order ID:  %s\n", orderID)
 		}
 	}

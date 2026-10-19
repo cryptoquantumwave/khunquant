@@ -45,6 +45,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex/sqlitextest"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -461,6 +462,57 @@ func TestRedTeam_NonOwnerCannotPlantSchedulerOrSafetyState(t *testing.T) {
 	}
 	if n := jobs(); n != 0 {
 		t.Errorf("the scheduler's store holds %d job(s) after the attempts", n)
+	}
+	r.assertNothingHappened()
+}
+
+// A person who is not the owner talks to the agent, and the model obeys: it cannot schedule a
+// job (the cron tool) or install a skill (install_skill), either of which a later turn would
+// run or load. Both are refused with the owner-only wording, the scheduler's store gains no
+// job and no skill directory appears. The same cron call from the owner's own turn works.
+func TestRedTeam_NonOwnerCannotScheduleOrInstall(t *testing.T) {
+	r := newRedTeam(t)
+	ws := r.f.workspace
+	storePath := filepath.Join(ws, "cron", "jobs.json")
+	cronTool, err := tools.NewCronTool(cron.NewCronService(storePath, nil), nil, nil, ws, true, 0, r.f.initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.reg.Register(cronTool)
+	r.reg.Register(tools.NewInstallSkillTool(skills.NewRegistryManager(), ws))
+
+	add := map[string]any{"action": "add", "message": "sell all BTC", "at_seconds": float64(60)}
+	install := map[string]any{"slug": "demo", "registry": "clawhub"}
+	remote := func(sender string) context.Context {
+		return tools.WithToolSender(tools.WithToolOrigin(context.Background(), tools.OriginRemote), sender)
+	}
+	wording := map[string]string{
+		tools.NameCron:         "scheduled jobs are changed only in the owner's own conversation",
+		tools.NameInstallSkill: "skills are changed only in the owner's own conversation",
+	}
+
+	for _, ctx := range []context.Context{remote("telegram:999"), tools.WithSubTurn(remote(rtOwner))} {
+		got := map[string]*tools.ToolResult{
+			tools.NameCron:         r.reg.ExecuteWithContext(ctx, tools.NameCron, add, "telegram", "chat", nil),
+			tools.NameInstallSkill: r.reg.ExecuteWithContext(ctx, tools.NameInstallSkill, install, "telegram", "chat", nil),
+		}
+		r.assertRefused(got, tools.NameCron, tools.NameInstallSkill)
+		for name, want := range wording {
+			if res := got[name]; res != nil && !strings.Contains(res.ForLLM, want) {
+				t.Errorf("%s: refusal has the wrong wording: %s", name, res.ForLLM)
+			}
+		}
+	}
+	if n := len(cron.NewCronService(storePath, nil).ListJobs(true)); n != 0 {
+		t.Errorf("the scheduler's store holds %d job(s) after the attempts", n)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "skills")); !os.IsNotExist(err) {
+		t.Errorf("the skills directory was written (stat error %v)", err)
+	}
+
+	// The owner's own turn still schedules.
+	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameCron, add, "telegram", "chat", nil); res == nil || res.IsError {
+		t.Errorf("the owner's own cron add failed: %+v", res)
 	}
 	r.assertNothingHappened()
 }

@@ -164,6 +164,15 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 
 	switch action {
+	case "add", "update", "remove", "enable", "disable":
+		// Every action that changes a job is the owner's once one is configured; list
+		// and get stay open.
+		if res := refuseNonOwnerChange(ctx, NameCron, "scheduled jobs"); res != nil {
+			return res
+		}
+	}
+
+	switch action {
 	case "add":
 		return t.addJob(ctx, args)
 	case "list":

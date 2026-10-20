@@ -20,9 +20,12 @@ A 60-second vertical (1080×1920, 30 fps) motion-graphic promo with a minimal, l
 
 ## Logos
 
-`logos/binance.svg`, `okx.svg`, `line.svg`, `telegram.svg` and `discord.svg` are the brand marks from [Simple Icons](https://simpleicons.org) (CC0 icon data; the marks stay trademarks of their owners).
-Simple Icons has no marks for **Bitkub, SET/Settrade or Webull**, so the video draws a plain placeholder tile with the name for those.
-To use the official artwork, drop it in as `logos/bitkub.svg|png`, `logos/set.svg|png`, `logos/webull.svg|png` (and optionally `logos/binanceth.svg|png`; without it, Binance TH is the Binance mark with a "TH" badge) and run `./build.sh`. The page picks the files up automatically.
+- `logos/bitkub.png`, `logos/set.png` and `logos/webull.png` come from the artwork the project owner supplied. They are cropped to the mark, with the white background made transparent.
+- `logos/binance.svg`, `okx.svg`, `line.svg`, `telegram.svg` and `discord.svg` are from [Simple Icons](https://simpleicons.org) (CC0 icon data).
+- All marks remain trademarks of their owners.
+- Binance TH uses the Binance mark with a "TH" badge. To use dedicated artwork, drop in `logos/binanceth.svg|png` and run `./build.sh`. Any file in `logos/` named after an exchange key replaces the current mark on the next build.
+
+The end card carries the disclaimer "KhunQuant เป็นเพียง AI agent ผู้ช่วย ไม่ใช่ผู้แนะนำการลงทุน · การลงทุนมีความเสี่ยง ผู้ลงทุนควรศึกษาข้อมูลก่อนตัดสินใจลงทุน".
 
 ## Storyboard and voice-over
 

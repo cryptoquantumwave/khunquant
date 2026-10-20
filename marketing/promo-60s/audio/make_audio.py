@@ -18,7 +18,7 @@ import wave
 import numpy as np
 
 SR = 48000
-DUR = 30.0
+DUR = 60.0
 N = int(SR * DUR)
 HERE = os.path.dirname(os.path.abspath(__file__))
 rng = np.random.default_rng(7)
@@ -134,46 +134,54 @@ def hat(d=0.05):
 
 def music(cues):
     buf = np.zeros((2, N))
-    groove_from = 2.9           # drums enter with the phone
-    end_hit = next((c["t"] for c in cues if c["type"] == "sparkle"), 27.3)
-    nbars = int(np.ceil(DUR / BAR))
-    for b in range(nbars):
-        t0 = b * BAR
+    groove_from = next((c["t"] for c in cues if c["type"] == "jump"), 8.0) + 0.4   # groove enters with the mascot
+    end_hit = max(c["t"] for c in cues if c["type"] == "sparkle")
+    # intro (pain point): slower, darker chords, no drums
+    INTRO = [[57, 60, 64, 67], [53, 57, 60, 64], [50, 53, 57, 60], [52, 56, 59, 62]]   # Am7 Fmaj7 Dm7 E7
+    seglen = groove_from / len(INTRO)
+    for k, ch in enumerate(INTRO):
+        t0 = k * seglen
+        place(buf, pad_chord(ch, seglen + 0.5), t0, 0.9)
+        for j, n in enumerate(ch):
+            place(buf, ep_note(midi(n), 2.4, 0.06), t0 + j * 0.09, 1.0, pan=-0.3 + 0.2 * j)
+        place(buf, np.sin(2 * np.pi * midi(ch[0] - 24) * t_axis(seglen)) * env(seglen, 0.05, 1.2), t0, 0.10)
+    nbars = int(np.ceil((end_hit - groove_from) / BAR))
+    for b in range(nbars + 1):
+        t0 = groove_from + b * BAR
+        last = t0 >= end_hit - 0.01 or b == nbars
         ch = CHORDS[b % 4]
-        last = t0 >= end_hit - BAR * 0.5
         if last:
             ch = [48, 52, 55, 59, 62]  # Cmaj9 to resolve on the logo
             t0 = end_hit
-        d = BAR if not last else DUR - t0
+        d = min(BAR, end_hit - t0) if not last else DUR - t0
         place(buf, pad_chord(ch, d + 0.4), t0, 1.0)
-        # electric-piano stabs: beat 1 and the "and" of 2
         for off, vel in ((0, 0.11), (BEAT * 1.5, 0.07)) if not last else ((0, 0.13),):
-            for k, n in enumerate(ch):
-                place(buf, ep_note(midi(n), 2.2 if not last else d, vel), t0 + off + k * 0.012, 1.0, pan=-0.3 + 0.2 * k)
-        # bass
-        if t0 >= groove_from - 0.01 or last:
-            place(buf, np.sin(2 * np.pi * midi(ROOTS[b % 4] if not last else 36) * t_axis(1.2)) * env(1.2, 0.01, 0.5), t0, 0.16)
-            if not last:
-                place(buf, np.sin(2 * np.pi * midi(ROOTS[b % 4]) * t_axis(0.8)) * env(0.8, 0.01, 0.35), t0 + BEAT * 2.5, 0.11)
+            if off < d:
+                for k, n in enumerate(ch):
+                    place(buf, ep_note(midi(n), 2.2 if not last else d, vel), t0 + off + k * 0.012, 1.0, pan=-0.3 + 0.2 * k)
+        root = ROOTS[b % 4] if not last else 36
+        place(buf, np.sin(2 * np.pi * midi(root) * t_axis(1.2)) * env(1.2, 0.01, 0.5 if not last else 1.5), t0, 0.16)
         if last:
+            # gentle arpeggio over the end card
+            for j, n in enumerate([72, 76, 79, 83, 86, 83, 79, 76]):
+                place(buf, ep_note(midi(n), 1.6, 0.05), t0 + 0.6 + j * BEAT / 2, 1.0, pan=0.4 * np.sin(j))
             break
-        # drums
+        if BEAT * 2.5 < d:
+            place(buf, np.sin(2 * np.pi * midi(root) * t_axis(0.8)) * env(0.8, 0.01, 0.35), t0 + BEAT * 2.5, 0.11)
         for beat in range(4):
             tb = t0 + beat * BEAT
-            if tb < groove_from:
-                continue
+            if tb >= end_hit:
+                break
             if beat in (0, 2):
                 place(buf, kick(), tb, 0.32)
             if beat in (1, 3):
                 place(buf, rim(), tb, 0.10, pan=0.15)
             for e8 in (0, 1):
-                swing = 0.03 if e8 else 0
-                place(buf, hat(), tb + e8 * BEAT / 2 + swing, 0.045 if e8 else 0.06, pan=0.35)
-    # gentle lo-fi tone + fade out
+                place(buf, hat(), tb + e8 * BEAT / 2 + (0.03 if e8 else 0), 0.045 if e8 else 0.06, pan=0.35)
     for c in range(2):
         buf[c] = filt(buf[c], lo=35, hi=7000)
     fade = np.ones(N)
-    nf = int(1.2 * SR)
+    nf = int(1.8 * SR)
     fade[-nf:] = np.linspace(1, 0, nf) ** 1.5
     fade[: int(0.15 * SR)] = np.linspace(0, 1, int(0.15 * SR))
     buf *= fade
@@ -182,7 +190,44 @@ def music(cues):
 
 
 # ---------------------------------------------------------------- sfx
-def sfx_sound(kind):
+PENTA = [72, 74, 76, 79, 81, 84]
+
+
+def sfx_sound(kind, i=0):
+    if kind == "card":
+        d = 0.14
+        s = filt(noise(d), lo=600, hi=3500) * env(d, 0.001, 0.02) * 0.5
+        s += np.sin(2 * np.pi * (260 + 25 * (i % 5)) * t_axis(d)) * env(d, 0.002, 0.05)
+        return s * 0.35
+    if kind == "thud":
+        d = 0.5
+        return (sweep(90, 45, d) * env(d, 0.003, 0.16) + filt(noise(d), hi=400) * env(d, 0.002, 0.05) * 0.4) * 0.45
+    if kind == "vacuum":
+        d = 0.75
+        x = noise(d)
+        out = np.zeros_like(x)
+        for k in range(8):
+            a, b = k * len(x) // 8, (k + 1) * len(x) // 8
+            out[a:b] = filt(x, lo=2400 - k * 250, hi=6000 - k * 600)[a:b]
+        return (out * np.linspace(0, 1, len(x)) ** 2 * 0.3 + sweep(200, 900, d) * np.linspace(0, 1, len(x)) ** 3 * 0.12)
+    if kind == "tile":
+        d = 0.9
+        f = midi(PENTA[i % len(PENTA)])
+        t = t_axis(d)
+        return (np.sin(2 * np.pi * f * t) + 0.3 * np.sin(4 * np.pi * f * t)) * env(d, 0.002, 0.25) * 0.22
+    if kind == "sparkle_s":
+        d = 1.0
+        s = np.zeros(int(SR * d))
+        for k, n in enumerate((84, 88, 91)):
+            t = t_axis(d - k * 0.06)
+            s[int(k * 0.06 * SR):] += np.sin(2 * np.pi * midi(n) * t) * env(d - k * 0.06, 0.002, 0.3)
+        return s * 0.16
+    if kind == "swipe":
+        d = 0.22
+        return filt(noise(d), lo=1500, hi=6000) * np.sin(np.linspace(0, np.pi, int(SR * d))) ** 2 * 0.16
+    if kind == "tick":
+        d = 0.25
+        return np.sin(2 * np.pi * 1568 * t_axis(d)) * env(d, 0.002, 0.06) * 0.2 + np.sin(2 * np.pi * 2093 * t_axis(d)) * env(d, 0.002, 0.04) * 0.1
     if kind == "key":
         d = 0.03
         s = filt(noise(d), lo=1800, hi=6000) * env(d, 0.0005, 0.004)
@@ -261,7 +306,7 @@ def sfx(cues):
         k = c["type"]
         pan = rng.uniform(-0.15, 0.15) if k == "key" else 0.0
         g = rng.uniform(0.75, 1.0) if k == "key" else 1.0
-        place(buf, sfx_sound(k), c["t"], g, pan)
+        place(buf, sfx_sound(k, c.get("i", 0)), c["t"], g, pan)
     return buf
 
 

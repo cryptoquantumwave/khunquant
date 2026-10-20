@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>KhunQuant Promo 60s</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+:root{
+  --bg:#f3f4f8; --ink:#16173a; --mute:#8a8fa8; --accent:#5c6bc0; --accent-d:#3e4da0; --accent-l:#e8eaf6;
+  --up:#16a34a; --dn:#e11d48; --line-me:#9be27a; --chat:#dde4ee;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--bg)}
+body{font-family:Plex,Kanit,sans-serif;color:var(--ink)}
+#stage{position:absolute;inset:0;overflow:hidden;background:radial-gradient(1200px 1400px at 50% 45%,#fbfbfd 0%,#f3f4f8 55%,#e9ebf2 100%)}
+#world{position:absolute;left:0;top:0;width:1080px;height:1920px;transform-origin:0 0}
+img{display:block}
+
+/* ---------- mascot ---------- */
+.mascot{position:absolute;display:block}
+.mascot svg{width:100%;height:100%;display:block;overflow:visible}
+.say{position:absolute;background:#fff;border-radius:36px;padding:22px 34px;font:600 44px/1.3 Kanit;box-shadow:0 10px 30px rgba(22,23,58,.10);white-space:nowrap}
+.say:after{content:"";position:absolute;left:50%;bottom:-18px;margin-left:-18px;border:18px solid transparent;border-bottom:0;border-top-color:#fff}
+#nametag{position:absolute;font:600 40px Kanit;color:var(--accent-d);letter-spacing:.5px}
+#shadowM{position:absolute;border-radius:50%;background:radial-gradient(closest-side,rgba(22,23,58,.18),transparent)}
+
+/* ---------- pain-point chaos cards ---------- */
+.cc{position:absolute;background:#fff;border-radius:26px;box-shadow:0 10px 30px rgba(22,23,58,.10);overflow:visible;font:500 24px/1.35 Plex}
+.cc .h{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #eef0f4;font:700 25px Kanit;border-radius:26px 26px 0 0}
+.cc .h i{width:16px;height:16px;border-radius:5px;display:block}
+.cc .b{padding:12px 18px 16px}
+.cc .badge{position:absolute;right:-14px;top:-14px;min-width:52px;height:52px;border-radius:26px;background:#ef4444;color:#fff;font:700 26px Kanit;display:grid;place-items:center;padding:0 10px;box-shadow:0 4px 10px rgba(239,68,68,.35)}
+.cc .ln{height:12px;border-radius:6px;background:#eceef4;margin:9px 0}
+.sheet{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;border-top:1px solid #e3e6ee;border-left:1px solid #e3e6ee;font:500 20px Plex}
+.sheet span{border-right:1px solid #e3e6ee;border-bottom:1px solid #e3e6ee;padding:4px 8px;white-space:nowrap;overflow:hidden}
+.sheet .hd{background:#f1f5ef;font-weight:700}
+.sheet .bad{background:#fee2e2;color:#b91c1c}
+.sticky{background:#fef08a !important;box-shadow:0 10px 24px rgba(120,100,0,.15) !important;font:600 27px/1.45 Kanit;padding:22px 24px}
+#cap{position:absolute;left:60px;right:60px;top:150px;text-align:center;z-index:210;pointer-events:none}
+#cap div{display:inline-block;background:#fff;border-radius:34px;padding:20px 40px;font:700 58px/1.25 Kanit;box-shadow:0 12px 36px rgba(22,23,58,.12)}
+
+/* ---------- exchange tiles ---------- */
+.tile{position:absolute;width:200px;text-align:center}
+.tile .sq{width:170px;height:170px;margin:0 auto;border-radius:44px;background:#fff;box-shadow:0 12px 30px rgba(22,23,58,.12);display:grid;place-items:center;position:relative}
+.tile .nm{font:600 30px Kanit;margin-top:14px;white-space:nowrap}
+.lg{width:100%;height:100%;display:grid;place-items:center;position:relative}
+.lg img{width:62%;height:62%;object-fit:contain}
+.lgfb{width:76%;height:76%;border-radius:24%;display:grid;place-items:center;color:#fff;font:800 30px Kanit;letter-spacing:-.5px}
+.thb{position:absolute;right:8%;bottom:8%;font:800 20px Kanit;background:#1b1a3a;color:#fff;border-radius:10px;padding:1px 8px}
+#lines{position:absolute;left:0;top:0}
+#uni{position:absolute;width:780px;background:#fff;border-radius:40px;box-shadow:0 20px 50px rgba(22,23,58,.14);padding:30px 36px;text-align:center}
+#uni .big{font:700 92px/1.1 Kanit}
+#uni .lrow{display:flex;justify-content:center;gap:14px;margin-top:16px}
+#uni .lrow .lg{width:84px;height:84px;border-radius:22px;background:#f5f6fa}
+
+/* ---------- phone (iPhone-like) ---------- */
+#phoneWrap{position:absolute;left:170px;top:200px;width:740px;height:1520px}
+#floor{position:absolute;left:90px;right:90px;bottom:-60px;height:90px;border-radius:50%;background:radial-gradient(closest-side,rgba(22,23,58,.22),transparent)}
+.btn{position:absolute;width:8px;border-radius:3px;background:linear-gradient(90deg,#8d9097,#d9dbe0 50%,#9a9da4)}
+#phone{position:absolute;inset:0;border-radius:118px;padding:9px;
+  background:linear-gradient(135deg,#e6e7ea 0%,#9ea1a8 18%,#f2f3f5 38%,#8b8e95 62%,#d7d9dd 82%,#a4a7ad 100%);
+  box-shadow:0 50px 90px rgba(22,23,58,.22),0 12px 24px rgba(22,23,58,.12)}
+#bezel{position:absolute;inset:9px;border-radius:110px;background:#0b0b0d;padding:13px}
+#screen{position:relative;width:696px;height:1476px;border-radius:97px;overflow:hidden;background:#fff}
+#island{position:absolute;left:50%;top:22px;width:190px;height:56px;margin-left:-95px;background:#000;border-radius:30px;z-index:90}
+#island:after{content:"";position:absolute;right:22px;top:16px;width:24px;height:24px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#2a3350,#07080c 60%)}
+#glare{position:absolute;inset:0;border-radius:97px;pointer-events:none;z-index:95;background:linear-gradient(115deg,rgba(255,255,255,.10) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 70%,rgba(255,255,255,.05) 100%)}
+.status{position:absolute;left:0;right:0;top:0;height:96px;display:flex;align-items:center;justify-content:space-between;padding:12px 62px 0 74px;font:600 31px Plex;z-index:40}
+.status svg{display:block}
+.homebar{position:absolute;left:50%;bottom:12px;width:250px;height:10px;margin-left:-125px;border-radius:6px;background:#111;z-index:92}
+.app{position:absolute;inset:0;overflow:hidden;transform-origin:50% 50%}
+#swbg{position:absolute;inset:0;background:linear-gradient(180deg,#3a3d55,#20212e);opacity:0}
+.swl{position:absolute;display:flex;align-items:center;gap:12px;font:600 30px Plex;color:#fff;opacity:0;white-space:nowrap}
+.swl .ic{width:54px;height:54px;border-radius:14px;background:#fff;display:grid;place-items:center}
+.swl .ic img{width:70%;height:70%}
+#touch{position:absolute;width:96px;height:96px;margin:-48px 0 0 -48px;border-radius:50%;background:rgba(255,255,255,.55);border:3px solid rgba(22,23,58,.18);box-shadow:0 4px 16px rgba(0,0,0,.18);z-index:94;opacity:0}
+
+/* LINE-like chat */
+#chat{background:var(--chat)}
+#chat .status{background:#fff}
+#hdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;padding:0 26px 0 18px;gap:16px;border-bottom:1px solid #e6e8ee;z-index:30}
+.hnm{font:700 33px Kanit;line-height:1.1}
+.hnm small{display:flex;align-items:center;gap:8px;font:500 22px Plex;color:var(--mute)}
+.hnm small i{width:12px;height:12px;border-radius:50%;background:#22c55e;display:block}
+.av{border-radius:50%;background:var(--accent-l);flex:none;display:grid;place-items:center;overflow:hidden}
+.av svg{width:72%;height:72%}
+.icons{margin-left:auto;display:flex;gap:30px}
+#vp{position:absolute;top:200px;left:0;right:0;overflow:hidden;z-index:5}
+#content{position:absolute;left:0;right:0;top:0;padding:18px 20px 0;display:flex;flex-direction:column;gap:22px}
+.date{align-self:center;font:500 22px Plex;color:#fff;background:rgba(60,70,100,.28);padding:6px 20px;border-radius:20px}
+.it{display:flex;align-items:flex-end;gap:12px;position:relative}
+.it.me{flex-direction:row-reverse}
+.it .av{width:60px;height:60px;align-self:flex-start}
+.meta{font:500 19px/1.25 Plex;color:#6b7390;flex:none;text-align:right}
+.it:not(.me) .meta{text-align:left}
+.bub{font:500 31px/1.42 Plex;padding:18px 24px;border-radius:30px;max-width:520px;background:#fff}
+.me .bub{background:var(--line-me);color:#10210a}
+.dots{position:absolute;left:72px;top:0;background:#fff;border-radius:30px;padding:24px 28px;display:flex;gap:10px}
+.dots i{width:14px;height:14px;border-radius:50%;background:#aab0c4;display:block}
+.card{width:540px;background:#fff;border-radius:30px;overflow:hidden;font:500 29px/1.42 Plex}
+.card .in{padding:24px 26px}
+.ct{font:700 32px Kanit;display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.pill{font:600 21px Kanit;padding:3px 14px;border-radius:20px;background:var(--accent-l);color:var(--accent-d)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.big{font:700 62px/1.1 Kanit;letter-spacing:-.5px}
+.sub{color:var(--mute);font-size:25px}
+.up{color:var(--up)} .dn{color:var(--dn)}
+.hr{height:1px;background:#eceef4;margin:14px 0}
+.stack{display:flex;height:22px;border-radius:12px;overflow:hidden;background:#eef0f6;margin:14px 0 12px}
+.stack i{display:block;height:100%}
+.leg3{display:flex;flex-direction:column;gap:6px;font-size:26px}
+.sw{display:inline-block;width:18px;height:18px;border-radius:5px;margin-right:10px;vertical-align:-1px}
+.weeks{display:flex;gap:8px;margin:10px 0 4px}
+.weeks i{flex:1;height:40px;border-radius:10px;background:#eef0f6;display:grid;place-items:center;font:700 20px Kanit;color:#fff}
+.ladder{display:flex;gap:10px;align-items:flex-end;height:120px;margin:10px 0 2px}
+.ladder i{flex:1;border-radius:10px 10px 4px 4px;background:#eef0f6;display:flex;justify-content:center;padding-top:6px;font:700 21px Kanit;color:#fff;transform-origin:bottom}
+.fbtn{border-top:1px solid #eceef4;text-align:center;padding:20px 0;font:600 29px Kanit;color:var(--accent-d);position:relative;overflow:hidden}
+.ripple{position:absolute;border-radius:50%;background:rgba(92,107,192,.25);width:40px;height:40px;margin:-20px 0 0 -20px;left:50%;top:50%;opacity:0}
+.legs .leg{display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:18px;background:#f5f6fa;margin:8px 0}
+.tag{font:700 22px Kanit;padding:4px 12px;border-radius:10px}
+.abar{position:relative;height:16px;border-radius:9px;background:#eef0f6;margin:6px 0 14px}
+.abar i{display:block;height:100%;border-radius:9px;width:0}
+.abar u{position:absolute;top:-6px;width:4px;height:28px;background:#16173a;border-radius:2px;margin-left:-2px}
+.ord{display:flex;align-items:center;gap:14px;padding:5px 0;font-size:28px}
+.ord i{width:38px;height:38px;border-radius:50%;background:#eef0f6;color:#fff;display:grid;place-items:center;font:700 22px Kanit;font-style:normal;flex:none}
+.ord .sub{margin-left:auto}
+
+/* input + keyboard */
+#inbar{position:absolute;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;z-index:20;border-top:1px solid #e6e8ee}
+#inbox{flex:1;height:68px;border-radius:34px;background:#f1f2f6;display:flex;align-items:center;padding:0 24px;overflow:hidden;font:500 30px Plex;position:relative}
+#inbox .ph{color:#a3a8bb;position:absolute;left:24px}
+#intext{white-space:nowrap;display:flex;align-items:center;flex:none}
+#caret{display:inline-block;width:3px;height:38px;background:#06c755;margin-left:2px}
+#sendb{width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:#e5e7ee;flex:none}
+#homefill{position:absolute;left:0;right:0;bottom:0;height:34px;background:#fff;z-index:19}
+#kb{position:absolute;left:0;right:0;bottom:0;height:560px;background:#d3d6dd;z-index:25;padding:14px 8px 0}
+.kr{display:flex;justify-content:center;gap:9px;margin-bottom:16px}
+.k{height:88px;flex:0 0 48px;border-radius:10px;background:#fff;box-shadow:0 2px 0 #8e9096;display:grid;place-items:center;font:400 38px Plex;color:#111;position:relative}
+.k.sp{background:#abb0ba;font:500 26px Plex}
+.k.on{background:#c4c8d0}
+.k .pop{position:absolute;bottom:60px;left:50%;width:84px;height:100px;margin-left:-42px;border-radius:14px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.25);display:grid;place-items:center;font:500 52px Plex;opacity:0}
+.kbot{display:flex;justify-content:space-between;padding:6px 40px 0}
+
+/* Telegram-like */
+#tg{background:#dfe8d2}
+#tg .status{background:#fff}
+#tg .thdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;gap:16px;padding:0 26px 0 18px;border-bottom:1px solid #e3e6ea}
+#tg .tbody{position:absolute;top:220px;left:20px;right:20px;display:flex;flex-direction:column;gap:18px}
+.tb{font:500 31px/1.42 Plex;padding:16px 22px 12px;border-radius:26px;max-width:540px;background:#fff;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.tb small{display:block;text-align:right;font:500 19px Plex;color:#8a9aa6;margin-top:2px}
+.tb.out{align-self:flex-end;background:#e2fdc8;border-bottom-right-radius:8px}
+.tb.out small{color:#5aa64a}
+.tb.inn{align-self:flex-start;border-bottom-left-radius:8px}
+.tinp{position:absolute;left:0;right:0;bottom:0;height:138px;background:#fff;display:flex;align-items:flex-start;gap:20px;padding:22px 26px 0;border-top:1px solid #e3e6ea}
+.tinp .box{flex:1;height:64px;border-radius:32px;border:1px solid #dfe3e8;display:flex;align-items:center;padding:0 24px;color:#9aa5ae;font:500 29px Plex}
+/* Discord-like */
+#dc{background:#313338;color:#dbdee1}
+#dc .status{color:#fff;background:#2b2d31}
+#dc .dhdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#2b2d31;display:flex;align-items:center;gap:14px;padding:0 28px;border-bottom:1px solid #1e1f22;font:700 32px Plex;color:#f2f3f5}
+#dc .dhdr span{font:500 22px Plex;color:#949ba4;margin-left:auto}
+#dc .dbody{position:absolute;top:226px;left:20px;right:20px;display:flex;flex-direction:column;gap:26px}
+.dm{display:flex;gap:18px;font:500 29px/1.42 Plex}
+.dm .dav{width:64px;height:64px;border-radius:50%;flex:none;display:grid;place-items:center;overflow:hidden}
+.dm b{color:#f2f3f5;font:600 29px Plex}
+.dm .bot{font:700 18px Plex;background:#5865f2;color:#fff;border-radius:6px;padding:1px 7px;margin-left:8px;vertical-align:3px}
+.dm .tm{font:500 20px Plex;color:#949ba4;margin-left:10px}
+.emb{margin-top:8px;background:#2b2d31;border-left:6px solid #5c6bc0;border-radius:8px;padding:16px 20px;color:#dbdee1}
+.dinp{position:absolute;left:20px;right:20px;bottom:52px;height:84px;border-radius:20px;background:#383a40;display:flex;align-items:center;padding:0 26px;color:#80848e;font:500 28px Plex}
+
+/* banner + lock screen */
+#banner{position:absolute;left:18px;right:18px;top:96px;z-index:85;background:rgba(250,250,252,.94);border-radius:40px;padding:22px 24px;display:flex;gap:20px;box-shadow:0 12px 30px rgba(20,20,60,.18)}
+.nt{background:rgba(255,255,255,.72);backdrop-filter:blur(20px);border-radius:40px;padding:22px 24px;display:flex;gap:20px;align-items:flex-start;box-shadow:0 6px 20px rgba(30,30,80,.10);position:relative;overflow:hidden}
+.lic{width:72px;height:72px;border-radius:18px;background:#06c755;display:grid;place-items:center;flex:none}
+.ntx{flex:1;font:500 28px/1.35 Plex;color:#151526}
+.ntx b{font:700 28px Plex;display:flex;justify-content:space-between}
+.ntx b span{font:500 23px Plex;color:#5d6178}
+#lock{position:absolute;inset:0;z-index:70;background:linear-gradient(180deg,#d9ddf5 0%,#aab3ea 45%,#6f7ccc 100%);overflow:hidden}
+#lock .orb{position:absolute;border-radius:50%;filter:blur(40px)}
+#lock .status{color:#fff}
+#ldate{position:absolute;top:150px;width:100%;text-align:center;font:600 34px Kanit;color:rgba(255,255,255,.92)}
+#lclock{position:absolute;top:190px;width:100%;text-align:center;font:600 196px/1 Plex;color:#fff;letter-spacing:-4px}
+#notifs{position:absolute;top:440px;left:22px;right:22px;display:flex;flex-direction:column;gap:16px}
+#lockbtns{position:absolute;bottom:70px;left:70px;right:70px;display:flex;justify-content:space-between}
+#lockbtns i{width:90px;height:90px;border-radius:50%;background:rgba(40,40,70,.25);display:block}
+#black{position:absolute;inset:0;background:#000;z-index:80;opacity:0}
+
+/* overlay UI */
+#title{position:absolute;left:0;right:0;top:86px;display:flex;justify-content:center;z-index:200}
+#title div{background:#fff;border-radius:50px;padding:14px 34px 14px 18px;font:600 38px Kanit;box-shadow:0 8px 30px rgba(22,23,58,.10);display:flex;align-items:center;gap:16px;white-space:nowrap}
+#title b{font:700 26px Kanit;color:#fff;background:var(--accent);border-radius:30px;padding:4px 14px}
+#foot{position:absolute;left:0;right:0;top:1856px;text-align:center;font:400 22px Plex;color:#9a9fb5;z-index:200}
+
+/* end card */
+#end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:150}
+#logoWrap{position:relative;width:380px;height:380px;display:grid;place-items:center}
+#logoWrap img{width:360px;height:360px}
+#flash{position:absolute;width:40px;height:40px;margin:-20px;border-radius:50%;background:#fff;z-index:140;opacity:0}
+.wm{font:800 128px/1 Kanit;letter-spacing:-2px;color:#1b1a3a;margin-top:14px}
+.thn{font:600 48px Kanit;color:var(--accent);margin-top:6px}
+.tagl{font:500 42px/1.4 Kanit;margin-top:28px;color:#3a3d5c}
+#estrip{display:flex;gap:16px;margin-top:36px}
+#estrip .lg{width:112px;height:112px;border-radius:28px;background:#fff;box-shadow:0 4px 14px rgba(22,23,58,.08)}
+.chips{display:flex;gap:14px;margin-top:24px}
+.chips span{font:600 30px Kanit;padding:10px 24px 10px 14px;border-radius:40px;background:#fff;box-shadow:0 4px 14px rgba(22,23,58,.08);display:flex;align-items:center;gap:10px}
+.chips img{width:38px;height:38px}
+.url{margin-top:40px;font:700 54px Kanit;padding:18px 56px;border-radius:60px;background:#1b1a3a;color:#fff}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="world">
+    <div id="chaos"></div>
+    <svg id="lines" width="1080" height="1920"></svg>
+    <div id="tiles"></div>
+    <div id="uni">
+      <div style="font:700 36px Kanit">📊 พอร์ตรวมทุกบัญชี</div>
+      <div class="big" id="cntUni">฿0</div>
+      <div class="sub" style="font-size:28px">6 บัญชี · รวมเป็นหนึ่งเดียว · คุยผ่านแชทเดียว</div>
+      <div class="lrow" id="uniLogos"></div>
+    </div>
+    <div id="shadowM"></div>
+    <div class="mascot" id="peek"></div>
+    <div class="say" id="peekSay" style="font-size:40px;padding:12px 24px"></div>
+
+    <div id="phoneWrap">
+      <div id="floor"></div>
+      <div class="btn" style="left:-7px;top:250px;height:60px"></div>
+      <div class="btn" style="left:-7px;top:360px;height:110px"></div>
+      <div class="btn" style="left:-7px;top:500px;height:110px"></div>
+      <div class="btn" style="right:-7px;top:400px;height:170px"></div>
+      <div id="phone"><div id="bezel"><div id="screen">
+        <div id="island"></div>
+        <div id="swbg"></div>
+        <div class="swl" id="swl0"><div class="ic"><img src="logos/line.svg" alt=""></div>LINE</div>
+        <div class="swl" id="swl1"><div class="ic"><img src="logos/telegram.svg" alt=""></div>Telegram</div>
+        <div class="swl" id="swl2"><div class="ic"><img src="logos/discord.svg" alt=""></div>Discord</div>
+
+        <!-- LINE -->
+        <div class="app" id="chat">
+          <div class="status st-dark"></div>
+          <div id="hdr">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+            <div class="av" style="width:66px;height:66px" data-mascot></div>
+            <div class="hnm">KhunQuant<small><i></i>ผู้ช่วยดูแลพอร์ต · ออนไลน์</small></div>
+            <div class="icons">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5" stroke-linecap="round"/></svg>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </div>
+          </div>
+          <div id="vp"><div id="content"></div></div>
+          <div id="inbar">
+            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="1.9" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="1.9" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 18l5-5 4 4 2-2 4 4"/></svg>
+            <div id="inbox"><span class="ph">Aa</span><span id="intext"><span id="typed"></span><span id="caret"></span></span></div>
+            <div id="sendb"><svg width="34" height="34" viewBox="0 0 24 24"><path d="M3 20l18-8L3 4l2.5 8z" fill="#fff"/></svg></div>
+          </div>
+          <div id="homefill"></div>
+          <div id="kb"></div>
+        </div>
+
+        <!-- Telegram -->
+        <div class="app" id="tg">
+          <div class="status st-dark"></div>
+          <div class="thdr">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#2481cc" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+            <div class="av" style="width:66px;height:66px" data-mascot></div>
+            <div class="hnm">KhunQuant<small style="color:#2481cc">bot</small></div>
+            <div class="icons"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#7d8b99" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+          </div>
+          <div class="tbody">
+            <div class="date" style="background:rgba(70,100,60,.3)">วันนี้</div>
+            <div class="tb inn">🔔 ETH แตะ $3,500 ตามที่ตั้งไว้แล้วครับ<small>08:12</small></div>
+            <div class="tb out" id="tgm1">พอร์ตวันนี้เป็นไงบ้าง?<small>14:10 ✓✓</small></div>
+            <div class="tb inn" id="tgb1" style="width:540px">
+              <div class="ct" style="font-size:31px">📊 พอร์ตรวม</div>
+              <div class="row"><span class="big" style="font-size:56px">฿1,252,300</span><span class="up" style="font:700 30px Kanit">▲ 0.3%</span></div>
+              <div class="sub">ทุกบัญชีปกติ ✅ ไม่มีสัญญาณเสี่ยง</div><small>14:10</small></div>
+          </div>
+          <div class="tinp"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#7d8b99" stroke-width="1.9" stroke-linecap="round"><path d="M20 11.5l-8.3 8.3a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></svg><div class="box">Message</div><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#7d8b99" stroke-width="1.9" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>
+        </div>
+
+        <!-- Discord -->
+        <div class="app" id="dc">
+          <div class="status st-light"></div>
+          <div class="dhdr"><span style="font:700 40px Plex;color:#80848e;margin:0">#</span>portfolio<span>KhunQuant HQ</span></div>
+          <div class="dbody">
+            <div class="dm"><div class="dav" style="background:#e8eaf6" data-mascot></div><div><b>KhunQuant</b><span class="bot">BOT</span><span class="tm">09:00</span><div>⚡ DCA BTC รอบนี้ซื้อแล้ว ฿5,000</div></div></div>
+            <div class="dm" id="dcm1"><div class="dav" style="background:#f59e0b;color:#fff;font:700 30px Kanit">คุ</div><div><b>คุณ</b><span class="tm">14:12</span><div>!pnl เดือนนี้</div></div></div>
+            <div class="dm" id="dcb1"><div class="dav" style="background:#e8eaf6" data-mascot></div><div style="flex:1"><b>KhunQuant</b><span class="bot">BOT</span><span class="tm">14:12</span>
+              <div class="emb"><div style="font:700 30px Kanit;color:#f2f3f5">📓 สรุปกำไร · ตุลาคม</div><div style="font:700 54px Kanit;color:#3ba55d">+฿18,420</div><div style="color:#b5bac1">23 ไม้ · Win rate 68%</div></div></div></div>
+          </div>
+          <div class="dinp">ส่งข้อความใน #portfolio</div>
+        </div>
+
+        <div id="banner"><div class="lic" id="bnIcon"></div><div class="ntx"><b>KhunQuant<span>LINE · ตอนนี้</span></b>⚠️ หุ้น AI & พลังงานในพอร์ตร้อนแรงเกินแผน ลองดูคำแนะนำ rebalance ครับ</div></div>
+        <div id="lock">
+          <div class="orb" style="width:520px;height:520px;left:-160px;top:760px;background:#8b97e6"></div>
+          <div class="orb" style="width:460px;height:460px;right:-180px;top:180px;background:#eef0ff"></div>
+          <div class="status st-light"></div>
+          <div id="ldate">วันอังคารที่ 20 ตุลาคม</div>
+          <div id="lclock">14:05</div>
+          <div id="notifs"></div>
+          <div id="lockbtns"><i></i><i></i></div>
+        </div>
+        <div id="black"></div>
+        <div id="touch"></div>
+        <div class="homebar" id="hb"></div>
+        <div id="glare"></div>
+      </div></div></div>
+    </div>
+
+    <div class="mascot" id="hero"></div>
+    <div class="say" id="say1">ให้ผมช่วยเอง!</div>
+    <div class="say" id="say2">สวัสดีครับ ผมคุณควอนต์ 👋</div>
+    <div id="nametag">คุณควอนต์</div>
+  </div>
+
+  <div id="flash"></div>
+  <div id="end">
+    <div id="logoWrap"><img src="logo.png" alt=""></div>
+    <div class="wm" id="wm">KhunQuant</div>
+    <div class="thn" id="thn">คุณควอนต์</div>
+    <div class="tagl" id="tagl">ทุกพอร์ตรวมเป็นหนึ่งเดียว<br>คุยง่ายในแชทของคุณ</div>
+    <div id="estrip"></div>
+    <div class="chips" id="chips"><span><img src="logos/line.svg" alt="">LINE</span><span><img src="logos/telegram.svg" alt="">Telegram</span><span><img src="logos/discord.svg" alt="">Discord</span></div>
+    <div class="url" id="url">khunquant.com</div>
+  </div>
+
+  <div id="cap"><div></div></div>
+  <div id="title"><div><b id="tnum">01</b><span id="ttxt"></span></div></div>
+  <div id="foot">ภาพจำลองเพื่อการสาธิต · ตัวเลขสมมติ · ไม่ใช่คำแนะนำการลงทุน</div>
+</div>
+
+<script>
+/* ================= helpers ================= */
+const cl = x => Math.max(0, Math.min(1, x));
+const P = (t, a, d) => cl((t - a) / d);
+const oC = x => 1 - Math.pow(1 - x, 3);
+const oB = x => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const ioC = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const lerp = (a, b, p) => a + (b - a) * p;
+const $ = s => document.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const CUES = []; const cue = (t, type, extra) => CUES.push({ t: +t.toFixed(3), type, ...(extra || {}) });
+const fmt = (n, d = 0) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const seg = new Intl.Segmenter('th', { granularity: 'grapheme' });
+const graphemes = s => [...seg.segment(s)].map(x => x.segment);
+const DURATION = 60;
+
+/* ================= mascot (pixel grid from web/frontend/public/khunquant-logo.png, 13x11) ================= */
+const C = { B: '#5c6bc0', D: '#3e4da0', W: '#e8eaf6' };
+const px = (cells, col) => cells.map(([r, c]) => `<rect x="${c * 10}" y="${r * 10}" width="10.4" height="10.4" fill="${col}"/>`).join('');
+const rowCells = (r, c0, c1) => { const a = []; for (let c = c0; c <= c1; c++) a.push([r, c]); return a; };
+function mascotSVG() {
+  const body = [...rowCells(1, 3, 9), ...rowCells(2, 2, 10), [3, 2], [3, 3], [3, 6], [3, 7], [3, 10], [4, 2], [4, 3], [4, 6], [4, 7], [4, 10],
+    ...rowCells(5, 2, 10), ...rowCells(6, 2, 10), ...rowCells(7, 2, 10), ...rowCells(8, 2, 10), [9, 3], [9, 4], [9, 8], [9, 9]];
+  return `<svg viewBox="-2 0 134 112" shape-rendering="crispEdges">
+    ${px(body, C.B)}${px([[9, 5], [9, 6], [9, 7]], C.D)}
+    <g class="eyes">${px([[3, 4], [4, 4], [4, 5], [3, 8], [4, 8], [4, 9]], C.D)}${px([[3, 5], [3, 9]], C.W)}</g>
+    <g class="armL">${px([[5, 0], [5, 1]], C.B)}${px([[6, 0]], C.D)}</g>
+    <g class="armR0">${px([[6, 11], [6, 12]], C.B)}${px([[5, 12]], C.D)}</g>
+    <g class="armR1" style="display:none">${px([[5, 11], [5, 12]], C.B)}${px([[4, 12], [3, 12]], C.D)}</g>
+    ${px([[10, 3], [10, 4], [10, 8], [10, 9]], C.D)}</svg>`;
+}
+function poseMascot(el, t, { wave = false, blinkSeed = 0 } = {}) {
+  const blink = ((t + blinkSeed) % 2.6) > 2.47;
+  el.querySelector('.eyes').setAttribute('transform', blink ? 'translate(0,44) scale(1,0.12) translate(0,-44)' : '');
+  const up = wave && Math.floor(t * 6) % 2 === 0;
+  el.querySelector('.armR0').style.display = up ? 'none' : '';
+  el.querySelector('.armR1').style.display = up ? '' : 'none';
+}
+
+/* ================= status bars ================= */
+function statusHTML(time, col) {
+  return `<span style="color:${col}">${time}</span><span style="display:flex;gap:10px;align-items:center">
+  <svg width="38" height="24" viewBox="0 0 38 24">${[0, 1, 2, 3].map(i => `<rect x="${i * 10}" y="${18 - i * 5}" width="7" height="${6 + i * 5}" rx="1.5" fill="${col}"/>`).join('')}</svg>
+  <svg width="34" height="24" viewBox="0 0 34 24" fill="${col}"><path d="M17 22l-4.5-4.6a6.4 6.4 0 0 1 9 0z"/><path d="M8.8 13.7a11.6 11.6 0 0 1 16.4 0l-2.6 2.6a8 8 0 0 0-11.2 0z"/><path d="M4.8 9.6a17.4 17.4 0 0 1 24.4 0l-2.6 2.6a13.6 13.6 0 0 0-19.2 0z"/></svg>
+  <svg width="54" height="26" viewBox="0 0 54 26"><rect x="1" y="2" width="44" height="22" rx="7" fill="none" stroke="${col}" stroke-opacity=".45" stroke-width="2"/><rect x="4.5" y="5.5" width="33" height="15" rx="4" fill="${col}"/><rect x="48" y="9" width="3.5" height="8" rx="1.5" fill="${col}" fill-opacity=".45"/></svg></span>`;
+}
+
+/* ================= exchange / broker logos ================= */
+// Official artwork is read from logos/<key>.svg|png when present; otherwise a neutral placeholder tile is drawn.
+const EX = [
+  { key: 'bitkub', name: 'Bitkub', fb: ['bitkub', '#4cba64'] },
+  { key: 'binance', name: 'Binance', fb: ['Binance', '#f0b90b'] },
+  { key: 'binanceth', name: 'Binance TH', base: 'binance', th: 1, fb: ['Binance', '#f0b90b'] },
+  { key: 'okx', name: 'OKX', fb: ['OKX', '#000'] },
+  { key: 'set', name: 'SET · Settrade', fb: ['SET', '#1d3f8f'] },
+  { key: 'webull', name: 'Webull', fb: ['webull', '#1d6bff'] },
+];
+const tryImg = src => new Promise(res => { const i = new Image(); i.onload = () => res(src); i.onerror = () => res(null); i.src = src; });
+async function resolveLogos() {
+  for (const e of EX) {
+    const k = e.base || e.key;
+    e.src = (e.th && await tryImg(`logos/${e.key}.svg`)) || (e.th && await tryImg(`logos/${e.key}.png`)) || await tryImg(`logos/${k}.svg`) || await tryImg(`logos/${k}.png`);
+    if (e.th && e.src && e.src.includes(e.key)) e.th = 0; // dedicated Binance TH artwork, no badge
+  }
+}
+const logoHTML = e => `<div class="lg">${e.src ? `<img src="${e.src}" alt="">` : `<div class="lgfb" style="background:${e.fb[1]};font-size:${e.fb[0].length > 4 ? 26 : 36}px">${e.fb[0]}</div>`}${e.th ? '<span class="thb">TH</span>' : ''}</div>`;
+
+/* ================= keyboard (Thai Kedmanee, iOS style) ================= */
+const KROWS = [['ๆ', 'ไ', 'ำ', 'พ', 'ะ', 'ั', 'ี', 'ร', 'น', 'ย', 'บ', 'ล'], ['ฟ', 'ห', 'ก', 'ด', 'เ', '้', '่', 'า', 'ส', 'ว', 'ง'], ['ผ', 'ป', 'แ', 'อ', 'ิ', 'ื', 'ท', 'ม', 'ใ', 'ฝ']];
+function buildKB() {
+  let h = '';
+  h += `<div class="kr">${KROWS[0].map(k => `<div class="k">${k}</div>`).join('')}</div>`;
+  h += `<div class="kr">${KROWS[1].map(k => `<div class="k">${k}</div>`).join('')}</div>`;
+  h += `<div class="kr"><div class="k sp" style="flex-basis:76px">⇧</div>${KROWS[2].map(k => `<div class="k">${k}</div>`).join('')}<div class="k sp" style="flex-basis:76px">⌫</div></div>`;
+  h += `<div class="kr"><div class="k sp" style="flex-basis:96px">123</div><div class="k sp" style="flex-basis:80px">☺</div><div class="k" id="kspace" style="flex:1;font-size:26px">เว้นวรรค</div><div class="k sp" style="flex-basis:150px">ขึ้นบรรทัด</div></div>`;
+  h += `<div class="kbot"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#3b3d44" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#3b3d44" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>`;
+  $('#kb').innerHTML = h;
+  $$('#kb .k').forEach(k => { const p = document.createElement('div'); p.className = 'pop'; p.textContent = k.textContent.length <= 2 ? k.textContent : ''; k.appendChild(p); });
+}
+
+/* ================= pain point: scattered portfolios ================= */
+const CHAOS = [
+  { x: 250, y: 560, w: 340, r: -6, t: .2, badge: 3, html: `<div class="h" style="background:#ecfdf3"><i style="background:#4cba64"></i>Bitkub</div><div class="b"><div class="sub">มูลค่าพอร์ต</div><div style="font:700 40px Kanit">฿182,400</div><svg width="300" height="60"><polyline points="0,40 40,30 80,45 120,20 160,35 200,15 240,30 300,10" fill="none" stroke="#4cba64" stroke-width="4"/></svg></div>` },
+  { x: 800, y: 520, w: 360, r: 5, t: .5, badge: 7, html: `<div class="h" style="background:#fffbea"><i style="background:#f0b90b"></i>Binance Futures</div><div class="b"><div class="row"><span>ETH-PERP</span><b class="dn">-$214</b></div><div class="row"><span>SOL-PERP</span><b class="up">+$88</b></div><div class="ln" style="width:70%"></div></div>` },
+  { x: 290, y: 905, w: 410, r: 4, t: .8, badge: 2, html: `<div class="h" style="background:#eef3ff"><i style="background:#1d3f8f"></i>Settrade · หุ้นไทย</div><div class="b"><div class="row"><span>PTT</span><span class="dn">-0.5%</span></div><div class="row"><span>KBANK</span><span class="up">+1.1%</span></div><div class="row"><span>AOT</span><span class="up">+0.6%</span></div></div>` },
+  { x: 790, y: 880, w: 340, r: -4, t: 1.1, badge: 5, html: `<div class="h" style="background:#eef4ff"><i style="background:#1d6bff"></i>Webull · หุ้น US</div><div class="b"><div class="row"><span>NVDA</span><span class="up">+6.0%</span></div><div class="row"><span>TSLA</span><span class="dn">-1.9%</span></div><div class="row"><span>AAPL</span><span class="up">+0.8%</span></div></div>` },
+  { x: 560, y: 700, w: 300, r: 2, t: 1.4, badge: 1, html: `<div class="h"><i style="background:#111"></i>OKX</div><div class="b"><div class="sub">Funding rate</div><div style="font:700 36px Kanit" class="dn">0.081%</div></div>` },
+  { x: 330, y: 1270, w: 500, r: -3, t: 1.7, html: `<div class="h" style="background:#f1f5ef"><i style="background:#16a34a"></i>บันทึกพอร์ต_v7_final(2).xlsx</div><div class="b"><div class="sheet"><span class="hd">สินทรัพย์</span><span class="hd">ทุน</span><span class="hd">ล่าสุด</span><span class="hd">%</span><span>BTC</span><span>1.98M</span><span>2.01M</span><span>+1.5</span><span>NVDA</span><span>4,120</span><span class="bad">#REF!</span><span class="bad">??</span><span>PTT</span><span>34.5</span><span>33.75</span><span>-2.2</span><span>ETH</span><span class="bad">ลืมจด</span><span>3,480</span><span>-</span></div></div>` },
+  { x: 790, y: 1225, w: 380, r: 6, t: 2.0, badge: 12, html: `<div class="h"><i style="background:#ef4444"></i>ข่าวหุ้นไทย</div><div class="b"><div class="ln"></div><div class="ln" style="width:80%"></div><div class="ln" style="width:60%"></div></div>` },
+  { x: 560, y: 1470, w: 400, r: -5, t: 2.3, badge: 24, html: `<div class="h"><i style="background:#3b82f6"></i>ข่าวหุ้นเทค / AI</div><div class="b"><div class="ln"></div><div class="ln" style="width:75%"></div><div class="ln" style="width:90%"></div></div>` },
+  { x: 860, y: 1590, w: 330, r: 3, t: 2.6, badge: 31, html: `<div class="h"><i style="background:#f59e0b"></i>ข่าวคริปโต</div><div class="b"><div class="ln"></div><div class="ln" style="width:70%"></div></div>` },
+  { x: 230, y: 1620, w: 290, r: -8, t: 2.9, sticky: 1, html: `อย่าลืม!<br>• DCA วันจันทร์<br>• เช็ค funding<br>• จดกำไรเมื่อวาน` },
+];
+const CAPS = [[.35, 2.25, 'พอร์ตกระจายอยู่หลายที่…'], [2.35, 4.35, 'ดูแลยาก จัดการยาก 😵‍💫'], [4.45, 6.45, 'ต้องจดเอง ตามข่าวเองทีละตลาด'], [9.3, 12.6, 'เชื่อมต่อได้ทุกพอร์ตของคุณ'], [12.75, 14.2, 'ทุกพอร์ตรวมเป็นหนึ่งเดียว']];
+
+/* ================= chat content ================= */
+const BTN = (id, txt) => `<div class="fbtn" id="${id}"><span class="ripple"></span>${txt}</div>`;
+const alloc = (label, w, target, id) => `<div class="row" style="font-size:27px"><span>${label}</span><span><b>${w}%</b> <span class="sub">/ เป้า ${target}%</span></span></div><div class="abar"><i id="${id}" data-w="${w}" style="background:${w > target ? '#e11d48' : '#5c6bc0'}"></i><u style="left:${target}%"></u></div>`;
+const CARDS = {
+  alert: `<div class="card"><div class="in">
+    <div class="ct">🔔 แจ้งเตือนราคา <span class="pill" style="margin-left:auto">BTC/USDT</span></div>
+    <div class="row"><span class="big">$59,840</span><span class="dn" style="font:700 34px Kanit">▼ 2.1%</span></div>
+    <div class="sub">หลุด $60,000 · RSI(14) = <b style="color:var(--ink)">28.6</b></div></div></div>`,
+  news: `<div class="card"><div class="in">
+    <div class="ct">📰 ข่าวเด่นวันนี้</div>
+    <div>🇺🇸 <b>NVDA</b> งบดีกว่าคาด <span class="up">+6%</span></div>
+    <div>🇹🇭 <b>SET</b> ปิดบวก <span class="up">+12 จุด</span> แบงก์นำ</div>
+    <div>₿ <b>BTC ETF</b> เงินไหลเข้า 3 วันติด</div></div></div>`,
+  rebal: `<div class="card"><div class="in">
+    <div class="ct">⚠️ เตือนความเสี่ยง <span class="pill" style="margin-left:auto;background:#ffe4e6;color:#be123c">AI Bubble</span></div>
+    <div class="sub" style="margin-bottom:12px">หุ้น AI & พลังงานขึ้นแรง จนสัดส่วนเกินแผน</div>
+    ${alloc('🤖 หุ้น AI / เทค', 46, 30, 'ra1')}${alloc('⚡ หุ้นพลังงาน', 18, 12, 'ra2')}${alloc('🛡️ สินทรัพย์อื่น', 36, 58, 'ra3')}
+    <div class="hr"></div>
+    <div style="font-size:27px">💡 แนะนำ: ทยอยลด <b>NVDA · SMCI · VST</b><br>พักเงินใน <b>ทองคำ · พันธบัตร</b></div>
+    <div style="margin-top:8px;font-weight:600">พิจารณา rebalance ไหมครับ?</div>
+    </div>${BTN('btnRebal', '✅ Rebalance ตามแผน')}${BTN('btnLater', '⏸ ไว้ทีหลัง')}</div>`,
+  rebalDone: `<div class="card"><div class="in">
+    <div class="ct">✅ Rebalance สำเร็จ <span class="pill" style="margin-left:auto">4 คำสั่ง</span></div>
+    <div class="ord"><i>✓</i>ขาย NVDA 15 หุ้น<span class="sub">Webull</span></div>
+    <div class="ord"><i>✓</i>ขาย VST 40 หุ้น<span class="sub">Webull</span></div>
+    <div class="ord"><i>✓</i>ซื้อ ทองคำ GLD 30 หุ้น<span class="sub">Webull</span></div>
+    <div class="ord"><i>✓</i>ซื้อ KBANK 500 หุ้น<span class="sub">Settrade</span></div>
+    <div class="hr"></div>
+    <div class="row" id="rbNew"><span class="sub">สัดส่วนใหม่</span><b>AI 30% · พลังงาน 12% ✓</b></div></div></div>`,
+  port: `<div class="card"><div class="in">
+    <div class="ct">📊 พอร์ตรวม <span class="pill">6 บัญชี</span></div>
+    <div class="row"><span class="big" id="cntPort">฿0</span><span class="up" style="font:700 32px Kanit">▲ 2.4%</span></div>
+    <div class="stack"><i id="sg1" style="background:#1b1a3a"></i><i id="sg2" style="background:#5c6bc0"></i><i id="sg3" style="background:#a9b2ec"></i></div>
+    <div class="leg3">
+      <div class="row"><span><i class="sw" style="background:#1b1a3a"></i>หุ้นไทย <span class="sub">Settrade</span></span><b>38%</b></div>
+      <div class="row"><span><i class="sw" style="background:#5c6bc0"></i>หุ้นเทค US <span class="sub">Webull</span></span><b>34%</b></div>
+      <div class="row"><span><i class="sw" style="background:#a9b2ec"></i>คริปโต <span class="sub">Bitkub · Binance · OKX</span></span><b>28%</b></div>
+    </div>
+    <div class="hr"></div>
+    <div class="row"><span class="sub">กำไรยังไม่รับรู้</span><b class="up">+฿86,240</b></div></div></div>`,
+  dca: `<div class="card"><div class="in">
+    <div class="ct">⚡ ตั้งแผน DCA แล้ว <span class="pill" style="margin-left:auto">● ทำงาน</span></div>
+    <div class="row"><b>DCA IN · BTC</b><span class="sub">Bitkub</span></div>
+    <div class="sub">฿5,000 ทุกวันจันทร์ · เมื่อ RSI(14) &lt; 40</div>
+    <div class="weeks" id="weeks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="hr"></div>
+    <div class="row"><b>DCA OUT · ETH</b><span class="sub">Binance TH</span></div>
+    <div class="sub">ทยอยขาย 10% ทุกครั้งที่ราคาขึ้น 15%</div>
+    <div class="ladder" id="ladder"><i style="height:35%">+15%</i><i style="height:55%">+30%</i><i style="height:78%">+45%</i><i style="height:100%">+60%</i></div>
+    </div>${BTN('btnDelta', '⚖️ เปิด Delta-Neutral')}${BTN('btnChartA', '📈 วิเคราะห์กราฟ')}</div>`,
+  delta: `<div class="card"><div class="in">
+    <div class="ct">⚖️ Delta-Neutral · SOL <span class="pill" style="margin-left:auto">● ทำงาน</span></div>
+    <div class="legs">
+      <div class="leg"><span class="tag" style="background:#dcfce7;color:#15803d">LONG</span><span>Spot <b>+50 SOL</b></span><span class="sub" style="margin-left:auto">Binance</span></div>
+      <div class="leg"><span class="tag" style="background:#ffe4e6;color:#be123c">SHORT</span><span>Perp <b>−50 SOL</b></span><span class="sub" style="margin-left:auto">OKX</span></div>
+    </div>
+    <svg width="488" height="110" viewBox="0 0 488 110" style="display:block;margin:4px auto">
+      <polygon points="244,58 220,106 268,106" fill="#c7cce8"/>
+      <g id="beam"><rect x="54" y="50" width="380" height="10" rx="5" fill="#1b1a3a"/>
+        <rect x="40" y="16" width="56" height="34" rx="9" fill="#16a34a"/><text x="68" y="41" text-anchor="middle" font-family="Kanit" font-weight="700" font-size="22" fill="#fff">L</text>
+        <rect x="392" y="16" width="56" height="34" rx="9" fill="#e11d48"/><text x="420" y="41" text-anchor="middle" font-family="Kanit" font-weight="700" font-size="22" fill="#fff">S</text></g></svg>
+    <div class="row"><span>Net Δ <b style="font:700 36px Kanit">0.00</b></span><span>Funding APR <b class="up" style="font:700 36px Kanit" id="cntApr">0%</b></span></div>
+    </div>${BTN('btnChart', '📈 วิเคราะห์กราฟ NVDA')}${BTN('btnPnl', '📓 สรุปกำไรเดือนนี้')}</div>`,
+  chart: `<div class="card"><div class="in">
+    <div class="ct">📈 NVDA · 1D <span class="pill" style="margin-left:auto">แนวโน้มขาขึ้น</span></div>
+    <svg id="chart" width="488" height="250" viewBox="0 0 488 250" style="display:block"></svg>
+    <div class="row" style="font-size:25px;margin-top:6px"><span>RSI <b>58</b></span><span>MACD <b class="up">ตัดขึ้น</b></span><span>EMA50 <b class="up">ยืนเหนือ</b></span></div></div></div>`,
+  pnl: `<div class="card"><div class="in">
+    <div class="ct">📓 บันทึกกำไร · ตุลาคม</div>
+    <div class="row"><span class="big up" id="cntPnl">+฿0</span><span class="sub" style="text-align:right">23 ไม้<br>Win rate 68%</span></div></div></div>`,
+};
+// k: date | bot | me | card ; t: appear time ; dots: typing dots for 0.5s before ; type: [t0,t1] typed into the input box
+const ITEMS = [
+  { k: 'date', t: -1, html: 'วันนี้' },
+  { k: 'bot', t: -1, html: 'สวัสดีครับ 👋 ผม<b>คุณควอนต์</b> ผู้ช่วยดูแลพอร์ตของคุณ มีอะไรให้ช่วยบอกได้เลย', time: '09:40' },
+  { k: 'me', t: 18.1, type: [15.8, 17.9], html: 'เตือนผมถ้า BTC หลุด 60,000 หรือ RSI ต่ำกว่า 30', time: '09:41' },
+  { k: 'bot', t: 19.05, dots: 1, html: '✅ ตั้งเตือนแล้วครับ! ผมจะเฝ้าตลาดให้ 24 ชม. แล้วแจ้งทันทีทาง LINE', time: '09:41' },
+  { k: 'card', t: 23.45, html: CARDS.alert, time: '14:05', silent: 1 },
+  { k: 'card', t: 23.5, html: CARDS.news, time: '14:05', silent: 1 },
+  { k: 'card', t: 24.95, dots: 1, html: CARDS.rebal, time: '14:05', id: 'rebal' },
+  { k: 'me', t: 28.05, html: '✅ Rebalance ตามแผน', time: '14:06' },
+  { k: 'card', t: 28.7, dots: 1, html: CARDS.rebalDone, time: '14:06', id: 'rebalDone' },
+  { k: 'me', t: 33.05, type: [32.05, 32.85], html: 'สรุปพอร์ตทั้งหมดให้หน่อย', time: '14:06' },
+  { k: 'card', t: 33.7, dots: 1, html: CARDS.port, time: '14:06' },
+  { k: 'me', t: 37.45, type: [35.7, 37.25], html: 'ตั้ง DCA ซื้อ BTC และทยอยขาย ETH ให้หน่อย', time: '14:07' },
+  { k: 'card', t: 38.0, dots: 1, html: CARDS.dca, time: '14:07' },
+  { k: 'me', t: 40.1, html: '⚖️ เปิด Delta-Neutral SOL ทุน $10,000', time: '14:08' },
+  { k: 'card', t: 40.75, dots: 1, html: CARDS.delta, time: '14:08' },
+  { k: 'me', t: 43.2, html: '📈 วิเคราะห์กราฟ NVDA', time: '14:09' },
+  { k: 'card', t: 43.75, dots: 1, html: CARDS.chart, time: '14:09' },
+  { k: 'card', t: 44.95, dots: 1, html: CARDS.pnl, time: '14:09' },
+];
+// Telegram / Discord messages (no scrolling)
+const SIMPLE = [{ sel: '#tgm1', t: 48.4, me: 1 }, { sel: '#tgb1', t: 49.1, dots: 1 }, { sel: '#dcm1', t: 52.0, me: 1 }, { sel: '#dcb1', t: 52.6, dots: 1 }];
+const NOTIFS = [
+  { t: 20.55, body: '🔔 BTC หลุด $60,000 แล้ว! ราคา $59,840 · RSI 28.6' },
+  { t: 21.35, body: '📰 NVDA งบดีกว่าคาด หุ้นพุ่ง +6% หลังปิดตลาด' },
+  { t: 22.15, body: '🇹🇭 SET ปิดบวก 12 จุด กลุ่มแบงก์นำตลาด' },
+  { t: 22.9, body: '⚡ DCA ซื้อ BTC ฿5,000 สำเร็จ (RSI 28)' },
+];
+const LICON = `<svg width="46" height="46" viewBox="0 0 24 24"><path d="M12 3.5c-5 0-9 3.2-9 7.2 0 3.6 3.2 6.6 7.5 7.1-.2.9-.6 2-1 2.7 2.3-.6 5.2-2.4 6.9-4 2.8-1.3 4.6-3.5 4.6-5.8 0-4-4-7.2-9-7.2z" fill="#fff"/></svg>`;
+
+/* ================= timeline + sound cues ================= */
+const KB_WIN = [[15.45, 18.2], [31.75, 33.15], [35.35, 37.6]];
+const kbProg = t => Math.max(0, ...KB_WIN.map(([a, b]) => Math.min(ioC(P(t, a, .32)), 1 - ioC(P(t, b, .3)))));
+let TYPES = [];
+let TAPS = [];
+const PEEKS = [{ a: 20.6, b: 23.2, y: 620, say: '!' }, { a: 25.5, b: 27.0, y: 1240, say: '🤔' }, { a: 34.1, b: 35.2, y: 1240, say: '👍' }, { a: 41.6, b: 42.4, y: 1240, say: '✨' }, { a: 44.3, b: 45.5, y: 1240, say: '📈' }];
+const TITLES = [[15.2, 19.7, '01', 'แจ้งเตือนราคา'], [19.85, 24.1, '02', 'เด้งเตือนถึงมือ · หุ้น & คริปโต'], [24.2, 31.5, '03', 'ทักมาเตือน · Rebalance'], [31.65, 35.25, '04', 'ทุกพอร์ตในแชทเดียว'],
+  [35.35, 39.45, '05', 'DCA In · DCA Out'], [39.55, 42.55, '06', 'Delta-Neutral'], [42.65, 45.6, '07', 'วิเคราะห์กราฟ · จดกำไร'], [45.8, 53.3, '08', 'LINE · Telegram · Discord']];
+// app switcher: progress (0 = full-screen app, 1 = switcher) and focused app index
+const SW_WIN = [[46.0, 47.7], [50.0, 51.4]];
+const swProg = t => Math.max(0, ...SW_WIN.map(([a, b]) => Math.min(ioC(P(t, a, .45)), 1 - ioC(P(t, b, .4)))));
+const swFocus = t => ioC(P(t, 46.8, .6)) + ioC(P(t, 50.6, .5));
+const TOUCH = [
+  { a: 45.85, b: 46.35, p0: [348, 1440], p1: [348, 1080] }, { a: 46.75, b: 47.4, p0: [600, 760], p1: [140, 760] }, { a: 47.55, b: 47.75, p0: [348, 738], p1: [348, 738] },
+  { a: 49.85, b: 50.35, p0: [348, 1440], p1: [348, 1080] }, { a: 50.55, b: 51.1, p0: [600, 760], p1: [140, 760] }, { a: 51.25, b: 51.45, p0: [348, 738], p1: [348, 738] }];
+
+function buildCues() {
+  TYPES = ITEMS.filter(i => i.type).map(i => {
+    const g = graphemes(i.html); const [t0, t1] = i.type; const times = []; seed = Math.round(t0 * 100);
+    for (let k = 0; k < g.length; k++) times.push(t0 + (t1 - t0) * (k + rnd() * .5) / g.length);
+    times.forEach(tt => cue(tt, 'key'));
+    cue(i.t - .05, 'send');
+    return { g, times, item: i };
+  });
+  KB_WIN.forEach(([a]) => cue(a, 'kbup'));
+  ITEMS.forEach(i => { if (i.t > 0 && i.k !== 'me' && !i.silent) cue(i.t, 'recv'); });
+  ITEMS.forEach(i => { if (i.t > 0 && i.k === 'me' && !i.type) cue(i.t, 'send'); });
+  SIMPLE.forEach(s => cue(s.t, s.me ? 'send' : 'recv'));
+  NOTIFS.forEach(n => cue(n.t, 'chime'));
+  cue(24.3, 'chime');
+  TAPS.forEach(x => cue(x.t, 'tap'));
+  [47.6, 51.3].forEach(t => cue(t, 'tap'));
+  [45.9, 46.8, 49.9, 50.6].forEach(t => cue(t, 'swipe'));
+  CHAOS.forEach((c, i) => cue(c.t, 'card', { i }));
+  cue(2.45, 'thud'); cue(6.6, 'pop'); cue(6.75, 'bubble'); cue(7.3, 'vacuum'); cue(8.0, 'jump'); cue(8.55, 'bubble');
+  EX.forEach((e, i) => cue(9.9 + i * .45, 'tile', { i }));
+  cue(12.85, 'whoosh'); cue(13.2, 'sparkle_s'); cue(14.25, 'jump'); cue(14.3, 'whoosh');
+  cue(19.8, 'lock'); cue(23.55, 'unlock');
+  [0, 1, 2, 3].forEach(k => cue(28.9 + k * .22, 'tick'));
+  cue(53.3, 'whoosh'); cue(53.45, 'jump'); cue(53.9, 'sparkle');
+  PEEKS.forEach(p => cue(p.a + .05, 'peek'));
+  CUES.sort((a, b) => a.t - b.t);
+  window.CUES = CUES;
+}
+
+/* ================= layout measurement + scroll ================= */
+const SCREEN_H = 1476, HOME = 34, INBAR = 104, KB_H = 560, VP_TOP = 200;
+let M = null, CAM = null, LOGO = { x: 540, y: 640 };
+const content = () => $('#content');
+const vpH = t => SCREEN_H - HOME - INBAR - kbProg(t) * (KB_H - HOME) - VP_TOP;
+function target(t) {
+  let bottom = 0;
+  ITEMS.forEach((it, i) => {
+    if (!(it.t <= t || (it.dots && t >= it.t - .5))) return;
+    bottom = Math.max(bottom, M[i].top + (it.t <= t ? M[i].h : M[i].dh));
+  });
+  return Math.max(0, bottom + 26 - vpH(t));
+}
+function scrollAt(t) { let s = 0; const N = 12; for (let k = 0; k < N; k++) s += target(t - k * .035); return s / N; }
+function scrollSmooth(t) { let s = 0; const N = 6; for (let k = 0; k < N; k++) s += scrollAt(t - k * .04); return s / N; }
+function worldOf(el, t) {
+  const c0 = content().getBoundingClientRect(), r = el.getBoundingClientRect();
+  return { x: M.left0 + (r.left - c0.left) + r.width / 2, y: M.top0 + (r.top - c0.top) - scrollSmooth(t) + r.height / 2, h: r.height };
+}
+
+/* ================= build DOM ================= */
+function build() {
+  $$('.st-dark').forEach(e => e.innerHTML = statusHTML('14:10', '#111'));
+  $$('.st-light').forEach(e => e.innerHTML = statusHTML('14:05', '#fff'));
+  buildKB();
+  $('#bnIcon').innerHTML = LICON;
+  // chaos cards
+  $('#chaos').innerHTML = CHAOS.map((c, i) => `<div class="cc ${c.sticky ? 'sticky' : ''}" id="cc${i}" style="width:${c.w}px">${c.html}${c.badge ? `<div class="badge">${c.badge}</div>` : ''}</div>`).join('');
+  // exchange tiles in a ring
+  EX.forEach((e, i) => { const a = (-90 + i * 60) * Math.PI / 180; e.x = 540 + Math.cos(a) * 370; e.y = 900 + Math.sin(a) * 370; });
+  $('#tiles').innerHTML = EX.map((e, i) => `<div class="tile" id="tl${i}"><div class="sq">${logoHTML(e)}</div><div class="nm">${e.name}</div></div>`).join('');
+  $('#lines').innerHTML = EX.map((e, i) => `<line id="ln${i}" x1="540" y1="900" x2="${e.x}" y2="${e.y}" stroke="#5c6bc0" stroke-width="5" stroke-dasharray="10 12" stroke-linecap="round"/>`).join('');
+  $('#uniLogos').innerHTML = EX.map(logoHTML).join('');
+  $('#estrip').innerHTML = EX.map(logoHTML).join('');
+  // LINE chat items
+  const ct = content();
+  ITEMS.forEach(it => {
+    const el = document.createElement('div');
+    if (it.k === 'date') { el.className = 'date'; el.textContent = it.html; }
+    else if (it.k === 'me') { el.className = 'it me'; el.innerHTML = `<div class="bub">${it.html}</div><div class="meta">อ่านแล้ว<br>${it.time}</div>`; }
+    else {
+      el.className = 'it'; const body = it.k === 'card' ? it.html : `<div class="bub">${it.html}</div>`;
+      el.innerHTML = `<div class="av" data-mascot></div>${body}<div class="meta">${it.time || ''}</div>`;
+      if (it.dots) { const d = document.createElement('div'); d.className = 'dots'; d.innerHTML = '<i></i><i></i><i></i>'; el.appendChild(d); }
+    }
+    if (it.id) el.id = it.id;
+    it.el = el; ct.appendChild(el);
+  });
+  SIMPLE.forEach(s => { s.el = $(s.sel); if (s.dots) { const d = document.createElement('div'); d.className = 'dots'; d.style.left = s.sel.startsWith('#dc') ? '82px' : '0'; d.innerHTML = '<i></i><i></i><i></i>'; s.el.style.position = 'relative'; s.el.appendChild(d); } });
+  $$('[data-mascot]').forEach(e => e.innerHTML = mascotSVG());
+  $('#hero').innerHTML = mascotSVG(); $('#peek').innerHTML = mascotSVG();
+  NOTIFS.forEach(n => { const el = document.createElement('div'); el.className = 'nt'; el.innerHTML = `<span class="ripple"></span><div class="lic">${LICON}</div><div class="ntx"><b>KhunQuant<span>LINE · ตอนนี้</span></b>${n.body}</div>`; n.el = el; $('#notifs').prepend(el); });
+  // chart
+  const svg = $('#chart'); let p = 150, html = '', e = 150; seed = 42; const n = 30, w = 488 / n, cs = [], ema = [];
+  for (let i = 0; i < n; i++) { const o = p, c = o + (rnd() - 0.37) * 14, h = Math.max(o, c) + rnd() * 7, l = Math.min(o, c) - rnd() * 7; p = c; cs.push({ o, c, h, l }); e += (c - e) * 0.2; ema.push(e); }
+  const all = cs.flatMap(k => [k.h, k.l]), mx = Math.max(...all), mn = Math.min(...all), Y = v => 235 - (v - mn) / (mx - mn) * 220;
+  const ys = Y(mn + (mx - mn) * .1), yr = Y(mx - (mx - mn) * .03);
+  html += `<g class="sr"><line x1="0" x2="488" y1="${ys}" y2="${ys}" stroke="#16a34a" stroke-dasharray="8 7" stroke-width="2.5"/><text x="4" y="${ys - 8}" fill="#16a34a" font-family="Kanit" font-size="21" font-weight="600">แนวรับ $172</text>
+    <line x1="0" x2="488" y1="${yr}" y2="${yr}" stroke="#e11d48" stroke-dasharray="8 7" stroke-width="2.5"/><text x="4" y="${yr + 26}" fill="#e11d48" font-family="Kanit" font-size="21" font-weight="600">แนวต้าน $195</text></g>`;
+  cs.forEach((k, i) => { const x = i * w + w / 2, col = k.c >= k.o ? '#16a34a' : '#e11d48';
+    html += `<g class="cdl"><line x1="${x}" x2="${x}" y1="${Y(k.h)}" y2="${Y(k.l)}" stroke="${col}" stroke-width="2.4"/><rect x="${x - w * .32}" y="${Y(Math.max(k.o, k.c))}" width="${w * .64}" height="${Math.max(3, Math.abs(Y(k.o) - Y(k.c)))}" fill="${col}" rx="1.5"/></g>`; });
+  html += `<polyline id="ema" points="${ema.map((v, i) => `${i * w + w / 2},${Y(v)}`).join(' ')}" fill="none" stroke="#5c6bc0" stroke-width="3.5" stroke-dasharray="1400" stroke-dashoffset="1400"/>`;
+  svg.innerHTML = html;
+  TAPS = [{ t: 23.35, sel: () => NOTIFS[0].el }, { t: 27.9, sel: () => $('#btnRebal') }, { t: 39.95, sel: () => $('#btnDelta') }, { t: 43.0, sel: () => $('#btnChart') }];
+}
+
+function setup() {
+  $('#world').style.transform = 'none'; content().style.transform = 'none';
+  ITEMS.forEach(i => { i.el.style.transform = 'none'; });
+  const c0 = content().getBoundingClientRect();
+  M = ITEMS.map(i => { const r = i.el.getBoundingClientRect(); return { top: r.top - c0.top, h: r.height, dh: 76 }; });
+  M.top0 = c0.top; M.left0 = c0.left;
+  const lr = $('#logoWrap').getBoundingClientRect(); LOGO = { x: lr.left + lr.width / 2, y: lr.top + lr.height / 2 };
+  // camera keyframes: [t, cx, cy, scale]
+  const D = [540, 960, 1], TY = [540, 1060, 1.6], LK = [540, 860, 1.12];
+  const rb = worldOf($('#rebal .card'), 26.5), rd = worldOf($('#rebalDone .card'), 30.0);
+  const br = worldOf($('#btnRebal'), 27.85), b1 = worldOf($('#btnDelta'), 39.9), b2 = worldOf($('#btnChart'), 42.95);
+  const fit = h => Math.min(1.15, 1700 / (h + 160));
+  CAM = [[0, 540, 960, 1], [4.3, 540, 980, 1.05], [4.9, 540, 1270, 1.3], [6.2, 540, 1270, 1.3], [6.75, ...D],
+    [15.45, ...D], [15.95, ...TY], [18.1, ...TY], [18.75, ...D],
+    [19.9, ...D], [20.5, ...LK], [23.2, ...LK], [23.9, ...D],
+    [25.0, ...D], [25.6, 540, rb.y, fit(rb.h)], [27.15, 540, rb.y, fit(rb.h)], [27.55, 540, br.y - 80, 1.5], [28.1, 540, br.y - 80, 1.5], [28.65, ...D], [29.3, 540, rd.y, fit(rd.h)], [31.0, 540, rd.y, fit(rd.h)], [31.6, ...D],
+    [31.75, ...D], [32.15, ...TY], [33.05, ...TY], [33.6, ...D], [34.4, 540, 1000, 1.06], [35.3, 540, 1000, 1.06], [35.75, ...TY], [37.45, ...TY], [38.0, ...D],
+    [39.35, ...D], [39.8, 540, b1.y - 80, 1.5], [40.15, 540, b1.y - 80, 1.5], [40.7, ...D], [42.45, ...D], [42.85, 540, b2.y - 80, 1.5], [43.2, 540, b2.y - 80, 1.5], [43.7, ...D],
+    [53.3, ...D], [53.9, 540, 960, .9], [DURATION + 1, 540, 960, .9]];
+}
+function camAt(t) {
+  let i = 0; while (i < CAM.length - 2 && t > CAM[i + 1][0]) i++;
+  const a = CAM[i], b = CAM[i + 1], p = ioC(cl((t - a[0]) / (b[0] - a[0])));
+  return [lerp(a[1], b[1], p), lerp(a[2], b[2], p), Math.exp(lerp(Math.log(a[3]), Math.log(b[3]), p))];
+}
+
+/* ================= render(t) ================= */
+function popIn(el, t, at, origin) {
+  const p = P(t, at, .4);
+  el.style.opacity = t >= at ? 1 : 0;
+  el.style.transformOrigin = origin;
+  el.style.transform = t >= at ? `translateY(${(1 - oC(p)) * 26}px) scale(${.9 + .1 * oB(p)})` : 'none';
+}
+function dotsAnim(dots, t, show) {
+  dots.style.opacity = show ? 1 : 0;
+  [...dots.children].forEach((d, k) => d.style.transform = `translateY(${Math.sin(t * 13 - k * 1.1) * -5}px)`);
+}
+
+function render(t) {
+  const [cx, cy, s] = camAt(t);
+  const ratio = 112 / 134;
+
+  /* ---- pain point ---- */
+  CHAOS.forEach((c, i) => {
+    const el = $('#cc' + i), p = oB(P(t, c.t, .45));
+    const shake = t > 2.45 && t < 3.3 ? Math.sin(t * 60 + i) * 6 * (1 - P(t, 2.45, .85)) : 0;
+    const vac = ioC(P(t, 7.3 + i * .03, .6));
+    const x = lerp(c.x, 540, vac) + shake, y = lerp(c.y + Math.sin(t * 1.3 + i) * 6, 980, vac);
+    el.style.left = (x - c.w / 2) + 'px'; el.style.top = (y - 90) + 'px';
+    el.style.transform = `rotate(${c.r + vac * 200}deg) scale(${(t >= c.t ? .6 + .4 * p : 0) * (1 - vac)})`;
+    el.style.opacity = t < c.t || vac >= 1 ? 0 : 1;
+  });
+  // captions
+  let cv = 0, ctx = ''; CAPS.forEach(([a, b, txt]) => { const v = Math.min(oC(P(t, a, .3)), 1 - P(t, b - .2, .2)); if (v > cv) { cv = v; ctx = txt; } });
+  $('#cap').style.opacity = cv; $('#cap').style.transform = `translateY(${(1 - cv) * -20}px)`; $('#cap div').textContent = ctx;
+
+  /* ---- connect: exchange tiles ---- */
+  EX.forEach((e, i) => {
+    const a = 9.9 + i * .45, p = oB(P(t, a, .45)), m = ioC(P(t, 12.85 + i * .04, .45));
+    const el = $('#tl' + i);
+    const x = lerp(e.x, 540, m), y = lerp(e.y, 560, m);
+    el.style.left = (x - 100) + 'px'; el.style.top = (y - 85) + 'px';
+    el.style.transform = `scale(${(t >= a ? p : 0) * (1 - m * .7)})`; el.style.opacity = t < a || m >= 1 ? 0 : 1;
+    const ln = $('#ln' + i), lp = oC(P(t, a + .15, .4));
+    ln.setAttribute('x2', lerp(540, e.x, lp)); ln.setAttribute('y2', lerp(900, e.y, lp));
+    ln.style.opacity = t < a + .15 ? 0 : 1 - P(t, 12.8, .3);
+    ln.style.strokeDashoffset = -t * 40;
+  });
+  const uni = $('#uni'), up = oB(P(t, 13.2, .5)), uOut = P(t, 14.1, .3);
+  uni.style.left = '150px'; uni.style.top = '420px';
+  uni.style.opacity = t < 13.2 ? 0 : 1 - uOut; uni.style.transform = `scale(${up * (1 - uOut * .3)})`;
+  $('#cntUni').textContent = '฿' + fmt(1248500 * oC(P(t, 13.3, .8)));
+
+  /* ---- phone entrance / exit ---- */
+  const rise = oC(P(t, 14.3, .75)), exit = ioC(P(t, 53.3, .6));
+  $('#phoneWrap').style.transform = `translateY(${(1 - rise) * 1750 + exit * 260}px) scale(${1 - exit * .25})`;
+  $('#phoneWrap').style.opacity = 1 - exit;
+  $('#phoneWrap').style.visibility = t < 14.2 ? 'hidden' : 'visible';
+
+  /* ---- LINE chat ---- */
+  const kb = kbProg(t);
+  $('#kb').style.transform = `translateY(${(1 - kb) * 100}%)`;
+  $('#inbar').style.bottom = (HOME + kb * (KB_H - HOME)) + 'px';
+  $('#vp').style.height = vpH(t) + 'px';
+  content().style.transform = `translateY(${-scrollSmooth(t)}px)`;
+  ITEMS.forEach(it => {
+    const el = it.el; if (it.t < 0) return;
+    const dots = el.querySelector(':scope > .dots'), showDots = it.dots && t >= it.t - .5 && t < it.t;
+    [...el.children].forEach(c => { if (c !== dots) c.style.opacity = t >= it.t ? 1 : 0; });
+    if (dots) { dotsAnim(dots, t, showDots); if (showDots) el.querySelector('.av').style.opacity = 1; }
+    popIn(el, t, it.t, it.k === 'me' ? 'right bottom' : 'left top');
+    if (showDots) el.style.opacity = 1;
+  });
+  SIMPLE.forEach(sm => {
+    const el = sm.el, dots = el.querySelector(':scope > .dots'), showDots = sm.dots && t >= sm.t - .5 && t < sm.t;
+    [...el.children].forEach(c => { if (c !== dots) c.style.opacity = t >= sm.t ? 1 : 0; });
+    if (dots) dotsAnim(dots, t, showDots);
+    popIn(el, t, sm.t, sm.me ? 'right bottom' : 'left top');
+    if (showDots) { el.style.opacity = 1; el.style.background = 'transparent'; el.style.boxShadow = 'none'; } else { el.style.background = ''; el.style.boxShadow = ''; }
+  });
+
+  // typing into the input box
+  let typed = '', active = null;
+  TYPES.forEach(ty => { if (t >= ty.item.type[0] - .3 && t < ty.item.t) { active = ty; typed = ty.g.filter((_, k) => ty.times[k] <= t).join(''); } });
+  $('#typed').textContent = typed;
+  $('.ph').style.opacity = typed ? 0 : 1;
+  $('#caret').style.opacity = active && (typed || Math.floor(t * 2.4) % 2 === 0) ? 1 : 0;
+  const box = $('#inbox'), itx = $('#intext'), room = box.clientWidth - 48;
+  itx.style.transform = itx.scrollWidth > room ? `translateX(${room - itx.scrollWidth}px)` : 'none';
+  $('#sendb').style.background = typed ? '#06c755' : '#e5e7ee';
+  const letterKeys = $$('#kb .k').filter(k => !k.classList.contains('sp') && k.id !== 'kspace');
+  letterKeys.forEach(k => { k.classList.remove('on'); k.querySelector('.pop').style.opacity = 0; });
+  $('#kspace').classList.remove('on');
+  if (active) active.times.forEach((tt, k) => {
+    if (t < tt || t >= tt + .1) return;
+    const ch = active.g[k];
+    const key = ch === ' ' ? $('#kspace') : letterKeys.find(x => x.firstChild.textContent === ch[0]) || letterKeys[(ch.codePointAt(0) * 7) % letterKeys.length];
+    key.classList.add('on'); if (key.id !== 'kspace') key.querySelector('.pop').style.opacity = 1;
+  });
+
+  /* ---- lock screen + proactive banner ---- */
+  $('#black').style.opacity = t < 19.8 ? 0 : t < 20.0 ? P(t, 19.8, .12) : 1 - P(t, 20.0, .25);
+  const unlock = ioC(P(t, 23.55, .5));
+  $('#lock').style.display = t >= 19.95 && t < 24.1 ? 'block' : 'none';
+  $('#lock').style.transform = `translateY(${-unlock * 100}%)`;
+  $('#hb').style.background = (t >= 19.95 && t < 23.8) || (t >= 45.9 && swProg(t) > .3) ? '#fff' : (t > 51.6 ? '#fff' : '#111');
+  NOTIFS.forEach(n => {
+    const p = P(t, n.t, .45);
+    n.el.style.display = t >= n.t ? 'flex' : 'none';
+    n.el.style.opacity = cl(p * 2.5);
+    n.el.style.transform = `translateY(${(1 - oB(p)) * -60}px) scale(${.92 + .08 * oB(p)})`;
+  });
+  const bn = Math.min(oB(P(t, 24.3, .5)), 1 - ioC(P(t, 25.9, .4)));
+  $('#banner').style.transform = `translateY(${(1 - bn) * -260}px)`; $('#banner').style.opacity = t < 24.3 || t > 26.4 ? 0 : 1;
+
+  TAPS.forEach(x => {
+    const el = x.sel(), r = el.querySelector('.ripple'), p = P(t, x.t, .45);
+    r.style.opacity = t >= x.t && p < 1 ? (1 - p) : 0; r.style.transform = `scale(${1 + p * 16})`;
+    el.style.background = t >= x.t && t < x.t + .5 ? '#eef0fa' : '';
+  });
+
+  /* ---- card internals ---- */
+  ['#ra1', '#ra2', '#ra3'].forEach((id, k) => { const el = $(id); el.style.width = (+el.dataset.w * oC(P(t, 25.15 + k * .15, .6))) + '%'; });
+  $$('#rebalDone .ord i').forEach((c, k) => { const a = 28.9 + k * .22; c.style.background = t >= a ? '#16a34a' : '#eef0f6'; c.style.transform = `scale(${t >= a ? oB(P(t, a, .25)) : .8})`; });
+  $('#rbNew').style.opacity = P(t, 29.85, .3);
+  $('#cntPort').textContent = '฿' + fmt(1248500 * oC(P(t, 33.8, 1.1)));
+  [[38, '#sg1', 33.9], [34, '#sg2', 34.05], [28, '#sg3', 34.2]].forEach(([w, id, a]) => $(id).style.width = (w * oC(P(t, a, .5))) + '%');
+  $$('#weeks i').forEach((c, k) => { const a = 38.15 + k * .1, on = t >= a, skip = k === 3 || k === 6; c.style.background = on ? (skip ? '#c9cde0' : '#16a34a') : '#eef0f6'; c.textContent = on ? (skip ? '–' : '✓') : ''; c.style.transform = `scale(${on ? oB(P(t, a, .25)) : .85})`; });
+  $$('#ladder i').forEach((c, k) => { const p = oC(P(t, 38.5 + k * .14, .35)); c.style.transform = `scaleY(${.25 + .75 * p})`; c.style.background = p > .5 ? '#f59e0b' : '#eef0f6'; });
+  $('#beam').setAttribute('transform', `rotate(${t < 40.95 ? -13 : -13 * (1 - oB(P(t, 40.95, .8)))} 244 55)`);
+  $('#cntApr').textContent = fmt(14.6 * oC(P(t, 41.1, .9)), 1) + '%';
+  $$('#chart .cdl').forEach((c, k) => c.style.opacity = P(t, 43.85 + k * .027, .18));
+  $('#ema').style.strokeDashoffset = 1400 * (1 - oC(P(t, 44.0, .8)));
+  $('#chart .sr').style.opacity = P(t, 44.5, .3);
+  $('#cntPnl').textContent = '+฿' + fmt(18420 * oC(P(t, 45.0, .8)));
+
+  /* ---- app switcher: LINE / Telegram / Discord ---- */
+  const sw = swProg(t), f = swFocus(t), sc = 1 - .4 * sw, step = lerp(696, 696 * .6 + 44, sw);
+  $('#swbg').style.opacity = sw > 0 ? 1 : 0;
+  ['#chat', '#tg', '#dc'].forEach((id, i) => {
+    const el = $(id), dx = (i - f) * step;
+    el.style.transform = `translate(${dx}px,${-20 * sw}px) scale(${sc})`;
+    el.style.borderRadius = (sw > 0 ? 60 / sc * sw + 0 : 0) + 'px';
+    el.style.boxShadow = sw > 0 ? `0 20px 60px rgba(0,0,0,${.45 * sw})` : 'none';
+    el.style.visibility = Math.abs(i - f) < 1.6 ? 'visible' : 'hidden';
+    const lb = $('#swl' + i);
+    lb.style.opacity = sw; lb.style.left = (348 + dx - 696 * sc / 2 + 10) + 'px'; lb.style.top = (738 - 20 * sw - 1476 * sc / 2 - 76) + 'px';
+  });
+  const tch = $('#touch'); let tv2 = 0;
+  TOUCH.forEach(g => { if (t >= g.a - .1 && t <= g.b + .15) { const p = ioC(P(t, g.a, g.b - g.a)); tv2 = Math.min(P(t, g.a - .1, .1), 1 - P(t, g.b, .15)); tch.style.left = lerp(g.p0[0], g.p1[0], p) + 'px'; tch.style.top = lerp(g.p0[1], g.p1[1], p) + 'px'; } });
+  tch.style.opacity = tv2 * .9;
+
+  /* ---- hero mascot ---- */
+  const hero = $('#hero');
+  let hx = 540, hy = 980, hw = 300, hop = 0, hs = 1, vis = false, wave = false, sx = 1, sy = 1;
+  if (t >= 6.6 && t < 7.3) { vis = true; hs = oB(P(t, 6.6, .45)); wave = true; }
+  else if (t >= 7.3 && t < 8.0) { vis = true; const q = Math.sin(P(t, 7.3, .7) * Math.PI * 3); sx = 1 + .12 * q; sy = 1 - .12 * q; }
+  else if (t >= 8.0 && t < 14.25) {
+    vis = true; const m = ioC(P(t, 8.0, .5)); hx = 540; hy = lerp(980, 900, m) - Math.sin(P(t, 8.0, .5) * Math.PI) * 140; hw = lerp(300, 330, m);
+    if (t > 8.5) hop = -Math.abs(Math.sin((t - 8.5) * 3.2)) * 18;
+    wave = (t > 8.5 && t < 9.8) || (t > 13.0 && t < 14.0);
+  } else if (t >= 14.25 && t < 14.95) {
+    vis = true; const fly = P(t, 14.25, .65), fe = ioC(fly);
+    hx = lerp(540, 299, fe); hy = lerp(900, 370, fe) - Math.sin(fly * Math.PI) * 240; hw = lerp(330, 48, fe);
+  } else if (t >= 53.45 && t < 53.92) {
+    vis = true; wave = true; const fin = P(t, 53.45, .45);
+    const wx = (LOGO.x - (540 - cx * s)) / s, wy = (LOGO.y - (960 - cy * s)) / s;
+    hx = lerp(1250, wx, oC(fin)); hy = lerp(1100, wy, oC(fin)) - Math.sin(fin * Math.PI) * 280; hw = lerp(180, 320, fin);
+  }
+  hero.style.width = hw + 'px'; hero.style.height = hw * ratio + 'px';
+  hero.style.left = (hx - hw / 2) + 'px'; hero.style.top = (hy - hw * ratio / 2 + hop) + 'px';
+  hero.style.transform = `scale(${hs * sx},${hs * sy})`; hero.style.opacity = vis ? 1 : 0;
+  poseMascot(hero, t, { wave });
+  const grounded = t >= 6.6 && t < 14.25;
+  $('#shadowM').style.cssText = `left:${hx - hw * .55}px;top:${hy + hw * ratio / 2 - 10}px;width:${hw * 1.1}px;height:50px;opacity:${grounded ? hs * (1 + hop / 60) * (t < 8.0 || t > 8.5 ? 1 : .4) : 0}`;
+  const s1 = Math.min(oB(P(t, 6.75, .35)), 1 - P(t, 7.25, .15));
+  $('#say1').style.cssText = `left:540px;top:${980 - 190 - 80}px;transform:translate(-50%,0) scale(${.6 + .4 * s1});opacity:${cl(s1 * 2)}`;
+  const s2 = Math.min(oB(P(t, 8.55, .35)), 1 - P(t, 9.6, .2));
+  $('#say2').style.cssText = `left:540px;top:${900 - 200 - 90}px;transform:translate(-50%,0) scale(${.6 + .4 * s2});opacity:${cl(s2 * 2)}`;
+  $('#nametag').style.cssText = `left:540px;top:1060px;transform:translateX(-50%);opacity:${Math.min(P(t, 8.7, .4), 1 - P(t, 9.7, .2))}`;
+  $('#hdr .av').style.opacity = t < 14.9 ? 0 : 1;
+
+  /* ---- mascot peeking out from behind the phone ---- */
+  const peek = $('#peek'), ps = $('#peekSay'); let pv = 0, pp = null;
+  PEEKS.forEach(p => { const v = Math.min(oB(P(t, p.a, .4)), 1 - ioC(P(t, p.b - .3, .3))); if (v > pv) { pv = v; pp = p; } });
+  if (pp && pv > .01) {
+    const w = 170; peek.style.width = w + 'px'; peek.style.height = w * ratio + 'px';
+    peek.style.left = (750 + pv * 130) + 'px'; peek.style.top = (pp.y + Math.sin(t * 6) * 6) + 'px';
+    peek.style.transform = `rotate(${(1 - pv) * 20 + 10}deg)`; peek.style.opacity = 1;
+    poseMascot(peek, t, { wave: true, blinkSeed: 1 });
+    const sp = P(t, pp.a + .25, .3);
+    ps.textContent = pp.say; ps.style.left = (870 + pv * 60) + 'px'; ps.style.top = (pp.y - 100) + 'px';
+    ps.style.opacity = cl(sp * 2) * cl(pv); ps.style.transform = `scale(${oB(sp)})`;
+  } else { peek.style.opacity = 0; ps.style.opacity = 0; }
+
+  $('#world').style.transform = `translate(${540 - cx * s}px,${960 - cy * s}px) scale(${s})`;
+
+  /* ---- section titles ---- */
+  let tv = 0, tt = null; TITLES.forEach(x => { const v = Math.min(oC(P(t, x[0], .35)), 1 - P(t, x[1] - .25, .25)); if (v > tv) { tv = v; tt = x; } });
+  tv *= cl((1.12 - s) / .06); // keep the title out of zoomed-in shots
+  $('#title').style.opacity = tv; $('#title').style.transform = `translateY(${(1 - tv) * -20}px)`;
+  if (tt) { $('#tnum').textContent = tt[2]; $('#ttxt').textContent = tt[3]; }
+  $('#foot').style.opacity = t > 15.2 && t < 53.3 ? 1 : 0;
+
+  /* ---- finale: flash + logo ---- */
+  const fl = P(t, 53.9, .45), fx = $('#flash');
+  fx.style.left = LOGO.x + 'px'; fx.style.top = LOGO.y + 'px';
+  fx.style.opacity = t >= 53.9 ? (1 - fl) * .95 : 0; fx.style.transform = `scale(${1 + oC(fl) * 30})`;
+  const lg = oB(P(t, 53.92, .55));
+  $('#end').style.opacity = t >= 53.9 ? 1 : 0;
+  $('#logoWrap').style.transform = `scale(${lg}) rotate(${(1 - lg) * -40}deg)`;
+  const fadeUp = (id, a) => { const p = P(t, a, .45); $(id).style.opacity = cl(p * 2); $(id).style.transform = `translateY(${(1 - oC(p)) * 40}px)`; };
+  fadeUp('#wm', 54.2); fadeUp('#thn', 54.4); fadeUp('#tagl', 54.65); fadeUp('#chips', 55.35); fadeUp('#url', 55.7);
+  $$('#estrip .lg').forEach((e, i) => { const p = oB(P(t, 55.0 + i * .06, .4)); e.style.transform = `scale(${t >= 55 + i * .06 ? p : 0})`; });
+}
+window.render = render; window.DURATION = DURATION;
+
+const q = new URLSearchParams(location.search);
+(async () => {
+  await resolveLogos();
+  build(); buildCues();
+  await document.fonts.ready;
+  await new Promise(r => setTimeout(r, 50));
+  setup();
+  if (q.has('t')) render(+q.get('t'));
+  else if (!q.has('static')) { const t0 = performance.now(); (function loop() { render(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
+  window.READY = true;
+})();
+</script>
+</body>
+</html>

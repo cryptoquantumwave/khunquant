@@ -22,418 +22,589 @@
 @font-face{font-family:Plex;font-weight:700;src:url(fonts/ibm-plex-sans-thai-latin-700-normal.woff2);unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 
 :root{
-  --bg0:#08081a; --bg1:#1b1a3a; --violet:#7c5cff; --cyan:#22d3ee; --green:#22c55e;
-  --red:#f43f5e; --gold:#fbbf24; --ink:#eef0ff; --mute:#9aa0c8; --card:#1a1d40; --line:#2c3064;
-  --line-green:#06c755; --tg-blue:#2aabee;
+  --bg:#f3f4f8; --ink:#16173a; --mute:#8a8fa8; --accent:#5c6bc0; --accent-d:#3e4da0; --accent-l:#e8eaf6;
+  --up:#16a34a; --dn:#e11d48; --line-me:#9be27a; --chat:#dde4ee;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{width:1080px;height:1920px;overflow:hidden;background:var(--bg0)}
-body{font-family:Plex,Kanit,sans-serif;color:var(--ink);position:relative}
-.abs{position:absolute}
-#stage{position:absolute;inset:0;overflow:hidden}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--bg)}
+body{font-family:Plex,Kanit,sans-serif;color:var(--ink)}
+#stage{position:absolute;inset:0;overflow:hidden;background:radial-gradient(1200px 1400px at 50% 45%,#fbfbfd 0%,#f3f4f8 55%,#e9ebf2 100%)}
+#world{position:absolute;left:0;top:0;width:1080px;height:1920px;transform-origin:0 0}
 
-/* background */
-.blob{position:absolute;border-radius:50%;filter:blur(120px);opacity:.55}
-#b1{width:900px;height:900px;background:#4b2fd6;left:-300px;top:-200px}
-#b2{width:800px;height:800px;background:#0e7490;right:-300px;bottom:-100px}
-#b3{width:600px;height:600px;background:#7c1d6f;left:300px;top:700px;opacity:.35}
-#grid{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.09) 2px,transparent 2px);background-size:54px 54px}
-.tick{position:absolute;font:600 30px Kanit;padding:10px 22px;border-radius:40px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);white-space:nowrap}
-.up{color:var(--green)} .dn{color:var(--red)}
+/* ---------- mascot ---------- */
+.mascot{position:absolute;display:block}
+.mascot svg{width:100%;height:100%;display:block;overflow:visible}
+.say{position:absolute;background:#fff;border-radius:36px;padding:22px 34px;font:600 44px/1.3 Kanit;box-shadow:0 10px 30px rgba(22,23,58,.10);white-space:nowrap}
+.say:after{content:"";position:absolute;left:50%;bottom:-18px;margin-left:-18px;border:18px solid transparent;border-bottom:0;border-top-color:#fff}
+#nametag{position:absolute;font:600 40px Kanit;color:var(--accent-d);letter-spacing:.5px}
+#shadowM{position:absolute;border-radius:50%;background:radial-gradient(closest-side,rgba(22,23,58,.18),transparent)}
 
-/* headlines */
-.hl{position:absolute;left:60px;right:60px;top:150px;text-align:center}
-.hl h1{font:800 84px/1.15 Kanit;letter-spacing:-.5px}
-.hl p{font:500 40px/1.3 Kanit;color:var(--cyan);margin-top:10px}
-.grad{background:linear-gradient(90deg,#a78bfa,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+/* ---------- phone (iPhone-like) ---------- */
+#phoneWrap{position:absolute;left:170px;top:200px;width:740px;height:1520px}
+#floor{position:absolute;left:90px;right:90px;bottom:-60px;height:90px;border-radius:50%;background:radial-gradient(closest-side,rgba(22,23,58,.22),transparent)}
+.btn{position:absolute;width:8px;border-radius:3px;background:linear-gradient(90deg,#8d9097,#d9dbe0 50%,#9a9da4)}
+#phone{position:absolute;inset:0;border-radius:118px;padding:9px;
+  background:linear-gradient(135deg,#e6e7ea 0%,#9ea1a8 18%,#f2f3f5 38%,#8b8e95 62%,#d7d9dd 82%,#a4a7ad 100%);
+  box-shadow:0 50px 90px rgba(22,23,58,.22),0 12px 24px rgba(22,23,58,.12)}
+#bezel{position:absolute;inset:9px;border-radius:110px;background:#0b0b0d;padding:13px}
+#screen{position:relative;width:696px;height:1476px;border-radius:97px;overflow:hidden;background:#fff}
+#island{position:absolute;left:50%;top:22px;width:190px;height:56px;margin-left:-95px;background:#000;border-radius:30px;z-index:90}
+#island:after{content:"";position:absolute;right:22px;top:16px;width:24px;height:24px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#2a3350,#07080c 60%)}
+#glare{position:absolute;inset:0;border-radius:97px;pointer-events:none;z-index:95;background:linear-gradient(115deg,rgba(255,255,255,.10) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 70%,rgba(255,255,255,.05) 100%)}
+.status{position:absolute;left:0;right:0;top:0;height:96px;display:flex;align-items:center;justify-content:space-between;padding:12px 62px 0 74px;font:600 31px Plex;z-index:40}
+.status svg{display:block}
+.homebar{position:absolute;left:50%;bottom:12px;width:250px;height:10px;margin-left:-125px;border-radius:6px;background:#111;z-index:92}
 
-/* phone */
-#phone{position:absolute;left:150px;top:400px;width:780px;height:1400px;border-radius:96px;background:#05050f;
-  border:14px solid #2b2e52;box-shadow:0 0 0 3px #4a4f86,0 60px 140px rgba(0,0,0,.6),0 0 160px rgba(124,92,255,.25);overflow:hidden}
-#island{position:absolute;left:50%;top:22px;width:200px;height:56px;margin-left:-100px;background:#000;border-radius:30px;z-index:20}
-.screen{position:absolute;inset:0;overflow:hidden}
-.status{position:absolute;top:28px;left:56px;right:56px;display:flex;justify-content:space-between;font:600 30px Plex;z-index:10}
+/* LINE-like chat */
+#chat{position:absolute;inset:0;background:var(--chat)}
+#chat .status{background:#fff}
+#hdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;padding:0 26px 0 18px;gap:16px;border-bottom:1px solid #e6e8ee;z-index:30}
+#hdr .nm{font:700 33px Kanit;line-height:1.1}
+#hdr .nm small{display:flex;align-items:center;gap:8px;font:500 22px Plex;color:var(--mute)}
+#hdr .nm small i{width:12px;height:12px;border-radius:50%;background:#22c55e;display:block}
+.av{border-radius:50%;background:var(--accent-l);flex:none;display:grid;place-items:center;overflow:hidden}
+.av svg{width:72%;height:72%}
+#hdr .icons{margin-left:auto;display:flex;gap:30px}
+#vp{position:absolute;top:200px;left:0;right:0;overflow:hidden;z-index:5}
+#content{position:absolute;left:0;right:0;top:0;padding:18px 20px 0;display:flex;flex-direction:column;gap:22px}
+.date{align-self:center;font:500 22px Plex;color:#fff;background:rgba(60,70,100,.28);padding:6px 20px;border-radius:20px}
+.it{display:flex;align-items:flex-end;gap:12px;position:relative}
+.it.me{flex-direction:row-reverse}
+.it .av{width:60px;height:60px;align-self:flex-start}
+.meta{font:500 19px/1.25 Plex;color:#6b7390;flex:none;text-align:right}
+.it:not(.me) .meta{text-align:left}
+.bub{font:500 31px/1.42 Plex;padding:18px 24px;border-radius:30px;max-width:520px;background:#fff}
+.me .bub{background:var(--line-me);color:#10210a}
+.dots{position:absolute;left:72px;top:0;background:#fff;border-radius:30px;padding:24px 28px;display:flex;gap:10px}
+.dots i{width:14px;height:14px;border-radius:50%;background:#aab0c4;display:block}
+.card{width:540px;background:#fff;border-radius:30px;overflow:hidden;font:500 29px/1.42 Plex}
+.card .in{padding:24px 26px}
+.ct{font:700 32px Kanit;display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.pill{font:600 21px Kanit;padding:3px 14px;border-radius:20px;background:var(--accent-l);color:var(--accent-d)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.big{font:700 62px/1.1 Kanit;letter-spacing:-.5px}
+.sub{color:var(--mute);font-size:25px}
+.up{color:var(--up)} .dn{color:var(--dn)}
+.hr{height:1px;background:#eceef4;margin:14px 0}
+.stack{display:flex;height:22px;border-radius:12px;overflow:hidden;background:#eef0f6;margin:14px 0 12px}
+.stack i{display:block;height:100%}
+.leg3{display:flex;flex-direction:column;gap:6px;font-size:26px}
+.sw{display:inline-block;width:18px;height:18px;border-radius:5px;margin-right:10px;vertical-align:-1px}
+.weeks{display:flex;gap:8px;margin:10px 0 4px}
+.weeks i{flex:1;height:40px;border-radius:10px;background:#eef0f6;display:grid;place-items:center;font:700 20px Kanit;color:#fff}
+.ladder{display:flex;gap:10px;align-items:flex-end;height:120px;margin:10px 0 2px}
+.ladder i{flex:1;border-radius:10px 10px 4px 4px;background:#eef0f6;display:flex;justify-content:center;padding-top:6px;font:700 21px Kanit;color:#fff;transform-origin:bottom}
+.fbtn{border-top:1px solid #eceef4;text-align:center;padding:20px 0;font:600 29px Kanit;color:var(--accent-d);position:relative;overflow:hidden}
+.ripple{position:absolute;border-radius:50%;background:rgba(92,107,192,.25);width:40px;height:40px;margin:-20px 0 0 -20px;left:50%;top:50%;opacity:0}
+.legs .leg{display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:18px;background:#f5f6fa;margin:8px 0}
+.tag{font:700 22px Kanit;padding:4px 12px;border-radius:10px}
+
+/* input + keyboard */
+#inbar{position:absolute;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;z-index:20;border-top:1px solid #e6e8ee}
+#inbox{flex:1;height:68px;border-radius:34px;background:#f1f2f6;display:flex;align-items:center;padding:0 24px;overflow:hidden;font:500 30px Plex;position:relative}
+#inbox .ph{color:#a3a8bb;position:absolute;left:24px}
+#intext{white-space:nowrap;display:flex;align-items:center;flex:none}
+#caret{display:inline-block;width:3px;height:38px;background:#06c755;margin-left:2px}
+#sendb{width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:#e5e7ee;flex:none}
+#homefill{position:absolute;left:0;right:0;bottom:0;height:34px;background:#fff;z-index:19}
+#kb{position:absolute;left:0;right:0;bottom:0;height:560px;background:#d3d6dd;z-index:25;padding:14px 8px 0}
+.kr{display:flex;justify-content:center;gap:9px;margin-bottom:16px}
+.k{height:88px;flex:0 0 48px;border-radius:10px;background:#fff;box-shadow:0 2px 0 #8e9096;display:grid;place-items:center;font:400 38px Plex;color:#111;position:relative}
+.k.sp{background:#abb0ba;font:500 26px Plex}
+.k.on{background:#c4c8d0}
+.k .pop{position:absolute;bottom:60px;left:50%;width:84px;height:100px;margin-left:-42px;border-radius:14px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.25);display:grid;place-items:center;font:500 52px Plex;opacity:0}
+.kbot{display:flex;justify-content:space-between;padding:6px 40px 0}
 
 /* lock screen */
-#lock{background:linear-gradient(180deg,#1b1a3a,#0b0b22 60%,#141040)}
-#lock .clock{position:absolute;top:120px;width:100%;text-align:center;font:600 170px/1 Kanit;letter-spacing:-4px}
-#lock .date{position:absolute;top:300px;width:100%;text-align:center;font:500 36px Kanit;color:#c9ccf0}
-#notifs{position:absolute;top:400px;left:26px;right:26px;display:flex;flex-direction:column;gap:18px}
-.notif{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.12);border-radius:36px;padding:22px 26px;display:flex;gap:20px;align-items:center}
-.notif .ic{width:74px;height:74px;border-radius:20px;display:grid;place-items:center;font-size:40px;flex:none}
-.notif b{font:600 28px Plex;color:#c9ccf0;display:block}
-.notif span{font:500 33px/1.3 Plex}
+#lock{position:absolute;inset:0;z-index:70;background:linear-gradient(180deg,#d9ddf5 0%,#aab3ea 45%,#6f7ccc 100%);overflow:hidden}
+#lock .orb{position:absolute;border-radius:50%;filter:blur(40px)}
+#lock .status{color:#fff}
+#ldate{position:absolute;top:150px;width:100%;text-align:center;font:600 34px Kanit;color:rgba(255,255,255,.92)}
+#lclock{position:absolute;top:190px;width:100%;text-align:center;font:600 196px/1 Plex;color:#fff;letter-spacing:-4px}
+#notifs{position:absolute;top:440px;left:22px;right:22px;display:flex;flex-direction:column;gap:16px}
+.nt{background:rgba(255,255,255,.72);backdrop-filter:blur(20px);border-radius:40px;padding:22px 24px;display:flex;gap:20px;align-items:flex-start;box-shadow:0 6px 20px rgba(30,30,80,.10);position:relative;overflow:hidden}
+.nt .lic{width:72px;height:72px;border-radius:18px;background:#06c755;display:grid;place-items:center;flex:none}
+.nt .tx{flex:1;font:500 28px/1.35 Plex;color:#151526}
+.nt .tx b{font:700 28px Plex;display:flex;justify-content:space-between}
+.nt .tx b span{font:500 23px Plex;color:#5d6178}
+#lockbtns{position:absolute;bottom:70px;left:70px;right:70px;display:flex;justify-content:space-between}
+#lockbtns i{width:90px;height:90px;border-radius:50%;background:rgba(40,40,70,.25);display:block}
+#black{position:absolute;inset:0;background:#000;z-index:80;opacity:0}
 
-/* chat */
-.chat{background:#0f1130}
-.chat .hdr{position:absolute;top:0;left:0;right:0;height:190px;padding:100px 34px 0;display:flex;align-items:center;gap:20px}
-.chat .hdr .av{width:70px;height:70px;border-radius:50%;background:#fff url(logo.png) center/120% no-repeat;flex:none}
-.chat .hdr .nm{font:700 34px Kanit;line-height:1.1}
-.chat .hdr .nm small{display:block;font:500 24px Plex;opacity:.8}
-.chat .hdr .badge{margin-left:auto;font:700 24px Kanit;padding:8px 18px;border-radius:30px;background:rgba(255,255,255,.2)}
-.chat.line .hdr{background:#1f2a24;border-bottom:4px solid var(--line-green)}
-.chat.tg .hdr{background:#17212b;border-bottom:4px solid var(--tg-blue)}
-.chat .body{position:absolute;top:220px;left:24px;right:24px;bottom:130px;display:flex;flex-direction:column;gap:28px}
-.chat .inp{position:absolute;left:0;right:0;bottom:0;height:120px;background:#14173a;display:flex;align-items:center;padding:0 28px;gap:18px}
-.chat .inp .box{flex:1;height:70px;border-radius:36px;background:#0b0d26;border:1px solid var(--line);font:400 28px Plex;color:var(--mute);display:flex;align-items:center;padding:0 28px}
-.chat .inp .snd{width:70px;height:70px;border-radius:50%;display:grid;place-items:center;font:700 34px Kanit}
-.chat.line .snd{background:var(--line-green)} .chat.tg .snd{background:var(--tg-blue)}
-.chip-date{align-self:center;font:500 22px Plex;color:var(--mute);background:rgba(255,255,255,.06);padding:6px 18px;border-radius:20px}
-.msg{max-width:84%;font:500 37px/1.4 Plex;padding:20px 26px;border-radius:34px}
-.me{align-self:flex-end;border-bottom-right-radius:10px;color:#fff}
-.chat.line .me{background:var(--line-green);color:#04210f}
-.chat.tg .me{background:#2b5278}
-.bot{align-self:flex-start;background:var(--card);border:1px solid var(--line);border-bottom-left-radius:10px}
-.slot{position:relative;align-self:flex-start;max-width:92%}
-.slot.wide{align-self:stretch;max-width:100%}
-.typing{position:absolute;left:0;top:0;background:var(--card);border:1px solid var(--line);border-radius:34px;padding:24px 30px;display:flex;gap:12px}
-.typing i{width:16px;height:16px;border-radius:50%;background:var(--mute);display:block}
-.card{background:linear-gradient(160deg,#20245a,#151837);border:1px solid #3a3f86;border-radius:30px;padding:28px 30px;font:500 33px/1.45 Plex}
-.card .tt{font:700 35px Kanit;display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.pill{font:700 25px Kanit;padding:4px 14px;border-radius:20px;background:rgba(255,255,255,.1)}
-.row{display:flex;justify-content:space-between;align-items:center;gap:16px}
-.big{font:700 72px/1.1 Kanit}
-.mute{color:var(--mute)}
-.bar{height:20px;border-radius:10px;background:rgba(255,255,255,.08);overflow:hidden;margin:8px 0 14px}
-.bar i{display:block;height:100%;border-radius:10px;width:0}
-.dots{display:flex;gap:12px;margin:14px 0 6px}
-.dots i{flex:1;height:54px;border-radius:12px;background:rgba(255,255,255,.07);display:grid;place-items:center;font:700 22px Kanit;color:#04210f}
-.ladder{display:flex;gap:12px;align-items:flex-end;height:190px;margin:12px 0 4px}
-.ladder i{flex:1;border-radius:12px 12px 4px 4px;background:rgba(255,255,255,.08);display:flex;align-items:flex-start;justify-content:center;font:700 26px Kanit;padding-top:8px;color:#fff}
-.leg{display:flex;align-items:center;gap:16px;padding:20px 20px;border-radius:20px;background:rgba(255,255,255,.05);margin:8px 0}
-.leg .tag{font:800 24px Kanit;padding:6px 14px;border-radius:12px}
+/* overlay UI */
+#title{position:absolute;left:0;right:0;top:86px;display:flex;justify-content:center;z-index:200}
+#title div{background:#fff;border-radius:50px;padding:14px 34px 14px 18px;font:600 38px Kanit;box-shadow:0 8px 30px rgba(22,23,58,.10);display:flex;align-items:center;gap:16px;white-space:nowrap}
+#title b{font:700 26px Kanit;color:#fff;background:var(--accent);border-radius:30px;padding:4px 14px}
+#foot{position:absolute;left:0;right:0;top:1856px;text-align:center;font:400 22px Plex;color:#9a9fb5;z-index:200}
 
-/* brand scenes */
-.brand{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
-.disc{width:400px;height:400px;border-radius:50%;background:#fff url(logo.png) center/118% no-repeat;box-shadow:0 0 120px rgba(124,92,255,.6)}
-.ringwrap{position:relative;width:480px;height:480px;display:grid;place-items:center}
-.ringwrap svg{position:absolute;inset:0}
-.wm{font:800 140px/1 Kanit;letter-spacing:-2px;margin-top:40px}
-.wm span{display:inline-block}
-.th{font:600 56px Kanit;color:var(--cyan);margin-top:6px}
-.tag1{font:600 52px/1.35 Kanit;margin-top:40px}
-.chips{display:flex;gap:18px;margin-top:40px;flex-wrap:wrap;justify-content:center;padding:0 60px}
-.chips span{font:600 36px Kanit;padding:14px 30px;border-radius:50px;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15)}
-.url{margin-top:50px;font:800 60px Kanit;padding:20px 60px;border-radius:70px;background:linear-gradient(90deg,#7c5cff,#22d3ee);color:#fff}
-#foot{position:absolute;left:0;right:0;top:1838px;text-align:center;font:400 24px Plex;color:rgba(255,255,255,.45)}
+/* end card */
+#end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:150}
+#logoWrap{position:relative;width:440px;height:440px;display:grid;place-items:center}
+#logoWrap img{width:420px;height:420px}
+#flash{position:absolute;width:40px;height:40px;margin:-20px;border-radius:50%;background:#fff;z-index:140;opacity:0}
+.wm{font:800 132px/1 Kanit;letter-spacing:-2px;color:#1b1a3a;margin-top:20px}
+.thn{font:600 50px Kanit;color:var(--accent);margin-top:8px}
+.tagl{font:500 44px/1.4 Kanit;margin-top:34px;color:#3a3d5c}
+.chips{display:flex;gap:14px;margin-top:36px}
+.chips span{font:600 32px Kanit;padding:10px 26px;border-radius:40px;background:#fff;box-shadow:0 4px 14px rgba(22,23,58,.08)}
+.url{margin-top:44px;font:700 54px Kanit;padding:18px 56px;border-radius:60px;background:#1b1a3a;color:#fff}
 </style>
 </head>
 <body>
 <div id="stage">
-  <div class="blob" id="b1"></div><div class="blob" id="b2"></div><div class="blob" id="b3"></div>
-  <div id="grid"></div>
-  <div id="ticks"></div>
+  <div id="world">
+    <div id="shadowM"></div>
+    <div class="mascot" id="peek"></div>
+    <div class="say" id="peekSay" style="font-size:40px;padding:12px 24px"></div>
 
-  <!-- ===== headlines (top) ===== -->
-  <div class="hl" data-s="0" data-e="2.9">
-    <h1 data-t="0.1">ตลาดวิ่งเร็วทุกวินาที</h1>
-    <p data-t="1.1" style="font-size:64px;font-weight:700;color:var(--gold)">คุณตามทันไหม?</p>
-  </div>
-  <div class="hl" data-s="6.4" data-e="11"><h1 data-t="6.5">แจ้งเตือน <span class="grad">ราคา &amp; ข่าว</span></h1><p data-t="6.7">หุ้นเทค · หุ้นไทย · คริปโต</p></div>
-  <div class="hl" data-s="11" data-e="15.5"><h1 data-t="11.1">ทุกพอร์ต <span class="grad">ในแชทเดียว</span></h1><p data-t="11.3">SET · Webull · Binance · Bitkub · OKX</p></div>
-  <div class="hl" data-s="15.5" data-e="19.5"><h1 data-t="15.6"><span class="grad">DCA In / Out</span> อัตโนมัติ</h1><p data-t="15.8">กรองจังหวะด้วย RSI · EMA · MACD</p></div>
-  <div class="hl" data-s="19.5" data-e="23"><h1 data-t="19.6"><span class="grad">Delta-Neutral</span></h1><p data-t="19.8">เก็บ Funding ไม่ต้องเดาทิศทาง</p></div>
-  <div class="hl" data-s="23" data-e="26.5"><h1 data-t="23.1">วิเคราะห์กราฟ <span class="grad">+ จดกำไร</span></h1><p data-t="23.3">Technical Analysis · Trade Journal</p></div>
+    <div id="phoneWrap">
+      <div id="floor"></div>
+      <div class="btn" style="left:-7px;top:250px;height:60px"></div>
+      <div class="btn" style="left:-7px;top:360px;height:110px"></div>
+      <div class="btn" style="left:-7px;top:500px;height:110px"></div>
+      <div class="btn" style="right:-7px;top:400px;height:170px"></div>
+      <div id="phone"><div id="bezel"><div id="screen">
+        <div id="island"></div>
 
-  <!-- ===== phone ===== -->
-  <div id="phone">
-    <div id="island"></div>
+        <div id="chat">
+          <div class="status" id="st1"></div>
+          <div id="hdr">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+            <div class="av" style="width:66px;height:66px" data-mascot></div>
+            <div class="nm">KhunQuant<small><i></i>ผู้ช่วยดูแลพอร์ต · ออนไลน์</small></div>
+            <div class="icons">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5" stroke-linecap="round"/></svg>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </div>
+          </div>
+          <div id="vp"><div id="content"></div></div>
+          <div id="inbar">
+            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="1.9" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#16173a" stroke-width="1.9" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 18l5-5 4 4 2-2 4 4"/></svg>
+            <div id="inbox"><span class="ph">Aa</span><span id="intext"><span id="typed"></span><span id="caret"></span></span></div>
+            <div id="sendb"><svg width="34" height="34" viewBox="0 0 24 24"><path d="M3 20l18-8L3 4l2.5 8z" fill="#fff"/></svg></div>
+          </div>
+          <div id="homefill"></div>
+          <div id="kb"></div>
+        </div>
 
-    <!-- lock screen -->
-    <div class="screen" id="lock" data-s="-1" data-e="3.3">
-      <div class="status"><span>09:41</span><span>5G ▮▮▮ 92%</span></div>
-      <div class="clock">09:41</div>
-      <div class="date">วันอังคาร 20 ตุลาคม</div>
-      <div id="notifs">
-        <div class="notif" data-t="0.25"><div class="ic" style="background:#16a34a">📈</div><div><b>Crypto · ตอนนี้</b><span>BTC พุ่ง +4.8% ทะลุแนวต้าน!</span></div></div>
-        <div class="notif" data-t="0.6"><div class="ic" style="background:#2563eb">📰</div><div><b>Tech News · ตอนนี้</b><span>NVDA เปิดตัวชิปใหม่ หุ้นขยับแรง</span></div></div>
-        <div class="notif" data-t="0.95"><div class="ic" style="background:#dc2626">🇹🇭</div><div><b>SET · 1 นาที</b><span>ดัชนีร่วงช่วงบ่าย กลุ่มพลังงานนำลง</span></div></div>
-        <div class="notif" data-t="1.3"><div class="ic" style="background:#d97706">⚠️</div><div><b>Futures · 2 นาที</b><span>Funding ETH perp พุ่งผิดปกติ</span></div></div>
-        <div class="notif" data-t="1.65"><div class="ic" style="background:#7c3aed">💼</div><div><b>Portfolio · 5 นาที</b><span>3 พอร์ต ยังไม่ได้เช็คมา 2 วัน…</span></div></div>
-        <div class="notif" data-t="2.0"><div class="ic" style="background:#475569">💬</div><div><b>Messages</b><span>ข้อความยังไม่อ่าน 99+</span></div></div>
-      </div>
+        <div id="lock">
+          <div class="orb" style="width:520px;height:520px;left:-160px;top:760px;background:#8b97e6"></div>
+          <div class="orb" style="width:460px;height:460px;right:-180px;top:180px;background:#eef0ff"></div>
+          <div class="status" id="st2"></div>
+          <div id="ldate">วันอังคารที่ 20 ตุลาคม</div>
+          <div id="lclock">14:05</div>
+          <div id="notifs"></div>
+          <div id="lockbtns"><i></i><i></i></div>
+        </div>
+        <div id="black"></div>
+        <div class="homebar" id="hb"></div>
+        <div id="glare"></div>
+      </div></div></div>
     </div>
 
-    <!-- chat 1: alerts & news (LINE) -->
-    <div class="screen chat line" data-s="6.0" data-e="11">
-      <div class="status"><span>09:41</span><span>5G ▮▮▮ 92%</span></div>
-      <div class="hdr"><div class="av"></div><div class="nm">KhunQuant<small>ผู้ช่วยดูแลพอร์ต · ออนไลน์</small></div><div class="badge">LINE</div></div>
-      <div class="body">
-        <div class="chip-date">วันนี้</div>
-        <div class="msg me" data-t="6.8">เตือนด้วยถ้า BTC หลุด $60,000 หรือ RSI ต่ำกว่า 30</div>
-        <div class="slot" data-t="7.6" data-typing><div class="msg bot">✅ ตั้งเตือนแล้วครับ จะแจ้งทันทีทาง LINE</div></div>
-        <div class="slot wide" data-t="8.5"><div class="card" style="border-color:#f43f5e88">
-          <div class="tt">🔔 ALERT <span class="pill dn">BTC/USDT</span><span class="mute" style="margin-left:auto;font:500 24px Plex">ตอนนี้</span></div>
-          <div class="row"><span class="big">$59,840</span><span class="dn" style="font:700 36px Kanit">▼ 2.1%</span></div>
-          <div class="mute">RSI(14) = <b style="color:#fff">28.6</b> · แตะเงื่อนไขที่ตั้งไว้แล้ว</div>
-        </div></div>
-        <div class="slot wide" data-t="9.4" data-typing><div class="card">
-          <div class="tt">📰 สรุปข่าวเช้านี้ <span class="pill">3 เรื่อง</span></div>
-          <div data-t="9.6">🇺🇸 <b>NVDA</b> งบดีกว่าคาด <span class="up">+6%</span> หลังปิดตลาด</div>
-          <div data-t="9.85">🇹🇭 <b>SET</b> ปิดบวก <span class="up">+12 จุด</span> กลุ่มแบงก์นำ</div>
-          <div data-t="10.1">₿ <b>BTC ETF</b> เงินไหลเข้า 3 วันติด</div>
-        </div></div>
-      </div>
-      <div class="inp"><div class="box">พิมพ์ข้อความ…</div><div class="snd">➤</div></div>
-    </div>
-
-    <!-- chat 2: portfolio (Telegram) -->
-    <div class="screen chat tg" data-s="11" data-e="15.5">
-      <div class="status"><span>09:42</span><span>5G ▮▮▮ 92%</span></div>
-      <div class="hdr"><div class="av"></div><div class="nm">KhunQuant<small>bot · online</small></div><div class="badge">Telegram</div></div>
-      <div class="body">
-        <div class="msg me" data-t="11.4">สรุปพอร์ตทั้งหมดให้หน่อย</div>
-        <div class="slot wide" data-t="12.1" data-typing><div class="card">
-          <div class="tt">📊 พอร์ตรวมทุกบัญชี</div>
-          <div class="row"><span class="big" data-count="1248500" data-cf="0" data-ct="12.2" data-cd="1.1" data-pre="฿">฿0</span><span class="up" style="font:700 34px Kanit">▲ +2.4%</span></div>
-          <div class="mute" style="margin-bottom:14px">อัปเดตเมื่อสักครู่ · 5 บัญชี</div>
-          <div class="row"><span>🇹🇭 หุ้นไทย <span class="mute">Settrade</span></span><b>38%</b></div>
-          <div class="bar"><i data-w="38" data-bt="12.5" style="background:#f59e0b"></i></div>
-          <div class="row"><span>🇺🇸 หุ้นเทค <span class="mute">Webull</span></span><b>34%</b></div>
-          <div class="bar"><i data-w="34" data-bt="12.7" style="background:#3b82f6"></i></div>
-          <div class="row"><span>₿ คริปโต <span class="mute">Binance · Bitkub · OKX</span></span><b>28%</b></div>
-          <div class="bar"><i data-w="28" data-bt="12.9" style="background:#a855f7"></i></div>
-          <div class="row" style="margin-top:4px"><span class="mute">กำไรยังไม่รับรู้</span><b class="up">+฿86,240</b></div>
-        </div></div>
-        <div class="slot" data-t="14.2" data-typing><div class="msg bot">💡 สัดส่วนคริปโตเกินเป้า 25% แล้ว อยากให้ rebalance ไหมครับ?</div></div>
-      </div>
-      <div class="inp"><div class="box">Message</div><div class="snd">➤</div></div>
-    </div>
-
-    <!-- chat 3: DCA (LINE) -->
-    <div class="screen chat line" data-s="15.5" data-e="19.5">
-      <div class="status"><span>09:43</span><span>5G ▮▮▮ 91%</span></div>
-      <div class="hdr"><div class="av"></div><div class="nm">KhunQuant<small>ผู้ช่วยดูแลพอร์ต · ออนไลน์</small></div><div class="badge">LINE</div></div>
-      <div class="body">
-        <div class="msg me" data-t="15.7">DCA BTC ทุกวันจันทร์ ครั้งละ ฿5,000 ถ้า RSI ต่ำกว่า 40</div>
-        <div class="slot wide" data-t="16.3" data-typing><div class="card" style="border-color:#22c55e88">
-          <div class="tt">⚡ DCA IN <span class="pill">BTC/THB · Bitkub</span><span class="pill up" style="margin-left:auto">● Active</span></div>
-          <div class="row"><span>฿5,000 / สัปดาห์</span><span class="mute">Gate: RSI(14) &lt; 40</span></div>
-          <div class="dots" data-dots="16.6" data-dd="0.14"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-          <div class="row"><span class="mute">ต้นทุนเฉลี่ย (VWAP)</span><b>฿2,012,400</b></div>
-        </div></div>
-        <div class="msg me" data-t="17.6">ETH ขึ้นทุก 15% ทยอยขายทีละ 10%</div>
-        <div class="slot wide" data-t="18.2" data-typing><div class="card" style="border-color:#f59e0b88">
-          <div class="tt">📤 DCA OUT <span class="pill">ETH/USDT</span><span class="pill" style="margin-left:auto;color:var(--gold)">Take-profit</span></div>
-          <div class="ladder" data-ladder="18.4" data-ld="0.18"><i style="height:40%">+15%</i><i style="height:60%">+30%</i><i style="height:80%">+45%</i><i style="height:100%">+60%</i></div>
-          <div class="row"><span class="mute">ขายครั้งละ 10% ของถือ</span><b>ทุน $2,410</b></div>
-        </div></div>
-      </div>
-      <div class="inp"><div class="box">พิมพ์ข้อความ…</div><div class="snd">➤</div></div>
-    </div>
-
-    <!-- chat 4: delta neutral (Telegram) -->
-    <div class="screen chat tg" data-s="19.5" data-e="23">
-      <div class="status"><span>09:44</span><span>5G ▮▮▮ 91%</span></div>
-      <div class="hdr"><div class="av"></div><div class="nm">KhunQuant<small>bot · online</small></div><div class="badge">Telegram</div></div>
-      <div class="body">
-        <div class="msg me" data-t="19.7">เปิด delta-neutral SOL เก็บ funding ทุน $10,000</div>
-        <div class="slot wide" data-t="20.3" data-typing><div class="card">
-          <div class="tt">⚖️ Delta-Neutral <span class="pill">SOL</span><span class="pill up" style="margin-left:auto">● Running</span></div>
-          <div class="leg" data-t="20.5"><span class="tag" style="background:#16a34a33;color:var(--green)">LONG</span><span>Spot <b>+50 SOL</b></span><span class="mute" style="margin-left:auto">Binance</span></div>
-          <div class="leg" data-t="20.7"><span class="tag" style="background:#e11d4833;color:var(--red)">SHORT</span><span>Perp <b>−50 SOL</b></span><span class="mute" style="margin-left:auto">OKX</span></div>
-          <svg id="scale" width="660" height="150" viewBox="0 0 660 150" style="display:block;margin:6px auto 0">
-            <polygon points="330,70 300,140 360,140" fill="#3a3f86"/>
-            <g id="beam"><rect x="80" y="62" width="500" height="12" rx="6" fill="#9aa0c8"/>
-              <circle cx="100" cy="40" r="30" fill="#22c55e"/><text x="100" y="50" text-anchor="middle" font-family="Kanit" font-weight="800" font-size="30" fill="#04210f">L</text>
-              <circle cx="560" cy="40" r="30" fill="#f43f5e"/><text x="560" y="50" text-anchor="middle" font-family="Kanit" font-weight="800" font-size="30" fill="#2a0010">S</text></g>
-          </svg>
-          <div class="row"><span>Net Δ <b class="up" style="font:700 40px Kanit">0.00</b> ✓</span><span>Funding APR <b class="up" style="font:700 40px Kanit" data-count="14.6" data-cf="0" data-ct="21.1" data-cd="0.9" data-dec="1" data-suf="%">0%</b></span></div>
-        </div></div>
-        <div class="slot" data-t="22.0" data-typing><div class="msg bot">🔁 จะคอย rebalance ให้อัตโนมัติ และเตือนถ้า funding กลับทิศครับ</div></div>
-      </div>
-      <div class="inp"><div class="box">Message</div><div class="snd">➤</div></div>
-    </div>
-
-    <!-- chat 5: chart + journal (LINE) -->
-    <div class="screen chat line" data-s="23" data-e="26.8">
-      <div class="status"><span>09:45</span><span>5G ▮▮▮ 90%</span></div>
-      <div class="hdr"><div class="av"></div><div class="nm">KhunQuant<small>ผู้ช่วยดูแลพอร์ต · ออนไลน์</small></div><div class="badge">LINE</div></div>
-      <div class="body">
-        <div class="msg me" data-t="23.2">วิเคราะห์กราฟ NVDA ให้หน่อย</div>
-        <div class="slot wide" data-t="23.7" data-typing><div class="card">
-          <div class="tt">📈 NVDA · 1D <span class="pill up" style="margin-left:auto">แนวโน้มขาขึ้น</span></div>
-          <svg id="chart" width="680" height="380" viewBox="0 0 680 300" preserveAspectRatio="none" style="display:block;width:100%"></svg>
-          <div class="row" style="font-size:30px"><span>RSI <b>58</b></span><span>MACD <b class="up">ตัดขึ้น</b></span><span>EMA50 <b class="up">เหนือ</b></span></div>
-        </div></div>
-        <div class="slot wide" data-t="25.1" data-typing><div class="card" style="border-color:#22c55e88">
-          <div class="tt">📓 บันทึกกำไร · เดือนนี้</div>
-          <div class="row"><span class="big up" data-count="18420" data-cf="0" data-ct="25.2" data-cd="0.9" data-pre="+฿">+฿0</span><span class="mute" style="text-align:right">23 ไม้<br>Win 68%</span></div>
-        </div></div>
-      </div>
-      <div class="inp"><div class="box">พิมพ์ข้อความ…</div><div class="snd">➤</div></div>
-    </div>
+    <div class="mascot" id="hero"></div>
+    <div class="say" id="say1">ตลาดวิ่งเร็วทุกวินาที…</div>
+    <div class="say" id="say2">ให้ผมช่วยดูพอร์ตให้นะ!</div>
+    <div id="nametag">คุณควอนต์</div>
   </div>
 
-  <!-- ===== brand reveal ===== -->
-  <div class="brand" id="intro" data-s="3.0" data-e="6.1">
-    <div class="ringwrap" data-t="3.2" data-pop>
-      <svg viewBox="0 0 480 480"><circle class="ring" cx="240" cy="240" r="226" fill="none" stroke="url(#rg)" stroke-width="8" stroke-linecap="round" stroke-dasharray="1420" stroke-dashoffset="1420" transform="rotate(-90 240 240)"/>
-        <defs><linearGradient id="rg"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs></svg>
-      <div class="disc"></div>
-    </div>
-    <div class="wm" data-letters="3.7">KhunQuant</div>
-    <div class="th" data-t="4.2">คุณควอนต์</div>
-    <div class="tag1" data-t="4.6">ผู้ช่วยดูแลพอร์ตส่วนตัว<br><span class="grad">อยู่ในแชทของคุณ</span></div>
-    <div class="chips"><span data-t="5.2">🇹🇭 หุ้นไทย</span><span data-t="5.35">🇺🇸 หุ้นเทค</span><span data-t="5.5">₿ คริปโต</span></div>
+  <div id="flash"></div>
+  <div id="end">
+    <div id="logoWrap"><img src="logo.png" alt=""></div>
+    <div class="wm" id="wm">KhunQuant</div>
+    <div class="thn" id="thn">คุณควอนต์</div>
+    <div class="tagl" id="tagl">ผู้ช่วยดูแลพอร์ตส่วนตัว<br>อยู่ในแชทของคุณ</div>
+    <div class="chips" id="chips"><span>LINE</span><span>Telegram</span><span>Discord</span><span>Slack</span></div>
+    <div class="url" id="url">khunquant.com</div>
   </div>
 
-  <!-- ===== CTA ===== -->
-  <div class="brand" id="cta" data-s="26.5" data-e="31">
-    <div class="ringwrap" data-t="26.7" data-pop>
-      <svg viewBox="0 0 480 480"><circle class="ring" cx="240" cy="240" r="226" fill="none" stroke="url(#rg2)" stroke-width="8" stroke-linecap="round" stroke-dasharray="1420" stroke-dashoffset="1420" transform="rotate(-90 240 240)"/>
-        <defs><linearGradient id="rg2"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs></svg>
-      <div class="disc"></div>
-    </div>
-    <div class="wm" data-letters="27.0">KhunQuant</div>
-    <div class="tag1" data-t="27.4" style="margin-top:20px">คุยง่าย <span class="grad">จัดการครบ</span><br>ทุกพอร์ตของคุณ</div>
-    <div class="chips"><span data-t="27.9">LINE</span><span data-t="28.0">Telegram</span><span data-t="28.1">Discord</span><span data-t="28.2">Slack</span></div>
-    <div data-t="28.5" style="margin-top:34px;font:500 32px Plex;color:#c9ccf0">Open-source · รันบนเครื่องคุณเอง · API key ไม่ออกนอกบ้าน</div>
-    <div class="url" data-t="28.9">khunquant.com</div>
-  </div>
-
-  <div id="foot" data-s="6.4" data-e="31">ภาพจำลองเพื่อการสาธิต · ตัวเลขสมมติ · ไม่ใช่คำแนะนำการลงทุน</div>
+  <div id="title"><div><b id="tnum">01</b><span id="ttxt"></span></div></div>
+  <div id="foot">ภาพจำลองเพื่อการสาธิต · ตัวเลขสมมติ · ไม่ใช่คำแนะนำการลงทุน</div>
 </div>
 
 <script>
+/* ================= helpers ================= */
 const cl = x => Math.max(0, Math.min(1, x));
 const P = (t, a, d) => cl((t - a) / d);
 const oC = x => 1 - Math.pow(1 - x, 3);
-const oB = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const oB = x => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
 const ioC = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const lerp = (a, b, p) => a + (b - a) * p;
+const $ = s => document.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const CUES = []; const cue = (t, type) => CUES.push({ t: +t.toFixed(3), type });
+const fmt = (n, d = 0) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const seg = new Intl.Segmenter('th', { granularity: 'grapheme' });
+const graphemes = s => [...seg.segment(s)].map(x => x.segment);
 
-// deterministic RNG
-let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+/* ================= mascot (pixel grid from web/frontend/public/khunquant-logo.png, 13x11) ================= */
+const C = { B: '#5c6bc0', D: '#3e4da0', W: '#e8eaf6' };
+const px = (cells, col) => cells.map(([r, c]) => `<rect x="${c * 10}" y="${r * 10}" width="10.4" height="10.4" fill="${col}"/>`).join('');
+const rowCells = (r, c0, c1) => { const a = []; for (let c = c0; c <= c1; c++) a.push([r, c]); return a; };
+function mascotSVG() {
+  const body = [...rowCells(1, 3, 9), ...rowCells(2, 2, 10), [3, 2], [3, 3], [3, 6], [3, 7], [3, 10], [4, 2], [4, 3], [4, 6], [4, 7], [4, 10],
+    ...rowCells(5, 2, 10), ...rowCells(6, 2, 10), ...rowCells(7, 2, 10), ...rowCells(8, 2, 10), [9, 3], [9, 4], [9, 8], [9, 9]];
+  return `<svg viewBox="-2 0 134 112" shape-rendering="crispEdges">
+    ${px(body, C.B)}${px([[9, 5], [9, 6], [9, 7]], C.D)}
+    <g class="eyes">${px([[3, 4], [4, 4], [4, 5], [3, 8], [4, 8], [4, 9]], C.D)}${px([[3, 5], [3, 9]], C.W)}</g>
+    <g class="armL">${px([[5, 0], [5, 1]], C.B)}${px([[6, 0]], C.D)}</g>
+    <g class="armR0">${px([[6, 11], [6, 12]], C.B)}${px([[5, 12]], C.D)}</g>
+    <g class="armR1" style="display:none">${px([[5, 11], [5, 12]], C.B)}${px([[4, 12], [3, 12]], C.D)}</g>
+    ${px([[10, 3], [10, 4], [10, 8], [10, 9]], C.D)}</svg>`;
+}
+$$('[data-mascot]').forEach(e => e.innerHTML = mascotSVG());
+$('#hero').innerHTML = mascotSVG(); $('#peek').innerHTML = mascotSVG();
+function poseMascot(el, t, { wave = false, blinkSeed = 0 } = {}) {
+  const blink = ((t + blinkSeed) % 2.6) > 2.47;
+  el.querySelector('.eyes').setAttribute('transform', blink ? 'translate(0,44) scale(1,0.12) translate(0,-44)' : '');
+  const up = wave && Math.floor(t * 6) % 2 === 0;
+  el.querySelector('.armR0').style.display = up ? 'none' : '';
+  el.querySelector('.armR1').style.display = up ? '' : 'none';
+}
 
-// background tickers
-const tickData = ['BTC ▲ 2.1%','NVDA ▲ 6.0%','PTT ▼ 0.4%','ETH ▲ 1.3%','AAPL ▲ 0.8%','KBANK ▲ 1.1%','SOL ▲ 3.2%','TSLA ▼ 1.9%','SET ▲ 0.9%','AOT ▲ 0.6%','MSFT ▲ 0.5%','BNB ▼ 0.7%','CPALL ▲ 0.3%','DOGE ▲ 4.4%'];
-const ticks = tickData.map((s, i) => {
-  const el = document.createElement('div'); el.className = 'tick ' + (s.includes('▲') ? 'up' : 'dn'); el.textContent = s;
-  document.getElementById('ticks').appendChild(el);
-  return { el, x: 40 + rnd() * 820, y: rnd() * 1920, v: 30 + rnd() * 50, o: .12 + rnd() * .18 };
-});
+/* ================= status bars ================= */
+function statusHTML(time, col) {
+  return `<span style="color:${col}">${time}</span><span style="display:flex;gap:10px;align-items:center">
+  <svg width="38" height="24" viewBox="0 0 38 24">${[0, 1, 2, 3].map(i => `<rect x="${i * 10}" y="${18 - i * 5}" width="7" height="${6 + i * 5}" rx="1.5" fill="${col}"/>`).join('')}</svg>
+  <svg width="34" height="24" viewBox="0 0 34 24" fill="${col}"><path d="M17 22l-4.5-4.6a6.4 6.4 0 0 1 9 0z"/><path d="M8.8 13.7a11.6 11.6 0 0 1 16.4 0l-2.6 2.6a8 8 0 0 0-11.2 0z"/><path d="M4.8 9.6a17.4 17.4 0 0 1 24.4 0l-2.6 2.6a13.6 13.6 0 0 0-19.2 0z"/></svg>
+  <svg width="54" height="26" viewBox="0 0 54 26"><rect x="1" y="2" width="44" height="22" rx="7" fill="none" stroke="${col}" stroke-opacity=".45" stroke-width="2"/><rect x="4.5" y="5.5" width="33" height="15" rx="4" fill="${col}"/><rect x="48" y="9" width="3.5" height="8" rx="1.5" fill="${col}" fill-opacity=".45"/></svg></span>`;
+}
+$('#st1').innerHTML = statusHTML('9:41', '#111'); $('#st2').innerHTML = statusHTML('14:05', '#fff');
 
-// letters
-$$('[data-letters]').forEach(el => { el.innerHTML = [...el.textContent].map(c => `<span>${c}</span>`).join(''); });
+/* ================= keyboard (Thai Kedmanee, iOS style) ================= */
+const KROWS = [['ๆ', 'ไ', 'ำ', 'พ', 'ะ', 'ั', 'ี', 'ร', 'น', 'ย', 'บ', 'ล'], ['ฟ', 'ห', 'ก', 'ด', 'เ', '้', '่', 'า', 'ส', 'ว', 'ง'], ['ผ', 'ป', 'แ', 'อ', 'ิ', 'ื', 'ท', 'ม', 'ใ', 'ฝ']];
+(function buildKB() {
+  let h = '';
+  h += `<div class="kr">${KROWS[0].map(k => `<div class="k">${k}</div>`).join('')}</div>`;
+  h += `<div class="kr">${KROWS[1].map(k => `<div class="k">${k}</div>`).join('')}</div>`;
+  h += `<div class="kr"><div class="k sp" style="flex-basis:76px">⇧</div>${KROWS[2].map(k => `<div class="k">${k}</div>`).join('')}<div class="k sp" style="flex-basis:76px">⌫</div></div>`;
+  h += `<div class="kr"><div class="k sp" style="flex-basis:96px">123</div><div class="k sp" style="flex-basis:80px">☺</div><div class="k" id="kspace" style="flex:1;font-size:26px">เว้นวรรค</div><div class="k sp" style="flex-basis:150px">ขึ้นบรรทัด</div></div>`;
+  h += `<div class="kbot"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#3b3d44" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#3b3d44" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>`;
+  $('#kb').innerHTML = h;
+  $$('#kb .k').forEach(k => { const p = document.createElement('div'); p.className = 'pop'; p.textContent = k.textContent.length <= 2 ? k.textContent : ''; k.appendChild(p); });
+})();
+const letterKeys = $$('#kb .k').filter(k => !k.classList.contains('sp') && k.id !== 'kspace');
 
-// chart data
-(function buildChart() {
-  const svg = document.getElementById('chart'); let p = 150, html = '', ema = [], e = 150; seed = 42;
-  const n = 30, w = 680 / n;
-  const cs = [];
-  for (let i = 0; i < n; i++) {
-    const o = p; const c = o + (rnd() - 0.38) * 14; const h = Math.max(o, c) + rnd() * 7; const l = Math.min(o, c) - rnd() * 7;
-    p = c; cs.push({ o, c, h, l }); e = e + (c - e) * 0.2; ema.push(e);
+/* ================= chat content ================= */
+const BTN = (id, txt) => `<div class="fbtn" id="${id}"><span class="ripple"></span>${txt}</div>`;
+const CARDS = {
+  alert: `<div class="card"><div class="in">
+    <div class="ct">🔔 แจ้งเตือนราคา <span class="pill" style="margin-left:auto">BTC/USDT</span></div>
+    <div class="row"><span class="big">$59,840</span><span class="dn" style="font:700 34px Kanit">▼ 2.1%</span></div>
+    <div class="sub">หลุด $60,000 · RSI(14) = <b style="color:var(--ink)">28.6</b></div></div></div>`,
+  news: `<div class="card"><div class="in">
+    <div class="ct">📰 ข่าวเด่นวันนี้</div>
+    <div>🇺🇸 <b>NVDA</b> งบดีกว่าคาด <span class="up">+6%</span></div>
+    <div>🇹🇭 <b>SET</b> ปิดบวก <span class="up">+12 จุด</span> แบงก์นำ</div>
+    <div>₿ <b>BTC ETF</b> เงินไหลเข้า 3 วันติด</div></div></div>`,
+  port: `<div class="card"><div class="in">
+    <div class="ct">📊 พอร์ตรวม <span class="pill">5 บัญชี</span></div>
+    <div class="row"><span class="big" id="cntPort">฿0</span><span class="up" style="font:700 32px Kanit">▲ 2.4%</span></div>
+    <div class="stack"><i id="sg1" style="background:#1b1a3a"></i><i id="sg2" style="background:#5c6bc0"></i><i id="sg3" style="background:#a9b2ec"></i></div>
+    <div class="leg3">
+      <div class="row"><span><i class="sw" style="background:#1b1a3a"></i>หุ้นไทย <span class="sub">Settrade</span></span><b>38%</b></div>
+      <div class="row"><span><i class="sw" style="background:#5c6bc0"></i>หุ้นเทค US <span class="sub">Webull</span></span><b>34%</b></div>
+      <div class="row"><span><i class="sw" style="background:#a9b2ec"></i>คริปโต <span class="sub">Binance · Bitkub</span></span><b>28%</b></div>
+    </div>
+    <div class="hr"></div>
+    <div class="row"><span class="sub">กำไรยังไม่รับรู้</span><b class="up">+฿86,240</b></div></div></div>`,
+  dca: `<div class="card"><div class="in">
+    <div class="ct">⚡ ตั้งแผน DCA แล้ว <span class="pill" style="margin-left:auto">● ทำงาน</span></div>
+    <div class="row"><b>DCA IN · BTC</b><span class="sub">Bitkub</span></div>
+    <div class="sub">฿5,000 ทุกวันจันทร์ · เมื่อ RSI(14) &lt; 40</div>
+    <div class="weeks" id="weeks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="hr"></div>
+    <div class="row"><b>DCA OUT · ETH</b><span class="sub">Binance</span></div>
+    <div class="sub">ทยอยขาย 10% ทุกครั้งที่ราคาขึ้น 15%</div>
+    <div class="ladder" id="ladder"><i style="height:35%">+15%</i><i style="height:55%">+30%</i><i style="height:78%">+45%</i><i style="height:100%">+60%</i></div>
+    </div>${BTN('btnDelta', '⚖️ เปิด Delta-Neutral')}${BTN('btnChartA', '📈 วิเคราะห์กราฟ')}</div>`,
+  delta: `<div class="card"><div class="in">
+    <div class="ct">⚖️ Delta-Neutral · SOL <span class="pill" style="margin-left:auto">● ทำงาน</span></div>
+    <div class="legs">
+      <div class="leg"><span class="tag" style="background:#dcfce7;color:#15803d">LONG</span><span>Spot <b>+50 SOL</b></span><span class="sub" style="margin-left:auto">Binance</span></div>
+      <div class="leg"><span class="tag" style="background:#ffe4e6;color:#be123c">SHORT</span><span>Perp <b>−50 SOL</b></span><span class="sub" style="margin-left:auto">OKX</span></div>
+    </div>
+    <svg width="488" height="110" viewBox="0 0 488 110" style="display:block;margin:4px auto">
+      <polygon points="244,58 220,106 268,106" fill="#c7cce8"/>
+      <g id="beam"><rect x="54" y="50" width="380" height="10" rx="5" fill="#1b1a3a"/>
+        <rect x="40" y="16" width="56" height="34" rx="9" fill="#16a34a"/><text x="68" y="41" text-anchor="middle" font-family="Kanit" font-weight="700" font-size="22" fill="#fff">L</text>
+        <rect x="392" y="16" width="56" height="34" rx="9" fill="#e11d48"/><text x="420" y="41" text-anchor="middle" font-family="Kanit" font-weight="700" font-size="22" fill="#fff">S</text></g></svg>
+    <div class="row"><span>Net Δ <b style="font:700 36px Kanit">0.00</b></span><span>Funding APR <b class="up" style="font:700 36px Kanit" id="cntApr">0%</b></span></div>
+    </div>${BTN('btnChart', '📈 วิเคราะห์กราฟ NVDA')}${BTN('btnPnl', '📓 สรุปกำไรเดือนนี้')}</div>`,
+  chart: `<div class="card"><div class="in">
+    <div class="ct">📈 NVDA · 1D <span class="pill" style="margin-left:auto">แนวโน้มขาขึ้น</span></div>
+    <svg id="chart" width="488" height="250" viewBox="0 0 488 250" style="display:block"></svg>
+    <div class="row" style="font-size:25px;margin-top:6px"><span>RSI <b>58</b></span><span>MACD <b class="up">ตัดขึ้น</b></span><span>EMA50 <b class="up">ยืนเหนือ</b></span></div></div></div>`,
+  pnl: `<div class="card"><div class="in">
+    <div class="ct">📓 บันทึกกำไร · ตุลาคม</div>
+    <div class="row"><span class="big up" id="cntPnl">+฿0</span><span class="sub" style="text-align:right">23 ไม้<br>Win rate 68%</span></div></div></div>`,
+};
+// k: date | bot | me | card ; t: appear time ; dots: typing dots for 0.5s before ; type: [t0,t1] typed into the input box
+const ITEMS = [
+  { k: 'date', t: -1, html: 'วันนี้' },
+  { k: 'bot', t: -1, html: 'สวัสดีครับ 👋 ผม<b>คุณควอนต์</b> ผู้ช่วยดูแลพอร์ตของคุณ มีอะไรให้ช่วยบอกได้เลย', time: '09:40' },
+  { k: 'me', t: 6.5, type: [4.2, 6.3], html: 'เตือนผมถ้า BTC หลุด 60,000 หรือ RSI ต่ำกว่า 30', time: '09:41' },
+  { k: 'bot', t: 7.45, dots: 1, html: '✅ ตั้งเตือนแล้วครับ! ผมจะเฝ้าตลาดให้ 24 ชม. แล้วแจ้งทันทีทาง LINE', time: '09:41' },
+  { k: 'card', t: 11.85, html: CARDS.alert, time: '14:05', silent: 1 },
+  { k: 'card', t: 11.9, html: CARDS.news, time: '14:05', silent: 1 },
+  { k: 'me', t: 14.05, type: [13.05, 13.85], html: 'สรุปพอร์ตทั้งหมดให้หน่อย', time: '14:06' },
+  { k: 'card', t: 14.7, dots: 1, html: CARDS.port, time: '14:06' },
+  { k: 'me', t: 18.45, type: [16.7, 18.25], html: 'ตั้ง DCA ซื้อ BTC และทยอยขาย ETH ให้หน่อย', time: '14:07' },
+  { k: 'card', t: 19.0, dots: 1, html: CARDS.dca, time: '14:07' },
+  { k: 'me', t: 21.1, html: '⚖️ เปิด Delta-Neutral SOL ทุน $10,000', time: '14:08' },
+  { k: 'card', t: 21.75, dots: 1, html: CARDS.delta, time: '14:08' },
+  { k: 'me', t: 24.2, html: '📈 วิเคราะห์กราฟ NVDA', time: '14:09' },
+  { k: 'card', t: 24.75, dots: 1, html: CARDS.chart, time: '14:09' },
+  { k: 'card', t: 25.95, dots: 1, html: CARDS.pnl, time: '14:09' },
+];
+const content = $('#content');
+ITEMS.forEach(it => {
+  const el = document.createElement('div');
+  if (it.k === 'date') { el.className = 'date'; el.textContent = it.html; }
+  else if (it.k === 'me') { el.className = 'it me'; el.innerHTML = `<div class="bub">${it.html}</div><div class="meta">อ่านแล้ว<br>${it.time}</div>`; }
+  else {
+    el.className = 'it'; const body = it.k === 'card' ? it.html : `<div class="bub">${it.html}</div>`;
+    el.innerHTML = `<div class="av" data-mascot></div>${body}<div class="meta">${it.time || ''}</div>`;
+    if (it.dots) { const d = document.createElement('div'); d.className = 'dots'; d.innerHTML = '<i></i><i></i><i></i>'; el.appendChild(d); }
   }
-  const all = cs.flatMap(k => [k.h, k.l]); const mx = Math.max(...all), mn = Math.min(...all);
-  const Y = v => 270 - (v - mn) / (mx - mn) * 250;
-  html += `<line class="sr" x1="0" x2="680" y1="${Y(mn + (mx - mn) * 0.12)}" y2="${Y(mn + (mx - mn) * 0.12)}" stroke="#22c55e" stroke-dasharray="10 8" stroke-width="3"/>`;
-  html += `<line class="sr" x1="0" x2="680" y1="${Y(mx - (mx - mn) * 0.04)}" y2="${Y(mx - (mx - mn) * 0.04)}" stroke="#f43f5e" stroke-dasharray="10 8" stroke-width="3"/>`;
-  html += `<text class="sr" x="8" y="${Y(mn + (mx - mn) * 0.12) - 10}" fill="#22c55e" font-family="Kanit" font-size="24" font-weight="600">แนวรับ</text>`;
-  html += `<text class="sr" x="8" y="${Y(mx - (mx - mn) * 0.04) + 30}" fill="#f43f5e" font-family="Kanit" font-size="24" font-weight="600">แนวต้าน</text>`;
-  cs.forEach((k, i) => {
-    const x = i * w + w / 2, col = k.c >= k.o ? '#22c55e' : '#f43f5e';
-    html += `<g class="cdl"><line x1="${x}" x2="${x}" y1="${Y(k.h)}" y2="${Y(k.l)}" stroke="${col}" stroke-width="3"/><rect x="${x - w * 0.32}" y="${Y(Math.max(k.o, k.c))}" width="${w * 0.64}" height="${Math.max(3, Math.abs(Y(k.o) - Y(k.c)))}" fill="${col}" rx="2"/></g>`;
-  });
-  html += `<polyline id="ema" points="${ema.map((v, i) => `${i * w + w / 2},${Y(v)}`).join(' ')}" fill="none" stroke="#fbbf24" stroke-width="4" stroke-dasharray="2000" stroke-dashoffset="2000"/>`;
+  it.el = el; content.appendChild(el);
+});
+$$('#content [data-mascot]').forEach(e => e.innerHTML = mascotSVG());
+
+(function buildChart() {
+  const svg = $('#chart'); let p = 150, html = '', e = 150; seed = 42; const n = 30, w = 488 / n, cs = [], ema = [];
+  for (let i = 0; i < n; i++) { const o = p, c = o + (rnd() - 0.37) * 14, h = Math.max(o, c) + rnd() * 7, l = Math.min(o, c) - rnd() * 7; p = c; cs.push({ o, c, h, l }); e += (c - e) * 0.2; ema.push(e); }
+  const all = cs.flatMap(k => [k.h, k.l]), mx = Math.max(...all), mn = Math.min(...all), Y = v => 235 - (v - mn) / (mx - mn) * 220;
+  const ys = Y(mn + (mx - mn) * .1), yr = Y(mx - (mx - mn) * .03);
+  html += `<g class="sr"><line x1="0" x2="488" y1="${ys}" y2="${ys}" stroke="#16a34a" stroke-dasharray="8 7" stroke-width="2.5"/><text x="4" y="${ys - 8}" fill="#16a34a" font-family="Kanit" font-size="21" font-weight="600">แนวรับ $172</text>
+    <line x1="0" x2="488" y1="${yr}" y2="${yr}" stroke="#e11d48" stroke-dasharray="8 7" stroke-width="2.5"/><text x="4" y="${yr + 26}" fill="#e11d48" font-family="Kanit" font-size="21" font-weight="600">แนวต้าน $195</text></g>`;
+  cs.forEach((k, i) => { const x = i * w + w / 2, col = k.c >= k.o ? '#16a34a' : '#e11d48';
+    html += `<g class="cdl"><line x1="${x}" x2="${x}" y1="${Y(k.h)}" y2="${Y(k.l)}" stroke="${col}" stroke-width="2.4"/><rect x="${x - w * .32}" y="${Y(Math.max(k.o, k.c))}" width="${w * .64}" height="${Math.max(3, Math.abs(Y(k.o) - Y(k.c)))}" fill="${col}" rx="1.5"/></g>`; });
+  html += `<polyline id="ema" points="${ema.map((v, i) => `${i * w + w / 2},${Y(v)}`).join(' ')}" fill="none" stroke="#5c6bc0" stroke-width="3.5" stroke-dasharray="1400" stroke-dashoffset="1400"/>`;
   svg.innerHTML = html;
 })();
 
-function fmt(n, dec) { return n.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }); }
+/* lock-screen push notifications from KhunQuant */
+const NOTIFS = [
+  { t: 8.95, body: '🔔 BTC หลุด $60,000 แล้ว! ราคา $59,840 · RSI 28.6' },
+  { t: 9.75, body: '📰 NVDA งบดีกว่าคาด หุ้นพุ่ง +6% หลังปิดตลาด' },
+  { t: 10.55, body: '🇹🇭 SET ปิดบวก 12 จุด กลุ่มแบงก์นำตลาด' },
+  { t: 11.3, body: '⚡ DCA ซื้อ BTC ฿5,000 สำเร็จ (RSI 28)' },
+];
+const LICON = `<svg width="46" height="46" viewBox="0 0 24 24"><path d="M12 3.5c-5 0-9 3.2-9 7.2 0 3.6 3.2 6.6 7.5 7.1-.2.9-.6 2-1 2.7 2.3-.6 5.2-2.4 6.9-4 2.8-1.3 4.6-3.5 4.6-5.8 0-4-4-7.2-9-7.2z" fill="#fff"/></svg>`;
+NOTIFS.forEach(n => { const el = document.createElement('div'); el.className = 'nt'; el.innerHTML = `<span class="ripple"></span><div class="lic">${LICON}</div><div class="tx"><b>KhunQuant<span>LINE · ตอนนี้</span></b>${n.body}</div>`; n.el = el; $('#notifs').prepend(el); });
 
-// timing windows; returns visibility 0..1 with fades
-function win(t, s, e, f = .35) { return Math.min(s <= 0 ? 1 : P(t, s, f), 1 - P(t, e - f, f)); }
+/* ================= timeline + sound cues ================= */
+const KB_WIN = [[3.85, 6.6], [12.75, 14.15], [16.35, 18.6]];
+const kbProg = t => Math.max(0, ...KB_WIN.map(([a, b]) => Math.min(ioC(P(t, a, .32)), 1 - ioC(P(t, b, .3)))));
+const TYPES = ITEMS.filter(i => i.type).map(i => {
+  const g = graphemes(i.html); const [t0, t1] = i.type; const times = []; seed = Math.round(t0 * 100);
+  for (let k = 0; k < g.length; k++) times.push(t0 + (t1 - t0) * (k + rnd() * .5) / g.length);
+  times.forEach(tt => cue(tt, 'key'));
+  cue(i.t - .05, 'send');
+  return { g, times, item: i };
+});
+KB_WIN.forEach(([a]) => cue(a, 'kbup'));
+ITEMS.forEach(i => { if (i.t > 0 && i.k !== 'me' && !i.silent) cue(i.t, 'recv'); });
+ITEMS.forEach(i => { if (i.t > 0 && i.k === 'me' && !i.type) cue(i.t, 'send'); });
+NOTIFS.forEach(n => cue(n.t, 'chime'));
+const TAPS = [{ t: 11.75, sel: () => NOTIFS[0].el }, { t: 20.95, sel: () => $('#btnDelta') }, { t: 24.0, sel: () => $('#btnChart') }];
+TAPS.forEach(x => cue(x.t, 'tap'));
+cue(0.2, 'pop'); cue(0.7, 'bubble'); cue(1.8, 'bubble'); cue(2.85, 'jump'); cue(2.95, 'whoosh');
+cue(8.2, 'lock'); cue(11.95, 'unlock'); cue(26.7, 'whoosh'); cue(26.85, 'jump'); cue(27.3, 'sparkle');
+const PEEKS = [{ a: 9.0, b: 11.6, y: 620, say: '!' }, { a: 15.1, b: 16.2, y: 1240, say: '👍' }, { a: 22.6, b: 23.4, y: 1240, say: '✨' }, { a: 25.3, b: 26.5, y: 1240, say: '📈' }];
+PEEKS.forEach(p => cue(p.a + .05, 'peek'));
+const TITLES = [[3.6, 8.1, '01', 'แจ้งเตือนราคา'], [8.25, 12.5, '02', 'เด้งเตือนถึงมือ · หุ้น & คริปโต'], [12.65, 16.25, '03', 'ทุกพอร์ตในแชทเดียว'], [16.35, 20.45, '04', 'DCA In · DCA Out'], [20.55, 23.55, '05', 'Delta-Neutral'], [23.65, 26.6, '06', 'วิเคราะห์กราฟ · จดกำไร']];
+CUES.sort((a, b) => a.t - b.t);
+window.CUES = CUES;
 
+/* ================= layout measurement + scroll ================= */
+const SCREEN_H = 1476, HOME = 34, INBAR = 104, KB_H = 560, VP_TOP = 200;
+let M = null, CAM = null, LOGO = { x: 540, y: 640 };
+const vpH = t => SCREEN_H - HOME - INBAR - kbProg(t) * (KB_H - HOME) - VP_TOP;
+function target(t) {
+  let bottom = 0;
+  ITEMS.forEach((it, i) => {
+    if (!(it.t <= t || (it.dots && t >= it.t - .5))) return;
+    bottom = Math.max(bottom, M[i].top + (it.t <= t ? M[i].h : M[i].dh));
+  });
+  return Math.max(0, bottom + 26 - vpH(t));
+}
+function scrollAt(t) { let s = 0; const N = 12; for (let k = 0; k < N; k++) s += target(t - k * .035); return s / N; }
+function scrollSmooth(t) { let s = 0; const N = 6; for (let k = 0; k < N; k++) s += scrollAt(t - k * .04); return s / N; }
+function worldOf(el, t) {
+  const c0 = content.getBoundingClientRect(), r = el.getBoundingClientRect();
+  return { x: M.left0 + (r.left - c0.left) + r.width / 2, y: M.top0 + (r.top - c0.top) - scrollSmooth(t) + r.height / 2 };
+}
+function setup() {
+  $('#world').style.transform = 'none'; content.style.transform = 'none';
+  ITEMS.forEach(i => { i.el.style.transform = 'none'; });
+  const c0 = content.getBoundingClientRect();
+  M = ITEMS.map(i => { const r = i.el.getBoundingClientRect(); return { top: r.top - c0.top, h: r.height, dh: 76 }; });
+  M.top0 = c0.top; M.left0 = c0.left;
+  const lr = $('#logoWrap').getBoundingClientRect(); LOGO = { x: lr.left + lr.width / 2, y: lr.top + lr.height / 2 };
+  // camera keyframes: [t, cx, cy, scale]
+  const D = [540, 960, 1], TY = [540, 1060, 1.6], LK = [540, 860, 1.12];
+  const b1 = worldOf($('#btnDelta'), 20.9), b2 = worldOf($('#btnChart'), 23.95);
+  const BZ1 = [540, b1.y - 80, 1.5], BZ2 = [540, b2.y - 80, 1.5];
+  CAM = [[0, ...D], [3.85, ...D], [4.35, ...TY], [6.5, ...TY], [7.15, ...D], [8.3, ...D], [8.9, ...LK], [11.6, ...LK], [12.3, ...D],
+    [12.7, ...D], [13.1, ...TY], [14.05, ...TY], [14.6, ...D], [15.4, 540, 1000, 1.06], [16.3, 540, 1000, 1.06], [16.75, ...TY], [18.45, ...TY], [19.0, ...D],
+    [20.35, ...D], [20.8, ...BZ1], [21.15, ...BZ1], [21.7, ...D], [23.45, ...D], [23.85, ...BZ2], [24.2, ...BZ2], [24.7, ...D], [26.6, ...D], [27.3, 540, 960, .9], [31, 540, 960, .9]];
+}
+function camAt(t) {
+  let i = 0; while (i < CAM.length - 2 && t > CAM[i + 1][0]) i++;
+  const a = CAM[i], b = CAM[i + 1], p = ioC(cl((t - a[0]) / (b[0] - a[0])));
+  return [lerp(a[1], b[1], p), lerp(a[2], b[2], p), Math.exp(lerp(Math.log(a[3]), Math.log(b[3]), p))];
+}
+window.setup = setup;
+
+/* ================= render(t) ================= */
 function render(t) {
-  // background
-  document.getElementById('b1').style.transform = `translate(${Math.sin(t * .4) * 120}px,${Math.cos(t * .3) * 160}px)`;
-  document.getElementById('b2').style.transform = `translate(${Math.cos(t * .35) * 140}px,${Math.sin(t * .45) * 120}px)`;
-  document.getElementById('b3').style.transform = `translate(${Math.sin(t * .5 + 1) * 200}px,${Math.cos(t * .25) * 200}px)`;
-  ticks.forEach(k => { const y = ((k.y - t * k.v) % 2100 + 2100) % 2100 - 100; k.el.style.transform = `translate(${k.x}px,${y}px)`; k.el.style.opacity = k.o; });
+  // phone entrance / exit
+  const rise = oC(P(t, 2.9, .75)), exit = ioC(P(t, 26.7, .6));
+  $('#phoneWrap').style.transform = `translateY(${(1 - rise) * 1750 + exit * 260}px) scale(${1 - exit * .25})`;
+  $('#phoneWrap').style.opacity = 1 - exit;
 
-  // generic pop-ins
-  $$('[data-t]').forEach(el => {
-    const tin = +el.dataset.t; const p = P(t, tin, .45);
-    const big = el.hasAttribute('data-pop');
-    const e = big ? oB(p) : oB(p) * 0.6 + oC(p) * 0.4;
-    el.style.opacity = cl(p * 2.2);
-    el.style.transform = big ? `scale(${0.3 + 0.7 * e})` : `translateY(${(1 - e) * 46}px) scale(${0.94 + 0.06 * e})`;
-    if (el.hasAttribute('data-typing')) {
-      let ty = el.querySelector('.typing');
-      if (!ty) { ty = document.createElement('div'); ty.className = 'typing'; ty.innerHTML = '<i></i><i></i><i></i>'; el.prepend(ty); }
-      const tv = t >= tin - .55 && t < tin;
-      ty.style.opacity = tv ? 1 : 0;
-      ty.style.transform = `scale(${0.8 + 0.2 * oB(P(t, tin - .55, .2))})`;
-      [...ty.children].forEach((d, i) => d.style.transform = `translateY(${Math.sin(t * 14 - i * 1.1) * -6}px)`);
-      if (tv) el.style.opacity = 1, el.style.transform = 'none';
-      [...el.children].forEach(c => { if (c !== ty) c.style.opacity = t >= tin ? 1 : 0; });
+  // keyboard + chat scroll
+  const kb = kbProg(t);
+  $('#kb').style.transform = `translateY(${(1 - kb) * 100}%)`;
+  $('#inbar').style.bottom = (HOME + kb * (KB_H - HOME)) + 'px';
+  $('#vp').style.height = vpH(t) + 'px';
+  content.style.transform = `translateY(${-scrollSmooth(t)}px)`;
+
+  ITEMS.forEach(it => {
+    const el = it.el; if (it.t < 0) return;
+    const p = P(t, it.t, .4), e = oB(p), dots = el.querySelector('.dots');
+    const showDots = it.dots && t >= it.t - .5 && t < it.t;
+    [...el.children].forEach(c => { if (c !== dots) c.style.opacity = t >= it.t ? 1 : 0; });
+    if (dots) {
+      dots.style.opacity = showDots ? 1 : 0;
+      [...dots.children].forEach((d, k) => d.style.transform = `translateY(${Math.sin(t * 13 - k * 1.1) * -5}px)`);
+      if (showDots) el.querySelector('.av').style.opacity = 1;
     }
+    el.style.opacity = (t >= it.t || showDots) ? 1 : 0;
+    el.style.transformOrigin = it.k === 'me' ? 'right bottom' : 'left top';
+    el.style.transform = t >= it.t ? `translateY(${(1 - oC(p)) * 26}px) scale(${.9 + .1 * e})` : 'none';
   });
 
-  // windows (scenes / headlines / screens)
-  $$('[data-s]').forEach(el => {
-    const s = +el.dataset.s, e = +el.dataset.e;
-    if (el.classList.contains('screen')) {
-      // slide transition between phone screens
-      const pin = s <= 0 ? 1 : ioC(P(t, s - .2, .45)), pout = ioC(P(t, e - .2, .45));
-      el.style.transform = `translateX(${(1 - pin) * 100 - pout * 100}%)`;
-      el.style.visibility = (t > s - .25 && t < e + .3) ? 'visible' : 'hidden';
-    } else {
-      const v = win(t, s, e);
-      el.style.opacity = v; el.style.visibility = v > 0 ? 'visible' : 'hidden';
-      if (el.classList.contains('hl')) el.style.transform = `translateY(${(1 - oC(P(t, s, .5))) * -30}px)`;
-    }
+  // typing into the input box
+  let typed = '', active = null;
+  TYPES.forEach(ty => { if (t >= ty.item.type[0] - .3 && t < ty.item.t) { active = ty; typed = ty.g.filter((_, k) => ty.times[k] <= t).join(''); } });
+  $('#typed').textContent = typed;
+  $('.ph').style.opacity = typed ? 0 : 1;
+  $('#caret').style.opacity = active && (typed || Math.floor(t * 2.4) % 2 === 0) ? 1 : 0;
+  const box = $('#inbox'), itx = $('#intext'), room = box.clientWidth - 48;
+  itx.style.transform = itx.scrollWidth > room ? `translateX(${room - itx.scrollWidth}px)` : 'none';
+  $('#sendb').style.background = typed ? '#06c755' : '#e5e7ee';
+  letterKeys.forEach(k => { k.classList.remove('on'); k.querySelector('.pop').style.opacity = 0; });
+  $('#kspace').classList.remove('on');
+  if (active) active.times.forEach((tt, k) => {
+    if (t < tt || t >= tt + .1) return;
+    const ch = active.g[k];
+    const key = ch === ' ' ? $('#kspace') : letterKeys.find(x => x.firstChild.textContent === ch[0]) || letterKeys[(ch.codePointAt(0) * 7) % letterKeys.length];
+    key.classList.add('on'); if (key.id !== 'kspace') key.querySelector('.pop').style.opacity = 1;
   });
 
-  // phone motion
-  const ph = document.getElementById('phone');
-  let ty = 0, rot = 0, sc = 1, op = 1;
-  const intro = oC(P(t, 0, .6)); sc *= 0.92 + 0.08 * intro;
-  if (t > 1.9 && t < 2.8) { const s = P(t, 1.9, .9); rot = Math.sin(t * 50) * 1.2 * s; }
-  const down = ioC(P(t, 2.7, .55)); ty += down * 1600; rot += down * 10;
-  const up = oC(P(t, 6.05, .7)); if (t >= 6.05) { ty = (1 - up) * 1600; rot = (1 - up) * -6; }
-  const out = ioC(P(t, 26.2, .5)); sc *= 1 - out * .35; op = 1 - out; ty += out * 300;
-  ph.style.transform = `translateY(${ty}px) rotate(${rot}deg) scale(${sc})`;
-  ph.style.opacity = op;
-  ph.style.visibility = (t > 3.3 && t < 6.0) || t > 26.8 ? 'hidden' : 'visible';
-
-  // letters
-  $$('[data-letters]').forEach(el => {
-    const t0 = +el.dataset.letters;
-    [...el.children].forEach((c, i) => { const p = P(t, t0 + i * .05, .4); c.style.opacity = cl(p * 2); c.style.transform = `translateY(${(1 - oB(p)) * 60}px)`; });
+  // lock screen
+  $('#black').style.opacity = t < 8.2 ? 0 : t < 8.4 ? P(t, 8.2, .12) : 1 - P(t, 8.4, .25);
+  const unlock = ioC(P(t, 11.95, .5));
+  $('#lock').style.display = t >= 8.35 && t < 12.5 ? 'block' : 'none';
+  $('#lock').style.transform = `translateY(${-unlock * 100}%)`;
+  $('#hb').style.background = t >= 8.35 && t < 12.2 ? '#fff' : '#111';
+  NOTIFS.forEach(n => {
+    const p = P(t, n.t, .45);
+    n.el.style.display = t >= n.t ? 'flex' : 'none';
+    n.el.style.opacity = cl(p * 2.5);
+    n.el.style.transform = `translateY(${(1 - oB(p)) * -60}px) scale(${.92 + .08 * oB(p)})`;
   });
-  // rings
-  $$('.ringwrap').forEach(rw => { const t0 = +rw.dataset.t; rw.querySelector('.ring').style.strokeDashoffset = 1420 * (1 - ioC(P(t, t0 + .1, .9))); });
-  // URL glow pulse
-  const url = document.querySelector('.url'); if (t > 29.2) url.style.boxShadow = `0 0 ${40 + Math.sin((t - 29.2) * 6) * 30}px rgba(34,211,238,.7)`;
 
-  // counters
-  $$('[data-count]').forEach(el => {
-    const to = +el.dataset.count, from = +el.dataset.cf, p = oC(P(t, +el.dataset.ct, +el.dataset.cd));
-    el.textContent = (el.dataset.pre || '') + fmt(from + (to - from) * p, +(el.dataset.dec || 0)) + (el.dataset.suf || '');
+  TAPS.forEach(x => {
+    const el = x.sel(), r = el.querySelector('.ripple'), p = P(t, x.t, .45);
+    r.style.opacity = t >= x.t && p < 1 ? (1 - p) : 0; r.style.transform = `scale(${1 + p * 16})`;
+    el.style.background = t >= x.t && t < x.t + .5 ? '#eef0fa' : '';
   });
-  // bars
-  $$('[data-w]').forEach(el => { el.style.width = (+el.dataset.w * 2.2 * oC(P(t, +el.dataset.bt, .7))) + '%'; });
-  // dca dots
-  $$('[data-dots]').forEach(el => { const t0 = +el.dataset.dots, d = +el.dataset.dd;
-    [...el.children].forEach((c, i) => { const on = t >= t0 + i * d; c.style.background = on ? (i === 3 || i === 6 ? '#3b3f74' : '#22c55e') : 'rgba(255,255,255,.07)'; c.textContent = on ? (i === 3 || i === 6 ? 'skip' : '✓') : ''; c.style.color = (i === 3 || i === 6) ? '#9aa0c8' : '#04210f'; c.style.transform = `scale(${on ? oB(P(t, t0 + i * d, .25)) : .8})`; }); });
-  // ladder
-  $$('[data-ladder]').forEach(el => { const t0 = +el.dataset.ladder, d = +el.dataset.ld;
-    [...el.children].forEach((c, i) => { const p = oC(P(t, t0 + i * d, .35)); c.style.background = p > .5 ? `linear-gradient(180deg,#fbbf24,#b45309)` : 'rgba(255,255,255,.08)'; c.style.transform = `scaleY(${0.3 + 0.7 * p})`; c.style.transformOrigin = 'bottom'; }); });
-  // delta-neutral beam
-  const beam = document.getElementById('beam'); const bp = P(t, 20.5, 1.0);
-  const ang = t < 20.7 ? -14 * P(t, 20.3, .2) : -14 * (1 - oB(P(t, 20.7, .7)));
-  beam.setAttribute('transform', `rotate(${ang} 330 68)`);
-  // chart
-  const cds = $$('#chart .cdl'); cds.forEach((c, i) => { const p = P(t, 23.8 + i * .028, .2); c.style.opacity = p; c.style.transform = `translateY(${(1 - p) * 20}px)`; });
-  document.getElementById('ema').style.strokeDashoffset = 2000 * (1 - oC(P(t, 24.0, .9)));
-  $$('#chart .sr').forEach(s => s.style.opacity = P(t, 24.6, .3));
+
+  // card internals
+  $('#cntPort').textContent = '฿' + fmt(1248500 * oC(P(t, 14.8, 1.1)));
+  [[38, '#sg1', 14.9], [34, '#sg2', 15.05], [28, '#sg3', 15.2]].forEach(([w, id, a]) => $(id).style.width = (w * oC(P(t, a, .5))) + '%');
+  $$('#weeks i').forEach((c, k) => { const a = 19.15 + k * .1, on = t >= a, skip = k === 3 || k === 6; c.style.background = on ? (skip ? '#c9cde0' : '#16a34a') : '#eef0f6'; c.textContent = on ? (skip ? '–' : '✓') : ''; c.style.transform = `scale(${on ? oB(P(t, a, .25)) : .85})`; });
+  $$('#ladder i').forEach((c, k) => { const p = oC(P(t, 19.5 + k * .14, .35)); c.style.transform = `scaleY(${.25 + .75 * p})`; c.style.background = p > .5 ? '#f59e0b' : '#eef0f6'; });
+  $('#beam').setAttribute('transform', `rotate(${t < 21.95 ? -13 : -13 * (1 - oB(P(t, 21.95, .8)))} 244 55)`);
+  $('#cntApr').textContent = fmt(14.6 * oC(P(t, 22.1, .9)), 1) + '%';
+  $$('#chart .cdl').forEach((c, k) => c.style.opacity = P(t, 24.85 + k * .027, .18));
+  $('#ema').style.strokeDashoffset = 1400 * (1 - oC(P(t, 25.0, .8)));
+  $('#chart .sr').style.opacity = P(t, 25.5, .3);
+  $('#cntPnl').textContent = '+฿' + fmt(18420 * oC(P(t, 26.0, .8)));
+
+  // camera
+  const [cx, cy, s] = camAt(t);
+
+  // hero mascot: intro, flies into the chat avatar, returns at the end and turns into the logo
+  const hero = $('#hero'), ratio = 112 / 134;
+  const intro = oB(P(t, .2, .5));
+  let hx = 540, hy = 840, hw = 440, hop = t < 2.85 ? -Math.abs(Math.sin((t - .2) * 3.4)) * 28 : 0;
+  const fly = P(t, 2.85, .65), fe = ioC(fly);
+  const avX = 299, avY = 370; // chat-header avatar centre in world coords
+  if (t >= 2.85) { hx = lerp(540, avX, fe); hy = lerp(840, avY, fe) - Math.sin(fly * Math.PI) * 240; hw = lerp(440, 48, fe); }
+  let lx = LOGO.x, ly = LOGO.y; // logo position is in screen space; convert to world
+  const fin = P(t, 26.85, .45);
+  if (t >= 26.85) { const wx = (lx - (540 - cx * s)) / s, wy = (ly - (960 - cy * s)) / s; hx = lerp(1250, wx, oC(fin)); hy = lerp(1100, wy, oC(fin)) - Math.sin(fin * Math.PI) * 280; hw = lerp(180, 320, fin); hop = 0; }
+  hero.style.width = hw + 'px'; hero.style.height = hw * ratio + 'px';
+  hero.style.left = (hx - hw / 2) + 'px'; hero.style.top = (hy - hw * ratio / 2 + hop) + 'px';
+  hero.style.transform = `scale(${t < 2.85 ? intro : 1})`;
+  hero.style.opacity = t < .2 ? 0 : (t >= 3.5 && t < 26.85) || t >= 27.32 ? 0 : 1;
+  poseMascot(hero, t, { wave: (t > .5 && t < 2.6) || t > 26.85 });
+  $('#shadowM').style.cssText = `left:360px;top:1060px;width:360px;height:60px;opacity:${t < 2.85 ? intro * (1 + hop / 60) : 1 - P(t, 2.85, .25)}`;
+  const s1 = P(t, .7, .35), s2 = P(t, 1.8, .35), sOut = P(t, 2.7, .2);
+  $('#say1').style.cssText = `left:540px;top:440px;transform:translate(-50%,0) scale(${.6 + .4 * oB(s1)});opacity:${cl(s1 * 2) * (1 - P(t, 1.75, .2))}`;
+  $('#say2').style.cssText = `left:540px;top:440px;transform:translate(-50%,0) scale(${.6 + .4 * oB(s2)});opacity:${cl(s2 * 2) * (1 - sOut)}`;
+  $('#nametag').style.cssText = `left:540px;top:1110px;transform:translateX(-50%);opacity:${P(t, .9, .4) * (1 - sOut)}`;
+  $('#hdr .av').style.opacity = t < 3.45 ? 0 : 1;
+
+  // mascot peeking out from behind the phone
+  const peek = $('#peek'), ps = $('#peekSay'); let pv = 0, pp = null;
+  PEEKS.forEach(p => { const v = Math.min(oB(P(t, p.a, .4)), 1 - ioC(P(t, p.b - .3, .3))); if (v > pv) { pv = v; pp = p; } });
+  if (pp && pv > .01) {
+    const w = 170; peek.style.width = w + 'px'; peek.style.height = w * ratio + 'px';
+    peek.style.left = (750 + pv * 130) + 'px'; peek.style.top = (pp.y + Math.sin(t * 6) * 6) + 'px';
+    peek.style.transform = `rotate(${(1 - pv) * 20 + 10}deg)`; peek.style.opacity = 1;
+    poseMascot(peek, t, { wave: true, blinkSeed: 1 });
+    const sp = P(t, pp.a + .25, .3);
+    ps.textContent = pp.say; ps.style.left = (870 + pv * 60) + 'px'; ps.style.top = (pp.y - 100) + 'px';
+    ps.style.opacity = cl(sp * 2) * cl(pv); ps.style.transform = `scale(${oB(sp)})`;
+  } else { peek.style.opacity = 0; ps.style.opacity = 0; }
+
+  $('#world').style.transform = `translate(${540 - cx * s}px,${960 - cy * s}px) scale(${s})`;
+
+  // section titles
+  let tv = 0, tt = null; TITLES.forEach(x => { const v = Math.min(oC(P(t, x[0], .35)), 1 - P(t, x[1] - .25, .25)); if (v > tv) { tv = v; tt = x; } });
+  tv *= cl((1.3 - s) / .2); // keep the title out of zoomed-in shots
+  $('#title').style.opacity = tv; $('#title').style.transform = `translateY(${(1 - tv) * -20}px)`;
+  if (tt) { $('#tnum').textContent = tt[2]; $('#ttxt').textContent = tt[3]; }
+  $('#foot').style.opacity = t > 3.6 && t < 26.7 ? 1 : 0;
+
+  // finale: flash + logo
+  const fl = P(t, 27.3, .45), f = $('#flash');
+  f.style.left = LOGO.x + 'px'; f.style.top = LOGO.y + 'px';
+  f.style.opacity = t >= 27.3 ? (1 - fl) * .95 : 0; f.style.transform = `scale(${1 + oC(fl) * 30})`;
+  const lg = oB(P(t, 27.32, .55));
+  $('#end').style.opacity = t >= 27.3 ? 1 : 0;
+  $('#logoWrap').style.transform = `scale(${lg}) rotate(${(1 - lg) * -40}deg)`;
+  const fadeUp = (id, a) => { const p = P(t, a, .45); $(id).style.opacity = cl(p * 2); $(id).style.transform = `translateY(${(1 - oC(p)) * 40}px)`; };
+  fadeUp('#wm', 27.6); fadeUp('#thn', 27.8); fadeUp('#tagl', 28.05); fadeUp('#chips', 28.35); fadeUp('#url', 28.65);
 }
 window.render = render;
+
 const q = new URLSearchParams(location.search);
-if (q.has('t')) render(+q.get('t'));
-else if (!q.has('static')) { const t0 = performance.now(); (function loop() { render(((performance.now() - t0) / 1000) % 30); requestAnimationFrame(loop); })(); }
+document.fonts.ready.then(() => {
+  setup();
+  if (q.has('t')) render(+q.get('t'));
+  else if (!q.has('static')) { const t0 = performance.now(); (function loop() { render(((performance.now() - t0) / 1000) % 30); requestAnimationFrame(loop); })(); }
+  window.READY = true;
+});
 </script>
 </body>
 </html>

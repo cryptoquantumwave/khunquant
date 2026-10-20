@@ -1,52 +1,47 @@
 1
 00:00:00,200 --> 00:00:02,800
 Markets move every second…
-can you keep up?
+let KhunQuant watch your portfolio.
 
 2
-00:00:03,100 --> 00:00:06,000
-Meet KhunQuant — your personal
-portfolio assistant, right in your chat.
+00:00:03,600 --> 00:00:06,300
+Just type in LINE
+what you want to be alerted about,
 
 3
-00:00:06,400 --> 00:00:08,700
-Just type in LINE or Telegram
-to set price alerts,
+00:00:06,500 --> 00:00:08,200
+and I'll watch the market 24/7.
 
 4
-00:00:08,800 --> 00:00:10,900
-or get news on tech stocks,
-Thai stocks and crypto — instantly.
+00:00:08,400 --> 00:00:12,400
+Price targets, tech stocks, Thai stocks, crypto news…
+pushed straight to your phone.
 
 5
-00:00:11,100 --> 00:00:15,300
-One question, every portfolio, every broker —
-plus rebalancing suggestions.
+00:00:12,700 --> 00:00:16,200
+Want the big picture? One question
+sums up every portfolio, every broker.
 
 6
-00:00:15,600 --> 00:00:17,500
-Set up DCA buys
-gated by RSI,
+00:00:16,400 --> 00:00:20,400
+Automatic DCA in and DCA out,
+gated by indicator signals.
 
 7
-00:00:17,600 --> 00:00:19,400
-or scale out to take profit — automatically.
-
-8
-00:00:19,600 --> 00:00:22,900
-Launch a delta-neutral strategy to earn funding
+00:00:20,600 --> 00:00:23,500
+Run delta-neutral to earn funding
 without betting on direction.
 
-9
-00:00:23,100 --> 00:00:26,300
+8
+00:00:23,700 --> 00:00:26,600
 Chart analysis on demand,
-and every trade's P&L logged for you.
+and every trade's P&L logged.
+
+9
+00:00:27,000 --> 00:00:28,600
+KhunQuant —
+your personal portfolio assistant.
 
 10
-00:00:26,600 --> 00:00:28,500
-KhunQuant. Easy to talk to,
-handles every portfolio.
-
-11
-00:00:28,600 --> 00:00:29,900
+00:00:28,700 --> 00:00:29,900
 Start at khunquant.com

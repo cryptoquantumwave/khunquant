@@ -1,12 +1,12 @@
 // Render promo.html to an MP4 (1080x1920, 30 fps) by stepping the timeline frame by frame.
 //
-//   node render.mjs                     -> khunquant-promo-30s.mp4
+//   node render.mjs                     -> build/video-only.mp4 (+ audio/cues.json)
 //   node render.mjs --stills 1,8,13     -> stills/t-<sec>.png only
 //
 // Requires playwright (Chromium) and ffmpeg on PATH.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -14,13 +14,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FPS = 30, DURATION = 30, W = 1080, H = 1920;
 const args = process.argv.slice(2);
 const stillsArg = args.includes('--stills') ? args[args.indexOf('--stills') + 1] : null;
-const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : join(here, 'khunquant-promo-30s.mp4');
+const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : join(here, 'build', 'video-only.mp4');
 
+mkdirSync(join(here, 'audio'), { recursive: true });
+mkdirSync(join(here, 'build'), { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 await page.goto(pathToFileURL(join(here, 'promo.html')).href + '?static');
-await page.evaluate(() => document.fonts.ready);
-await page.waitForTimeout(300);
+await page.waitForFunction(() => window.READY === true);
+await page.waitForTimeout(200);
+// sound-effect cue sheet, consumed by audio/make_audio.py
+writeFileSync(join(here, 'audio', 'cues.json'), '[\n' + (await page.evaluate(() => window.CUES)).map(c => JSON.stringify(c)).join(',\n') + '\n]\n');
 
 if (stillsArg) {
   mkdirSync(join(here, 'stills'), { recursive: true });

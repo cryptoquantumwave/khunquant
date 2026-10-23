@@ -59,7 +59,7 @@ Scenes are authored on their own clock, and the `WARP` table in `promo.html` map
 ./add-voiceover.sh vo.wav                 # -> khunquant-promo-60s_with-vo.mp4
 ```
 
-The script mixes `music.wav` (sidechain-ducked by the voice), `sfx.wav` and your VO onto the silent video, then normalises to -14 LUFS / -1.5 dBTP. The VO should start at 0:00 and follow `khunquant-promo-60s.th.srt`.
+The script mixes `music.wav` (sidechain-ducked by the voice), `sfx.wav` and your VO onto the silent video, then normalises to -14 LUFS / -1.5 dBTP. The voice is first levelled to -16 LUFS, and the music+SFX bed sits about 21 dB below it. If the bed is too loud or too quiet, override the gains: `MUSIC_DB=-8 SFX_DB=-12 ./add-voiceover.sh vo.wav`. The VO should start at 0:00 and follow `khunquant-promo-60s.th.srt`.
 In CapCut or Premiere you can instead put `khunquant-promo-60s.mp4` on the timeline and add the VO track. The bed is already quiet enough to talk over.
 
 ## Re-rendering

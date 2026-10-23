@@ -4,6 +4,7 @@ A 60-second vertical (1080×1920, 30 fps) motion-graphic promo with a minimal, l
 
 | File | What it is |
 |---|---|
+| `khunquant-promo-60s_with-vo.mp4` | **Final cut with the voice-over** (`audio/vo.wav`), music ducked under the voice, -14 LUFS |
 | `khunquant-promo-60s.mp4` | Final video with background music and SFX, **no voice**. Ready to drop a VO on top |
 | `khunquant-promo-60s_video-only.mp4` | Same picture, silent, for editors who build their own audio |
 | `khunquant-promo-60s_preview-th-subs.mp4` | Timing check only: the Thai SRT burned in |
@@ -46,6 +47,11 @@ The end card carries the disclaimer "KhunQuant เป็นเพียง AI ag
 Voice direction: friendly and confident, like a smart friend rather than a broker. Read คุณควอนต์ as "khun-quant" and DCA as "ดี-ซี-เอ". Each cue fits a normal Thai speaking pace.
 
 All prices, balances, orders and news are made up for the demo. A footer on screen says so ("ภาพจำลองเพื่อการสาธิต · ตัวเลขสมมติ · ไม่ใช่คำแนะนำการลงทุน").
+
+## Voice-over sync
+
+`audio/vo.wav` is the recorded voice-over. The text in `khunquant-promo-60s.th.srt` is the script supplied with it, unchanged except that the TTS spelling "คุณคว้อน" is written as "คุณควอนต์". Cue times were moved to the speech start/end points measured in the audio (silencedetect).
+Scenes are authored on their own clock, and the `WARP` table in `promo.html` maps video time to scene time so each beat lands on its line. Sound cues go through the same map. If the VO is re-recorded, adjust the `WARP` anchors and the SRT times, then run `./build.sh`.
 
 ## Adding the voice-over
 

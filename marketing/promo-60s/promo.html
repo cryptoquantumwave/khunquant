@@ -351,6 +351,17 @@ const fmt = (n, d = 0) => n.toLocaleString('en-US', { minimumFractionDigits: d, 
 const seg = new Intl.Segmenter('th', { granularity: 'grapheme' });
 const graphemes = s => [...seg.segment(s)].map(x => x.segment);
 const DURATION = 60;
+// Time warp onto the recorded voice-over (audio/vo.wav): [video time, scene time] anchors.
+// Scenes are authored on their own clock; render() and the sound cues go through this map.
+const WARP = [[0, 0], [8.0, 6.5], [9.35, 8.45], [10.65, 9.9], [11.2, 10.35], [11.75, 10.8], [12.85, 11.25], [13.35, 11.7], [13.75, 12.15], [14.3, 12.85],
+  [15.6, 14.3], [16.9, 15.45], [19.5, 18.1], [20.2, 19.05], [22.3, 19.8], [26.6, 24.0], [32.0, 27.9], [34.1, 31.6], [35.4, 33.7], [36.6, 35.3],
+  [40.55, 39.5], [44.0, 42.6], [46.0, 44.95], [48.2, 45.65], [52.0, 50.0], [55.3, 53.3], [60, 60]];
+function pw(x, from, to) {
+  if (x <= WARP[0][from]) return x;
+  for (let i = 1; i < WARP.length; i++) if (x <= WARP[i][from]) { const a = WARP[i - 1], b = WARP[i]; return a[to] + (b[to] - a[to]) * (x - a[from]) / (b[from] - a[from]); }
+  return x;
+}
+const sceneTime = v => pw(v, 0, 1), videoTime = sc => pw(sc, 1, 0);
 
 /* ================= mascot (pixel grid from web/frontend/public/khunquant-logo.png, 13x11) ================= */
 const C = { B: '#5c6bc0', D: '#3e4da0', W: '#e8eaf6' };
@@ -574,6 +585,7 @@ function buildCues() {
   [0, 1, 2, 3].forEach(k => cue(28.9 + k * .22, 'tick'));
   cue(53.3, 'whoosh'); cue(53.45, 'jump'); cue(53.9, 'sparkle');
   PEEKS.forEach(p => cue(p.a + .05, 'peek'));
+  CUES.forEach(c => c.t = +videoTime(c.t).toFixed(3));
   CUES.sort((a, b) => a.t - b.t);
   window.CUES = CUES;
 }
@@ -682,7 +694,7 @@ function dotsAnim(dots, t, show) {
   [...dots.children].forEach((d, k) => d.style.transform = `translateY(${Math.sin(t * 13 - k * 1.1) * -5}px)`);
 }
 
-function render(t) {
+function renderScene(t) {
   const [cx, cy, s] = camAt(t);
   const ratio = 112 / 134;
 
@@ -879,7 +891,7 @@ function render(t) {
   fadeUp('#wm', 54.2); fadeUp('#thn', 54.4); fadeUp('#tagl', 54.65); fadeUp('#chips', 55.35); fadeUp('#url', 55.7); fadeUp('#disc', 56.1);
   $$('#estrip .lg').forEach((e, i) => { const p = oB(P(t, 55.0 + i * .06, .4)); e.style.transform = `scale(${t >= 55 + i * .06 ? p : 0})`; });
 }
-window.render = render; window.DURATION = DURATION;
+window.render = v => renderScene(sceneTime(v)); window.DURATION = DURATION;
 
 const q = new URLSearchParams(location.search);
 (async () => {
@@ -888,8 +900,8 @@ const q = new URLSearchParams(location.search);
   await document.fonts.ready;
   await new Promise(r => setTimeout(r, 50));
   setup();
-  if (q.has('t')) render(+q.get('t'));
-  else if (!q.has('static')) { const t0 = performance.now(); (function loop() { render(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
+  if (q.has('t')) window.render(+q.get('t'));
+  else if (!q.has('static')) { const t0 = performance.now(); (function loop() { window.render(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
   window.READY = true;
 })();
 </script>

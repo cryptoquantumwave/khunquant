@@ -571,10 +571,13 @@ func TestCronTurn_MessageToolSuppressionStillWorks(t *testing.T) {
 	if got, err := cronTool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob = %q, %v, want ok", got, err)
 	}
-	want := []string{"other-chat: note to someone else", "chat-1: cron final other chat"}
+	// An autonomous turn may only message its own chat, so the send to another
+	// chat is refused: nothing reaches other-chat, and since nothing was sent to
+	// this chat either, the final response is still published.
+	want := []string{"chat-1: cron final other chat"}
 	if got := drain(); !equalStrings(got, want) {
-		t.Errorf("job that messaged a different chat published %q, want %q "+
-			"(a message elsewhere must not suppress the response)", got, want)
+		t.Errorf("job that tried to message a different chat published %q, want %q "+
+			"(the send must be refused and must not suppress the response)", got, want)
 	}
 
 	// Each job ran as a turn of its own, and nothing about either is kept.

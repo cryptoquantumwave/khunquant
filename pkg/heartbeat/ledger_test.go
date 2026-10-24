@@ -33,14 +33,14 @@ func TestLedger_HeartbeatMessageSendIsRecordedAndShownNextPrompt(t *testing.T) {
 	hs.ObserveMessageSends(mt)
 
 	// A heartbeat turn's send is recorded...
-	hbCtx := tools.WithToolOrigin(context.Background(), tools.OriginHeartbeat)
+	hbCtx := tools.WithToolOrigin(tools.WithToolContext(context.Background(), "telegram", "42"), tools.OriginHeartbeat)
 	if res := mt.Execute(hbCtx, map[string]any{
 		"content": "SOL is down 12%\ntoday", "channel": "telegram", "chat_id": "42",
 	}); res.IsError {
 		t.Fatalf("send failed: %s", res.ForLLM)
 	}
 	// ...a cron job's or an untagged turn's send through the same tool is not.
-	cronCtx := tools.WithToolOrigin(context.Background(), tools.OriginCron)
+	cronCtx := tools.WithToolOrigin(tools.WithToolContext(context.Background(), "telegram", "42"), tools.OriginCron)
 	mt.Execute(cronCtx, map[string]any{"content": "cron says hi", "channel": "telegram", "chat_id": "42"})
 	mt.Execute(context.Background(), map[string]any{"content": "untagged", "channel": "telegram", "chat_id": "42"})
 

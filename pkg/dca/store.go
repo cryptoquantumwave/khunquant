@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	_ "modernc.org/sqlite"
 )
 
@@ -371,20 +372,16 @@ func (s *Store) CountExecutions(ctx context.Context, planID int64) (int, error) 
 	return count, err
 }
 
-// CountExecutionsInPeriod returns the number of completed executions for a plan
-// within the current calendar period ("hour", "day", "week").
-func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, period string) (int, error) {
-	if period == "" {
-		return 0, nil
-	}
-	now := time.Now()
-	var since time.Time
+// periodStart returns the start of the calendar period containing now, in
+// now's own location: the top of the hour, local midnight, or local Monday
+// midnight.
+func periodStart(now time.Time, period string) (time.Time, error) {
 	switch period {
 	case "hour":
-		since = now.Truncate(time.Hour)
+		return now.Truncate(time.Hour), nil
 	case "day":
 		y, m, d := now.Date()
-		since = time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+		return time.Date(y, m, d, 0, 0, 0, 0, now.Location()), nil
 	case "week":
 		weekday := int(now.Weekday())
 		if weekday == 0 {
@@ -392,17 +389,57 @@ func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, perio
 		}
 		monday := now.AddDate(0, 0, -(weekday - 1))
 		y, m, d := monday.Date()
-		since = time.Date(y, m, d, 0, 0, 0, 0, now.Location())
-	default:
-		return 0, fmt.Errorf("dca: unknown period %q (use hour/day/week)", period)
+		return time.Date(y, m, d, 0, 0, 0, 0, now.Location()), nil
 	}
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM dca_executions
-		 WHERE plan_id = ? AND status = 'completed' AND executed_at >= ?`,
-		planID, since.Format(time.RFC3339),
-	).Scan(&count)
-	return count, err
+	return time.Time{}, fmt.Errorf("dca: unknown period %q (use hour/day/week)", period)
+}
+
+// CountExecutionsInPeriod returns the number of completed executions for a plan
+// within the current calendar period ("hour", "day", "week").
+//
+// executed_at is compared as an INSTANT: each stored value is parsed (RFC3339,
+// any offset) and compared with the period start as a time.Time. Comparing the
+// strings in SQL put a local-offset "since" ("...+07:00") against the UTC
+// ("...Z") values the writers produce, and so miscounted on any non-UTC host.
+//
+// A row whose executed_at cannot be parsed is COUNTED and logged at WARN: this
+// is a safety cap, and a corrupt row must not be able to switch it off.
+func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, period string) (int, error) {
+	if period == "" {
+		return 0, nil
+	}
+	since, err := periodStart(time.Now(), period)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, executed_at FROM dca_executions
+		 WHERE plan_id = ? AND status = 'completed'`, planID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var id int64
+		var executedAt string
+		if err := rows.Scan(&id, &executedAt); err != nil {
+			return 0, err
+		}
+		at, perr := time.Parse(time.RFC3339, executedAt)
+		if perr != nil {
+			logger.WarnCF("dca", "Unparseable executed_at counted toward the period cap", map[string]any{
+				"plan_id": planID, "execution_id": id, "executed_at": executedAt, "error": perr.Error(),
+			})
+			count++
+			continue
+		}
+		if !at.Before(since) {
+			count++
+		}
+	}
+	return count, rows.Err()
 }
 
 // LastExecution returns the most recent execution for a plan, or nil if none.

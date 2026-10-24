@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1068,7 +1069,14 @@ func (c *Client) CancelOrder(ctx context.Context, req CancelOrderRequest) (*Plac
 	return &resp, nil
 }
 
-// FetchOpenOrders fetches all open orders for the account.
+// OrderPageSize is the page_size sent with the open-order and order-history
+// listings: the documented maximum (docs/webull-api-spec.md; the default is 10).
+// A listing that returns this many records may continue on a next page that this
+// client does not read, so callers treat a full page as possibly truncated.
+const OrderPageSize = 100
+
+// FetchOpenOrders fetches one page (OrderPageSize records) of the account's open
+// orders. A full page may be truncated.
 func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	accountID, err := c.AccountID(ctx)
 	if err != nil {
@@ -1076,6 +1084,7 @@ func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	}
 	query := url.Values{}
 	query.Set("account_id", accountID)
+	query.Set("page_size", strconv.Itoa(OrderPageSize))
 	var resp []ComboOrder
 	if err := c.doRequest(ctx, http.MethodGet, endpointOrderOpen, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
@@ -1083,7 +1092,8 @@ func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	return resp, nil
 }
 
-// FetchOrderHistory fetches closed orders within a date range.
+// FetchOrderHistory fetches one page (OrderPageSize records) of closed orders
+// within a date range. A full page may be truncated.
 // startDate and endDate are optional yyyy-MM-dd format strings; if empty, defaults to last 7 days.
 func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate string) ([]ComboOrder, error) {
 	accountID, err := c.AccountID(ctx)
@@ -1092,6 +1102,7 @@ func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate strin
 	}
 	query := url.Values{}
 	query.Set("account_id", accountID)
+	query.Set("page_size", strconv.Itoa(OrderPageSize))
 	if startDate != "" {
 		query.Set("start_date", startDate)
 	}

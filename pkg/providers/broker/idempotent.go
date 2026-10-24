@@ -213,6 +213,8 @@ func (p *placer) report(o PlaceOutcome, cid string) {
 //   - Listings can hide truncation: Binance TH and ccxt Binance filter "closed"
 //     rows after the exchange applied its limit, and Bitkub ignores since and
 //     caps at 100. That is why "none" from a shape match is never acted on.
+//     An adapter with a paged listing (PagedListings, Webull) reports the cut
+//     itself, from the raw page, for the open and the closed listing alike.
 //   - In paper mode the simulation is in memory and forgets, and is not
 //     capable: its listings are empty, so a retry ends in ErrReconcileUnproven.
 //     Nothing is placed, in the simulation or anywhere, and no live call is made.
@@ -499,7 +501,19 @@ type listing struct {
 // reads then shows in both (deduplicated), never in neither.
 func (pl *placer) list(ctx context.Context, tgt target, req *OrderRequest, windowStart time.Time, wantTrades bool) (listing, error) {
 	var l listing
-	open, err := tgt.openOrders(ctx, req.Symbol)
+	paged, isPaged := tgt.spot.(PagedListings)
+	if tgt.fut != nil {
+		isPaged = false
+	}
+	var open []ccxt.Order
+	var err error
+	if isPaged {
+		var cut bool
+		open, cut, err = paged.FetchOpenOrdersPage(ctx, req.Symbol)
+		l.truncated = l.truncated || cut
+	} else {
+		open, err = tgt.openOrders(ctx, req.Symbol)
+	}
 	if err != nil {
 		return l, fmt.Errorf("open orders: %w", err)
 	}
@@ -510,7 +524,15 @@ func (pl *placer) list(ctx context.Context, tgt target, req *OrderRequest, windo
 			ms := windowStart.UnixMilli()
 			since = &ms
 		}
-		closed, err := tgt.spot.FetchClosedOrders(ctx, req.Symbol, since, pl.limit)
+		var closed []ccxt.Order
+		var err error
+		if isPaged {
+			var cut bool
+			closed, cut, err = paged.FetchClosedOrdersPage(ctx, req.Symbol, since, pl.limit)
+			l.truncated = l.truncated || cut
+		} else {
+			closed, err = tgt.spot.FetchClosedOrders(ctx, req.Symbol, since, pl.limit)
+		}
 		if err != nil {
 			return l, fmt.Errorf("closed orders: %w", err)
 		}

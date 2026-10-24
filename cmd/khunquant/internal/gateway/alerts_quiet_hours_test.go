@@ -86,13 +86,11 @@ func TestAlerts_OwnerAlertCrossingInQuietHoursIsDeliveredNotDigested(t *testing.
 		t.Fatalf("the stored candidate lost the mark: %s", cand)
 	}
 	// The outbox took it to the owner: one send was attempted for it. The fixture has no
-	// live Telegram channel, so the send fails and the outbox releases the decision (a
-	// delivered_at_ms on a row that is still not delivered); that stamp is what shows the
-	// governor put it in front of the delivery layer at night instead of the digest.
+	// live Telegram channel, so the send fails and the outbox keeps the message for a
+	// retry; a message waiting for a retry is what shows the governor put it in front of
+	// the delivery layer at night instead of the digest.
 	waitUntil(t, "the delivery attempt", func() bool {
-		var n int
-		_ = db.QueryRow(`SELECT COUNT(*) FROM attention_decisions WHERE dedup_key LIKE 'price_cross:%' AND delivered_at_ms IS NOT NULL`).Scan(&n)
-		return n == 1
+		return f.services.Attention.Stats().RetryPending == 1
 	})
 	// And nothing is waiting for the digest.
 	var queued int

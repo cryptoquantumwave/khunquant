@@ -8,6 +8,12 @@ import (
 
 type SendCallback func(channel, chatID, content string) error
 
+// SendObserver is told about every message the tool delivered. ctx is the
+// calling turn's, so an observer can tell by ToolOrigin which kind of turn sent
+// it (a heartbeat keeps a ledger of what it sent). It runs after the send has
+// succeeded and must not block.
+type SendObserver func(ctx context.Context, channel, chatID, content string)
+
 // sentTarget records the channel+chatID that the message tool sent to.
 type sentTarget struct {
 	Channel string
@@ -28,6 +34,8 @@ const maxTrackedTurns = 1024
 type MessageTool struct {
 	sendCallback SendCallback
 	mu           sync.Mutex
+	// observer is told of each successful send (guarded by mu).
+	observer SendObserver
 	// sentByTurn records, per turn ID, the targets this tool sent to. It is
 	// keyed by turn because one MessageTool serves every turn of an agent, and
 	// turns overlap: a heartbeat's message must not make a concurrent user turn
@@ -134,6 +142,14 @@ func (t *MessageTool) SetSendCallback(callback SendCallback) {
 	t.sendCallback = callback
 }
 
+// SetSendObserver sets the observer told of each message this tool delivers,
+// replacing any earlier one. nil removes it.
+func (t *MessageTool) SetSendObserver(o SendObserver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.observer = o
+}
+
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	content, ok := args["content"].(string)
 	if !ok {
@@ -167,6 +183,13 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	t.recordSent(TurnID(ctx), sentTarget{Channel: channel, ChatID: chatID})
+
+	t.mu.Lock()
+	observer := t.observer
+	t.mu.Unlock()
+	if observer != nil {
+		observer(ctx, channel, chatID, content)
+	}
 
 	// Silent: user already received the message directly
 	return &ToolResult{

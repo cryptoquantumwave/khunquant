@@ -79,7 +79,7 @@ func TestShadow_NeverChangesAnOutcome(t *testing.T) {
 	want := map[string]bool{}
 	for cn, ctx := range shadowCtxs() {
 		for _, c := range shadowCalls {
-			want[cn+"/"+c.name] = enforceToolPolicy(ctx, c.name, c.args) == nil
+			want[cn+"/"+c.name] = enforceToolPolicy(ctx, c.name, c.args, false) == nil
 		}
 	}
 	for _, spy := range []*spyAuthorizer{
@@ -91,7 +91,7 @@ func TestShadow_NeverChangesAnOutcome(t *testing.T) {
 		armShadow(t, rc)
 		for cn, ctx := range shadowCtxs() {
 			for _, c := range shadowCalls {
-				if got := checkToolPolicy(ctx, c.name, c.args) == nil; got != want[cn+"/"+c.name] {
+				if got := checkToolPolicy(ctx, c.name, c.args, false) == nil; got != want[cn+"/"+c.name] {
 					t.Errorf("%s/%s: allowed = %v with the shadow armed, %v without", cn, c.name, got, want[cn+"/"+c.name])
 				}
 			}
@@ -110,14 +110,14 @@ func TestShadow_Disarmed_NoAuthorizeCall(t *testing.T) {
 	rc := policy.NewRecorder(spy, nil, nil, 0)
 	t.Cleanup(func() { rc.Close(time.Second) })
 	SetPolicyShadow(rc)
-	checkToolPolicy(context.Background(), NameGetTicker, nil)
+	checkToolPolicy(context.Background(), NameGetTicker, nil, false)
 	rc.Flush(2 * time.Second)
 	if spy.count() != 1 {
 		t.Fatalf("armed: %d calls, want 1", spy.count())
 	}
 	SetPolicyShadow(nil)
 	for i := 0; i < 5; i++ {
-		checkToolPolicy(context.Background(), NameGetTicker, nil)
+		checkToolPolicy(context.Background(), NameGetTicker, nil, false)
 	}
 	rc.Flush(2 * time.Second)
 	if spy.count() != 1 {
@@ -141,10 +141,10 @@ func TestShadow_RecordsBothOutcomes(t *testing.T) {
 
 	order := map[string]any{"provider": "okx", "symbol": "BTC/USDT", "side": "buy", "amount": 1.0, "price": 10.0, "type": "limit", "confirm": true}
 	ctxs := shadowCtxs()
-	if checkToolPolicy(ctxs["owner"], NameCreateOrder, order) != nil {
+	if checkToolPolicy(ctxs["owner"], NameCreateOrder, order, false) != nil {
 		t.Fatal("the owner's order was refused")
 	}
-	if checkToolPolicy(ctxs["cron"], NameCreateOrder, order) == nil {
+	if checkToolPolicy(ctxs["cron"], NameCreateOrder, order, false) == nil {
 		t.Fatal("a cron order was allowed")
 	}
 	rc.Flush(2 * time.Second)
@@ -408,7 +408,7 @@ func TestShadow_BlockedValuerDoesNotDelayTheToolCall(t *testing.T) {
 	order := map[string]any{"provider": "noprovider-test", "symbol": "BTC/USDT", "side": "buy", "amount": 1.0, "type": "market", "confirm": true}
 	start := time.Now()
 	for i := 0; i < 20; i++ {
-		if checkToolPolicy(ctx, NameCreateOrder, order) != nil {
+		if checkToolPolicy(ctx, NameCreateOrder, order, false) != nil {
 			t.Fatal("the order was refused")
 		}
 	}
@@ -433,7 +433,7 @@ func BenchmarkCheckToolPolicy_Shadow(b *testing.B) {
 		return func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				checkToolPolicy(ctx, name, args)
+				checkToolPolicy(ctx, name, args, false)
 			}
 		}
 	}

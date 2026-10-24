@@ -31,6 +31,7 @@ func TestSessionCookie_IsNotTheLauncherSecret(t *testing.T) {
 	store := NewSessionStore(0)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Host = "localhost:18800" // httptest's default "example.com" is not a local name
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 	SessionAuth(secret, store, "", okHandler()).ServeHTTP(rec, req)

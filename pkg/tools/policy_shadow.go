@@ -73,7 +73,7 @@ func observeShadow(ctx context.Context, name string, args map[string]any, legacy
 // registry does that just before the check): a test that wants the registry's
 // behaviour calls NoteToolCalls first.
 func PolicyProbe(ctx context.Context, e *policy.Engine, name string, args map[string]any) (legacyAllowed bool, v policy.Verdict) {
-	legacyAllowed = enforceToolPolicy(ctx, name, args) == nil
+	legacyAllowed = enforceToolPolicy(ctx, name, args, false) == nil
 	return legacyAllowed, e.Authorize(ctx, buildActionRequest(ctx, name, args))
 }
 

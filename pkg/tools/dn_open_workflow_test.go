@@ -158,34 +158,134 @@ func TestDNOpen_KillFlagRefusesPlaceSteps(t *testing.T) {
 	}
 }
 
-// The kill flag engaged between the legs stops the second leg; the first is then an
-// orphan and the recovery, which the flag does not stop, takes over.
-func TestDNOpen_KillBetweenLegsEndsInRecovery(t *testing.T) {
+// The kill flag engaged between the legs does NOT stop the second leg: once the first
+// has filled, the second only completes the hedge, and refusing it would leave a naked
+// leveraged leg. Every risk gate is decided before the first leg (see the tests below).
+func TestDNOpen_KillBetweenLegsStillHedges(t *testing.T) {
+	for _, first := range []deltaneutral.LegType{deltaneutral.LegTypeFutures, deltaneutral.LegTypeSpot} {
+		t.Run(string(first), func(t *testing.T) {
+			r := newDNRig(t, true)
+			r.world.onCreate = func(leg string) {
+				if leg == string(first) {
+					r.engageKill()
+				}
+			}
+			n := r.node()
+			id := r.start(n, first)
+			if w := r.drive(n, id, true); w.Status != journal.StatusSucceeded {
+				t.Fatalf("workflow: %+v", w)
+			}
+			if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultOpened {
+				t.Fatalf("result: %+v", res)
+			}
+			if r.world.placed("futures") != 1 || r.world.placed("spot") != 1 {
+				t.Errorf("the hedge must be completed: futures %d spot %d", r.world.placed("futures"), r.world.placed("spot"))
+			}
+			if e := r.exec(n)[0]; e.State != string(deltaneutral.ExecutionStateBothLegsFilled) {
+				t.Errorf("execution %q, want both_legs_filled", e.State)
+			}
+			if p := r.plan(n); p.Status != deltaneutral.PlanStatusActive {
+				t.Errorf("plan %q", p.Status)
+			}
+			if _, err := n.eng.Get(context.Background(), deltaneutral.RecoverID(r.exec(n)[0].ID)); err == nil {
+				t.Error("a completed hedge needs no recovery")
+			}
+		})
+	}
+}
+
+// A cap, the leverage opt-in and the daily-loss brake that the second leg would breach
+// once the first has filled (the price moved, the owner changed the setting) do not
+// stop it: only trade permission does.
+func TestDNOpen_BrakesBreachedAfterFirstLegStillHedge(t *testing.T) {
+	for _, first := range []deltaneutral.LegType{deltaneutral.LegTypeFutures, deltaneutral.LegTypeSpot} {
+		t.Run(string(first), func(t *testing.T) {
+			r := newDNRig(t, true)
+			r.world.onCreate = func(leg string) {
+				if leg == string(first) {
+					r.cfg.TradingRisk.MaxOrderValueUSD = 1
+					r.cfg.TradingRisk.AllowLeverage = false
+					r.cfg.TradingRisk.DailyLossLimitUSD = 100
+					tripLossTracker(t, 100)
+				}
+			}
+			n := r.node()
+			id := r.start(n, first)
+			r.drive(n, id, true)
+			if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultOpened {
+				t.Fatalf("result: %+v", res)
+			}
+			if r.world.placed("futures") != 1 || r.world.placed("spot") != 1 {
+				t.Errorf("futures %d spot %d", r.world.placed("futures"), r.world.placed("spot"))
+			}
+		})
+	}
+}
+
+// Trade permission is the one gate the hedge leg keeps.
+func TestDNOpen_HedgeLegStillNeedsTradePermission(t *testing.T) {
 	r := newDNRig(t, true)
-	r.world.onCreate = func(leg string) {
-		if leg == "futures" {
-			r.engageKill()
-		}
-	}
 	n := r.node()
-	id := r.start(n, deltaneutral.LegTypeFutures)
-	r.drive(n, id, true)
-	if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultRecovery {
-		t.Fatalf("result: %+v", res)
+	g := n.deps.Exchange
+	p := r.plan(n)
+	lo, err := g.LegOrder(p, deltaneutral.LegTypeSpot, 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if r.world.placed("spot") != 0 {
-		t.Error("the second leg must not be placed while the kill flag is engaged")
+	lo.Hedge = true
+	r.cfg.TradingRisk.MaxOrderValueUSD = 1 // would refuse an entry
+	if err := g.Gate(context.Background(), p, deltaneutral.Sizing{ContractSize: 10, Mark: 100}, lo); err != nil {
+		t.Fatalf("a hedge leg is not subject to the cap: %v", err)
 	}
-	if e := r.exec(n)[0]; e.State != string(deltaneutral.ExecutionStateRecoveryRequired) {
-		t.Errorf("execution %q, want recovery_required", e.State)
+	lo.Hedge = false
+	if err := g.Gate(context.Background(), p, deltaneutral.Sizing{ContractSize: 10, Mark: 100}, lo); err == nil {
+		t.Fatal("control: the same order as an entry must meet the cap")
 	}
-	rec := deltaneutral.RecoverID(r.exec(n)[0].ID)
-	if w, err := n.eng.Get(context.Background(), rec); err != nil || w.Protective != true {
-		t.Fatalf("dn.recover was not started as a protective workflow: %+v %v", w, err)
-	}
-	if w := r.drive(n, rec, false); w.Status != journal.StatusWaiting || r.tg.count() != 1 {
-		t.Fatalf("dn.recover must still run and ask while killed: %+v, %d cards", w, r.tg.count())
-	}
+}
+
+// A second leg that a gate would refuse is refused BEFORE the first goes out: nothing
+// is placed, so there is no half-open position to strand.
+func TestDNOpen_SecondLegGateRefusesBeforeFirstLeg(t *testing.T) {
+	t.Run("cap_breached_by_the_second_leg_only", func(t *testing.T) {
+		r := newDNRig(t, true)
+		// futures first: 4 contracts = 4000 USD passes, the spot buy of 40/0.999 x 100 = 4004 USD does not.
+		r.cfg.TradingRisk.MaxOrderValueUSD = 4002
+		n := r.node()
+		id := r.start(n, deltaneutral.LegTypeFutures)
+		r.drive(n, id, true)
+		if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultRefused {
+			t.Fatalf("result: %+v", res)
+		}
+		if r.world.placed("futures")+r.world.placed("spot") != 0 {
+			t.Error("the first leg went out although the second would be refused")
+		}
+	})
+	t.Run("cap_breached_spot_first", func(t *testing.T) {
+		r := newDNRig(t, true)
+		r.cfg.TradingRisk.MaxOrderValueUSD = 1
+		n := r.node()
+		id := r.start(n, deltaneutral.LegTypeSpot)
+		r.drive(n, id, true)
+		if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultRefused {
+			t.Fatalf("result: %+v", res)
+		}
+		if r.world.placed("futures")+r.world.placed("spot") != 0 {
+			t.Error("an order was placed past the cap")
+		}
+	})
+	t.Run("leverage_not_allowed_spot_first", func(t *testing.T) {
+		r := newDNRig(t, true)
+		r.cfg.TradingRisk.AllowLeverage = false
+		n := r.node()
+		id := r.start(n, deltaneutral.LegTypeSpot)
+		r.drive(n, id, true)
+		if res := finalizeOf(t, n, id); res.Result != deltaneutral.ResultRefused {
+			t.Fatalf("result: %+v", res)
+		}
+		if r.world.placed("futures")+r.world.placed("spot") != 0 {
+			t.Error("the spot leg went out although the futures leg may not be opened")
+		}
+	})
 }
 
 // A plan with exposure left by an earlier attempt is not opened on top of it.

@@ -13,8 +13,10 @@ type Outcome struct {
 	// composer's text when it replaced it. Its Decisions are the decisions that made
 	// it up.
 	Message Message
-	// Delivered is whether the deliverer took it. False means every decision in it
-	// was released.
+	// Delivered is whether the deliverer took it. False means that it was tried
+	// again until the tries ran out (or the outbox stopped) and its decisions were
+	// moved to the digest (or, for a protective Critical, released). A message is
+	// reported once, with its last outcome, not once per try.
 	Delivered bool
 	// Composed is true when the LLM composer produced the text that was sent: a model
 	// turn was spent on this message. It is false for a template message, and for one

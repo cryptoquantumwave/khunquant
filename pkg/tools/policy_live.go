@@ -94,7 +94,7 @@ func verdictRefusal(name string, v policy.Verdict) *ToolResult {
 // test that asks twice with one engine sees the second counted; build an engine per
 // probe for an independent answer.
 func PolicyProbeLive(ctx context.Context, e *policy.Engine, name string, args map[string]any) (legacyAllowed, liveAllowed bool, v policy.Verdict) {
-	if enforceToolPolicy(ctx, name, args) != nil {
+	if enforceToolPolicy(ctx, name, args, false) != nil {
 		return false, false, policy.Verdict{Mode: policy.ModeDeny, Reasons: []string{"today's checks refuse"}}
 	}
 	if !applies(name) {

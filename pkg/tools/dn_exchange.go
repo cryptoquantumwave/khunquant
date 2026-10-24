@@ -358,7 +358,9 @@ func (e *dnExchange) LegOrder(p *deltaneutral.Plan, leg deltaneutral.LegType, am
 
 // Gate runs the order gates of this repository for an order that adds risk, in
 // their order: permission, the cap valued in USD (an unknown value refuses), the
-// per-account daily loss, and for futures the leverage opt-in.
+// per-account daily loss, and for futures the leverage opt-in. An exit meets the
+// permission and the leverage opt-in for reducing only; a hedge completion (the second
+// leg of an entry, see deltaneutral.LegOrder.Hedge) meets the permission only.
 func (e *dnExchange) Gate(ctx context.Context, p *deltaneutral.Plan, sz deltaneutral.Sizing, o deltaneutral.LegOrder) error {
 	provider, account, symbol := p.SpotProvider, p.SpotAccount, p.SpotSymbol
 	if o.Leg == deltaneutral.LegTypeFutures {
@@ -366,6 +368,9 @@ func (e *dnExchange) Gate(ctx context.Context, p *deltaneutral.Plan, sz deltaneu
 	}
 	if err := broker.CheckPermission(e.cfg, provider, account, config.ScopeTrade); err != nil {
 		return fmt.Errorf("%s leg permission denied: %w", o.Leg, err)
+	}
+	if o.Hedge { // completing a hedge whose first leg filled: permission is the only brake
+		return nil
 	}
 	if o.Exit { // getting out: neither the cap nor the daily-loss brake may stop it
 		if o.Leg == deltaneutral.LegTypeFutures {

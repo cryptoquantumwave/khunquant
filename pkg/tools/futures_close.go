@@ -417,6 +417,16 @@ func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[stri
 		return UserResult(fmt.Sprintf("No active futures positions on %s — nothing to flatten.", providerID))
 	}
 
+	// Point of no return: a cancel after the open orders are gone but before every
+	// position is closed would leave exposure behind, so refuse now if the turn is
+	// already cancelled, otherwise finish on a context the cancellation cannot cut.
+	seqCtx, endSeq, refused := beginFuturesSequence(ctx, NameFuturesEmergencyFlatten, providerID)
+	if refused != nil {
+		return refused
+	}
+	defer endSeq()
+	ctx = seqCtx
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Emergency flatten on %s:\n\n", providerID))
 

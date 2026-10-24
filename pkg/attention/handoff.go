@@ -108,8 +108,10 @@ func (h Handoff) String() string {
 }
 
 // DigestDeferrer is implemented by a gate that can move an in-flight notify or
-// escalate decision to the digest queue. *Governor does. A gate without it gets
-// the decision released instead (it can be decided again).
+// escalate decision to the digest queue. *Governor does. The outbox uses it for a
+// message it could not hand over in time and for one the deliverer would not take
+// after its retries. A gate without it gets the decision released instead (it can
+// be decided again).
 type DigestDeferrer interface {
 	DeferToDigest(ctx context.Context, d Decision) error
 }
@@ -123,7 +125,7 @@ type OutboxStats struct {
 	OrdinaryHandOvers   uint64
 	ProtectiveHandOvers uint64
 	// Deferred counts decisions moved to the digest because the ordinary lane was
-	// full or they waited past maxQueueAge.
+	// full, they waited past maxQueueAge, or their message could not be delivered.
 	Deferred uint64
 	// Aged counts messages that waited past maxQueueAge (their decisions are in
 	// Deferred).
@@ -144,15 +146,25 @@ type OutboxStats struct {
 	// ObserverDropped counts outcomes not reported because too many observer calls
 	// were still running.
 	ObserverDropped uint64
+	// Retried counts messages sent again after the deliverer did not take them.
+	Retried uint64
+	// RetriesExhausted counts messages that were given up after a failed delivery:
+	// their tries ran out, the lease or the retry queue left no room for another,
+	// or the outbox stopped. Their decisions went to the digest (or, if protective,
+	// were released); the first are also counted in Deferred.
+	RetriesExhausted uint64
 
 	OrdinaryQueued    int
 	ProtectivePending int
 	DeferBacklog      int
+	// RetryPending is the number of messages waiting for a retry.
+	RetryPending int
 }
 
 type laneJob struct {
 	group  []buffered
 	digest *Digest
+	retry  *retryEntry // a message to send again (see retry.go)
 }
 
 type deferral struct {
@@ -169,6 +181,11 @@ type handoffState struct {
 	deferred []deferral
 	inflight int
 
+	// retries wait for their time; protRetry are the due ones on the protective
+	// lane (the ordinary lane carries its own in ord). See retry.go.
+	retries   []*retryEntry
+	protRetry []*retryEntry
+
 	ordWake  chan struct{}
 	protWake chan struct{}
 
@@ -176,6 +193,7 @@ type handoffState struct {
 	deferredN, aged, deferralFailed        atomic.Uint64
 	abandoned, superseded, rejectedClosed  atomic.Uint64
 	panics                                 atomic.Uint64
+	retried, retriesExhausted              atomic.Uint64
 
 	panicMu   sync.Mutex
 	lastPanic time.Time
@@ -219,6 +237,7 @@ func (o *Outbox) Stats() OutboxStats {
 		OrdinaryQueued:    len(h.ord),
 		ProtectivePending: len(h.prot),
 		DeferBacklog:      len(h.deferred),
+		RetryPending:      len(h.retries) + len(h.protRetry),
 	}
 	o.mu.Unlock()
 	s.OrdinaryHandOvers = h.ordinaryHandOvers.Load()
@@ -230,6 +249,8 @@ func (o *Outbox) Stats() OutboxStats {
 	s.Superseded = h.superseded.Load()
 	s.RejectedClosed = h.rejectedClosed.Load()
 	s.Panics = h.panics.Load()
+	s.Retried = h.retried.Load()
+	s.RetriesExhausted = h.retriesExhausted.Load()
 	s.ObserverDropped = o.obs.dropped.Load()
 	return s
 }
@@ -538,7 +559,7 @@ func (o *Outbox) shutdown(ctx context.Context, l *lanes) {
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownFlushTimeout)
 	defer cancel()
 	// A delivery still running when the flush window ends is cancelled; whatever
-	// it did not send is released by flush's bookkeeping.
+	// it did not send is moved to the digest by flush's bookkeeping.
 	stopFlush := context.AfterFunc(fctx, l.cancel)
 	defer stopFlush()
 
@@ -556,6 +577,10 @@ func (o *Outbox) shutdown(ctx context.Context, l *lanes) {
 		logger.WarnCF("attention", "delivery lanes did not stop in time; a deliverer is ignoring its context", nil)
 	}
 	l.cancel()
+	// After the workers have stopped, so that none can queue a retry behind this
+	// (a failing delivery gives up at once once o.closed is set), and before the
+	// deferrals, so that a fallback that fails here is still retried below.
+	o.drainRetries(fctx)
 	if err := o.processDeferrals(fctx); err != nil {
 		logger.WarnCF("attention", "final deferral failed", map[string]any{"error": err.Error()})
 	}
@@ -608,7 +633,8 @@ func (o *Outbox) idle() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	h := o.hand
-	return len(h.ord) == 0 && len(h.prot) == 0 && len(h.deferred) == 0 && h.inflight == 0
+	// h.retries (messages still waiting for their time) is not work in progress.
+	return len(h.ord) == 0 && len(h.prot) == 0 && len(h.protRetry) == 0 && len(h.deferred) == 0 && h.inflight == 0
 }
 
 // ordinaryStep delivers one queued ordinary job. It reports whether there was one.
@@ -619,6 +645,12 @@ func (o *Outbox) ordinaryStep(ctx context.Context) bool {
 	}
 	defer o.jobDone()
 	defer o.recoverLane("ordinary lane")
+	if j.retry != nil {
+		if err := o.attemptRetry(ctx, j.retry); err != nil {
+			logger.WarnCF("attention", "ordinary redelivery bookkeeping failed", map[string]any{"error": err.Error()})
+		}
+		return true
+	}
 	if j.digest != nil {
 		defer o.digestDone()
 		if err := o.sendDigest(ctx, j.digest); err != nil {
@@ -644,6 +676,14 @@ func (o *Outbox) ordinaryStep(ctx context.Context) bool {
 
 // protectiveStep delivers the pending protective group, without the composer.
 func (o *Outbox) protectiveStep(ctx context.Context) bool {
+	if r := o.takeProtectiveRetry(); r != nil {
+		defer o.jobDone()
+		defer o.recoverLane("protective lane")
+		if err := o.attemptRetry(ctx, r); err != nil {
+			logger.WarnCF("attention", "protective redelivery bookkeeping failed", map[string]any{"error": err.Error()})
+		}
+		return true
+	}
 	g := o.takeProtective()
 	if g == nil {
 		return false

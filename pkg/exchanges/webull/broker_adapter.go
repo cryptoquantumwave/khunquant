@@ -902,9 +902,29 @@ func (a *webullAdapter) FetchOrder(ctx context.Context, id, symbol string) (ccxt
 // to a ccxt.Order tagged with ccxtSymbol. Shared by the equity and option
 // open-orders paths.
 func (a *webullAdapter) fetchOpenOrdersFiltered(ctx context.Context, ccxtSymbol string, keep func(OrderItem) bool) ([]ccxt.Order, error) {
+	orders, _, err := a.fetchOpenOrdersPageFiltered(ctx, ccxtSymbol, keep)
+	return orders, err
+}
+
+// pageIsFull reports whether a listing answer may have been cut at page_size. The
+// spec says only "records per query": whether a record is a combo or an order
+// inside one is not stated, so the page counts as full when EITHER count reaches
+// OrderPageSize (the safe reading: more answers become inconclusive, none less).
+func pageIsFull(combos []ComboOrder) bool {
+	items := 0
+	for _, c := range combos {
+		items += len(c.Orders)
+	}
+	return len(combos) >= OrderPageSize || items >= OrderPageSize
+}
+
+// fetchOpenOrdersPageFiltered is fetchOpenOrdersFiltered plus whether the page
+// Webull returned was full (so the listing may continue past it). The flag is read
+// from the raw records, before the predicate drops any.
+func (a *webullAdapter) fetchOpenOrdersPageFiltered(ctx context.Context, ccxtSymbol string, keep func(OrderItem) bool) ([]ccxt.Order, bool, error) {
 	combos, err := a.client.FetchOpenOrders(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var result []ccxt.Order
@@ -917,25 +937,42 @@ func (a *webullAdapter) fetchOpenOrdersFiltered(ctx context.Context, ccxtSymbol 
 			result = append(result, orderItemToCCXT(ccxtSymbol, &item))
 		}
 	}
-	return result, nil
+	return result, pageIsFull(combos), nil
 }
 
-// FetchOpenOrders returns all open orders, optionally filtered by symbol.
+// FetchOpenOrders returns the open orders of the first page, optionally filtered by symbol.
 func (a *webullAdapter) FetchOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error) {
+	orders, _, err := a.FetchOpenOrdersPage(ctx, symbol)
+	return orders, err
+}
+
+var _ broker.PagedListings = (*webullAdapter)(nil)
+
+// FetchOpenOrdersPage is FetchOpenOrders plus whether the page was full, so the
+// idempotent reconcile can tell "not listed" from "may be on the next page".
+func (a *webullAdapter) FetchOpenOrdersPage(ctx context.Context, symbol string) ([]ccxt.Order, bool, error) {
 	symbolFilter := toWebullSymbol(symbol) // "" → "", "AAPL/USD" → "AAPL"
-	orders, err := a.fetchOpenOrdersFiltered(ctx, symbol, func(item OrderItem) bool {
+	orders, truncated, err := a.fetchOpenOrdersPageFiltered(ctx, symbol, func(item OrderItem) bool {
 		return symbolFilter == "" || item.Symbol == symbolFilter
 	})
 	if err != nil {
-		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
+		return nil, false, fmt.Errorf("webull: FetchOpenOrders: %w", err)
 	}
-	return orders, nil
+	return orders, truncated, nil
 }
 
 // FetchClosedOrders returns closed/filled orders, optionally filtered by symbol.
 // since: optional Unix milliseconds timestamp; if provided, derives start_date.
 // limit: max number of orders to return (0 = no limit).
 func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, since *int64, limit int) ([]ccxt.Order, error) {
+	orders, _, err := a.FetchClosedOrdersPage(ctx, symbol, since, limit)
+	return orders, err
+}
+
+// FetchClosedOrdersPage is FetchClosedOrders plus whether the listing may hold
+// more than was read: the raw page Webull returned was full (counted before the
+// status and symbol filters), or limit cut the result short.
+func (a *webullAdapter) FetchClosedOrdersPage(ctx context.Context, symbol string, since *int64, limit int) ([]ccxt.Order, bool, error) {
 	// Derive start_date from since if provided (format yyyy-MM-dd)
 	var startDate string
 	if since != nil {
@@ -945,8 +982,9 @@ func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, si
 
 	combos, err := a.client.FetchOrderHistory(ctx, startDate, "")
 	if err != nil {
-		return nil, fmt.Errorf("webull: FetchClosedOrders: %w", err)
+		return nil, false, fmt.Errorf("webull: FetchClosedOrders: %w", err)
 	}
+	fullPage := pageIsFull(combos)
 
 	var result []ccxt.Order
 	symbolFilter := toWebullSymbol(symbol)
@@ -968,12 +1006,12 @@ func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, si
 
 			// Respect limit
 			if limit > 0 && len(result) >= limit {
-				return result, nil
+				return result, true, nil
 			}
 		}
 	}
 
-	return result, nil
+	return result, fullPage, nil
 }
 
 // FetchMyTrades returns personal trade history.

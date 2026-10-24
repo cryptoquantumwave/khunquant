@@ -429,7 +429,7 @@ func TestProposeOrder_ClassPolicyAndCeiling(t *testing.T) {
 	armPolicy(t, false, defaultToolPolicies())
 	for _, origin := range []string{OriginCron, OriginHeartbeat} {
 		ctx := WithToolOrigin(context.Background(), origin)
-		if refusal := checkToolPolicy(ctx, NameProposeOrder, nil); refusal == nil {
+		if refusal := checkToolPolicy(ctx, NameProposeOrder, nil, false); refusal == nil {
 			t.Errorf("%s turn may call propose_order", origin)
 		}
 	}

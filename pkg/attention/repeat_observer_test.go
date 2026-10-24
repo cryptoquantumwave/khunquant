@@ -181,10 +181,15 @@ func TestObserver_ReportsEachMessageAfterTheBookkeeping(t *testing.T) {
 		t.Fatalf("the decision was not yet marked delivered when the observer ran")
 	}
 
-	// A failed delivery is reported too, as not delivered.
+	// A message that could not be delivered is reported too, as not delivered, once
+	// its tries have run out (not once per try).
 	e.del.setFn(failing)
 	e.submit(cand("k2", critical, protective))
+	e.exhaustRetries()
 	outs = obs.waitFor(t, 1)
+	if len(outs) != 2 {
+		t.Fatalf("%d outcomes, want 1 per message", len(outs))
+	}
 	if outs[1].Delivered {
 		t.Fatalf("a failed delivery was reported as delivered: %+v", outs[1])
 	}

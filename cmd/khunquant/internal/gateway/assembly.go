@@ -477,6 +477,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	} else {
 		s.HeartbeatService.SetBus(msgBus)
 		s.HeartbeatService.SetHandler(heartbeatHandler(al))
+		observeHeartbeatSends(al, s.HeartbeatService)
 	}
 	if err := s.HeartbeatService.Start(); err != nil {
 		return s, fmt.Errorf("error %s heartbeat service: %w", starting, err)
@@ -532,6 +533,26 @@ func heartbeatHandler(al *agent.AgentLoop) heartbeat.HeartbeatHandler {
 		// For heartbeat, always return silent - the subagent result will be
 		// sent to user via processSystemMessage when the async task completes
 		return tools.SilentResult(response)
+	}
+}
+
+// observeHeartbeatSends has the default agent's message tool (the one a heartbeat
+// turn runs with) report each message a heartbeat turn delivers to hs, which keeps
+// the ledger of sent alerts the next legacy prompt shows. The agent loop outlives a
+// reload, so this runs on every build and replaces the earlier service's observer.
+func observeHeartbeatSends(al *agent.AgentLoop, hs *heartbeat.HeartbeatService) {
+	reg := al.GetRegistry()
+	if reg == nil {
+		return
+	}
+	inst := reg.GetDefaultAgent()
+	if inst == nil || inst.Tools == nil {
+		return
+	}
+	if t, ok := inst.Tools.Get(tools.NameMessage); ok {
+		if mt, ok := t.(*tools.MessageTool); ok {
+			hs.ObserveMessageSends(mt)
+		}
 	}
 }
 

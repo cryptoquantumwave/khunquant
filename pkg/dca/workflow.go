@@ -269,6 +269,9 @@ type checkOut struct {
 
 type gatesOut struct {
 	Refused string `json:"refused,omitempty"`
+	// USD is the run valued again at risk_gates; a still-open order reserves the
+	// larger of it and the check_mandate value against the period cap.
+	USD float64 `json:"usd,omitempty"`
 }
 
 // Outcomes of the place step.
@@ -289,6 +292,7 @@ const (
 	resultDone     = "done"
 	resultFailed   = "failed"   // nothing was bought
 	resultUnproven = "unproven" // an order may exist
+	resultPending  = "pending"  // an order exists and is not done (resting, or partly filled)
 	resultRefused  = "refused"
 	resultAsked    = "asked"
 	// resultSkipped: the owner's autonomy setting stopped the buy; a "skipped" row says why.
@@ -372,7 +376,7 @@ func (d *Deps) runExecute(c *journal.Ctx, raw json.RawMessage) error {
 		case used+fresh.USD > m.MaxPerPeriodUSD*(1+1e-9):
 			return gatesOut{Refused: fmt.Sprintf("the run is now worth $%.2f, which would exceed the %s limit of $%.2f", fresh.USD, m.Period, m.MaxPerPeriodUSD)}, nil
 		}
-		return gatesOut{}, nil
+		return gatesOut{USD: fresh.USD}, nil
 	}, retry...); err != nil {
 		if !isStepError(err) {
 			return err
@@ -429,10 +433,34 @@ func (d *Deps) runExecute(c *journal.Ctx, raw json.RawMessage) error {
 	switch {
 	case !fill.Known:
 		return d.record(c, in, chk, placed, recordOut{Result: resultUnproven, Reason: "the order was placed but its fill could not be confirmed"})
+	case !fill.Done:
+		// The order exists and is still working: a market order that queues until an
+		// auction (Settrade's ATO), or one partly filled. It is NEVER cancelled here
+		// (an order meant to wait for the open must be allowed to), and it is neither
+		// "nothing bought" nor a finished fill: the whole run is counted against the
+		// period cap until it is proven, and the plan asks the owner before the next
+		// buy instead of buying blind on top of it.
+		return d.record(c, in, chk, placed, recordOut{
+			Result: resultPending, Reason: pendingReason(fill, chk.Quote.BaseAmount),
+			USD: max(chk.Quote.USD, gates.USD),
+		})
 	case fill.Filled <= 0:
 		return d.record(c, in, chk, placed, recordOut{Result: resultFailed, Reason: "the order was placed but nothing filled (" + fill.Status + ")"})
 	}
 	return d.record(c, in, chk, placed, recordOut{Result: resultDone, Fill: fill})
+}
+
+// pendingReason words a still-open order for the owner, and for the next ask.
+func pendingReason(f Fill, requested float64) string {
+	status := f.Status
+	if status == "" {
+		status = "open"
+	}
+	id := "order"
+	if f.OrderID != "" {
+		id = "order " + f.OrderID
+	}
+	return fmt.Sprintf("%s placed, still %s (filled %s of %s); counted against the cap until confirmed", id, status, fg(f.Filled), fg(requested))
 }
 
 func (d *Deps) checkMandate(c *journal.Ctx, in ExecInput) func(context.Context, int) (any, error) {
@@ -796,6 +824,16 @@ func (d *Deps) writeRecord(ctx context.Context, c *journal.Ctx, in ExecInput, ch
 		}
 	case resultSkipped:
 		exec.Status, exec.ErrorMsg = "skipped", res.Reason
+	case resultPending:
+		// The order id is kept so the owner (and any later reconcile) can find it. The
+		// full requested USD value is recorded as usage: until the order is proven it
+		// may fill in full, and the cap is what bounds a mandate.
+		exec.Status, exec.ErrorMsg = "failed", "unproven: "+res.Reason
+		exec.OrderID = placed.Fill.OrderID
+		usd = res.USD
+		if err := d.Store.MarkUnproven(ctx, plan.ID, c.WorkflowID(), res.Reason, now); err != nil {
+			return res, err
+		}
 	default:
 		exec.Status, exec.ErrorMsg = "failed", res.Reason
 	}

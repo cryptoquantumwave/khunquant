@@ -5,12 +5,42 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// futuresSequenceTimeout bounds a multi-call futures sequence (entry plus protection,
+// cancel plus replace, cancel plus flatten) once it has begun. The sequence runs
+// detached from the caller's cancellation, so this is its only deadline.
+const futuresSequenceTimeout = 60 * time.Second
+
+// beginFuturesSequence marks the point of no return of a multi-call futures tool: the
+// first mutating exchange call is about to be made.
+//
+// A turn can be cancelled at any moment (the cognition scheduler's turn deadline, a
+// config reload draining jobs). Cancelling between the entry and its stop-loss would
+// leave a leveraged position with no stop, and cancelling inside a mutating HTTP call
+// leaves its outcome unknown. So the caller's ctx is consulted exactly once, here:
+//
+//   - already cancelled: the returned result refuses cleanly and nothing has been
+//     placed (the caller must return it);
+//   - otherwise: the returned context is detached from cancellation
+//     (context.WithoutCancel keeps the caller's values, e.g. origin and turn id) and
+//     bounded by futuresSequenceTimeout. The caller must use it for every remaining
+//     call of the sequence, and call the returned cancel func when done.
+func beginFuturesSequence(ctx context.Context, tool, providerID string) (context.Context, context.CancelFunc, *ToolResult) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, ErrorResult(fmt.Sprintf(
+			"%s refused: the request was cancelled before any order was sent to %s (%v). Nothing was changed on the exchange; re-run it if you still want it.",
+			tool, providerID, err)).WithError(err)
+	}
+	seqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), futuresSequenceTimeout)
+	return seqCtx, cancel, nil
+}
 
 // mergeOrderFillData merges fill and fee data from a CreateOrder response and a
 // subsequent FetchOrder response into a single ccxt.Order for leg recording.

@@ -195,8 +195,12 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 //
 // The refusal sets ForUser as well as ForLLM: a block the operator never sees
 // is indistinguishable from the tool quietly doing nothing.
-func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
-	refusal := enforceToolPolicy(ctx, name, args)
+//
+// declaresConfirm is whether the registered tool's schema declares a boolean
+// "confirm" parameter. The approval gate waves through confirm=false calls only
+// for such tools; see isPreviewCall.
+func checkToolPolicy(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
+	refusal := enforceToolPolicy(ctx, name, args, declaresConfirm)
 	// Shadow: the policy engine is asked about the call and its verdict recorded
 	// beside what the checks above decided. It cannot change the outcome. In live,
 	// a money call the checks allowed is decided and recorded by the hook instead
@@ -209,7 +213,7 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 
 // enforceToolPolicy is the enforcement: the class ceiling, the per-tool rows and
 // the approval hold.
-func enforceToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
+func enforceToolPolicy(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
 	// The class ceiling comes first and answers one question for autonomous
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
@@ -248,7 +252,7 @@ func enforceToolPolicy(ctx context.Context, name string, args map[string]any) *T
 	case rowHold:
 		// Approval runs last: a call that would be refused anyway must not cost the
 		// operator an approval they then cannot use.
-		return checkApproval(ctx, name, args)
+		return checkApproval(ctx, name, args, declaresConfirm)
 	}
 	return nil
 }

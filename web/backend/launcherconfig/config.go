@@ -25,7 +25,11 @@ type Config struct {
 	AllowedCIDRs         []string `json:"allowed_cidrs,omitempty"`
 	AllowLocalhostBypass bool     `json:"allow_localhost_bypass"`
 	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
-	LauncherToken        string   `json:"launcher_token,omitempty"`
+	// AllowedHosts lists extra Host names the launcher answers to, for a
+	// reverse proxy serving it under a domain. localhost, *.localhost and IP
+	// literals are always allowed; any other Host gets 421 (DNS rebinding).
+	AllowedHosts          []string `json:"allowed_hosts,omitempty"`
+	LauncherToken         string   `json:"launcher_token,omitempty"`
 	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
 	// BehindTLSProxy marks session cookies Secure even though the launcher
 	// itself serves plain HTTP, for deployments behind a TLS-terminating
@@ -60,7 +64,37 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("trusted proxy CIDR %q trusts every address; list the proxy's own address instead", cidr)
 		}
 	}
+	for _, h := range cfg.AllowedHosts {
+		if strings.ContainsAny(h, "/@*\\ \t") || strings.Contains(h, "://") {
+			return fmt.Errorf("invalid allowed host %q: give a bare host name, e.g. bot.example.com", h)
+		}
+	}
 	return nil
+}
+
+// NormalizeHosts trims entries, lower-cases them, strips a trailing dot, removes
+// empty values, and deduplicates.
+func NormalizeHosts(hosts []string) []string {
+	if len(hosts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(hosts))
+	seen := make(map[string]struct{}, len(hosts))
+	for _, raw := range hosts {
+		h := strings.TrimRight(strings.ToLower(strings.TrimSpace(raw)), ".")
+		if h == "" {
+			continue
+		}
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // NormalizeCIDRs trims entries, removes empty values, and deduplicates CIDRs.
@@ -112,6 +146,7 @@ func Load(path string, fallback Config) (Config, error) {
 	}
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
+	cfg.AllowedHosts = NormalizeHosts(cfg.AllowedHosts)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
 	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	if err := Validate(cfg); err != nil {
@@ -124,6 +159,7 @@ func Load(path string, fallback Config) (Config, error) {
 func Save(path string, cfg Config) error {
 	cfg.AllowedCIDRs = NormalizeCIDRs(cfg.AllowedCIDRs)
 	cfg.TrustedProxyCIDRs = NormalizeCIDRs(cfg.TrustedProxyCIDRs)
+	cfg.AllowedHosts = NormalizeHosts(cfg.AllowedHosts)
 	cfg.LauncherToken = strings.TrimSpace(cfg.LauncherToken)
 	cfg.DashboardPasswordHash = strings.TrimSpace(cfg.DashboardPasswordHash)
 	if err := Validate(cfg); err != nil {

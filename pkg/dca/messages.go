@@ -46,6 +46,17 @@ func (d *Deps) notice(planID, symbol string, chk checkOut, res recordOut) Notice
 			Title: fmt.Sprintf("DCA plan %s: the order could not be proven - check the exchange", planID),
 			Body: "The buy order MAY OR MAY NOT HAVE BEEN PLACED (" + res.Reason + "). Nothing will be bought again for this slot, " +
 				"and the next due slot will ask you first until you have looked and approved a new mandate."}
+	case resultPending:
+		if th {
+			return Notice{Severity: "warning", DedupKey: key,
+				Title: fmt.Sprintf("แผน DCA %s: คำสั่งซื้อยังไม่เสร็จ - ตรวจที่ exchange", planID),
+				Body: "คำสั่งซื้อถูกส่งแล้วแต่ยังไม่เสร็จสมบูรณ์: " + res.Reason + " (คิดเป็นประมาณ $" + f2(res.USD) +
+					" ของวงเงิน) ระบบจะไม่ยกเลิกคำสั่งเอง และจะไม่ซื้อซ้ำ รอบถัดไปจะถามคุณก่อนจนกว่าคุณจะตรวจและอนุมัติวงเงินใหม่"}
+		}
+		return Notice{Severity: "warning", DedupKey: key,
+			Title: fmt.Sprintf("DCA plan %s: the order is still open - check the exchange", planID),
+			Body: "The buy order was placed but is not finished: " + res.Reason + " (about $" + f2(res.USD) + " of the limit). " +
+				"It is not cancelled automatically, nothing will be bought again, and the next due slot will ask you first until you have looked and approved a new mandate."}
 	case resultFailed:
 		if th {
 			return Notice{Severity: "notice", DedupKey: key,

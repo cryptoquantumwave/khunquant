@@ -124,6 +124,16 @@ func (t *FuturesModifyProtectionTool) Execute(ctx context.Context, args map[stri
 			strings.Join(parts, " and "), symbol, positionSide, protectionQty, replaceNote))
 	}
 
+	// Point of no return: a cancel between removing the old protection and placing the
+	// new would leave the position unprotected, so refuse now if the turn is already
+	// cancelled, otherwise finish the replace on a context the cancellation cannot cut.
+	seqCtx, endSeq, refused := beginFuturesSequence(ctx, NameFuturesModifyProtection, providerID)
+	if refused != nil {
+		return refused
+	}
+	defer endSeq()
+	ctx = seqCtx
+
 	// Rate limit: spent only on a confirmed change, before the first cancel/placement.
 	if !broker.DefaultLimiter.Allow(providerID) {
 		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)

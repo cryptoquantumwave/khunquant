@@ -142,6 +142,20 @@ func main() {
 		)
 	}
 
+	// D44: with trusted_proxy_cidrs set the launcher is reached through a proxy,
+	// which normally forwards the public domain as Host. HostAllowlist answers
+	// 421 to it, so say so at startup rather than leave the operator to find
+	// out from a broken page. Never auto-allowed: allowed_hosts decides which
+	// names may reach a launcher that auto-issues loopback sessions.
+	if len(launcherCfg.TrustedProxyCIDRs) > 0 && len(launcherCfg.AllowedHosts) == 0 {
+		log.Printf(
+			"WARNING: trusted_proxy_cidrs is set but allowed_hosts is empty.\n" +
+				"  The launcher refuses (421) any Host other than localhost, *.localhost or an\n" +
+				"  IP address, so requests proxied under a domain name will fail. List the\n" +
+				"  domain in allowed_hosts in launcher-config.json.",
+		)
+	}
+
 	// Ensure a persistent launcher token exists.
 	if launcherCfg.LauncherToken == "" {
 		launcherCfg.LauncherToken = generateLauncherToken()
@@ -213,12 +227,22 @@ func main() {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
+	// D44: HostAllowlist is the outermost check, ahead of IPAllowlist and the
+	// auth chain. A DNS-rebinding page reaches the launcher from loopback with a
+	// matching Host and Origin, so only refusing the unknown Host stops it from
+	// being auto-issued a session. SetAllowedHosts feeds the same list to the
+	// defence-in-depth check in SessionAuth.
+	allowedHosts := launcherconfig.NormalizeHosts(launcherCfg.AllowedHosts)
+	middleware.SetAllowedHosts(allowedHosts)
+
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
-			middleware.SecurityHeaders(
-				middleware.JSONContentType(
-					accessControlledMux,
+			middleware.HostAllowlist(allowedHosts,
+				middleware.SecurityHeaders(
+					middleware.JSONContentType(
+						accessControlledMux,
+					),
 				),
 			),
 		),

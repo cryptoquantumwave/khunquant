@@ -485,7 +485,7 @@ func TestHeartbeatContract_Selection(t *testing.T) {
 		warns    bool
 	}{
 		"legacy":                       {cfgFor("legacy", "live", true), deliverable, heartbeat.ContractLegacy, false},
-		"sweep runs legacy for now":    {cfgFor("sweep", "live", true), deliverable, heartbeat.ContractLegacy, false},
+		"sweep needs perception":       {cfgFor("sweep", "live", true), deliverable, heartbeat.ContractGoverned, false}, // Effective makes it governed
 		"governed + live + outbox":     {cfgFor("governed", "live", true), deliverable, heartbeat.ContractGoverned, false},
 		"governed + shadow attention":  {cfgFor("governed", "shadow", true), deliverable, heartbeat.ContractLegacy, false},
 		"governed + no owner":          {cfgFor("governed", "live", false), deliverable, heartbeat.ContractLegacy, false},

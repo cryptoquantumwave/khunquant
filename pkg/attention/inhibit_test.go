@@ -78,16 +78,16 @@ func TestInhibit_OnlySentDecisionsInhibit(t *testing.T) {
 func TestInhibit_ProtectiveCriticalIsNeverInhibited(t *testing.T) {
 	e := newEnv(t)
 	e.send(cand("dn:7:margin", warning, onSubject("BTC/USDT")))
-	e.send(cand("liquidation:okx:btc", warning, onSubject("BTC/USDT:USDT")))
+	e.send(cand("liquidation_distance:okx:btc", warning, onSubject("BTC/USDT:USDT")))
 
 	// a protective Critical under a suppressed prefix gets through, in active
 	// hours and in quiet hours.
 	expect(t, e.decide(cand("price_cross:btc", critical, protective, onSubject("BTC/USDT"))), proactive.DispNotify, ReasonProtective)
 	e.clock.Set(bkkAt(0, 3, 0))
-	expect(t, e.decide(cand("move:btc", critical, protective, onSubject("BTC/USDT"))), proactive.DispNotify, ReasonProtective)
+	expect(t, e.decide(cand("move_vs_vol:btc", critical, protective, onSubject("BTC/USDT"))), proactive.DispNotify, ReasonProtective)
 	// a Critical that is not protective is inhibited like any other.
 	e.clock.Set(bkkAt(0, 12, 5))
-	expect(t, e.decide(cand("move:btc:2", critical, onSubject("BTC/USDT"))), proactive.DispDrop, inhibitedBy("liquidation:okx:btc"))
+	expect(t, e.decide(cand("move_vs_vol:btc:2", critical, onSubject("BTC/USDT"))), proactive.DispDrop, inhibitedBy("liquidation_distance:okx:btc"))
 }
 
 func TestInhibit_ExpiresAfterFor(t *testing.T) {
@@ -102,23 +102,23 @@ func TestInhibit_ExpiresAfterFor(t *testing.T) {
 func TestInhibit_DrawdownSuppressesAnyAssetMoveFor30Minutes(t *testing.T) {
 	e := newEnv(t)
 	e.send(cand("drawdown:portfolio:tier2", warning, onSubject("portfolio")))
-	d := e.decide(cand("move:sol", notice, onSubject("SOL/USDT")))
+	d := e.decide(cand("move_vs_vol:sol", notice, onSubject("SOL/USDT")))
 	expect(t, d, proactive.DispDrop, inhibitedBy("drawdown:portfolio:tier2"))
 	// a subject with no asset at all is covered too, because the rule does not
 	// need a base asset.
-	expect(t, e.decide(cand("move:market", notice, onSubject("portfolio"))), proactive.DispDrop, inhibitedBy("drawdown:portfolio:tier2"))
+	expect(t, e.decide(cand("move_vs_vol:market", notice, onSubject("portfolio"))), proactive.DispDrop, inhibitedBy("drawdown:portfolio:tier2"))
 	// price_cross is not in this rule.
 	expect(t, e.decide(cand("price_cross:sol", notice, onSubject("SOL/USDT"))), proactive.DispNotify, ReasonTemplate)
 
 	e.clock.Add(31 * time.Minute)
-	expect(t, e.decide(cand("move:sol:2", notice, onSubject("SOL/USDT"))), proactive.DispNotify, ReasonTemplate)
+	expect(t, e.decide(cand("move_vs_vol:sol:2", notice, onSubject("SOL/USDT"))), proactive.DispNotify, ReasonTemplate)
 }
 
 func TestInhibit_LiquidationSuppressesSameAssetMove(t *testing.T) {
 	e := newEnv(t)
-	e.send(cand("liquidation:okx:btc", critical, protective, onSubject("BTC/USDT:USDT")))
-	expect(t, e.decide(cand("move:btc", notice, onSubject("BTC/USDT"))), proactive.DispDrop, inhibitedBy("liquidation:okx:btc"))
-	expect(t, e.decide(cand("move:eth", notice, onSubject("ETH/USDT"))), proactive.DispNotify, ReasonTemplate)
+	e.send(cand("liquidation_distance:okx:btc", critical, protective, onSubject("BTC/USDT:USDT")))
+	expect(t, e.decide(cand("move_vs_vol:btc", notice, onSubject("BTC/USDT"))), proactive.DispDrop, inhibitedBy("liquidation_distance:okx:btc"))
+	expect(t, e.decide(cand("move_vs_vol:eth", notice, onSubject("ETH/USDT"))), proactive.DispNotify, ReasonTemplate)
 }
 
 func TestInhibit_NoBaseAssetNoMatch(t *testing.T) {

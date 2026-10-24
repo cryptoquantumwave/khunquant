@@ -20,8 +20,8 @@ import (
 // it runs to completion whether or not the turn that started it is still
 // running, reaches the user exactly once, and a failure is reported.
 //
-// They swap package-level state (MockEventBus.Emit, the logger's writer), so
-// none of them may run in parallel.
+// They swap package-level state (the logger's writer), so none of them may run
+// in parallel. The sub-turn event sink is per loop and needs no such care.
 
 // ====================== scaffolding ======================
 
@@ -61,18 +61,22 @@ func logLine(l *spawnLogBuffer, substr string) string {
 	return ""
 }
 
-// watchSubTurnEvents records sub-turn events and signals each sub-turn's end.
+// subTurnWatch records sub-turn events and signals each sub-turn's end. It is
+// created before the loop (the provider closures that wait on it are), and
+// attached to the loop once there is one.
 type subTurnWatch struct {
 	mu      sync.Mutex
 	spawned []SubTurnSpawnEvent
 	ended   *signal
 }
 
-func watchSubTurnEvents(t *testing.T) *subTurnWatch {
-	t.Helper()
-	w := &subTurnWatch{ended: newSignal()}
-	original := MockEventBus.Emit
-	MockEventBus.Emit = func(e any) {
+func newSubTurnWatch() *subTurnWatch {
+	return &subTurnWatch{ended: newSignal()}
+}
+
+// attach makes al report its sub-turn events to the watch.
+func (w *subTurnWatch) attach(al *AgentLoop) {
+	al.setEventSink(eventSinkFunc(func(e any) {
 		switch ev := e.(type) {
 		case SubTurnSpawnEvent:
 			w.mu.Lock()
@@ -81,9 +85,7 @@ func watchSubTurnEvents(t *testing.T) *subTurnWatch {
 		case SubTurnEndEvent:
 			w.ended.fire()
 		}
-	}
-	t.Cleanup(func() { MockEventBus.Emit = original })
-	return w
+	}))
 }
 
 func nextInbound(t *testing.T, msgBus *bus.MessageBus) bus.InboundMessage {
@@ -190,7 +192,7 @@ func TestSpawn_ExplicitCancelStillStopsCriticalChild(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const session = "agent:main:spawn-cancel"
-			watch := watchSubTurnEvents(t)
+			watch := newSubTurnWatch()
 			release := newSignal()
 			childBlocked := newSignal()
 			childErr := make(chan error, 1)
@@ -214,6 +216,7 @@ func TestSpawn_ExplicitCancelStillStopsCriticalChild(t *testing.T) {
 					return nil, ctx.Err()
 				})
 			al, msgBus := newTurnTestLoop(t, prov, true)
+			watch.attach(al)
 			al.RegisterTool(&funcTool{name: "child_step", fn: func(context.Context, map[string]any) *tools.ToolResult {
 				return tools.SilentResult("step done")
 			}})
@@ -226,7 +229,7 @@ func TestSpawn_ExplicitCancelStillStopsCriticalChild(t *testing.T) {
 			childBlocked.wait(t, "the child to carry on after its parent ended")
 
 			watch.mu.Lock()
-			if len(watch.spawned) != 1 || !watch.spawned[0].Config.Critical {
+			if len(watch.spawned) != 1 || !watch.spawned[0].Critical {
 				t.Errorf("sub-turns spawned = %+v, want one critical sub-turn", watch.spawned)
 			}
 			watch.mu.Unlock()
@@ -253,7 +256,7 @@ func TestSpawn_ExplicitCancelStillStopsCriticalChild(t *testing.T) {
 // One spawn, one message to the user. The result used to be queued on the
 // parent turn as well, and appended to the parent's own final response.
 func TestSpawn_SingleDelivery(t *testing.T) {
-	watch := watchSubTurnEvents(t)
+	watch := newSubTurnWatch()
 
 	prov := newRoutedProvider().
 		on("PARENT_TURN", func(ctx context.Context, call int, _ []providers.Message) (*providers.LLMResponse, error) {
@@ -273,6 +276,7 @@ func TestSpawn_SingleDelivery(t *testing.T) {
 			return textResponse("CHILD_RESULT")
 		})
 	al, msgBus := newTurnTestLoop(t, prov, true)
+	watch.attach(al)
 
 	res := awaitTurn(t, "the parent turn", startTurn(context.Background(), al, "PARENT_TURN", "agent:main:spawn-single"))
 	if res.err != nil || res.response != "parent done" {

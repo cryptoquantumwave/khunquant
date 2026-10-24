@@ -30,7 +30,7 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 	e.clock.Set(bkkAt(-1, 0, 0)) // Monday 00:00 Bangkok
 	keys := []string{"drawdown:portfolio", "dn:1:funding", "dn:2:margin", "price:btc", "price:eth",
 		"liq:okx:btc", "concentration:eth", "news:fed", "stale:okx", "pnl:daily", "basis:sol", "rebalance",
-		"price_cross:btc", "price_cross:eth", "liquidation:okx:btc", "move:btc", "move:eth", "move:sol"}
+		"price_cross:btc", "price_cross:eth", "liquidation_distance:okx:btc", "move_vs_vol:btc", "move_vs_vol:eth", "move_vs_vol:sol"}
 	subjects := []string{"BTC/USDT", "ETH/USDT", "BTC/USDT:USDT", "SOL/USDT", "portfolio"}
 
 	// independent re-statement of the rule under test: the Bangkok wall clock.
@@ -56,8 +56,8 @@ func TestDecide_NoNotifyInQuietHoursUnlessProtectiveCritical(t *testing.T) {
 
 		c := cand(keys[rng.Intn(len(keys))], proactive.Severity(rng.Intn(4)))
 		c.Subject = subjects[rng.Intn(len(subjects))]
-		if strings.HasPrefix(c.DedupKey, "price_cross:") || strings.HasPrefix(c.DedupKey, "move:") ||
-			strings.HasPrefix(c.DedupKey, "liquidation:") || strings.HasPrefix(c.DedupKey, "dn:") {
+		if strings.HasPrefix(c.DedupKey, "price_cross:") || strings.HasPrefix(c.DedupKey, "move_vs_vol:") ||
+			strings.HasPrefix(c.DedupKey, "liquidation_distance:") || strings.HasPrefix(c.DedupKey, "dn:") {
 			c.DedupKey += ":" + strconv.Itoa(rng.Intn(8)) // many situations, so dedup does not hide the rule
 		}
 		c.TriggerID = "trig:" + c.DedupKey

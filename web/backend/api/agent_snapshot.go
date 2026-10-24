@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/snapshot"
-	_ "modernc.org/sqlite"
+	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
 type snapshotListItem struct {
@@ -173,18 +172,16 @@ func (h *Handler) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	dbPath := filepath.Join(workspacePath, "memory", "snapshots", "snapshots.db")
 
-	// Open raw connection to bypass the keep-last safety guard (user explicitly chose to delete).
-	db, err := sql.Open("sqlite", dbPath)
+	// Open a raw handle, not the store, to bypass the keep-last safety guard (the user
+	// explicitly chose to delete). sqlitex.Open puts the busy timeout and foreign_keys in
+	// the DSN, so every pooled connection waits for the gateway's writes and cascades the
+	// delete to the snapshot's positions.
+	db, err := sqlitex.Open(dbPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to open db: %v", err), http.StatusInternalServerError)
 		return
 	}
 	defer db.Close()
-
-	if _, err := db.ExecContext(r.Context(), "PRAGMA foreign_keys=ON"); err != nil {
-		http.Error(w, fmt.Sprintf("failed to enable foreign keys: %v", err), http.StatusInternalServerError)
-		return
-	}
 
 	res, err := db.ExecContext(r.Context(), "DELETE FROM snapshots WHERE id = ?", id)
 	if err != nil {

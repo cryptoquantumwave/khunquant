@@ -40,27 +40,24 @@ type attentionSubmitter interface {
 // services. It must run after buildAttention: a governed heartbeat delivers
 // through the outbox, and without one it stays legacy rather than lose output.
 //
-//   - legacy, and sweep (MR-213 builds it): legacy;
-//   - governed with an outbox that has a Run loop: governed. Effective has already
-//     required attention to be live, and the Run loop exists only when the owner
-//     can be reached; an outbox without one would hold decisions nobody flushes;
-//   - governed without such an outbox: legacy, with one WARN.
+//   - legacy: legacy;
+//   - governed, or sweep (a governed heartbeat that is started by what changed,
+//     with its own handler; see sweep_wiring.go), with an outbox that has a Run
+//     loop: governed. Effective has already required attention to be live, and the
+//     Run loop exists only when the owner can be reached; an outbox without one
+//     would hold decisions nobody flushes;
+//   - governed or sweep without such an outbox: legacy, with one WARN.
 func heartbeatContract(cfg *config.Config, s *gatewayServices) heartbeat.Contract {
 	eff := cfg.Proactive.Effective()
 	switch eff.HeartbeatMode {
-	case config.HeartbeatModeGoverned:
+	case config.HeartbeatModeGoverned, config.HeartbeatModeSweep:
 		if s.Attention != nil && s.attentionRun != nil {
 			return heartbeat.ContractGoverned
 		}
 		if cfg.Heartbeat.Enabled {
-			logger.WarnCF("heartbeat", "proactive.heartbeat.mode is governed but attention cannot deliver "+
+			logger.WarnCF("heartbeat", "proactive.heartbeat.mode is "+eff.HeartbeatMode+" but attention cannot deliver "+
 				"(its database is unavailable or the owner cannot be reached): "+
 				"the heartbeat stays on its legacy path", nil)
-		}
-	case config.HeartbeatModeSweep:
-		if cfg.Heartbeat.Enabled {
-			logger.InfoCF("heartbeat", "proactive.heartbeat.mode sweep is not available yet: "+
-				"the heartbeat runs on its legacy path", nil)
 		}
 	}
 	return heartbeat.ContractLegacy
@@ -80,6 +77,26 @@ const (
 // minute and five.
 func heartbeatDeadline(interval time.Duration) time.Duration {
 	return max(heartbeatDeadlineMin, min(heartbeatDeadlineMax, interval/2))
+}
+
+// heartbeatTurnRequest is the proactive turn every governed or sweep heartbeat
+// runs: the heartbeat kind (read-only ceiling: the read tools and respond_proactive,
+// no trade tool, exits included; nothing it does is published), the configured
+// model tier and tool subset, and a deadline that ends it before the next tick.
+func heartbeatTurnRequest(prompt string, deadline time.Duration, tier proactive.ModelTier, toolNames []string) agent.ProactiveTurnRequest {
+	return agent.ProactiveTurnRequest{
+		Kind:         proactive.TurnHeartbeatLegacy,
+		Prompt:       prompt,
+		ForcedSkills: nil,
+		// Bounded by the turn, and ended earlier by the service's context on Stop.
+		Deadline: deadline,
+		// The configured tier: the normal model unless the owner asked for the
+		// light one (which the turn serves with the normal model when the
+		// agent has none).
+		Model: tier,
+		// The configured tool subset (the default one when none is set).
+		Tools: toolNames,
+	}
 }
 
 // newGovernedHandler builds the governed handler for a generation of services.
@@ -116,19 +133,7 @@ func governedHeartbeatHandler(
 ) heartbeat.ContextHandler {
 	deadline := heartbeatDeadline(interval)
 	return func(ctx context.Context, prompt, _, _ string) *tools.ToolResult {
-		res, err := run.RunProactiveTurn(ctx, agent.ProactiveTurnRequest{
-			Kind:         proactive.TurnHeartbeatLegacy,
-			Prompt:       prompt,
-			ForcedSkills: nil,
-			// Bounded by the turn, and ended earlier by the service's context on Stop.
-			Deadline: deadline,
-			// The configured tier: the normal model unless the owner asked for the
-			// light one (which the turn serves with the normal model when the
-			// agent has none).
-			Model: tier,
-			// The configured tool subset (the default one when none is set).
-			Tools: toolNames,
-		})
+		res, err := run.RunProactiveTurn(ctx, heartbeatTurnRequest(prompt, deadline, tier, toolNames))
 		if err != nil {
 			logger.WarnCF("heartbeat", "Governed heartbeat turn failed; nothing delivered",
 				map[string]any{"error": err.Error()})

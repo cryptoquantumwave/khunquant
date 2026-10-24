@@ -42,18 +42,22 @@ type Config struct {
 	// Future: MonitorBluetooth, MonitorPCI, etc.
 }
 
+// SourcesFor builds the device monitors cfg asks for. NewService uses it, and so
+// does the perception adapter, which wraps the same monitors.
+func SourcesFor(cfg Config) []EventSource {
+	out := make([]EventSource, 0)
+	if cfg.Enabled && cfg.MonitorUSB {
+		out = append(out, sources.NewUSBMonitor())
+	}
+	return out
+}
+
 func NewService(cfg Config, stateMgr *state.Manager) *Service {
-	s := &Service{
+	return &Service{
 		state:   stateMgr,
 		enabled: cfg.Enabled,
-		sources: make([]EventSource, 0),
+		sources: SourcesFor(cfg),
 	}
-
-	if cfg.Enabled && cfg.MonitorUSB {
-		s.sources = append(s.sources, sources.NewUSBMonitor())
-	}
-
-	return s
 }
 
 func (s *Service) SetBus(msgBus *bus.MessageBus) {

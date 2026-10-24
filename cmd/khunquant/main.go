@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -30,6 +31,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/status"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/trigger"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/uninstall"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/update"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/version"
@@ -57,6 +59,7 @@ func NewKhunquantCommand() *cobra.Command {
 		heartbeat.NewHeartbeatCommand(),
 		launcher.NewLauncherCommand(),
 		status.NewStatusCommand(),
+		trigger.NewTriggerCommand(),
 		cron.NewCronCommand(),
 		clean.NewCleanCommand(),
 		migrate.NewMigrateCommand(),
@@ -116,6 +119,24 @@ func initTermuxSSL() {
 	}
 }
 
+// exitStatus is how the process ends for an error from a command. A command that
+// silences cobra's own error output (`khunquant trigger`) returns an error that
+// names its exit status; its message is printed here, on stderr. Any other error
+// was already printed by cobra and ends the process with 1.
+func exitStatus(err error) int {
+	var ee interface {
+		error
+		ExitCode() int
+	}
+	if errors.As(err, &ee) {
+		if msg := ee.Error(); msg != "" {
+			fmt.Fprintln(os.Stderr, "Error:", msg)
+		}
+		return ee.ExitCode()
+	}
+	return 1
+}
+
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
@@ -142,6 +163,6 @@ func main() {
 
 	cmd := NewKhunquantCommand()
 	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitStatus(err))
 	}
 }

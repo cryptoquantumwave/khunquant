@@ -146,6 +146,7 @@ func (t *FuturesClosePositionTool) execute(ctx context.Context, args map[string]
 	// closeAmount is the whole position here, so it is both the requested
 	// amount and the denominator.
 	recordRealisedLoss(symbol, pnlBeforeClose, filled, closeAmount, closeAmount, verifyErr)
+	publishFuturesExit(ctx, NameFuturesClosePosition, providerID, account, symbol, closeSide, orderType, closeAmount, order, filled, status, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, closeAmount)
@@ -313,6 +314,7 @@ func (t *FuturesReducePositionTool) execute(ctx context.Context, args map[string
 	// position's size - dividing by finalAmount would over-record by 1/fraction.
 	// finalAmount is what was requested, used only if the fill is unverifiable.
 	recordRealisedLoss(symbol, pnlBeforeClose, filled, finalAmount, positionSize, verifyErr)
+	publishFuturesExit(ctx, NameFuturesReducePosition, providerID, account, symbol, closeSide, orderType, finalAmount, order, filled, status, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, finalAmount)
@@ -448,6 +450,7 @@ func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[stri
 		filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
 		// Flatten closes many positions; each records its own loss.
 		recordRealisedLoss(ap.symbol, ap.pnlBeforeClose, filled, ap.contracts, ap.contracts, verifyErr)
+		publishFuturesExit(ctx, NameFuturesEmergencyFlatten, providerID, account, ap.symbol, closeSide, "market", ap.contracts, order, filled, status, verifyErr)
 		fillNote := ""
 		if partial {
 			fillNote = fmt.Sprintf(" partial %.8g/%.8g", filled, ap.contracts)

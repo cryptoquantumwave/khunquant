@@ -17,10 +17,17 @@ type UpdateDeltaNeutralPlanTool struct {
 	cfg         *config.Config
 	store       *deltaneutral.Store
 	cronService *cron.CronService
+	sync        DNSyncFunc
 }
 
 func NewUpdateDeltaNeutralPlanTool(cfg *config.Config, store *deltaneutral.Store, cronService *cron.CronService) *UpdateDeltaNeutralPlanTool {
 	return &UpdateDeltaNeutralPlanTool{cfg: cfg, store: store, cronService: cronService}
+}
+
+// WithSync gives the tool the hook it calls after it touched the plan's cron job. Nil is fine.
+func (t *UpdateDeltaNeutralPlanTool) WithSync(f DNSyncFunc) *UpdateDeltaNeutralPlanTool {
+	t.sync = f
+	return t
 }
 
 func (t *UpdateDeltaNeutralPlanTool) Name() string { return NameUpdateDeltaNeutralPlan }
@@ -191,6 +198,15 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	}
 
 	changed := false
+	// jobTouched is set wherever the plan's cron job is enabled, disabled or replaced.
+	// Whatever happens after that, the hook is called on the way out: the job is what
+	// the trigger path has to catch up with, even when a later edit is refused.
+	jobTouched := false
+	defer func() {
+		if jobTouched {
+			t.sync.request()
+		}
+	}()
 
 	// Update name
 	if v, ok := args["name"].(string); ok && v != "" {
@@ -202,6 +218,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	if v, ok := args["enabled"].(bool); ok {
 		plan.Enabled = v
 		t.cronService.EnableJob(plan.CronJobID, v)
+		jobTouched = true
 		changed = true
 	}
 
@@ -320,6 +337,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			// Remove old cron job and create new one
 			if plan.CronJobID != "" {
 				t.cronService.RemoveJob(plan.CronJobID)
+				jobTouched = true
 			}
 			cronMsg := fmt.Sprintf("[DN-MONITOR] plan_id=%d", planID)
 			job, err := t.cronService.AddJob(
@@ -335,6 +353,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			}
 			job.Payload.NoHistory = true
 			t.cronService.UpdateJob(job)
+			jobTouched = true
 			plan.CronJobID = job.ID
 			plan.MonitorInterval = newInterval
 			changed = true
@@ -445,6 +464,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	if job := t.cronService.GetJob(plan.CronJobID); job != nil {
 		job.Name = fmt.Sprintf("dn:%d:%s", plan.ID, plan.Name)
 		_ = t.cronService.UpdateJob(job)
+		jobTouched = true
 	}
 
 	status := "enabled"

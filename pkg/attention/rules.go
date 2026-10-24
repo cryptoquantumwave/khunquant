@@ -22,6 +22,15 @@ const (
 	ReasonBudget       = "budget"
 	ReasonComposeLLM   = "compose_llm"
 	ReasonTemplate     = "template"
+	// ReasonOwnerAlertQuiet marks a candidate the owner asked for (an alert they
+	// set) that is delivered outside their active hours, where any other candidate
+	// would be held for the digest. It replaces compose_llm / template on that
+	// decision, so the owner can see why it came at night.
+	ReasonOwnerAlertQuiet = "owner_alert_quiet_hours"
+	// ReasonDeferred marks a notify or escalate decision the outbox could not
+	// hand over in time (its lane was full, or it waited past its lease) and moved
+	// to the digest instead.
+	ReasonDeferred = "deferred_to_digest"
 
 	// ReasonInhibitedPrefix starts the reason of an inhibited candidate; the
 	// dedup key of the inhibitor follows it ("inhibited_by:dn:12:margin").
@@ -49,8 +58,17 @@ type InhibitRule struct {
 // it later; nothing reads one yet.
 var defaultInhibits = []InhibitRule{
 	{WhenPrefix: "dn:", SuppressPrefix: "price_cross:", SameBaseAsset: true, For: time.Hour},
-	{WhenPrefix: "liquidation:", SuppressPrefix: "move:", SameBaseAsset: true, For: time.Hour},
-	{WhenPrefix: "drawdown:portfolio", SuppressPrefix: "move:", SameBaseAsset: false, For: 30 * time.Minute},
+	// The delta-neutral health trigger's dedup keys start with its kind, dn_health:
+	// (the registry requires the kind as the prefix of every key).
+	{WhenPrefix: "dn_health:", SuppressPrefix: "price_cross:", SameBaseAsset: true, For: time.Hour},
+	// The portfolio triggers' keys start with their kind (the registry requires it):
+	// liquidation_distance:… explains a move_vs_vol:… of the same base asset, and
+	// drawdown:portfolio:… (the kind drawdown, subject portfolio) explains any move.
+	// TestInhibit_RowsAreNamed pins these rows, so a renamed kind fails there, loudly.
+	// (The older liquidation: and move: rows were removed: no key the registry accepts
+	// can carry those prefixes.)
+	{WhenPrefix: "liquidation_distance:", SuppressPrefix: "move_vs_vol:", SameBaseAsset: true, For: time.Hour},
+	{WhenPrefix: "drawdown:portfolio", SuppressPrefix: "move_vs_vol:", SameBaseAsset: false, For: 30 * time.Minute},
 }
 
 // knownQuotes are the quote currencies a Subject must end in to be read as a
@@ -170,13 +188,21 @@ type facts struct {
 //	3b  undelivered digest item, severity >= c.Severity        drop               dedup_queued
 //	4   c.Protective && c.Severity == Critical                 notify | escalate  protective
 //	5   a fresh inhibitor explains c (see InhibitRule)         drop               inhibited_by:<key>
-//	6   now outside Profile.ActiveHours                        digest             quiet_hours
+//	6   now outside Profile.ActiveHours, and not c.OwnerRequested
+//	                                                           digest             quiet_hours
 //	7   c.Severity == Info                                     digest             info_to_digest
 //	8   Severity < Critical and sends today >= budget          digest             budget
 //	    (Warning: budget+1; Critical is never budgeted; a candidate that joins
 //	    a still-open pending message adds none and is not held back)
 //	9   c.Compose == ComposeLLM                                escalate           compose_llm
 //	10  otherwise                                              notify             template
+//
+// A candidate with OwnerRequested (the firing of an alert the owner set) skips
+// rule 6 only: it is delivered in quiet hours as it would be in active hours, and
+// rules 9 and 10 then report owner_alert_quiet_hours instead of their own reason
+// when it is quiet hours. Rules 1 to 5, 7 and 8 apply to it unchanged, so it can
+// still be muted, dropped as a repeat, inhibited, only logged in shadow, held for
+// the digest as Info, or held for the digest over the daily budget.
 //
 // Notes on the table:
 //
@@ -211,6 +237,12 @@ type facts struct {
 //     A reservation is held until the decision is delivered (stays counted) or
 //     reported failed (released). Only notify/escalate rows count; a delivered
 //     digest item does not.
+//   - The window of rule 3 is the candidate's DedupWindow (else the configured
+//     default), except for a protective Critical, whose window is
+//     AttentionConfig.CriticalRepeatMinutes when that is set (30 by default): a
+//     breach that persists is delivered again at most that often, neither once per
+//     dedup window of hours nor on every tick. A protective Critical still ignores
+//     in-flight decisions.
 //   - Rule 3b does not apply to a protective Critical candidate: it is about
 //     things the owner has NOT been told, and a queued item must never swallow
 //     the one alert that must not wait.
@@ -246,17 +278,26 @@ func evaluate(c proactive.Candidate, f facts) (proactive.Disposition, string) {
 		return proactive.DispNotify, ReasonProtective
 	case f.InhibitedBy != "":
 		return proactive.DispDrop, ReasonInhibitedPrefix + f.InhibitedBy
-	case !f.InActiveHours:
+	case !f.InActiveHours && !c.OwnerRequested:
 		return proactive.DispDigest, ReasonQuietHours
 	case c.Severity == proactive.SeverityInfo:
 		return proactive.DispDigest, ReasonInfoToDigest
 	case c.Severity < proactive.SeverityCritical && f.SendsToday >= f.limitFor(c.Severity) && !f.JoinsPending:
 		return proactive.DispDigest, ReasonBudget
 	case c.Compose == proactive.ComposeLLM:
-		return proactive.DispEscalate, ReasonComposeLLM
+		return proactive.DispEscalate, deliverReason(c, f, ReasonComposeLLM)
 	default:
-		return proactive.DispNotify, ReasonTemplate
+		return proactive.DispNotify, deliverReason(c, f, ReasonTemplate)
 	}
+}
+
+// deliverReason is the reason of a candidate that goes out through rules 9 and 10:
+// base, except that an owner's alert delivered in quiet hours says so.
+func deliverReason(c proactive.Candidate, f facts, base string) string {
+	if c.OwnerRequested && !f.InActiveHours {
+		return ReasonOwnerAlertQuiet
+	}
+	return base
 }
 
 // limitFor is how many non-critical sends a day allows a candidate of severity

@@ -4,20 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 // SetPriceAlertTool manages price alerts backed by the cron scheduler.
 type SetPriceAlertTool struct {
 	cfg         *config.Config
 	cronService *cron.CronService
+	// triggers resolves the trigger registry, late. Nil, or a registry that is not
+	// live, leaves the tool exactly as it was: alerts are cron jobs.
+	triggers AlertTriggersFunc
 }
 
 func NewSetPriceAlertTool(cfg *config.Config, cronService *cron.CronService) *SetPriceAlertTool {
 	return &SetPriceAlertTool{cfg: cfg, cronService: cronService}
+}
+
+// WithTriggers lets the tool write to the trigger registry while one is live (see
+// AlertTriggers) and show and cancel the alerts that are in it. It returns t.
+func (t *SetPriceAlertTool) WithTriggers(f AlertTriggersFunc) *SetPriceAlertTool {
+	t.triggers = f
+	return t
 }
 
 func (t *SetPriceAlertTool) Name() string { return NameSetPriceAlert }
@@ -43,12 +53,13 @@ func (t *SetPriceAlertTool) Parameters() map[string]any {
 				"enum":        []string{"above", "below"},
 				"description": "Alert condition: 'above' fires when price exceeds threshold, 'below' fires when price drops below.",
 			},
-			"threshold": map[string]any{"type": "number", "description": "Price threshold."},
-			"message":   map[string]any{"type": "string", "description": "Custom message to include in the alert notification."},
-			"channel":   map[string]any{"type": "string", "description": "Optional: target notification channel (e.g. line, telegram). Defaults to the current channel."},
-			"chat_id":   map[string]any{"type": "string", "description": "Optional: target chat/user ID for the notification. Required when specifying a custom channel."},
-			"recurring": map[string]any{"type": "boolean", "description": "If true, keep the alert active after it fires (default: false = one-shot)."},
-			"alert_id":  map[string]any{"type": "string", "description": "Alert ID to cancel (required for action='cancel')."},
+			"threshold":        map[string]any{"type": "number", "description": "Price threshold."},
+			"message":          map[string]any{"type": "string", "description": "Custom message to include in the alert notification."},
+			"channel":          map[string]any{"type": "string", "description": "Optional: target notification channel (e.g. line, telegram). Defaults to the current channel."},
+			"chat_id":          map[string]any{"type": "string", "description": "Optional: target chat/user ID for the notification. Required when specifying a custom channel."},
+			"recurring":        map[string]any{"type": "boolean", "description": "If true, keep the alert active after it fires (default: false = one-shot)."},
+			"cooldown_minutes": map[string]any{"type": "integer", "description": "Optional: the least time between two firings of a recurring alert, in minutes (default 60)."},
+			"alert_id":         map[string]any{"type": "string", "description": "Alert ID to cancel (required for action='cancel')."},
 		},
 		"required": []string{"action"},
 	}
@@ -59,13 +70,13 @@ func (t *SetPriceAlertTool) Execute(ctx context.Context, args map[string]any) *T
 
 	switch action {
 	case "list":
-		return t.listAlerts()
+		return t.listAlerts(ctx)
 	case "cancel":
 		id, _ := args["alert_id"].(string)
 		if id == "" {
 			return ErrorResult("alert_id is required for cancel action")
 		}
-		return t.cancelAlert(id)
+		return t.cancelAlert(ctx, id)
 	case "create":
 		return t.createAlert(ctx, args)
 	default:
@@ -91,6 +102,9 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 	cooldown, err := parseAlertCooldown(args)
 	if err != nil {
 		return ErrorResult(err.Error())
+	}
+	if at := liveTriggers(t.triggers); at != nil {
+		return t.createTriggerAlert(ctx, at, providerID, account, symbol, condition, threshold, message, recurring, cooldown)
 	}
 
 	payload := PriceAlertPayload{
@@ -146,33 +160,31 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 		job.ID, symbol, condition, "price", threshold, recurring))
 }
 
-func (t *SetPriceAlertTool) listAlerts() *ToolResult {
-	jobs := t.cronService.ListJobs(false)
-
-	var alerts []cron.CronJob
-	for _, j := range jobs {
-		if strings.HasPrefix(j.Name, "price_alert:") || strings.HasPrefix(j.Name, "indicator_alert:") {
-			alerts = append(alerts, j)
-		}
-	}
-
-	if len(alerts) == 0 {
-		return UserResult("No active price or indicator alerts.")
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Active alerts (%d):\n\n", len(alerts)))
-	sb.WriteString(fmt.Sprintf("%-24s  %-s\n", "ID", "Name"))
-	sb.WriteString(fmt.Sprintf("%-24s  %-s\n", strings.Repeat("-", 24), strings.Repeat("-", 40)))
-	for _, a := range alerts {
-		sb.WriteString(fmt.Sprintf("%-24s  %s\n", a.ID, a.Name))
-	}
-	return UserResult(sb.String())
+func (t *SetPriceAlertTool) listAlerts(ctx context.Context) *ToolResult {
+	return listAlertsAll(ctx, t.cronService, t.triggers)
 }
 
-func (t *SetPriceAlertTool) cancelAlert(id string) *ToolResult {
-	if t.cronService.RemoveJob(id) {
-		return UserResult(fmt.Sprintf("Alert %s cancelled.", id))
+func (t *SetPriceAlertTool) cancelAlert(ctx context.Context, id string) *ToolResult {
+	return cancelAlertAny(ctx, t.cronService, t.triggers, id)
+}
+
+// createTriggerAlert writes the alert to the live trigger registry instead of a cron
+// job. It is delivered to the owner, not to the chat that asked for it.
+func (t *SetPriceAlertTool) createTriggerAlert(ctx context.Context, at AlertTriggers,
+	providerID, account, symbol, condition string, threshold float64, message string, recurring bool, cooldown int) *ToolResult {
+	p := triggers.PriceCrossParams{
+		Provider: providerID, Account: account, Symbol: symbol, Direction: condition, Threshold: threshold,
+		Recurring: recurring, CooldownMin: cooldown, Message: triggers.CleanAlertMessage(message),
 	}
-	return ErrorResult(fmt.Sprintf("Alert %s not found.", id))
+	if err := p.Validate(); err != nil {
+		return ErrorResult(fmt.Sprintf("invalid price alert: %v", err))
+	}
+	spec, err := at.Add(ctx, triggers.Spec{
+		Kind: triggers.KindPriceCross, Params: p.JSON(), Mode: triggers.ModeLive, Origin: triggers.OriginSetPriceAlert,
+	})
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("creating alert: %v", err))
+	}
+	return UserResult(fmt.Sprintf("Price alert created (ID: %s)\n  %s %s %s %.8g\n  Recurring: %v\n%s",
+		spec.ID, symbol, condition, "price", threshold, recurring, liveDeliveryNote))
 }

@@ -242,13 +242,23 @@ func getEvent(logger zerolog.Logger, level LogLevel) *zerolog.Event {
 }
 
 func logMessage(level LogLevel, component string, message string, fields map[string]any) {
-	if level < currentLevel {
+	// SetLevel, SetAdditionalWriter and Enable/DisableFileLogging replace these
+	// package variables under mu while any goroutine may be logging (the
+	// gateway toggles the additional writer on a config reload). Read them once,
+	// under the read lock, and log from the copies. A call that started before a
+	// setter returned may still write to the sink it replaced; it never reads a
+	// half-written one.
+	mu.RLock()
+	lvl, consoleLogger, fileSink := currentLevel, logger, fileLogger
+	mu.RUnlock()
+
+	if level < lvl {
 		return
 	}
 
 	callerFile, callerLine, callerFunc := getCallerInfo()
 
-	event := getEvent(logger, level)
+	event := getEvent(consoleLogger, level)
 
 	// Build combined field with component and caller
 	if component != "" {
@@ -263,8 +273,8 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	event.Msg(message)
 
 	// Also log to file if enabled
-	if fileLogger.GetLevel() != zerolog.NoLevel {
-		fileEvent := getEvent(fileLogger, level)
+	if fileSink.GetLevel() != zerolog.NoLevel {
+		fileEvent := getEvent(fileSink, level)
 
 		if component != "" {
 			fileEvent.Str("component", component)

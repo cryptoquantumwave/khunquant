@@ -119,6 +119,11 @@ func (g *Governor) PendingDigest(ctx context.Context) (*Digest, error) {
 	if err := commit(tx); err != nil {
 		return nil, err
 	}
+	// The same instants, in the owner's zone: RenderDigest shows the time of a
+	// delayed item and has no profile to ask.
+	for i := range items {
+		items[i].At = items[i].At.In(loc)
+	}
 	return &Digest{Day: day, Items: items}, nil
 }
 
@@ -159,6 +164,76 @@ func (g *Governor) CompleteDigest(ctx context.Context, dg *Digest, r Delivery) e
 	}
 	return commit(tx)
 }
+
+// DeferToDigest turns an in-flight notify or escalate decision into a digest
+// item: its row becomes a digest row (reason ReasonDeferred) and joins the digest
+// queue, so the owner hears about it in the next digest instead of never. The
+// outbox does this for a message it could not hand over in time (a full lane, or
+// a wait past the decision's lease) and for one the deliverer did not take after
+// its retries; RenderDigest marks such an item as delayed. Because the row stops being a notify, it no
+// longer reserves budget.
+//
+// It is idempotent: a decision already in the queue is left there once, and one
+// that was delivered or released, or that is no longer a notify or escalate, is
+// left alone. A protective decision is refused: protective alerts are never
+// deferred. Outside live mode it does nothing (no decision there is sendable).
+func (g *Governor) DeferToDigest(ctx context.Context, d Decision) error {
+	if g.mode != modeLive {
+		return nil
+	}
+	if d.ID == "" {
+		return errors.New("attention: decision has no id")
+	}
+	tx, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("attention: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		disp, reason string
+		delivered    int
+		releasedAt   sql.NullInt64
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT disposition, reason, delivered, delivered_at_ms FROM attention_decisions WHERE id = ?`, d.ID).
+		Scan(&disp, &reason, &delivered, &releasedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w %q", errUnknownDecision, d.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("attention: read decision: %w", err)
+	}
+	if reason == ReasonProtective {
+		return fmt.Errorf("attention: decision %q is protective and cannot be deferred", d.ID)
+	}
+	switch {
+	case disp == string(proactive.DispDigest):
+		// Already a digest item: make sure it is queued, once.
+	case (disp == string(proactive.DispNotify) || disp == string(proactive.DispEscalate)) &&
+		delivered == 0 && !releasedAt.Valid:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE attention_decisions SET disposition = ?, reason = ? WHERE id = ? AND delivered = 0`,
+			string(proactive.DispDigest), ReasonDeferred, d.ID); err != nil {
+			return fmt.Errorf("attention: defer decision: %w", err)
+		}
+	default:
+		return nil // delivered, released or not a message at all: nothing to defer
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO attention_digest_queue (decision_id, enqueued_ms) VALUES (?, ?)
+		 ON CONFLICT(decision_id) DO NOTHING`, d.ID, g.clock().UnixMilli()); err != nil {
+		return fmt.Errorf("attention: queue deferred decision: %w", err)
+	}
+	return commit(tx)
+}
+
+// CleanLine reduces text that came from outside the process (a model's prose, a
+// title) to one clean line of at most limit runes: line breaks and control and
+// invisible format characters are removed, white space collapses, and a long line
+// ends with an ellipsis. It is what the outbox applies to the titles and prose
+// of a grouped message.
+func CleanLine(s string, limit int) string { return oneLine(s, limit) }
 
 // digestDay returns the local day whose digest is due at now, as "2006-01-02".
 // See the comment at the top of the file for the rule. It reads the profile and
@@ -272,7 +347,9 @@ func setMeta(ctx context.Context, tx *sql.Tx, key, value string) error {
 // order their best item ranks, and the rest are summarised as "and N more".
 // Titles and subjects can carry text from outside the process, so each is
 // reduced to one clean line here: a newline in a title never becomes a second
-// item line. The message carries no actions and no footer.
+// item line. An item deferred from a message that could not be delivered
+// (ReasonDeferred) ends with a "delayed" note giving the time it was raised, in
+// the zone of its At. The message carries no actions and no footer.
 func RenderDigest(items []Decision) (title, body string) {
 	n := len(items)
 	if n == 0 {
@@ -295,6 +372,11 @@ func RenderDigest(items []Decision) (title, body string) {
 		}
 		if line == "" {
 			line = "(no title)"
+		}
+		if d.Reason == ReasonDeferred && !d.At.IsZero() {
+			// It missed its own message (see DeferToDigest). At is when it was
+			// raised, in the zone PendingDigest put it in.
+			line += " (delayed: raised at " + d.At.Format("15:04") + ", could not be delivered on time)"
 		}
 		if _, seen := bySubject[subject]; !seen {
 			order = append(order, subject)

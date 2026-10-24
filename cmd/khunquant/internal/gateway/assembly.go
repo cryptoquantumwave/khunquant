@@ -14,14 +14,19 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/devices"
+	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/voice"
 )
 
@@ -53,8 +58,8 @@ type handleMux interface {
 // shutdown. Anything that must restart with new config (the loss-guard sampler,
 // the cron service, the channel manager, ...) belongs on gatewayServices instead.
 //
-// Later changes add a database handle and an event bus: register each with
-// add so Close releases it.
+// The proactive database handle and the event bus live here; register anything
+// further with add so Close releases it.
 type sharedResources struct {
 	// LogBuf is the dev-MCP log ring buffer. It is created the first time
 	// dev-MCP is enabled, kept across reloads so history survives them, and
@@ -62,9 +67,41 @@ type sharedResources struct {
 	// touched only by the single goroutine that builds services.
 	LogBuf *debugtap.LogBuffer
 
+	// Events is the gateway's one event bus (see event_bus.go). It is made with
+	// the resources and closed by Close, never by a reload.
+	Events *events.EventBus
+
 	mu      sync.Mutex
 	closers []namedCloser
 	closed  bool
+
+	// triggerLim is the external trigger route's rate limit, per process: a reload
+	// keeps it (see trigger_api.go).
+	triggerLim *triggerLimiter
+
+	// dcaStats and dcaOutcomes are the dca_due trigger's counters and per-slot record:
+	// per process, so that a reload keeps the day's record (dca_due_wiring.go).
+	dcaStats    *triggers.DCAStats
+	dcaOutcomes *triggers.DCAOutcomes
+
+	// portfolioStats are the portfolio triggers' counters, per process
+	// (portfolio_triggers_wiring.go).
+	portfolioStats *triggers.PortfolioStats
+
+	// sweep is the heartbeat sweep's overlap guard, failure count and counters, per
+	// process: a sweep still running when a reload builds the next generation is
+	// seen by it (sweep_wiring.go). Created on first use, guarded by mu.
+	sweep *sweep.State
+}
+
+// sweepState returns the process's sweep state, creating it on first use.
+func (r *sharedResources) sweepState() *sweep.State {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sweep == nil {
+		r.sweep = &sweep.State{}
+	}
+	return r.sweep
 }
 
 type namedCloser struct {
@@ -73,7 +110,9 @@ type namedCloser struct {
 }
 
 func newSharedResources() *sharedResources {
-	return &sharedResources{}
+	r := &sharedResources{Events: events.NewBus()}
+	r.add(eventBusResource, r.Events)
+	return r
 }
 
 // add registers a resource for Close. Resources close in reverse order of
@@ -122,6 +161,21 @@ type assemblyDeps struct {
 	// (so a failed reload cannot strand its listener) and the dev-MCP debug tap.
 	Prev *gatewayServices
 
+	// Alerts is the alert side of this generation (alerts_wiring.go): buildServices
+	// makes it before the tools are registered and sets it on its own copy of the
+	// deps; the caller of buildServices never sets it.
+	Alerts *alertRuntime
+
+	// DNStore is the delta-neutral plan store (nil when it could not be opened);
+	// buildServices sets it on its own copy of the deps once the cron side has opened
+	// it, and the caller never sets it.
+	DNStore *deltaneutral.Store
+
+	// Demands is what the market source reads. buildPerception sets it on its own
+	// copy of the deps when the triggers registry is built; it is never set by
+	// the caller of buildServices.
+	Demands perception.DemandSource
+
 	// Reload selects wording of console and log lines ("restarted" vs "started").
 	// It must never change what is built.
 	Reload bool
@@ -144,7 +198,7 @@ func (p phase) sayf(format string, args ...any) {
 
 // buildServices constructs and starts every gateway service for cfg, in this
 // order: loss guard, cron, media store, channel manager (and agent loop wiring,
-// voice), HTTP server, routes, channels, notify, attention, heartbeat, devices.
+// voice), HTTP server, routes, channels, notify, attention, perception, heartbeat, devices.
 //
 // On error it returns the services that were already started, not nil, so the
 // caller can keep tracking and later stop them.
@@ -152,7 +206,7 @@ func (p phase) sayf(format string, args ...any) {
 // ctx only bounds construction. Long-lived services (channels, devices) run on
 // context.Background() on purpose: they must outlive this call.
 func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
-	s := &gatewayServices{}
+	s := &gatewayServices{perceptionLive: newPerceptionHolder()}
 	if prev := d.Prev; prev != nil {
 		s.SandboxServer = prev.SandboxServer
 		s.SandboxToken = prev.SandboxToken
@@ -175,7 +229,16 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 			map[string]any{"error": err.Error()})
 	}
 
+	// Sub-turn events go to the shared event bus, on a first start and on every
+	// reload (the agent loop outlives both).
+	wireEventBus(d)
+
 	s.LossGuard = lossGuardStarter(cfg)
+
+	// The alert side: the late-bound route from the alert tools to the trigger
+	// registry (which does not exist yet), and the migration of the cron alerts.
+	s.Alerts = newAlertRuntime(d)
+	d.Alerts = s.Alerts
 
 	// Cron tool and service.
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
@@ -186,7 +249,10 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		cfg.Agents.Defaults.RestrictToWorkspace,
 		execTimeout,
 		cfg,
+		cronHooks{Alerts: s.Alerts.resolver(), DNSync: s.Alerts.requestDNSync},
 	)
+	d.DNStore = s.DNStore
+	s.Alerts.dn.configure(s.DNStore)
 	if err := s.CronService.Start(); err != nil {
 		return s, fmt.Errorf("error %s cron service: %w", starting, err)
 	}
@@ -264,6 +330,18 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Attention: the governor and the outbox that turns its decisions into
 	// messages. After notify, which it delivers through.
 	s.Attention, s.attentionRun = buildAttention(d, s.NotifyService)
+	wireDNAudit(s.Attention, d) // the audit rows of delivered delta-neutral alerts
+
+	// Perception: the sources, the manager and the pipeline engine. After
+	// attention, whose outbox it decides through and hands over to; nothing is
+	// built unless perception is effectively on and that outbox exists.
+	s.Perception = buildPerception(d, s.Attention)
+	s.perceptionLive.Store(s.Perception)
+
+	// Alerts: with a registry, import and (when live) promote the cron alerts; without
+	// one, hand back any job a promotion had switched off. After perception, which
+	// builds the registry, and after the cron service started.
+	s.Alerts.attach(d, s.CronService, s.Perception)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -282,18 +360,34 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		// generation was built from, so a reload that changes
 		// proactive.heartbeat.model or .tools builds a handler with it.
 		eff := cfg.Proactive.Effective()
-		s.HeartbeatService.SetContextHandler(newGovernedHandler(
-			al, s.Attention, s.HeartbeatService.Interval(), eff.HeartbeatModel, eff.HeartbeatTools))
+		interval := s.HeartbeatService.Interval()
+		if h := sweepHandler(d, s, eff, al, interval); h != nil {
+			// A sweep: reconcile, look at what changed, ask the model only if
+			// something did. It runs on every tick, also when HEARTBEAT.md lists no
+			// task: its reconciliation does not depend on one.
+			s.HeartbeatService.SetRunWithoutTasks(true)
+			s.HeartbeatService.SetContextHandler(h)
+		} else {
+			s.HeartbeatService.SetContextHandler(newGovernedHandler(
+				al, s.Attention, interval, eff.HeartbeatModel, eff.HeartbeatTools))
+		}
 	} else {
 		s.HeartbeatService.SetBus(msgBus)
 		s.HeartbeatService.SetHandler(heartbeatHandler(al))
+		observeHeartbeatSends(al, s.HeartbeatService)
 	}
 	if err := s.HeartbeatService.Start(); err != nil {
 		return s, fmt.Errorf("error %s heartbeat service: %w", starting, err)
 	}
 	p.sayf("✓ Heartbeat service %s", p.pick("started", "restarted"))
 
-	// Device service, on the shared state manager.
+	// Device service, on the shared state manager. When the perception device
+	// adapter has taken the monitors over, it is not started: two readers of the
+	// same hardware would report every plug twice.
+	if s.Perception != nil && s.Perception.devicesTakenOver {
+		p.sayf("✓ Device events go through the perception pipeline")
+		return s, nil
+	}
 	s.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
@@ -336,6 +430,26 @@ func heartbeatHandler(al *agent.AgentLoop) heartbeat.HeartbeatHandler {
 	}
 }
 
+// observeHeartbeatSends has the default agent's message tool (the one a heartbeat
+// turn runs with) report each message a heartbeat turn delivers to hs, which keeps
+// the ledger of sent alerts the next legacy prompt shows. The agent loop outlives a
+// reload, so this runs on every build and replaces the earlier service's observer.
+func observeHeartbeatSends(al *agent.AgentLoop, hs *heartbeat.HeartbeatService) {
+	reg := al.GetRegistry()
+	if reg == nil {
+		return
+	}
+	inst := reg.GetDefaultAgent()
+	if inst == nil || inst.Tools == nil {
+		return
+	}
+	if t, ok := inst.Tools.Get(tools.NameMessage); ok {
+		if mt, ok := t.(*tools.MessageTool); ok {
+			hs.ObserveMessageSends(mt)
+		}
+	}
+}
+
 // registerGatewayRoutes puts every gateway HTTP route on mux (and starts the
 // sandbox server whose API it serves). It is the only place routes are added:
 // buildServices calls it right after SetupHTTPServer and before StartAll, on a
@@ -345,6 +459,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken, perceptionStatsFn(s.perceptionLive))
+	registerTriggerAPIFor(mux, s, d)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -361,7 +477,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 }
 
 // stopServices stops all services of one generation and cleans up their
-// resources. Order: heartbeat, attention outbox, loss guard, channels, devices,
+// resources. Order: heartbeat, perception (sources, then the engine), attention outbox, loss guard, channels, devices,
 // notify, cron, media store.
 // The sandbox server is deliberately not stopped here; see handleConfigReload
 // and shutdownGateway.
@@ -375,6 +491,19 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	if s.HeartbeatService != nil {
 		s.HeartbeatService.Stop()
 	}
+
+	// Then perception, before the outbox: the sources stop first so that nothing
+	// new arrives, then the engine drains what its inbox holds through the pipeline,
+	// which hands its decisions to the outbox. The outbox must still be accepting
+	// them, so it stops after, never before. (The heartbeat is already stopped, so
+	// no second producer is left.)
+	s.Alerts.stop() // before the registry's pipeline goes: it writes to the registry and the cron store
+	s.Alerts = nil
+	s.Perception.stop()
+	if s.perceptionLive != nil {
+		s.perceptionLive.Store(nil)
+	}
+	s.Perception = nil
 
 	// Then the outbox: its final flush delivers through the notify service and
 	// the channels, which are still up at this point.

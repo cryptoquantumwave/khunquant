@@ -74,6 +74,12 @@ type Notification struct {
 	// InterventionID is the attention decision ID. A fresh one is generated
 	// when it is empty or not made of ULID characters.
 	InterventionID string
+	// SessionBody, when set, replaces Body in the copy written into the owner's
+	// session; the message the owner is sent is unchanged. The model reads the
+	// session on the owner's next turn, so a body that quotes text from outside
+	// (an external trigger's message) is kept out of it by giving the session a
+	// body without that text. nil means the session copy carries Body.
+	SessionBody *string
 	// WriteToSession is true by default (nil).
 	WriteToSession      *bool
 	DisableNotification bool
@@ -292,6 +298,10 @@ func (s *Service) Deliver(ctx context.Context, n Notification) (Result, error) {
 	text, ok := render(n.Severity, id, n.Title, n.Body)
 	if !ok {
 		return res, errors.New("notify: notification has neither title nor body")
+	}
+
+	if n.SessionBody != nil {
+		text.Session = sessionCopy(n.Severity, id, cleanTitle(n.Title), cleanBody(*n.SessionBody))
 	}
 
 	s.mu.Lock()

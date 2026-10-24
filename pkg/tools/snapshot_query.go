@@ -38,7 +38,7 @@ func (t *QuerySnapshotsTool) Parameters() map[string]any {
 			},
 			"label": map[string]any{
 				"type":        "string",
-				"description": "Filter by label (e.g. \"daily\", \"heartbeat\").",
+				"description": "Filter by label (e.g. \"daily\", \"heartbeat\"). Scheduled automatic snapshots are listed only with label \"auto\".",
 			},
 			"source": map[string]any{
 				"type":        "string",

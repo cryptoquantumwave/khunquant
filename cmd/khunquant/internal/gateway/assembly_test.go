@@ -608,6 +608,9 @@ func TestAssembly_EachServiceAndRouteHasOneCallSite(t *testing.T) {
 	// Exactly one: they must exist, and exist once, or the check proves nothing.
 	for _, callee := range []string{
 		"registerCronAPI",
+		"registerProactiveStatsAPI",
+		"wireEventBus",
+		"events.NewBus",
 		"registerSandboxAPI",
 		"registerDevMCP",
 		"startAndRegisterSandbox",
@@ -616,6 +619,7 @@ func TestAssembly_EachServiceAndRouteHasOneCallSite(t *testing.T) {
 		"heartbeat.NewHeartbeatService",
 		"devices.NewService",
 		"channels.NewManager",
+		"al.SetEventBus",
 	} {
 		if got := counts[callee]; got != 1 {
 			t.Errorf("%s( is called %d times in the gateway package's non-test files, want exactly 1", callee, got)

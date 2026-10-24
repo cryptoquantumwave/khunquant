@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
 const schema = `
@@ -297,21 +297,14 @@ func NewStore(workspacePath string) (*Store, error) {
 		return nil, fmt.Errorf("deltaneutral: create dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "delta_neutral.db")
-	db, err := sql.Open("sqlite", dbPath)
+	// sqlitex.Open puts busy_timeout, foreign_keys, WAL and synchronous in the DSN, so
+	// EVERY pooled connection has them. Several handles write this file (the agent's
+	// tools, the perception source, the trigger migration, the gateway's DN sync, the
+	// web launcher); pragmas run through db.Exec configured only one connection and
+	// left no busy timeout, so a second writer failed at once with SQLITE_BUSY.
+	db, err := sqlitex.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("deltaneutral: open db: %w", err)
-	}
-
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA cache_size=-2000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("deltaneutral: %s: %w", pragma, err)
-		}
 	}
 
 	if _, err := db.Exec(schema); err != nil {

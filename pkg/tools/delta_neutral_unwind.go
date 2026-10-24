@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -548,6 +549,12 @@ func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, pl
 		filledNotional = baseQty * avgFillPrice
 	}
 
+	publishOrder(ctx, orderReport{
+		tool: NameUnwindDeltaNeutralPosition, provider: plan.FuturesProvider, account: plan.FuturesAccount,
+		symbol: plan.FuturesSymbol, side: closeSide, kind: "market", amount: closeContracts, unit: orderfeed.UnitContracts,
+		order: order, notionalUSD: filledNotional, notionalKnown: (filledNotional > 0) && usdQuoted(plan.FuturesSymbol, plan.FuturesProvider),
+	})
+
 	leg := &deltaneutral.ExecutionLeg{
 		ExecutionID:        exec.ID,
 		LegType:            string(deltaneutral.LegTypeFutures),
@@ -668,6 +675,12 @@ func (t *UnwindDeltaNeutralPositionTool) closeSpotLeg(ctx context.Context, plan 
 	} else if avgFillPrice > 0 {
 		filledNotional = filledQty * avgFillPrice
 	}
+
+	publishOrder(ctx, orderReport{
+		tool: NameUnwindDeltaNeutralPosition, provider: plan.SpotProvider, account: plan.SpotAccount,
+		symbol: plan.SpotSymbol, side: sellSide, kind: "market", amount: sellAmount, unit: orderfeed.UnitBase,
+		order: order, notionalUSD: filledNotional, notionalKnown: (filledNotional > 0) && usdQuoted(plan.SpotSymbol, plan.SpotProvider),
+	})
 
 	leg := &deltaneutral.ExecutionLeg{
 		ExecutionID:        exec.ID,

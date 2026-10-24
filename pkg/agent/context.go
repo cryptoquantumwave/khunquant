@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -37,6 +38,10 @@ type ContextBuilder struct {
 	promptCacheSeq    uint64 // build counter, for oldest-first eviction
 
 	financialCollector *FinancialContextCollector
+
+	// background is the section only background turns carry (see
+	// background_sections.go); nil or empty adds nothing.
+	background *backgroundSections
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -55,6 +60,14 @@ func (cb *ContextBuilder) WithSplitOnMarker(enabled bool) *ContextBuilder {
 
 func (cb *ContextBuilder) WithFinancialCollector(c *FinancialContextCollector) *ContextBuilder {
 	cb.financialCollector = c
+	return cb
+}
+
+// WithBackgroundSections shares the agent loop's background-section holder with
+// the builder. The holder is read through an atomic pointer, so attaching it while
+// turns are running is safe.
+func (cb *ContextBuilder) WithBackgroundSections(b *backgroundSections) *ContextBuilder {
+	cb.background = b
 	return cb
 }
 
@@ -417,6 +430,13 @@ func (cb *ContextBuilder) BuildMessagesWithOptions(
 
 	// Build short dynamic context (time, runtime, session) — changes per request
 	dynamicCtx := cb.buildDynamicContext(channel, chatID)
+	// Background turns, and only they, also carry the sections attached for them.
+	// A user turn's dynamic context is exactly what it always was.
+	if (o.Mode == PromptLight || o.Mode == PromptProactive) && !o.NoBackgroundSections {
+		if extra := cb.background.render(context.Background()); extra != "" {
+			dynamicCtx += "\n\n" + extra
+		}
+	}
 
 	// Compose a single system message: static (cached) + dynamic + optional summary.
 	// Keeping all system content in one message ensures every provider adapter can

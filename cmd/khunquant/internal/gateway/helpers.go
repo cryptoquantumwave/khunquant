@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
@@ -72,9 +73,12 @@ type gatewayServices struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
-	NotifyService    *notify.Service // nil when proactive is off or the service could not be built; nil means delivery is disabled
-	Attention        *attention.Outbox // nil when attention mode is off or the database is unavailable; submit candidates here
-	attentionRun     *attentionRunner  // the outbox's Run loop; nil unless attention is live and can deliver
+	NotifyService    *notify.Service                    // nil when proactive is off or the service could not be built; nil means delivery is disabled
+	Attention        *attention.Outbox                  // nil when attention mode is off or the database is unavailable; submit candidates here
+	attentionRun     *attentionRunner                   // the outbox's Run loop; nil unless attention is live and can deliver
+	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
+	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
+	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
@@ -549,6 +553,16 @@ func getFileSize(path string) int64 {
 	return info.Size()
 }
 
+// cronHooks are the late-bound hooks the gateway gives the tools setupCronTool
+// registers. Both are optional: without them the tools behave as they always did.
+type cronHooks struct {
+	// Alerts routes the alert tools to the trigger registry, when one is live.
+	Alerts tools.AlertTriggersFunc
+	// DNSync asks for a (debounced) pass of the delta-neutral hand-over after a plan
+	// tool changed a plan's cron job.
+	DNSync tools.DNSyncFunc
+}
+
 func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
@@ -556,6 +570,7 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
+	hooks ...cronHooks,
 ) (*cron.CronService, *deltaneutral.Store) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
@@ -599,11 +614,22 @@ func setupCronTool(
 		dnStore = store
 	}
 
+	var h cronHooks
+	if len(hooks) > 0 {
+		h = hooks[0]
+	}
+	// triggersLive says, at the moment a job runs, whether the trigger registry is
+	// live and so owns the alert families a promotion switched off.
+	triggersLive := func() bool { return h.Alerts != nil && h.Alerts().Live() }
+
 	// Set onJob handler — alert, DCA, and DN jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
 	// The ctx carries the per-run job timeout and is cancelled when the cron service
 	// gives up waiting at stop; every handler uses it instead of context.Background().
 	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
+		// The legacy handlers below stay for rollback; a job of a family the triggers
+		// replaced that runs while they are live is said so (once per job per day).
+		legacyJobs.check(job, triggersLive)
 		if strings.HasPrefix(job.Name, tools.JobPrefixPriceAlert) {
 			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
@@ -627,11 +653,14 @@ func setupCronTool(
 	})
 
 	// Alert tools (Track D) — require cron service, registered after it is created.
+	// The tools write to the trigger registry only while one is live (decided on every
+	// call, see tools.AlertTriggers); otherwise they are the cron tools they always were.
+	route := h.Alerts
 	if cfg.Tools.IsToolEnabled("set_price_alert") {
-		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService).WithTriggers(route))
 	}
 	if cfg.Tools.IsToolEnabled("set_indicator_alert") {
-		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService).WithTriggers(route))
 	}
 
 	// DCA tools (Track E) — require cron service + the store opened above.
@@ -669,7 +698,7 @@ func setupCronTool(
 	// Delta-neutral tools (Track F) — require cron service + the store opened above.
 	if dnToolsEnabled(cfg) && dnStore != nil {
 		if cfg.Tools.IsToolEnabled("create_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("list_delta_neutral_plans") {
 			agentLoop.RegisterTool(tools.NewListDeltaNeutralPlansTool(dnStore))
@@ -678,10 +707,10 @@ func setupCronTool(
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralPlanTool(cfg, dnStore))
 		}
 		if cfg.Tools.IsToolEnabled("update_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("get_delta_neutral_summary") {
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralSummaryTool(cfg, dnStore))

@@ -505,13 +505,20 @@ func (d *Deps) checkMandate(c *journal.Ctx, in ExecInput) func(context.Context, 
 		ask := func(bound, reason, detail string, used float64) (any, error) {
 			return checkOut{Verdict: verdictAsk, Bound: bound, Reason: reason, Detail: detail, Quote: q, Used: used}, nil
 		}
-		if dial == "ask" {
-			return ask(BoundOwnerDial, "the owner's autonomy setting asks about every mandated buy", "", 0)
-		}
+		// An unproven earlier run comes first, even under the dial: that order may already
+		// have bought, so the card must say so rather than only naming the owner's setting.
 		if reason, err := d.Store.Unproven(ctx, plan.ID); err != nil {
 			return nil, err
 		} else if reason != "" {
-			return ask(BoundUnproven, "an earlier run could not be proven: "+reason, "", 0)
+			why, detail := "an earlier run could not be proven: "+reason, ""
+			if dial == "ask" {
+				why += " (the owner's autonomy setting also asks about every mandated buy)"
+				detail = "owner autonomy setting: ask"
+			}
+			return ask(BoundUnproven, why, detail, 0)
+		}
+		if dial == "ask" {
+			return ask(BoundOwnerDial, "the owner's autonomy setting asks about every mandated buy", "", 0)
 		}
 		if m.Status != MandateActive || !m.ExpiresAt.After(now) {
 			return ask(BoundExpired, "the mandate expired on "+m.ExpiresAt.Format("2006-01-02"), "", 0)

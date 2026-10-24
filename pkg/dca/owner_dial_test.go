@@ -58,6 +58,33 @@ func TestOwnerDial_T2_AskMakesAProposalAndNoOrder(t *testing.T) {
 	}
 }
 
+// ask plus an unproven earlier run: the card names the unproven run (it may already
+// have bought), not only the owner's setting, and the dial is still mentioned.
+func TestOwnerDial_T2_UnprovenComesBeforeAsk(t *testing.T) {
+	w := newXWorld(t, true, monday)
+	p := w.newProc()
+	p.setDial(constDial("ask"))
+	m := w.mandate(p.store, nil)
+	if err := p.store.MarkUnproven(context.Background(), w.planID, "wf", "the order may have been placed", monday); err != nil {
+		t.Fatal(err)
+	}
+	p.run(m, monday)
+	if w.ex.orderCount() != 0 || w.asker.count() != 1 {
+		t.Fatalf("orders %d, asks %v; want one ask and no order", w.ex.orderCount(), w.asker.asked)
+	}
+	got := w.asker.asked[0]
+	if !strings.Contains(got, "could not be proven") || !strings.Contains(got, "the order may have been placed") || !strings.Contains(got, "autonomy setting") {
+		t.Errorf("ask = %q, want the unproven reason and a mention of the dial", got)
+	}
+	var bound string
+	if err := p.store.db.QueryRowContext(context.Background(), `SELECT bound FROM dca_slot_asks WHERE plan_id = ?`, w.planID).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound != BoundUnproven {
+		t.Errorf("slot bound = %q, want %q", bound, BoundUnproven)
+	}
+}
+
 // An owner-dial question must not move the price-move baseline.
 func TestOwnerDial_T2_AskDoesNotResetThePriceBaseline(t *testing.T) {
 	w := newXWorld(t, true, monday)

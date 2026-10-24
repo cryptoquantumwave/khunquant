@@ -42,6 +42,10 @@ type fakeEx struct {
 	orders      map[string]int // idempotency key -> orders on the exchange
 	placeCalls  int
 	baseSizes   []float64
+	// placeMod changes the fill a placement answers with; fetch, when set, is the
+	// order as the exchange reports it when read back (a resting order stays "open").
+	placeMod func(*Fill)
+	fetch    *Fill
 }
 
 func newFakeEx(capable bool) *fakeEx {
@@ -89,10 +93,19 @@ func (e *fakeEx) PlaceMandateBuy(_ context.Context, _ *Plan, q Quote, key string
 }
 
 func (e *fakeEx) fillLocked(key string, q Quote) Fill {
-	return Fill{OrderID: "ord-" + key[len(key)-5:], Status: "closed", Filled: q.BaseAmount, AvgPrice: e.price, Known: true, Done: true, Paper: e.paper}
+	f := Fill{OrderID: "ord-" + key[len(key)-5:], Status: "closed", Filled: q.BaseAmount, AvgPrice: e.price, Known: true, Done: true, Paper: e.paper}
+	if e.placeMod != nil {
+		e.placeMod(&f)
+	}
+	return f
 }
 
 func (e *fakeEx) Fetch(context.Context, *Plan, string) (Fill, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.fetch != nil {
+		return *e.fetch, nil
+	}
 	return Fill{}, errors.New("not needed")
 }
 

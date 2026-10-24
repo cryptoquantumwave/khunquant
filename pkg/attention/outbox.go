@@ -32,6 +32,15 @@ import (
 // pendingLease (10 minutes) and then stop counting against the budget and dedup;
 // nothing is delivered twice and nothing is stuck. On an orderly stop, Run
 // flushes the buffer once.
+//
+// Failed deliveries. A message the deliverer did not take is not given up on: it
+// is tried again after a short wait, a bounded number of times (see retry.go),
+// while its decisions stay reserved. When the tries run out, or the outbox stops
+// with a retry pending, each decision is moved to the digest (DeferToDigest) so
+// the owner hears of it late instead of never. A protective Critical cannot be
+// moved there: it is retried for up to an hour, then released. Retries are in
+// memory, like the buffer: after a crash the reservation lapses as described
+// above.
 
 const (
 	// tickEvery is how often Run calls Tick.
@@ -105,8 +114,12 @@ func hasQuote(c proactive.Candidate) bool {
 }
 
 // Deliverer sends one message to the owner. delivered=false with a nil error
-// means the message could not or must not be sent right now; the decisions are
-// then released, as for an error.
+// means the message could not or must not be sent right now; it is then treated
+// as for an error: tried again later, and in the end moved to the digest.
+//
+// A message is sent again only after a false or an error, so Deliver must not
+// report false or an error for a message it did send. The same Message, with the
+// same InterventionID, is passed on every try.
 type Deliverer interface {
 	Deliver(ctx context.Context, m Message) (delivered bool, err error)
 }
@@ -192,8 +205,9 @@ func NewOutbox(g Gate, d Deliverer, groupWindow time.Duration, clock func() time
 // buffers it for the next message. Other decisions are returned as they are (a
 // digest decision is already queued). A protective Critical is flushed before
 // Submit returns, together with everything already buffered. A failure to deliver
-// is not an error of Submit: it is logged and recorded by releasing the
-// decisions; the returned error is the governor's.
+// is not an error of Submit: it is logged and the message is retried or its
+// decisions moved to the digest (see the file comment); the returned error is the
+// governor's.
 func (o *Outbox) Submit(ctx context.Context, it Item) (Decision, error) {
 	d, err := o.g.Decide(ctx, it.Candidate)
 	if err != nil {
@@ -270,6 +284,13 @@ func (o *Outbox) tick(ctx context.Context, handOver bool) error {
 			o.handOverOrdinary(out)
 		} else {
 			errs = append(errs, o.flush(ctx, out))
+		}
+	}
+	if handOver {
+		o.handOverDueRetries(now)
+	} else {
+		for _, r := range o.takeDueRetries(now) {
+			errs = append(errs, o.attemptRetry(ctx, r))
 		}
 	}
 	errs = append(errs, o.processDeferrals(ctx))
@@ -406,24 +427,26 @@ func (o *Outbox) flushWith(ctx context.Context, group []buffered, compose bool) 
 		}
 	}
 
-	ok, derr := o.deliver(ctx, m)
-	if derr != nil || !ok {
-		fields := map[string]any{"decisions": len(decs), "intervention_id": m.InterventionID}
-		if derr != nil {
-			fields["error"] = derr.Error()
-		}
-		logger.WarnCF("attention", "message not delivered; decisions released", fields)
+	// Only a message the deliverer did not take is ever tried again: once it has
+	// taken it, nothing below can send it a second time.
+	if ok, derr := o.deliver(ctx, m); !ok {
+		return o.deliveryFailed(ctx, m, composedOK, 1, time.Time{}, derr)
 	}
+	return o.delivered(ctx, m, composedOK)
+}
 
+// delivered records that the deliverer took m: every member is marked delivered
+// in m's intervention, and the Observer is told.
+func (o *Outbox) delivered(ctx context.Context, m Message, composed bool) error {
 	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bookkeepTimeout)
 	defer cancel()
 	var errs []error
-	for _, d := range decs {
-		if err := o.g.MarkDelivered(bctx, d, Delivery{Delivered: ok, InterventionID: m.InterventionID}); err != nil {
+	for _, d := range m.Decisions {
+		if err := o.g.MarkDelivered(bctx, d, Delivery{Delivered: true, InterventionID: m.InterventionID}); err != nil {
 			errs = append(errs, fmt.Errorf("decision %s: %w", d.ID, err))
 		}
 	}
-	o.observe(Outcome{Message: m, Delivered: ok, Composed: composedOK, At: o.clock()})
+	o.observe(Outcome{Message: m, Delivered: true, Composed: composed, At: o.clock()})
 	return errors.Join(errs...)
 }
 

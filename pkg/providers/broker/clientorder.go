@@ -119,6 +119,23 @@ type ClientIDLookup interface {
 	FetchOrderByClientID(ctx context.Context, market, symbol, clientOrderID string) (order ccxt.Order, found bool, err error)
 }
 
+// PagedListings is implemented by an adapter whose open-orders and closed-orders
+// listings are ONE page of a paged API (Webull: 10 rows by default, 100 at most,
+// continued by a cursor). The reconcile searches those listings for an order it
+// may have placed, and "not in the listing" proves nothing when the listing was
+// cut. The adapter alone can say so, from the rows the exchange returned before
+// any symbol or status filter: truncated is true when that raw page was full.
+// A truncated listing makes "none" ambiguous, so the order is not placed again.
+//
+// An adapter that does not implement it keeps the generic rule: a closed-orders
+// listing that returns reconcileListLimit rows or more is truncated.
+type PagedListings interface {
+	// FetchOpenOrdersPage is FetchOpenOrders plus the truncation flag.
+	FetchOpenOrdersPage(ctx context.Context, symbol string) (orders []ccxt.Order, truncated bool, err error)
+	// FetchClosedOrdersPage is FetchClosedOrders plus the truncation flag.
+	FetchClosedOrdersPage(ctx context.Context, symbol string, since *int64, limit int) (orders []ccxt.Order, truncated bool, err error)
+}
+
 // clientIDKeys are the params names that carry a caller-chosen client order ID on
 // any of the exchanges above. PlaceOrderIdempotent derives the ID itself and
 // refuses a request that already sets one.

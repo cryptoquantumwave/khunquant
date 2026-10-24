@@ -6,6 +6,7 @@ package settrade
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -236,7 +237,8 @@ const setBoardLotSize = 100
 // symbol: CCXT format "PTT/THB" or raw "PTT".
 // orderType: "limit" → Limit, "market" → ATO (or Limit for oddlot).
 // amount: number of shares/units to trade.
-// price: required for limit orders; also used as fallback price for oddlot market orders.
+// price: required for limit orders; for oddlot market orders it is the limit price to
+// use, and when nil the adapter prices the order from its own quote (see oddLotReferencePrice).
 func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side string, amount float64, price *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	sym := toSetSymbol(symbol)
 
@@ -252,11 +254,18 @@ func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType
 	case "market":
 		// Oddlot orders (< 1 board lot) cannot use ATO; fall back to Limit.
 		if int(amount) < setBoardLotSize {
-			if price == nil {
-				return ccxt.Order{}, fmt.Errorf("settrade: oddlot market order for %d shares requires a price (< %d board lot size)", int(amount), setBoardLotSize)
-			}
 			priceType = "Limit"
-			orderPrice = *price
+			if price != nil {
+				orderPrice = *price
+			} else {
+				// Callers leave price nil for market orders (other adapters would
+				// turn a non-nil price into a limit), so quote it here.
+				ref, err := a.oddLotReferencePrice(ctx, symbol, side)
+				if err != nil {
+					return ccxt.Order{}, fmt.Errorf("settrade: oddlot market order for %d shares (< %d board lot size) needs a reference price: %w", int(amount), setBoardLotSize, err)
+				}
+				orderPrice = ref
+			}
 		} else {
 			priceType = "ATO"
 		}
@@ -279,6 +288,30 @@ func (a *SettradeFullAdapter) CreateOrder(ctx context.Context, symbol, orderType
 		return ccxt.Order{}, err
 	}
 	return settradeOrderToCCXT(o), nil
+}
+
+// oddLotReferencePrice returns the price used to turn an oddlot market order into a
+// Limit order, taken from the adapter's own quote. A buy prefers the ask and a sell
+// prefers the bid; otherwise it uses the last price. It never returns a value that
+// is not positive and finite.
+func (a *SettradeFullAdapter) oddLotReferencePrice(ctx context.Context, symbol, side string) (float64, error) {
+	t, err := a.FetchTicker(ctx, symbol)
+	if err != nil {
+		return 0, err
+	}
+	var preferred *float64
+	switch strings.ToLower(side) {
+	case "buy":
+		preferred = t.Ask
+	case "sell":
+		preferred = t.Bid
+	}
+	for _, p := range []*float64{preferred, t.Last} {
+		if p != nil && *p > 0 && !math.IsInf(*p, 0) && !math.IsNaN(*p) {
+			return *p, nil
+		}
+	}
+	return 0, fmt.Errorf("no usable quote for %s (last, bid and ask are missing or not positive)", symbol)
 }
 
 func (a *SettradeFullAdapter) CancelOrder(ctx context.Context, id, _ string) (ccxt.Order, error) {

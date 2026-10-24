@@ -56,7 +56,13 @@ type LegOrder struct {
 	// Exit marks an order that only reduces exposure: a reduce-only futures close, a spot
 	// sell of what is held. It is placed on the real providers even in paper mode, and
 	// only trade permission and the leverage opt-in (RiskReduce) gate it.
-	Exit       bool   `json:"exit,omitempty"`
+	Exit bool `json:"exit,omitempty"`
+	// Hedge marks the SECOND leg of an open or a resize-increase, placed after the first
+	// leg filled: it completes the hedge and leaves the position LESS risky than the first
+	// leg alone did. Every risk gate (cap, daily loss, leverage, kill flag) is decided for
+	// both legs before the first goes out; once it has filled, only trade permission can
+	// stop the second, because a refusal would strand a naked leveraged leg.
+	Hedge      bool   `json:"hedge,omitempty"`
 	MarginMode string `json:"margin_mode,omitempty"` // an exit's: the live position's
 	// Op names the operation (OpOpen, OpResize, OpUnwind) for the order feed.
 	Op string `json:"op,omitempty"`
@@ -477,9 +483,15 @@ func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int)
 			if has {
 				return validateOut{Refused: fmt.Sprintf("plan %d still has open or unreconciled exposure from a previous attempt", plan.ID)}, nil
 			}
+			// The reservation: this workflow's id is new, so the attempt id alone cannot
+			// tell two opens of one plan apart. One conditional insert gives the plan to
+			// exactly one of them; the other places nothing.
 			now := time.Now()
 			exec = &Execution{PlanID: plan.ID, AttemptID: attemptID, State: string(ExecutionStateValidating), RequestedAt: now, CreatedAt: now, UpdatedAt: now}
-			if _, err := d.Store.SaveExecution(ctx, exec); err != nil {
+			if err := d.Store.ReserveExecution(ctx, exec); err != nil {
+				if errors.Is(err, ErrPlanBusy) {
+					return validateOut{Refused: err.Error()}, nil
+				}
 				return nil, err
 			}
 		} else if ExecutionState(exec.State) == ExecutionStateFailed {
@@ -493,6 +505,27 @@ func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int)
 				return nil, uerr
 			}
 			return validateOut{Refused: why, ExecutionID: exec.ID}, nil
+		}
+		if ExecutionState(exec.State) == ExecutionStateValidating {
+			// Holding the plan, look again: the status and the exposure read above may
+			// predate an open that finished in between (it released its reservation).
+			// Own legs cannot exist yet, so a re-run of this step checks too.
+			cur, perr := d.Store.GetPlan(ctx, plan.ID)
+			if perr != nil {
+				return refuse(fmt.Sprintf("cannot load plan %d: %v", plan.ID, perr))
+			}
+			switch cur.Status {
+			case PlanStatusDraft, PlanStatusReady, PlanStatusFailed:
+			default:
+				return refuse(fmt.Sprintf("plan status is %q; only draft, ready, or failed plans can be opened", cur.Status))
+			}
+			has, herr := d.Store.HasOpenExposure(ctx, plan.ID)
+			if herr != nil {
+				return refuse(fmt.Sprintf("cannot verify that plan %d has no open exposure: %v", plan.ID, herr))
+			}
+			if has {
+				return refuse(fmt.Sprintf("plan %d still has open or unreconciled exposure from a previous attempt", plan.ID))
+			}
 		}
 		sz, err := d.Exchange.Quote(ctx, plan, in.FirstLeg)
 		if err != nil {
@@ -643,7 +676,8 @@ func (d *Deps) exchange(f *flow) Exchange {
 }
 
 // placeLeg runs one place step. An entry runs the kill flag and the order gates, then
-// PlaceOrderIdempotent. An exit (f.exit) is the other way round: nothing stops it but
+// PlaceOrderIdempotent; the second leg of an entry (a hedge completion) runs the trade
+// permission only. An exit (f.exit) is the other way round: nothing stops it but
 // trade permission, and what it places is decided in the step from the exchange as it
 // is (see exitOrder), not from a number the journal holds.
 func (d *Deps) placeLeg(c *journal.Ctx, f *flow, name string, leg LegType, amount float64, bad error, out *placeOut) error {
@@ -667,7 +701,11 @@ func (d *Deps) placeLeg(c *journal.Ctx, f *flow, name string, leg LegType, amoun
 		if bad != nil {
 			return refuse(bad.Error())
 		}
-		if !f.exit && d.killed() {
+		// The second leg of an entry follows a first leg that has already filled: it
+		// completes the hedge, so the kill flag (like every other risk gate) was decided
+		// before the first leg and is not read again (see LegOrder.Hedge).
+		hedge := f.machine && !f.exit && leg != f.first
+		if !f.exit && !hedge && d.killed() {
 			return refuse("the kill switch is engaged")
 		}
 		plan, err := d.Store.GetPlan(ctx, f.planID)
@@ -688,7 +726,7 @@ func (d *Deps) placeLeg(c *journal.Ctx, f *flow, name string, leg LegType, amoun
 		} else if lo, err = ex.LegOrder(plan, leg, amount); err != nil {
 			return refuse(err.Error())
 		}
-		lo.Op = f.op
+		lo.Op, lo.Hedge = f.op, hedge
 		if err := ex.Gate(ctx, plan, f.sizing, lo); err != nil {
 			return refuse(err.Error())
 		}

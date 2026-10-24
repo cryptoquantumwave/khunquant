@@ -39,7 +39,7 @@ func TestReflectionCeiling_TableOverEveryClassifiedTool(t *testing.T) {
 		if turnMayCall(proactiveTurnCtx(proactive.TurnReflection), n) {
 			t.Errorf("the reflection turn may call %s", n)
 		}
-		if refusal := checkToolPolicy(proactiveTurnCtx(proactive.TurnReflection), n, nil); refusal == nil ||
+		if refusal := checkToolPolicy(proactiveTurnCtx(proactive.TurnReflection), n, nil, false); refusal == nil ||
 			!strings.Contains(refusal.ForLLM, "reflection turn") {
 			t.Errorf("%s: refusal = %+v", n, refusal)
 		}

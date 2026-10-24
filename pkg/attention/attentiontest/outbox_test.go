@@ -72,8 +72,21 @@ func TestOutbox_OverFake_FailuresAreReported(t *testing.T) {
 	if err := ob.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if got := f.Deliveries(); len(got) != 0 {
+		t.Fatalf("deliveries = %+v, want none reported while a retry is pending", got)
+	}
+	// the retries run out; a gate without DeferToDigest gets the decision released.
+	for i := 0; i < 3; i++ {
+		now = now.Add(5 * time.Minute)
+		if err := ob.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if got := f.Deliveries(); len(got) != 1 || got[0].Delivery.Delivered {
 		t.Fatalf("deliveries = %+v", got)
+	}
+	if n := len(del.Messages()); n != 4 {
+		t.Fatalf("%d tries, want 4", n)
 	}
 
 	// scripted results and the digest error path.

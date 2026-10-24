@@ -28,7 +28,7 @@ func TestLegacyHeartbeat_V2Template_DeliversThroughMessage(t *testing.T) {
 		providers.LLMResponse{Content: "HEARTBEAT_OK"},
 	)
 	al, _ := defaultWorkspaceLoop(t, prov)
-	prompt := heartbeat.LegacyPrompt(time.Now().Format("2006-01-02 15:04:05"), heartbeat.TemplateV2())
+	prompt := heartbeat.LegacyPrompt(time.Now().Format("2006-01-02 15:04:05"), heartbeat.TemplateV2(), nil)
 
 	if _, err := al.ProcessHeartbeat(context.Background(), prompt, "telegram", "chat-1"); err != nil {
 		t.Fatalf("ProcessHeartbeat: %v", err)
@@ -71,7 +71,7 @@ func TestLegacyHeartbeat_V2Template_NothingMaterialSendsNothing(t *testing.T) {
 		return &providers.LLMResponse{Content: "HEARTBEAT_OK"}, nil
 	}}
 	al, _ := defaultWorkspaceLoop(t, prov)
-	prompt := heartbeat.LegacyPrompt(time.Now().Format("2006-01-02 15:04:05"), heartbeat.TemplateV2())
+	prompt := heartbeat.LegacyPrompt(time.Now().Format("2006-01-02 15:04:05"), heartbeat.TemplateV2(), nil)
 
 	resp, err := al.ProcessHeartbeat(context.Background(), prompt, "telegram", "chat-1")
 	if err != nil {

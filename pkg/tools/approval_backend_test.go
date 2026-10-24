@@ -513,3 +513,53 @@ func TestApprovalBackend_PlaceFuturesExitAndRecordLoss(t *testing.T) {
 		t.Errorf("recorded loss = %v, want 2", got)
 	}
 }
+
+// A spot proposal on a contract symbol would be resolved to the perpetual by the
+// exchange library, skipping the leverage opt-in and valuing the order without
+// its contract size. Prepare refuses it, the spot gate refuses it on its own
+// (defence in depth, and it is what a stored proposal meets again at Recheck),
+// and the same symbol as a futures proposal still works.
+func TestApprovalBackend_SpotRefusesContractSymbol(t *testing.T) {
+	ctx := context.Background()
+	installFutures(t)
+	b := NewApprovalOrderBackend(noLeverage())
+
+	t.Run("Prepare refuses, with a message the model can recover from", func(t *testing.T) {
+		for _, market := range []string{"", approval.MarketSpot} { // spot is the default
+			req := approval.OrderRequest{Provider: "okx", Market: market, Symbol: "BTC/USDT:USDT", Side: "buy", Amount: 1}
+			_, err := b.Prepare(ctx, req)
+			if err == nil || !strings.Contains(err.Error(), "use market=futures") {
+				t.Errorf("market %q: err = %v, want a refusal that names market=futures", market, err)
+			}
+		}
+	})
+
+	t.Run("the spot gate refuses on its own", func(t *testing.T) {
+		_, err := b.gateSpot(ctx, orderSpec{provider: "okx", market: approval.MarketSpot, symbol: "BTC/USDT:USDT", side: "buy", orderType: "market", amount: 1})
+		if err == nil || !strings.Contains(err.Error(), "use market=futures") {
+			t.Fatalf("err = %v, want the gate to refuse a contract symbol", err)
+		}
+	})
+
+	t.Run("a stored spot proposal on a contract symbol is refused at Recheck", func(t *testing.T) {
+		_, err := b.Recheck(ctx, approval.OrderParams{
+			Provider: "okx", Market: approval.MarketSpot, Symbol: "BTC/USDT:USDT", Side: "buy", Type: "market",
+			Amount: 1, RefPrice: 100, NotionalUSD: 100, PriceCollarPct: 1,
+		})
+		if err == nil || !strings.Contains(err.Error(), "use market=futures") {
+			t.Fatalf("err = %v, want Recheck to refuse", err)
+		}
+	})
+
+	t.Run("the same symbol as a futures proposal still works", func(t *testing.T) {
+		fcfg := capConfig(0)
+		fcfg.TradingRisk.AllowLeverage = true
+		got, err := NewApprovalOrderBackend(fcfg).Prepare(ctx, futReq("buy", 1000, false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Params.Market != approval.MarketFutures || got.Params.Symbol != "BTC/USDT:USDT" {
+			t.Errorf("params = %+v", got.Params)
+		}
+	})
+}

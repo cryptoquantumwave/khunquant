@@ -37,6 +37,7 @@ func TestProactiveDefaults(t *testing.T) {
 		Approvals:  ApprovalsConfig{ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
 		Policy:     ModeConfig{Mode: "off"},
+		News:       NewsConfig{IntervalMinutes: 60, MaxAssets: 8, MaxParsesPerRun: 3, MaxParsesPerDay: 12, RunSeconds: 300},
 		Reflection: ReflectionConfig{AtLocal: "21:00"},
 		Learning:   LearningConfig{HoldoutRate: 0.05},
 	}
@@ -326,11 +327,16 @@ func TestEffective_DowngradesWithoutOwner(t *testing.T) {
 	c.Triggers.Mode = ProactiveModeShadow
 	c.Policy.Mode = ProactiveModeLive
 	e := c.Effective()
-	if e.HeartbeatMode != "legacy" || e.AttentionMode != "off" || e.TriggersMode != "shadow" || e.PolicyMode != "live" {
-		t.Errorf("off/shadow must stay as configured, policy is not a delivery mode: %+v", e)
+	if e.HeartbeatMode != "legacy" || e.AttentionMode != "off" || e.TriggersMode != "shadow" || e.PolicyMode != "shadow" {
+		t.Errorf("off/shadow must stay as configured, and live policy needs an owner: %+v", e)
 	}
-	if want := "proactive: owner not configured; heartbeat.mode governed → legacy"; !contains(e.Downgrades, want) {
-		t.Errorf("downgrades %q lack %q", e.Downgrades, want)
+	for _, want := range []string{
+		"proactive: owner not configured; heartbeat.mode governed → legacy",
+		"proactive: owner not configured; policy.mode live → shadow",
+	} {
+		if !contains(e.Downgrades, want) {
+			t.Errorf("downgrades %q lack %q", e.Downgrades, want)
+		}
 	}
 
 	// Other switches are the configured value AND-ed with Enabled.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/calendar"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/reflection"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
@@ -144,6 +146,18 @@ func ownerTargets(d assemblyDeps) func() map[string]float64 {
 // New specs are live in their own mode; the global triggers mode caps them (shadow by
 // default), so they deliver only when the owner has made triggers and attention live.
 func ensurePortfolioSpecs(ctx context.Context, reg *triggers.Registry, cfg *config.Config, have map[string]triggers.Factory) {
+	ensurePortfolioSpecsCounted(ctx, reg, cfg, have, nil)
+}
+
+// ensurePortfolioSpecsCounted is ensurePortfolioSpecs that also reports, in stats (nil is
+// fine), how many specs it left alone because an approved reflection tuned them.
+func ensurePortfolioSpecsCounted(ctx context.Context, reg *triggers.Registry, cfg *config.Config, have map[string]triggers.Factory, stats *triggers.PortfolioStats) {
+	var tuned uint64
+	defer func() {
+		if stats != nil {
+			stats.SpecsReflectionTuned.Store(tuned)
+		}
+	}()
 	for _, kind := range triggers.PortfolioKinds {
 		if have[kind] == nil {
 			continue
@@ -165,6 +179,12 @@ func ensurePortfolioSpecs(ctx context.Context, reg *triggers.Registry, cfg *conf
 			_, err = reg.Add(ctx, triggers.Spec{
 				ID: id, Kind: kind, Mode: triggers.ModeLive, Origin: triggers.PortfolioSpecOrigin, Params: want,
 			})
+		case strings.HasSuffix(existing.Origin, reflection.ProvenanceSuffix):
+			// The owner approved a reflection's change to its parameters: not put back.
+			tuned++
+			logger.InfoCF("perception", "A portfolio trigger keeps the parameters an approved reflection set; "+
+				"proactive.triggers.params does not override them", map[string]any{"trigger": existing.ID})
+			continue
 		default:
 			if got, cerr := triggers.ValidatePortfolioParams(kind, existing.Params); cerr == nil && bytes.Equal(got, want) &&
 				bytes.Equal(existing.Params, want) {

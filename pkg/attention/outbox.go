@@ -498,7 +498,7 @@ func (o *Outbox) digestDone() {
 
 // sendDigest delivers dg and reports the outcome to the governor.
 func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
-	title, body := RenderDigest(dg.Items)
+	title, body, sessionBody := renderDigest(dg.Items)
 	m := Message{
 		InterventionID: proactive.NewID(),
 		Severity:       proactive.SeverityInfo,
@@ -508,6 +508,9 @@ func (o *Outbox) sendDigest(ctx context.Context, dg *Digest) error {
 		Silent:         true,
 		Digest:         true,
 		Decisions:      dg.Items,
+	}
+	if sessionBody != "" {
+		m.SessionRestricted, m.SessionBody = true, sessionBody
 	}
 	ok, derr := o.deliver(ctx, m)
 	if derr != nil || !ok {

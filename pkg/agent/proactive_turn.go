@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/cognition"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
@@ -178,6 +179,47 @@ func (al *AgentLoop) RunProactiveTurn(
 	ctx context.Context,
 	req ProactiveTurnRequest,
 ) (ProactiveTurnResult, error) {
+	if al.scheduler() == nil || inScheduledJob(ctx) ||
+		(req.Kind != proactive.TurnProactive && req.Kind != proactive.TurnHeartbeatLegacy) {
+		return al.runProactiveTurn(ctx, req)
+	}
+	// With cognition on the turn is a budgeted job at proactive priority. Over
+	// budget it is skipped: the error wraps proactive.ErrTurnSkipped, so the
+	// composer sends its template, a governed heartbeat delivers nothing this tick
+	// and the sweep keeps its mark. It never falls back to a model call.
+	deadline := req.Deadline
+	if deadline <= 0 {
+		deadline = DefaultProactiveDeadline
+	}
+	spec := turnSpec{Kind: req.Kind, Priority: cognition.PriProactive, Budgeted: true, Deadline: deadline}
+	if agent := al.GetRegistry().GetDefaultAgent(); agent != nil {
+		spec.Session = sessionKeyAgentPrefix + agent.ID + ":proactive"
+	}
+	// The deadline bounds the whole turn, as it always did, so it starts here and
+	// covers the wait in the queue: a caller whose job has waited it out stops
+	// waiting (the job is dropped unrun) and sends its template.
+	waitCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	var box turnBox[ProactiveTurnResult]
+	err, scheduled := al.submitTurn(waitCtx, spec, func(jctx context.Context) error {
+		res, runErr := al.runProactiveTurn(jctx, req)
+		box.put(res, runErr)
+		return runErr
+	})
+	if !scheduled {
+		return al.runProactiveTurn(ctx, req)
+	}
+	if err != nil { // skipped, cancelled or dropped before it ran: say so
+		err = fmt.Errorf("proactive turn: %w", err)
+	}
+	return box.outcome(err)
+}
+
+// runProactiveTurn is RunProactiveTurn's turn, with or without a scheduler.
+func (al *AgentLoop) runProactiveTurn(
+	ctx context.Context,
+	req ProactiveTurnRequest,
+) (ProactiveTurnResult, error) {
 	var res ProactiveTurnResult
 
 	if req.Kind != proactive.TurnProactive && req.Kind != proactive.TurnHeartbeatLegacy {
@@ -232,6 +274,24 @@ func (al *AgentLoop) RunProactiveTurn(
 	if req.Kind == proactive.TurnProactive && len(req.Candidates) > 0 {
 		ctx = tools.WithProposalScope(ctx, tools.NewProposalScope(
 			req.Candidates, req.DeliverNow, req.InterventionID, len(req.ForcedSkills) > 0))
+	} else {
+		// Every other proactive turn carries a taint too, so that the policy engine
+		// reads the same provenance floor whatever the turn: what its candidates
+		// were worth (none: the legacy heartbeat's own checklist, system), dropped
+		// to untrusted by forced skills and by any tool that reads outside text.
+		start := proactive.TrustSystem
+		if len(req.Candidates) > 0 {
+			trusts := make([]proactive.Trust, 0, len(req.Candidates))
+			for _, c := range req.Candidates {
+				trusts = append(trusts, c.Trust)
+			}
+			start = proactive.MinTrust(trusts...)
+		}
+		taint := proactive.NewTaint(start)
+		if len(req.ForcedSkills) > 0 {
+			taint.Lower(proactive.TrustUntrusted)
+		}
+		ctx = proactive.WithTaint(ctx, taint)
 	}
 
 	nonce := newFenceNonce()

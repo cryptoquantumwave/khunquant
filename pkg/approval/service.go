@@ -44,6 +44,15 @@ type Options struct {
 	// Mandates creates the mandate row of an approved mandate proposal; nil means
 	// mandate proposals cannot be made or approved.
 	Mandates MandateSink
+	// Memories appends the fact of an approved memory proposal to MEMORY.md, and Digest
+	// queues the announcement of a suggestion for the next digest; memory suggestions
+	// can be made only while both are set.
+	Memories MemorySink
+	Digest   MemoryDigest
+	// Reflections applies an approved reflection proposal (a trigger parameter, an
+	// intent pause or cancel, a mute); reflection proposals can be made and approved
+	// only while it and Digest are set.
+	Reflections ReflectionSink
 	// Clock is the time source for expiry, staleness and waits; nil is the wall clock.
 	Clock journal.Clock
 	// Events receives approval.created, approval.decided and approval.expired.
@@ -207,9 +216,10 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 	defer s.mu.Unlock()
 
 	now := s.now()
-	if codes, err := s.st.pendingCodes(ctx, now, r.Origin == OriginMandate); err != nil {
+	class := classOf(KindOrder, r.Origin)
+	if codes, err := s.st.pendingCodes(ctx, now, class); err != nil {
 		return Proposal{}, err
-	} else if len(codes) >= pendingLimit(r.Origin == OriginMandate) {
+	} else if max, _, _ := class.bounds(); len(codes) >= max {
 		return Proposal{}, &PendingError{Codes: codes}
 	}
 
@@ -257,7 +267,7 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		if bounds.hourly {
 			return Proposal{}, ErrHourlyLimit
 		}
-		codes, _ := s.st.pendingCodes(ctx, now, r.Origin == OriginMandate)
+		codes, _ := s.st.pendingCodes(ctx, now, class)
 		return Proposal{}, &PendingError{Codes: codes}
 	case err != nil:
 		return Proposal{}, err
@@ -313,7 +323,9 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 // Decide records the owner's decision on the pending proposal that holds code.
 //
 // The sender must be the configured owner (the same comparison tools.checkOwnerTurn
-// makes), the proposal pending and unexpired, and nonce, when given, the one stored
+// makes), or the call must come from the control path for a message from the
+// authenticated web launcher chat (WithWebDecider) while that route is active, in
+// which case DecidedBy is "web"; the proposal pending and unexpired, and nonce, when given, the one stored
 // (compared in constant time); button callbacks carry the nonce, the text command
 // does not and relies on the owner check and the code's uniqueness. The transition
 // is one conditional UPDATE, so a double tap, two channels, or a race with the
@@ -328,6 +340,11 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, senderID string) (Proposal, error) {
 	ownerID, ok := s.owner()
 	canonical := identity.CanonicalSender(senderID, "")
+	if ok && !identity.SameSender(canonical, ownerID) && IsWebDecider(ctx) && s.o.Cfg.WebOwnerActive() {
+		// The second owner route: the authenticated web launcher chat. The decision is
+		// recorded as the web's, and every later step re-proves it (OwnerDecider).
+		canonical, ownerID = identity.WebOwner, identity.WebOwner
+	}
 	if !ok || !identity.SameSender(canonical, ownerID) {
 		logger.WarnCF(logComponent, "SECURITY: approval decision from a sender who is not the owner", nil)
 		return Proposal{}, ErrNotOwner
@@ -358,12 +375,12 @@ func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, 
 	// While the kill switch is engaged only an order that reduces risk may be
 	// approved. The proposal is left pending (it expires on its own, and an owner
 	// who resumes can still approve it); a rejection is never blocked.
-	if approve && s.killed() && !p.Reducing {
+	if approve && s.killed() && !p.Reducing && p.Kind != KindMemory && !IsReflectionKind(p.Kind) { // these move no money
 		logger.InfoCF(logComponent, "Approval refused: the kill switch is engaged", map[string]any{"code": code})
 		return Proposal{}, ErrKilled
 	}
 
-	if approve && p.Kind == KindMandate && s.o.Mandates == nil {
+	if approve && (p.Kind == KindMandate && s.o.Mandates == nil || p.Kind == KindMemory && s.o.Memories == nil || IsReflectionKind(p.Kind) && s.o.Reflections == nil) {
 		return Proposal{}, ErrUnavailable
 	}
 	to := StatusRejected
@@ -467,6 +484,9 @@ func (s *Service) editCard(ctx context.Context, p Proposal, outcome string) {
 	loc := s.locale(ctx)
 	loc.Lang = p.Lang
 	var card Card
+	if p.Kind == KindMemory || IsReflectionKind(p.Kind) {
+		return // announced in a digest, which is one message of many: there is no card to edit
+	}
 	if p.Kind == KindMandate {
 		mp, err := VerifiedMandate(p)
 		if err != nil {
@@ -509,6 +529,12 @@ func (s *Service) startExecution(ctx context.Context, p Proposal) error {
 	if p.Kind == KindMandate {
 		return s.executeMandate(ctx, p) // creates the mandate row; no workflow, no order
 	}
+	if p.Kind == KindMemory {
+		return s.executeMemory(ctx, p) // appends the fact; no workflow, no order
+	}
+	if IsReflectionKind(p.Kind) {
+		return s.executeReflection(ctx, p) // applies the change; no workflow, no order
+	}
 	wf := s.workflows()
 	if wf == nil {
 		return errors.New("approval: no workflow engine attached")
@@ -548,6 +574,14 @@ func (s *Service) Recover(ctx context.Context) error {
 	for _, p := range executing {
 		if p.Kind == KindMandate {
 			errs = append(errs, s.executeMandate(ctx, p))
+			continue
+		}
+		if p.Kind == KindMemory {
+			errs = append(errs, s.executeMemory(ctx, p))
+			continue
+		}
+		if IsReflectionKind(p.Kind) {
+			errs = append(errs, s.executeReflection(ctx, p))
 			continue
 		}
 		w, err := wf.Get(ctx, p.WorkflowID)
@@ -617,10 +651,3 @@ func (s *Service) sweep(ctx context.Context) {
 
 // Params returns the stored params of a proposal, verified against its hash.
 func (s *Service) Params(p Proposal) (OrderParams, error) { return decodeVerified(p) }
-
-func pendingLimit(mandate bool) int {
-	if mandate {
-		return MaxPendingMandate
-	}
-	return MaxPending
-}

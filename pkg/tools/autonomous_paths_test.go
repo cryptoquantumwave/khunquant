@@ -20,7 +20,7 @@ func writeWorkspace(t *testing.T) string {
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
 		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
-		"memory/MEMORY.md", "memory/notes.md", "HEARTBEAT.md", "reports/today.md",
+		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md", "reports/today.md",
 	} {
 		full := filepath.Join(ws, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -64,6 +64,21 @@ func mustRefuseWrite(t *testing.T, what string, res *ToolResult, wantFragment st
 	}
 }
 
+// refusalFragment is the part of a refusal that names why: the stores under memory/ say
+// what they hold, the rest of memory/ says it is the agent's memory.
+func refusalFragment(rel string) string {
+	low := strings.ToLower(filepath.ToSlash(filepath.Clean(rel)))
+	for _, store := range []string{"memory/dca", "memory/delta_neutral", "memory/snapshots", "memory/proactive"} {
+		if strings.HasPrefix(low, store) {
+			return "holds scheduler / safety / prompt state"
+		}
+	}
+	if strings.HasPrefix(low, "memory/") {
+		return "the agent's memory"
+	}
+	return "holds scheduler / safety / prompt state"
+}
+
 func readSeed(t *testing.T, ws, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(rel)))
@@ -82,6 +97,7 @@ func TestAutonomousWrite_ProtectedPathsRefused(t *testing.T) {
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
 		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
+		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md",
 	}
 
 	// The list in the test and the list in the code must agree: a new protected
@@ -110,7 +126,7 @@ func TestAutonomousWrite_ProtectedPathsRefused(t *testing.T) {
 				for _, tool := range fileTools {
 					// A relative path and the same path made absolute.
 					for _, path := range []string{rel, filepath.Join(ws, filepath.FromSlash(rel))} {
-						mustRefuseWrite(t, ctxName+" "+tool+" "+path, fileCall(ctx, tool, ws, restrict, path), "holds scheduler / safety / prompt state")
+						mustRefuseWrite(t, ctxName+" "+tool+" "+path, fileCall(ctx, tool, ws, restrict, path), refusalFragment(rel))
 					}
 				}
 				if got := readSeed(t, ws, rel); got != seedText {
@@ -132,10 +148,12 @@ func TestAutonomousWrite_CaseTraversalAndNewFilesRefused(t *testing.T) {
 			"notes/../cron/jobs.json", "./cron/../cron/jobs.json", "cron//jobs.json", "cron/./jobs.json",
 			"../" + filepath.Base(ws) + "/cron/jobs.json",
 			"cron/new.json", "skills/new/SKILL.md", "memory/dca/other.db", "state/new/deep/file.json",
+			"MEMORY/MEMORY.md", "Memory/memory.MD", "memory/../memory/MEMORY.md", "memory//MEMORY.md", "memory/new/deep/note.md",
+			"heartbeat.MD", "Heartbeat.md", "notes/../HEARTBEAT.md",
 		} {
 			for _, tool := range fileTools {
 				for _, restrict := range []bool{true, false} {
-					mustRefuseWrite(t, ctxName+" "+tool+" "+path, fileCall(ctx, tool, ws, restrict, path), "holds scheduler / safety / prompt state")
+					mustRefuseWrite(t, ctxName+" "+tool+" "+path, fileCall(ctx, tool, ws, restrict, path), refusalFragment(path))
 				}
 			}
 		}
@@ -199,14 +217,14 @@ func TestAutonomousWrite_SymlinksAndOutsideRefused(t *testing.T) {
 	}
 }
 
-// What the spec leaves to autonomous turns stays possible: notes, the alert
-// ledger in memory/MEMORY.md, HEARTBEAT.md and ordinary workspace files.
-func TestAutonomousWrite_NotesAndOrdinaryFilesAllowed(t *testing.T) {
+// Ordinary workspace files stay writable to autonomous turns. (Memory and HEARTBEAT.md are
+// not among them any more: see TestAutonomousWrite_ProtectedPathsRefused.)
+func TestAutonomousWrite_OrdinaryFilesAllowed(t *testing.T) {
 	for ctxName, ctx := range autonomousFileContexts() {
 		for _, restrict := range []bool{true, false} {
 			for _, tool := range fileTools {
 				ws := writeWorkspace(t)
-				for _, rel := range []string{"memory/notes.md", "memory/MEMORY.md", "HEARTBEAT.md", "reports/today.md"} {
+				for _, rel := range []string{"reports/today.md"} {
 					for _, path := range []string{rel, filepath.Join(ws, filepath.FromSlash(rel))} {
 						// Seed it again: edit needs the old text, and append/write may have run.
 						full := filepath.Join(ws, filepath.FromSlash(rel))
@@ -276,12 +294,12 @@ func TestGuardAutonomousWrite_ReturnsTheCheckedPath(t *testing.T) {
 	ws := writeWorkspace(t)
 	ctx := WithToolOrigin(context.Background(), OriginHeartbeat)
 
-	got, refusal := guardAutonomousWrite(ctx, NameWriteFile, ws, false, "memory/notes.md")
-	if refusal != nil || got != filepath.Join(ws, "memory", "notes.md") {
+	got, refusal := guardAutonomousWrite(ctx, NameWriteFile, ws, false, "reports/today.md")
+	if refusal != nil || got != filepath.Join(ws, "reports", "today.md") {
 		t.Errorf("got (%q, %v), want the absolute workspace path", got, refusal)
 	}
 	user := WithToolOrigin(context.Background(), OriginRemote)
-	if got, refusal := guardAutonomousWrite(user, NameWriteFile, ws, false, "memory/notes.md"); refusal != nil || got != "memory/notes.md" {
+	if got, refusal := guardAutonomousWrite(user, NameWriteFile, ws, false, "reports/today.md"); refusal != nil || got != "reports/today.md" {
 		t.Errorf("a user path was rewritten to %q", got)
 	}
 }

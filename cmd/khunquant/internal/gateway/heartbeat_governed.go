@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -134,6 +135,10 @@ func governedHeartbeatHandler(
 	deadline := heartbeatDeadline(interval)
 	return func(ctx context.Context, prompt, _, _ string) *tools.ToolResult {
 		res, err := run.RunProactiveTurn(ctx, heartbeatTurnRequest(prompt, deadline, tier, toolNames))
+		if errors.Is(err, proactive.ErrTurnSkipped) {
+			// Over the cognition budget: this tick is skipped (the scheduler logged why).
+			return tools.SilentResult("Heartbeat skipped: " + err.Error())
+		}
 		if err != nil {
 			logger.WarnCF("heartbeat", "Governed heartbeat turn failed; nothing delivered",
 				map[string]any{"error": err.Error()})

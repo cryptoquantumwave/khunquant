@@ -166,6 +166,10 @@ const (
 	KindJournalWorkflow Kind = "journal.workflow"
 	// KindControlCommand is emitted when a control command is received.
 	KindControlCommand Kind = "control.command"
+	// KindPolicyDecision is emitted when the policy engine records a verdict for a tool
+	// call (shadow mode: the call itself is decided by the existing checks). It carries
+	// ids, names, the mode and the tier only: never a call's arguments or amounts.
+	KindPolicyDecision Kind = "policy.decision"
 )
 
 var knownKinds = []Kind{
@@ -241,6 +245,7 @@ var knownKinds = []Kind{
 	KindJournalStep,
 	KindJournalWorkflow,
 	KindControlCommand,
+	KindPolicyDecision,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

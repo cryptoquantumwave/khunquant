@@ -24,6 +24,12 @@ type TurnCanceller interface {
 	CancelAllTurns(reason string) int
 }
 
+// QueueCanceller drops the model work queued behind the running turns and cancels
+// the scheduled ones (*cognition.Scheduler). nil when cognition is off.
+type QueueCanceller interface {
+	CancelAll(reason string)
+}
+
 // Flows is the part of *journal.Engine the kill switch uses.
 type Flows interface {
 	List(ctx context.Context, f journal.ListFilter) ([]journal.Workflow, error)
@@ -88,8 +94,12 @@ const (
 // Kill is the /stop sequence. Every dependency but Flag may be nil (its step is then
 // skipped and left out of the summary).
 type Kill struct {
-	Flag      KillSwitch
-	Turns     TurnCanceller
+	Flag  KillSwitch
+	Turns TurnCanceller
+	// Queue is the cognition scheduler: what waits for a model turn is dropped, with
+	// no fallback delivery, and what runs is cancelled. A message sent after /stop
+	// is queued as usual.
+	Queue     QueueCanceller
 	Flows     Flows
 	Orders    FlowOrderer
 	Mandates  MandateRevoker
@@ -159,7 +169,14 @@ func (k *Kill) busy(ctx context.Context, by, reason string) StopSummary {
 	if k.Turns != nil {
 		sum.TurnsCancelled = k.Turns.CancelAllTurns(stopReason)
 	}
+	k.dropQueue()
 	return sum
+}
+
+func (k *Kill) dropQueue() {
+	if k.Queue != nil {
+		k.Queue.CancelAll(stopReason)
+	}
 }
 
 func (k *Kill) clock() journal.Clock {
@@ -267,6 +284,9 @@ func (k *Kill) execute(ctx context.Context, r *stopRun, by, reason string) {
 			return nil
 		})
 	}
+	// 2b. What waits for a turn, and any job that started since: after the turns, so
+	// the count above is of turns that were running when /stop came.
+	k.dropQueue()
 	// 3. Workflows.
 	var stopping []stopEntry // cancelled workflows that are mid-step
 	if k.Flows != nil {

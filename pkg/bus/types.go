@@ -15,6 +15,14 @@ type SenderInfo struct {
 	CanonicalID string `json:"canonical_id,omitempty"` // "platform:id" format
 	Username    string `json:"username,omitempty"`     // username (e.g. @alice)
 	DisplayName string `json:"display_name,omitempty"` // display name
+
+	// WebAuthenticated is set by the pico channel, and only by it, on a message
+	// whose WebSocket authenticated with the configured pico token in a header or
+	// subprotocol (never a URL query). It is a fact about the connection, not the
+	// person, and on its own it makes nobody the owner: config.Config.IsWebOwnerTurn
+	// also needs the launcher's own authentication to be established. Never
+	// serialised, so no decode path can set it.
+	WebAuthenticated bool `json:"-"`
 }
 
 type InboundMessage struct {

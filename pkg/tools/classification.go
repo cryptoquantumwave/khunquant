@@ -1,5 +1,7 @@
 package tools
 
+import "sort"
+
 // Class says what a tool can DO, independent of how it is named or configured.
 //
 // It exists for one purpose today: the ceiling on autonomous turns (a heartbeat,
@@ -191,6 +193,15 @@ var toolClasses = map[string]Class{
 	// so the tool is propose, not read: the ceiling refuses it everywhere except
 	// where proposeOrderOpen grants it.
 	NameProposeOrder: ClassPropose,
+	// remember stores a suggestion for the owner to confirm (or, in the owner's own
+	// conversation, the owner's own note). The ceiling does not admit autonomous turns
+	// to this class; rememberOpen grants it by name, bound to an owner being configured
+	// and the digest that carries the suggestion running.
+	NameRemember: ClassPropose,
+	// propose_reflection hands the nightly reflection's suggestions to code, which
+	// validates them and queues proposals the owner decides. It changes nothing itself.
+	// Per-turn tool, open to the reflection turn alone (reflectionTurnMayCall).
+	NameProposeReflection: ClassPropose,
 
 	// Orders and positions. Every exit is here as well: the previous rule that
 	// exits are never gated holds for turns a person started, not for these.
@@ -236,4 +247,17 @@ var toolClasses = map[string]Class{
 // is not in the table (an MCP tool, a tool added without being classified).
 func ClassOf(name string) Class {
 	return toolClasses[name]
+}
+
+// ClassifiedNames returns every tool name that has a class, sorted. It is the set
+// a test over "every tool" starts from: the registry cannot hold a tool outside it
+// (TestClassOf_AllRegisteredToolsClassified), and it includes the tools only the
+// gateway registers.
+func ClassifiedNames() []string {
+	names := make([]string, 0, len(toolClasses))
+	for n := range toolClasses {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

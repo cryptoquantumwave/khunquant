@@ -110,12 +110,21 @@ type TriggerSpec struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
-// Expectation is what a goal expects the world to look like (a later change
-// evaluates it). It is stored and bounded here; no tool sets it yet.
+// Expectation is what a goal expects the world to look like: a true/false expression
+// over the world model (pkg/worldmodel's expectation language), which the
+// goal_discrepancy trigger evaluates while the goal is active and says so when it has
+// been false for Consecutive known checks in a row, EveryMinutes apart. The ledger
+// bounds it; the expression itself is compiled by pkg/triggers/intents, which this
+// package must not import.
+//
+// Severity is info, notice or warning: a goal that no longer holds is never a safety
+// alarm. Zero Consecutive and EveryMinutes mean the trigger's defaults.
 type Expectation struct {
-	Expr        string             `json:"expr"`
-	Description string             `json:"description,omitempty"`
-	Severity    proactive.Severity `json:"severity"`
+	Expr         string             `json:"expr"`
+	Description  string             `json:"description,omitempty"`
+	Severity     proactive.Severity `json:"severity"`
+	Consecutive  int                `json:"consecutive,omitempty"`
+	EveryMinutes int                `json:"every_minutes,omitempty"`
 }
 
 // Provenance records who and what created an intent, or changed its status. It is
@@ -215,6 +224,11 @@ const (
 	MaxProposedIntents = 20
 	// MaxListLimit is the most rows one list returns.
 	MaxListLimit = 500
+
+	// MaxExpectConsecutive bounds Expectation.Consecutive and MaxExpectEveryMinutes
+	// bounds Expectation.EveryMinutes (one day).
+	MaxExpectConsecutive  = 10
+	MaxExpectEveryMinutes = 24 * 60
 
 	maxExprBytes        = 500
 	maxDescriptionRunes = 200
@@ -421,10 +435,18 @@ func normalizeNew(in Intent) (Intent, error) {
 		if err != nil {
 			return Intent{}, err
 		}
-		if e.Severity < proactive.SeverityInfo || e.Severity > proactive.SeverityCritical {
-			return Intent{}, fmt.Errorf("intent: unknown severity %d", int(e.Severity))
+		if e.Severity < proactive.SeverityInfo || e.Severity > proactive.SeverityWarning {
+			return Intent{}, fmt.Errorf("intent: an expectation's severity is info, notice or warning, not %d: a goal that no longer holds is not a safety alarm", int(e.Severity))
 		}
-		out.Expected = &Expectation{Expr: expr, Description: desc, Severity: e.Severity}
+		if e.Consecutive < 0 || e.Consecutive > MaxExpectConsecutive {
+			return Intent{}, fmt.Errorf("intent: consecutive checks %d is outside 1..%d", e.Consecutive, MaxExpectConsecutive)
+		}
+		if e.EveryMinutes < 0 || e.EveryMinutes > MaxExpectEveryMinutes {
+			return Intent{}, fmt.Errorf("intent: checking every %d minutes is outside 1..%d", e.EveryMinutes, MaxExpectEveryMinutes)
+		}
+		out.Expected = &Expectation{
+			Expr: expr, Description: desc, Severity: e.Severity, Consecutive: e.Consecutive, EveryMinutes: e.EveryMinutes,
+		}
 	}
 
 	if in.MandateID != "" {

@@ -233,6 +233,23 @@ type TradingRiskConfig struct {
 	// schedule: an operator may reasonably want a tighter ceiling on what fires
 	// without anyone watching than on what they place by hand.
 	MaxDCAAmountPerOrderUSD float64 `json:"max_dca_amount_per_order_usd" env:"KHUNQUANT_TRADING_MAX_DCA_ORDER_USD"`
+
+	// The next three are brakes of the policy engine (pkg/policy). Each is off by
+	// default and exempts reduce-only and exit orders. While the engine runs in
+	// shadow (proactive.policy.mode) they only appear in its recorded verdicts and
+	// refuse nothing; in live they refuse, and the owner's own trades are subject to
+	// them like anyone's (exits are exempt).
+
+	// MaxOrdersPer10Min caps how many orders may be placed in any ten minutes
+	// (all providers together). 0 means no limit.
+	MaxOrdersPer10Min int `json:"max_orders_per_10min,omitempty" env:"KHUNQUANT_TRADING_MAX_ORDERS_PER_10MIN"`
+	// MaxSymbolSharePct caps the share of the portfolio (percent, 0-100) one
+	// symbol may hold after an order. 0 means no limit. NOT SUPPORTED YET: no
+	// portfolio source is wired, so a value above 0 is rejected by validation.
+	MaxSymbolSharePct float64 `json:"max_symbol_share_pct,omitempty" env:"KHUNQUANT_TRADING_MAX_SYMBOL_SHARE_PCT"`
+	// SymbolAllowlist, when not empty, limits orders to these symbols
+	// (case-insensitive, e.g. "BTC/USDT"). Empty means any symbol.
+	SymbolAllowlist []string `json:"symbol_allowlist,omitempty" env:"KHUNQUANT_TRADING_SYMBOL_ALLOWLIST" envSeparator:","`
 }
 
 // OKXExchangeAccount extends ExchangeAccount with the OKX-specific passphrase.
@@ -1469,6 +1486,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Never fails the load; see reportProactive.
 	reportProactive(cfg.Proactive)
+	reportTradingRisk(cfg.TradingRisk)
 
 	// Migrate legacy channel config fields to new unified structures.
 	// Still unconditional: these are idempotent and predate versioning, and
@@ -1548,6 +1566,7 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 	}
 
 	reportProactive(cfg.Proactive)
+	reportTradingRisk(cfg.TradingRisk)
 
 	cfg.migrateChannelConfigs()
 

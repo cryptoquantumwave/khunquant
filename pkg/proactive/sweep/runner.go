@@ -300,6 +300,12 @@ func (r *Runner) Run(ctx context.Context, heartbeatPrompt string) (res Result) {
 		if ctx.Err() != nil {
 			return Result{Outcome: ResultInterrupted, Summary: "interrupted during the turn"}
 		}
+		if errors.Is(err, proactive.ErrTurnSkipped) {
+			// The budget is spent, not the turn broken: the mark stays and the failure
+			// count is untouched, so these changes are looked at once the budget is back
+			// instead of being abandoned after MaxFailures ticks.
+			return Result{Outcome: ResultSkipped, Summary: "skipped: the cognition budget is spent; the mark stayed"}
+		}
 		st.turnFailures.Add(1)
 		return r.failed(ctx, err, seq, cursor, readAt, markAt)
 	}

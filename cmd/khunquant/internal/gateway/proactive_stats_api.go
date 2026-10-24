@@ -31,6 +31,13 @@ type busStatsResponse struct {
 	// workflow definition is registered). Its counters are those of the current
 	// generation of services.
 	Journal *journalStatsResponse `json:"journal,omitempty"`
+
+	// Policy is present only while the policy engine is armed (shadow or live).
+	Policy *policyStatsResponse `json:"policy,omitempty"`
+
+	// Cognition is present only while the turn scheduler runs (proactive.cognition
+	// effectively on): queue depth by priority, running jobs and today's budget use.
+	Cognition *cognitionStatsResponse `json:"cognition,omitempty"`
 }
 
 type subscriberStatsResponse struct {

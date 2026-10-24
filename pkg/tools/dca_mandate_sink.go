@@ -28,10 +28,10 @@ func NewMandateSink(cfg *config.Config, store *dca.Store, now func() time.Time) 
 }
 
 func (s *mandateSink) CreateMandate(ctx context.Context, p approval.Proposal) error {
-	route, ok := s.cfg.Proactive.OwnerRoute()
+	ownerID, ok := s.cfg.OwnerDecider(p.DecidedBy)
 	if !ok {
 		return errors.New("no owner is configured")
 	}
-	_, err := s.store.CreateMandateFromProposal(ctx, p, route.SenderID, s.now())
+	_, err := s.store.CreateMandateFromProposal(ctx, p, ownerID, s.now())
 	return err
 }

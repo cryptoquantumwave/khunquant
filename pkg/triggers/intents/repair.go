@@ -65,7 +65,7 @@ func (c *Compiler) repairLostFire(ctx context.Context, it intent.Intent, plan Pl
 		return false
 	}
 	reminder := it.Type == intent.TypeReminder
-	oneShot := (reminder && OneShotReminder(it)) || (!reminder && Compilable(it.Type) && it.FireBudget == 1)
+	oneShot := (reminder && OneShotReminder(it)) || (!reminder && Compiles(it) && it.FireBudget == 1)
 	if !oneShot {
 		return false
 	}

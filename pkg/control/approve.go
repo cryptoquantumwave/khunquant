@@ -52,6 +52,9 @@ func (d *Dispatcher) decideCommand(ctx context.Context, in Input, approve bool) 
 // service checks the owner again, and the proposal's own conditions (pending,
 // unexpired, the right nonce when there is one, the kill switch).
 func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, code, nonce string, approve bool) Reply {
+	if isWebOwner(deps, in) {
+		ctx = approval.WithWebDecider(ctx) // Decide checks the route again
+	}
 	p, err := deps.Approvals.Decide(ctx, code, nonce, approve, canonicalSender(in))
 	var se *approval.StatusError
 	switch {
@@ -79,6 +82,29 @@ func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, c
 
 func decidedText(p approval.Proposal, approve bool) string {
 	summary := firstLine(p.Summary, 200)
+	if p.Kind == approval.KindMemory {
+		// The reply names the suggestion by code and category only: the fact reached the
+		// owner in the digest, and is not repeated into a conversation a model reads.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was saved to memory.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Saved %s to memory.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Saving it to memory now.", summary)
+	}
+	if approval.IsReflectionKind(p.Kind) {
+		// Named by code only: the change reached the owner in the digest.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was changed.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Applied %s.", summary)
+		case p.Status == approval.StatusFailed:
+			return fmt.Sprintf("Approved %s, but it could no longer be applied; nothing was changed.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Applying it now.", summary)
+	}
 	if p.Kind == approval.KindMandate {
 		// A mandate card places nothing: approving it lets code buy inside its limits.
 		switch {

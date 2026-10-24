@@ -29,6 +29,7 @@ var (
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
 	ctxKeyOrigin  = &toolCtxKey{"origin"}
 	ctxKeySender  = &toolCtxKey{"sender"}
+	ctxKeyWebAuth = &toolCtxKey{"webAuth"}
 )
 
 // Tool call origins. A turn is tagged where it starts, and the tag travels with
@@ -107,6 +108,21 @@ func WithToolSender(ctx context.Context, senderID string) context.Context {
 // ToolSender extracts the turn's sender from ctx, or "" if untagged.
 func ToolSender(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeySender).(string)
+	return v
+}
+
+// WithWebAuth marks the turn as one whose message arrived on a pico connection
+// authenticated with the pico token (bus.SenderInfo.WebAuthenticated). Only the
+// agent loop's root-turn tagging calls it, and no sub-turn or follow-up copies it,
+// so a delegated task never inherits it. It is a fact, not a grant: checkOwnerTurn
+// still needs the owner and the launcher's authentication.
+func WithWebAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyWebAuth, true)
+}
+
+// webAuthenticated reports whether ctx carries WithWebAuth.
+func webAuthenticated(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeyWebAuth).(bool)
 	return v
 }
 

@@ -29,3 +29,11 @@ func SameSender(a, b string) bool {
 func IsOwner(sender, fallbackPlatform, ownerID string) bool {
 	return SameSender(CanonicalSender(sender, fallbackPlatform), ownerID)
 }
+
+// WebOwner is the name recorded for the owner acting from the authenticated web
+// launcher chat, in place of a sender id: the DecidedBy of an approval, the author
+// of a profile version or intent, the stamp of a memory. It is deliberately not a
+// canonical "platform:id", so no configured owner sender can ever equal it
+// (proactive.owner.sender_id must be canonical), and the audit says which surface
+// acted.
+const WebOwner = "web"

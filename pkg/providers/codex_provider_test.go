@@ -873,3 +873,45 @@ func TestCodexMessageContent_Empty(t *testing.T) {
 		t.Errorf("codexMessageContent nil = %q, want empty", got)
 	}
 }
+
+// A one-shot completion that asks for no native tools reaches the Codex backend with
+// no tools at all, the provider's built-in web search included; the same provider
+// asked as a normal chat still sends it.
+func TestCodexProvider_NoNativeToolsOption(t *testing.T) {
+	var sawTools []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		_, has := reqBody["tools"]
+		sawTools = append(sawTools, has)
+		writeCompletedSSE(w, map[string]any{
+			"id": "resp_test", "object": "response", "status": "completed",
+			"output": []map[string]any{{
+				"id": "msg_1", "type": "message", "role": "assistant", "status": "completed",
+				"content": []map[string]any{{"type": "output_text", "text": "ok"}},
+			}},
+			"usage": map[string]any{
+				"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+				"input_tokens_details":  map[string]any{"cached_tokens": 0},
+				"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+
+	if _, _, err := Complete(t.Context(), provider, "gpt-4o", "hi", CompleteOptions{MaxTokens: 100, NoNativeTools: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Complete(t.Context(), provider, "gpt-4o", "hi", CompleteOptions{MaxTokens: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sawTools) != 2 || sawTools[0] || !sawTools[1] {
+		t.Errorf("tools present per request = %v, want [false true]", sawTools)
+	}
+}

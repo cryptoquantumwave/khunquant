@@ -200,14 +200,38 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 // "confirm" parameter. The approval gate waves through confirm=false calls only
 // for such tools; see isPreviewCall.
 func checkToolPolicy(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
+	refusal := enforceToolPolicy(ctx, name, args, declaresConfirm)
+	// Shadow: the policy engine is asked about the call and its verdict recorded
+	// beside what the checks above decided. It cannot change the outcome. In live,
+	// a money call the checks allowed is decided and recorded by the hook instead
+	// (policyHook), so that it is neither asked twice nor counted twice.
+	if refusal != nil || livePolicy.Load() == nil || !applies(name) {
+		observeShadow(ctx, name, args, refusal == nil)
+	}
+	return refusal
+}
+
+// enforceToolPolicy is the enforcement: the class ceiling, the per-tool rows and
+// the approval hold.
+func enforceToolPolicy(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
 	// The class ceiling comes first and answers one question for autonomous
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
 	if !turnMayCall(ctx, name) {
+		if ToolOrigin(ctx) == OriginProactive && ProactiveTurnKind(ctx) == proactive.TurnReflection {
+			return policyRefusal(name, fmt.Sprintf("tool %q is not permitted in a reflection turn. It can read the owner's profile "+
+				"and intents and declare its suggestions with %s; it cannot message, write, trade or change anything.",
+				name, NameProposeReflection))
+		}
 		if name == NameProposeOrder {
 			return policyRefusal(name, "propose_order is not available in this turn. It is open only to the owner's own "+
 				"conversation turn and to a proactive turn whose inputs were all exchange data (a proactive turn that "+
 				"has read the web, a file or a skill cannot propose); approvals must also be switched on.")
+		}
+		if name == NameRemember {
+			return policyRefusal(name, fmt.Sprintf("tool %q is not permitted in an autonomous (%s) turn: memories cannot be "+
+				"suggested without an owner (proactive.owner) to confirm them in the daily digest, and the digest and "+
+				"approvals must be running.", name, describeOrigin(ToolOrigin(ctx))))
 		}
 		if ToolOrigin(ctx) == OriginProactive {
 			return policyRefusal(name, fmt.Sprintf(
@@ -222,6 +246,30 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any, decl
 			name, describeOrigin(ToolOrigin(ctx))))
 	}
 
+	switch kind, msg := rowGate(ctx, name); kind {
+	case rowBlocked:
+		return policyRefusal(name, msg)
+	case rowHold:
+		// Approval runs last: a call that would be refused anyway must not cost the
+		// operator an approval they then cannot use.
+		return checkApproval(ctx, name, args, declaresConfirm)
+	}
+	return nil
+}
+
+type rowKind int
+
+const (
+	rowPass rowKind = iota
+	rowBlocked
+	rowHold
+)
+
+// rowGate is the tool's own policy row, without side effects: whether a blocked
+// origin, paper mode or a required approval stands in the call's way. It is the
+// whole of the row logic - enforceToolPolicy and the policy engine both ask it - so
+// the two cannot disagree. For rowBlocked msg is the refusal text.
+func rowGate(ctx context.Context, name string) (kind rowKind, msg string) {
 	policyMu.RLock()
 	enabled, paper := policyEnabled, policyPaper
 	policy, declared := policyTable[name]
@@ -229,7 +277,7 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any, decl
 	policyMu.RUnlock()
 
 	if !enabled || (!declared && !needsApproval) {
-		return nil
+		return rowPass, ""
 	}
 
 	origin := ToolOrigin(ctx)
@@ -238,33 +286,30 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any, decl
 		// lost its tag is a turn we cannot vouch for, and "unknown" must not be
 		// the one value that slips past a financial gate.
 		if origin == blocked || origin == "" {
-			return policyRefusal(name, fmt.Sprintf(
+			return rowBlocked, fmt.Sprintf(
 				"%s is not available to %s turns. A scheduled job runs with nobody present to "+
 					"answer for it, so financial actions must be started by a person.",
-				name, describeOrigin(origin)))
+				name, describeOrigin(origin))
 		}
 	}
 
 	if policy.RefuseUnderPaperMode && paper {
-		return policyRefusal(name, fmt.Sprintf(
+		return rowBlocked, fmt.Sprintf(
 			"%s is blocked while paper_trading_mode is on. This tool has no simulated mode, so "+
 				"running it would place real orders despite paper mode. Disable paper_trading_mode "+
-				"to use it.", name))
+				"to use it.", name)
 	}
 
-	// Approval runs last: a call that would be refused anyway must not cost the
-	// operator an approval they then cannot use.
 	if needsApproval {
 		// An approval request is a message to the operator's chat. A proactive
 		// turn delivers nothing, and nobody is waiting on it to answer one.
 		if origin == OriginProactive {
-			return policyRefusal(name, fmt.Sprintf(
-				"%s requires operator approval, which a proactive turn cannot ask for.", name))
+			return rowBlocked, fmt.Sprintf(
+				"%s requires operator approval, which a proactive turn cannot ask for.", name)
 		}
-		return checkApproval(ctx, name, args, declaresConfirm)
+		return rowHold, ""
 	}
-
-	return nil
+	return rowPass, ""
 }
 
 // turnMayCall is the one predicate for "may the turn carried by ctx call this
@@ -285,12 +330,20 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any, decl
 // where it starts, and the per-tool rows already fail closed on an empty origin.
 // Like the rows, the ceiling does nothing until SetPolicyConfig has armed it.
 func turnMayCall(ctx context.Context, name string) bool {
+	// The reflection turn has its own, explicit and far smaller ceiling, decided before
+	// anything below can grant it a tool by name or by class (see reflectionTurnMayCall).
+	if ToolOrigin(ctx) == OriginProactive && ProactiveTurnKind(ctx) == proactive.TurnReflection {
+		return reflectionTurnMayCall(name)
+	}
 	// propose_order is granted by name, to the owner's own root turn and to a
 	// trusted candidate-driven proactive turn, and to nothing else (see
 	// proposeOrderOpen). It is decided before the origin shortcuts below, which
 	// would give a proactive turn the read class only and a person's turn everything.
 	if name == NameProposeOrder {
 		return proposeOrderOpen(ctx)
+	}
+	if name == NameRemember {
+		return rememberOpen(ctx)
 	}
 	origin := ToolOrigin(ctx)
 

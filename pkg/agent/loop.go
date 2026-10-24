@@ -1883,8 +1883,11 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 
+				// Session-scoped tools (seahorse short_grep/short_expand) read the
+				// caller's session from ctx and fail closed without it.
+				toolCtx := tools.WithToolSessionKey(ctx, opts.SessionKey)
 				toolResult := agent.Tools.ExecuteWithContext(
-					ctx,
+					toolCtx,
 					tc.Name,
 					tc.Arguments,
 					opts.Channel,

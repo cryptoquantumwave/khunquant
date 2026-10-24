@@ -59,14 +59,12 @@ func TestGrepMissingPattern(t *testing.T) {
 	}
 }
 
-func TestGrepToolSupportsAllConversations(t *testing.T) {
+func TestGrepToolDoesNotAdvertiseAllConversations(t *testing.T) {
 	s := openTestStore(t)
 	tool := NewGrepTool(&RetrievalEngine{store: s})
-	params := tool.Parameters()
-	props := params["properties"].(map[string]any)
+	props := tool.Parameters()["properties"].(map[string]any)
 
-	// GrepTool should accept all_conversations parameter
-	if _, ok := props["all_conversations"]; !ok {
-		t.Error("Parameters missing 'all_conversations' field")
+	if _, ok := props["all_conversations"]; ok {
+		t.Error("short_grep must not advertise a cross-conversation parameter")
 	}
 }

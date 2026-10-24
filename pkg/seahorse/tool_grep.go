@@ -23,7 +23,8 @@ func (t *GrepTool) Name() string {
 }
 
 func (t *GrepTool) Description() string {
-	return `Search summaries and messages for matching content.
+	return `Search summaries and messages of the current conversation for matching content.
+Other conversations are never searched.
 
 Pattern syntax:
 - Words: "authentication" - matches content containing this word
@@ -41,7 +42,6 @@ Parameters:
 - scope: "both" (default), "summary", or "message" - what to search
 - role: "user", "assistant", or omit for all - filter by message role
 - last: Time shortcut like "6h", "7d", "2w", "1m" (hours/days/weeks/months)
-- all_conversations: Search all conversations (default: current only)
 - since: ISO8601 timestamp, content after this time
 - before: ISO8601 timestamp, content before this time
 - limit: Max results (default: 20)
@@ -64,8 +64,7 @@ Examples:
   {"pattern": "bug AND login"}
   {"pattern": "%snake%"}
   {"pattern": "project", "scope": "summary"}
-  {"pattern": "error", "role": "assistant", "last": "7d"}
-  {"pattern": "error", "all_conversations": true}`
+  {"pattern": "error", "role": "assistant", "last": "7d"}`
 }
 
 func (t *GrepTool) Parameters() map[string]any {
@@ -89,10 +88,6 @@ func (t *GrepTool) Parameters() map[string]any {
 			"last": map[string]any{
 				"type":        "string",
 				"description": "Time shortcut: '6h' (6 hours), '7d' (7 days), '2w' (2 weeks), '1m' (1 month)",
-			},
-			"all_conversations": map[string]any{
-				"type":        "boolean",
-				"description": "Search across all conversations (default: searches current conversation only)",
 			},
 			"since": map[string]any{
 				"type":        "string",
@@ -128,8 +123,9 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if last, ok := args["last"].(string); ok && last != "" {
 		input.Last = last
 	}
-	if allConv, ok := args["all_conversations"].(bool); ok {
-		input.AllConversations = allConv
+	if allConv, ok := args["all_conversations"].(bool); ok && allConv {
+		return tools.ErrorResult(
+			"Searching other conversations is not supported; short_grep only searches the current conversation.")
 	}
 	if limit, ok := args["limit"].(float64); ok {
 		input.Limit = int(limit)
@@ -149,6 +145,13 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		}
 		input.Before = &parsed
 	}
+
+	// Fail closed: without a resolvable caller conversation, search nothing.
+	convID, err := t.engine.callerConversationID(ctx)
+	if err != nil {
+		return tools.ErrorResult("Grep refused: " + err.Error())
+	}
+	input.ConversationID = convID
 
 	result, err := t.engine.Grep(ctx, input)
 	if err != nil {

@@ -84,6 +84,7 @@ type gatewayServices struct {
 	Control          *controlRuntime                    // the kill flag and the control-command dispatcher (control_wiring.go); built on every generation
 	Policy           *policyRuntime                     // the policy engine's shadow record (policy_wiring.go); nil unless proactive is on and proactive.policy.mode is shadow or live
 	Reflection       *reflectionRuntime                 // the nightly reflection loop; nil unless it is effectively on and everything it reads runs
+	Feedback         *feedbackRuntime                   // the owner-response recorder; nil unless proactive.learning is effectively on
 	Approval         *approvalRuntime                   // order approvals (pkg/approval); nil unless approvals are effectively on and the workflow engine runs
 	DNFlow           *dnFlowRuntime                     // dn.open / dn.recover dependencies; nil unless the delta-neutral tools are on
 	DCAFlow          *dcaFlowRuntime                    // dca.execute dependencies and the mandate sync; nil unless mandates are on

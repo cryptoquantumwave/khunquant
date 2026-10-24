@@ -36,6 +36,7 @@ var callbackActions = map[string]string{
 	"snz1d": "snooze_1d",
 	"use":   "useful",
 	"nu":    "not_useful",
+	"mute":  "mute",
 }
 
 // callbackCodes is callbackActions the other way round.

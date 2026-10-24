@@ -173,6 +173,11 @@ func (t *UpdateDeltaNeutralPlanTool) Parameters() map[string]any {
 }
 
 func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Every edit is the owner's.
+	if res := refuseNonOwnerChange(ctx, NameUpdateDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {

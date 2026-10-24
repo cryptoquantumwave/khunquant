@@ -1,0 +1,30 @@
+{
+  "specs": [
+    {
+      "id": "liq",
+      "kind": "liquidation_distance",
+      "params": {
+        "critical_pct": 15,
+        "warning_pct": 25,
+        "margin_ratio_critical_pct": 80,
+        "hysteresis_pct": 2,
+        "max_age_minutes": 7,
+        "warning_repeat_hours": 6
+      }
+    },
+    {
+      "id": "btc-below-60k",
+      "kind": "price_cross",
+      "params": {
+        "provider": "okx",
+        "symbol": "BTC/USDT",
+        "direction": "below",
+        "threshold": 60000,
+        "recurring": true
+      }
+    }
+  ],
+  "futures_accounts": [
+    "okx/main"
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "match": "dn_health:12:funding_negative",
+    "from": "2026-03-10T05:30:00Z",
+    "to": "2026-03-10T05:35:00Z",
+    "should_fire": true,
+    "note": "funding went negative"
+  },
+  {
+    "match": "dn_health:12:funding_reversal",
+    "from": "2026-03-10T06:30:00Z",
+    "to": "2026-03-10T06:35:00Z",
+    "should_fire": true,
+    "note": "funding rates reversing"
+  },
+  {
+    "match": "dn_health:12",
+    "from": "2026-03-10T05:00:00Z",
+    "to": "2026-03-10T05:29:00Z",
+    "should_fire": false,
+    "note": "healthy before the flip"
+  }
+]

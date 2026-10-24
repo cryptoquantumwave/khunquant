@@ -250,6 +250,8 @@ type rigOpts struct {
 	router channels.ControlRouter
 	// noStart builds the channel and marks it running without polling.
 	noStart bool
+	// learning turns proactive.learning on (reactions).
+	learning bool
 }
 
 func ownerConfig(stub *botStub, allow []string) *config.Config {
@@ -271,6 +273,7 @@ func newRig(t *testing.T, o rigOpts) *rig {
 	}
 	stub := newBotStub(t)
 	cfg := ownerConfig(stub, o.allow)
+	cfg.Proactive.Learning.Enabled = o.learning
 	mb := bus.NewMessageBus()
 	ch, err := NewTelegramChannel(cfg, mb)
 	require.NoError(t, err)
@@ -641,16 +644,22 @@ func TestCallbackData_ParseIsStrict(t *testing.T) {
 }
 
 func TestAllowedUpdatesSet(t *testing.T) {
-	assert.Equal(t, []string{"message", "callback_query"}, allowedUpdates())
+	assert.Equal(t, []string{"message", "callback_query"}, allowedUpdates(false))
+	assert.Equal(t, []string{"message", "callback_query", "message_reaction"}, allowedUpdates(true))
 	// A fresh slice each time: telego keeps the one it is given.
-	a := allowedUpdates()
+	a := allowedUpdates(false)
 	a[0] = "x"
-	assert.Equal(t, "message", allowedUpdates()[0])
+	assert.Equal(t, "message", allowedUpdates(false)[0])
 
-	// And it is what goes on the wire.
+	// And it is what goes on the wire: with learning off exactly what it was before
+	// reactions existed, with it on the reaction updates as well.
 	r := newRig(t, rigOpts{})
 	polls := r.api.waitCalls("getUpdates", 1)
 	assert.Equal(t, []any{"message", "callback_query"}, polls[0].Body["allowed_updates"])
+
+	r = newRig(t, rigOpts{learning: true})
+	polls = r.api.waitCalls("getUpdates", 1)
+	assert.Equal(t, []any{"message", "callback_query", "message_reaction"}, polls[0].Body["allowed_updates"])
 }
 
 // ---------------------------------------------------------------------------

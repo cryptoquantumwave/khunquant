@@ -74,6 +74,9 @@ func buildPolicy(d assemblyDeps) *policyRuntime {
 	}
 	cfg := d.Cfg
 	eng := tools.NewPolicyEngine(func() *config.Config { return cfg }, killed, rt, nil)
+	// The owner's tighten-only autonomy dial, read from the profile on every decision.
+	readDial := autonomyReader(d)
+	eng.SetOwnerDial(func(ctx context.Context, t policy.Tier) (string, error) { return readDial(ctx, t.String()) })
 	var bus events.Bus
 	if b := d.Shared.eventBus(); b != nil {
 		bus = b

@@ -195,7 +195,7 @@ func TestHandleDCAAutoJob_AcceptsTheJobAfterAScheduleChange(t *testing.T) {
 	store, cronService, cronTool, probe, cfg, planID, own := newDCAHandlerFixture(t)
 
 	update := tools.NewUpdateDCAPlanTool(store, cronService)
-	if res := update.Execute(context.Background(), map[string]any{
+	if res := update.Execute(ownerCtx(), map[string]any{
 		"plan_id": float64(planID), "schedule": map[string]any{"cron": "0 10 * * 2"},
 	}); res.IsError {
 		t.Fatalf("update: %s", res.ForLLM)

@@ -313,12 +313,8 @@ func queuedDigestItems(ctx context.Context, tx *sql.Tx) ([]Decision, error) {
 	return items, nil
 }
 
-type rowQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // getMeta returns the attention_meta value for key, "" when absent.
-func getMeta(ctx context.Context, q rowQuerier, key string) (string, error) {
+func getMeta(ctx context.Context, q Queryer, key string) (string, error) {
 	var v string
 	err := q.QueryRowContext(ctx, `SELECT value FROM attention_meta WHERE key = ?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -422,7 +418,7 @@ func renderOthers(items []Decision) string {
 		if _, seen := bySubject[subject]; !seen {
 			order = append(order, subject)
 		}
-		bySubject[subject] = append(bySubject[subject], "• "+line)
+		bySubject[subject] = append(bySubject[subject], "• "+line+heldNote(d.Reason))
 	}
 
 	var b strings.Builder
@@ -439,6 +435,18 @@ func renderOthers(items []Decision) string {
 		b.WriteString("\n\nand " + strconv.Itoa(n-maxDigestItems) + " more")
 	}
 	return b.String()
+}
+
+// heldNote says, in words built by code, why an item the owner would have been messaged
+// about is in the digest, when learning is the reason. It is "" for every other reason.
+func heldNote(reason string) string {
+	switch reason {
+	case ReasonLowAcceptance:
+		return " (held for the digest: you found these less useful recently)"
+	case ReasonHoldout:
+		return " (held for the digest: a routine check on what is worth a message)"
+	}
+	return ""
 }
 
 // maxDigestMemory is how many memory suggestions a digest shows: each is answered with

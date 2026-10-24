@@ -54,6 +54,11 @@ func (t *DeleteSnapshotsTool) Parameters() map[string]any {
 }
 
 func (t *DeleteSnapshotsTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Deleted history cannot be recovered: owner only.
+	if res := refuseNonOwnerChange(ctx, NameDeleteSnapshots, "snapshots"); res != nil {
+		return res
+	}
+
 	f := snapshot.DeleteFilter{}
 
 	hasID := false

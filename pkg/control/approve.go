@@ -56,6 +56,7 @@ func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, c
 		ctx = approval.WithWebDecider(ctx) // Decide checks the route again
 	}
 	p, err := deps.Approvals.Decide(ctx, code, nonce, approve, canonicalSender(in))
+	noteDecision(ctx, p, err)
 	var se *approval.StatusError
 	switch {
 	case err == nil:

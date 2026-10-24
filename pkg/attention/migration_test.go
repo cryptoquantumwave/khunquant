@@ -58,7 +58,7 @@ func TestMigration_V1DatabaseUpgradesToV2(t *testing.T) {
 	}
 
 	var v int
-	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 3 {
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 4 {
 		t.Fatalf("schema version = %d, %v", v, err)
 	}
 	// the old rows are intact, and the new columns are null on them.

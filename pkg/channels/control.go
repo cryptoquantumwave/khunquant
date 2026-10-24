@@ -94,6 +94,54 @@ type ControlRouter interface {
 	Recognises(in ControlInput) bool
 }
 
+// FeedbackObserver is an optional interface of a ControlRouter: it is told about two
+// inputs that are not control commands but are the owner's answer to a proactive
+// message, so that they can be recorded. The channel checks for it with a type
+// assertion, so a router without it is untouched. Both calls must return at once
+// without waiting on I/O (they hand the work to a goroutine), and neither changes
+// what the channel does next: a reply still goes to the agent exactly as it was.
+type FeedbackObserver interface {
+	// ObserveReply is called with the input of an inbound message that was not
+	// handled as a control command. in.Text is the sender's own words, without the
+	// quoted message the channel put in front of them, and in.ReplyToMessageID is the
+	// message replied to.
+	ObserveReply(ctx context.Context, in ControlInput)
+	// ObserveReaction is called when a user reacts to a message (emoji is the reaction
+	// as the platform names it). in.ReplyToMessageID and in.MessageID are the message
+	// reacted to; in.Text is empty.
+	ObserveReaction(ctx context.Context, in ControlInput, emoji string)
+}
+
+// observeReply tells the router's feedback side, if it has one, about a reply. It
+// never panics into the caller and never changes the message.
+func observeReply(ctx context.Context, r ControlRouter, in ControlInput) {
+	fo, ok := r.(FeedbackObserver)
+	if !ok || in.ReplyToMessageID == "" {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.ErrorCF("channels", "The feedback observer panicked", map[string]any{"channel": in.Channel})
+		}
+	}()
+	fo.ObserveReply(ctx, in)
+}
+
+// ObserveReaction offers a reaction to the control router's feedback side. It is for
+// the channels that receive reactions; a router without one ignores it.
+func (c *BaseChannel) ObserveReaction(ctx context.Context, in ControlInput, emoji string) {
+	fo, ok := c.ControlRouter().(FeedbackObserver)
+	if !ok {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.ErrorCF("channels", "The feedback observer panicked", map[string]any{"channel": in.Channel})
+		}
+	}()
+	fo.ObserveReaction(ctx, in, emoji)
+}
+
 type controlRouterBox struct{ r ControlRouter }
 
 // SetControlRouter injects the router. nil removes it. Safe to call while the
@@ -171,6 +219,7 @@ func (c *BaseChannel) routeControl(
 		return true
 	}
 	if !handled {
+		observeReply(ctx, r, in)
 		return false
 	}
 	c.sendControlReply(ctx, in, reply)

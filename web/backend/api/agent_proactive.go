@@ -70,11 +70,21 @@ type proactiveState struct {
 	// wide sqlitex.Shared handle, created on first use and not on every request.
 	storeMu sync.Mutex
 	stores  map[string]*intent.Store
+
+	// The live event streams (agent_proactive_dashboard.go): how many are open, and the
+	// channel Close shuts them with. pollEvery and heartbeatEvery are zero in production
+	// (the defaults apply); tests set them.
+	streamMu       sync.Mutex
+	streams        int
+	shutdown       chan struct{}
+	pollEvery      time.Duration
+	heartbeatEvery time.Duration
 }
 
 // Close releases the launcher's handle on the shared proactive database. It is
 // safe to call more than once and on a handler that never opened it.
 func (h *Handler) Close() error {
+	h.proactive.closeStreams() // the launcher's shutdown hook for the live streams
 	h.proactive.storeMu.Lock()
 	h.proactive.stores = nil
 	h.proactive.storeMu.Unlock()

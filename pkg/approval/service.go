@@ -154,7 +154,8 @@ func (s *Service) emit(kind events.Kind, p Proposal, sev events.Severity) {
 	}
 	s.o.Events.PublishNonBlocking(events.Event{
 		Kind: kind, Source: events.Source{Component: logComponent}, Severity: sev,
-		Payload: map[string]any{"id": p.ID, "code": p.Code, "kind": string(p.Kind), "status": string(p.Status), "origin": string(p.Origin)},
+		Payload: map[string]any{"id": p.ID, "code": p.Code, "kind": string(p.Kind), "status": string(p.Status), "origin": string(p.Origin),
+			"intervention_id": p.InterventionID},
 	})
 }
 

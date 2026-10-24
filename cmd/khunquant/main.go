@@ -27,6 +27,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/model"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/onboard"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/owner"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/replay"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/risk"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
@@ -60,6 +61,7 @@ func NewKhunquantCommand() *cobra.Command {
 		launcher.NewLauncherCommand(),
 		status.NewStatusCommand(),
 		trigger.NewTriggerCommand(),
+		replay.NewReplayCommand(),
 		cron.NewCronCommand(),
 		clean.NewCleanCommand(),
 		migrate.NewMigrateCommand(),
@@ -119,6 +121,9 @@ func initTermuxSSL() {
 	}
 }
 
+// isReplay says whether the process was started as `khunquant replay`.
+func isReplay(args []string) bool { return len(args) > 1 && args[1] == "replay" }
+
 // exitStatus is how the process ends for an error from a command. A command that
 // silences cobra's own error output (`khunquant trigger`) returns an error that
 // names its exit status; its message is printed here, on stderr. Any other error
@@ -141,7 +146,13 @@ func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
 
-	fmt.Printf("%s", banner)
+	// `khunquant replay` prints its report and writes nothing but the file it was told
+	// to: no banner on its standard output, no cache file, no network call for news of
+	// an update.
+	quiet := isReplay(os.Args)
+	if !quiet {
+		fmt.Printf("%s", banner)
+	}
 
 	// Install a file-backed PassphraseProvider so enc:// credentials are
 	// decrypted automatically if ~/.khunquant/.passphrase exists.
@@ -150,7 +161,10 @@ func main() {
 
 	// Read the cached update result instantly (no network wait), and kick off
 	// a background refresh so the cache stays fresh for the next invocation.
-	info := updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
+	var info *updater.UpdateInfo
+	if !quiet {
+		info = updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
+	}
 	if info != nil && info.IsOutdated {
 		fmt.Printf(
 			"%s Update available: %s (you have %s)\n   → %s\n\n",

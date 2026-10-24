@@ -50,7 +50,7 @@ func TestAlerts_LiveTriggersWithShadowAttentionPromoteNothing(t *testing.T) {
 		}
 	}
 	jobs := f.cronJobCount()
-	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(context.Background(), "telegram", "-100group"),
+	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(ownerCtx(), "telegram", "-100group"),
 		map[string]any{"action": "create", "provider": "okx", "symbol": "SOL/USDT", "condition": "below", "threshold": 100.0})
 	if res.IsError || f.cronJobCount() != jobs+1 || strings.Contains(res.ForLLM, "owner") {
 		t.Fatalf("the tool did not write a cron job: %+v (jobs %d -> %d)", res, jobs, f.cronJobCount())
@@ -101,7 +101,7 @@ func standIns(f *assemblyFixture) []string {
 func TestAlerts_ToolMadeAlertSurvivesTheRegistryGoingAway(t *testing.T) {
 	useSources(t, false, &countingSource{name: "fake"})
 	f := newAssemblyFixture(t, alertsMode(config.ProactiveModeLive))
-	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(context.Background(), "telegram", "-100group"),
+	res := alertTool(t, f, tools.NameSetPriceAlert).Execute(tools.WithToolContext(ownerCtx(), "telegram", "-100group"),
 		map[string]any{"action": "create", "provider": "okx", "symbol": "SOL/USDT", "condition": "below", "threshold": 100.0, "recurring": true})
 	if res.IsError {
 		t.Fatal(res.ForLLM)
@@ -160,7 +160,7 @@ func TestAlerts_ToolMadeAlertSurvivesTheRegistryGoingAway(t *testing.T) {
 func TestAlerts_NoOwnerRouteIsNotGuessedAndTheAlertIsListedInactive(t *testing.T) {
 	useSources(t, false, &countingSource{name: "fake"})
 	f := newAssemblyFixture(t, alertsMode(config.ProactiveModeLive))
-	alertTool(t, f, tools.NameSetPriceAlert).Execute(context.Background(), map[string]any{
+	alertTool(t, f, tools.NameSetPriceAlert).Execute(ownerCtx(), map[string]any{
 		"action": "create", "provider": "okx", "symbol": "SOL/USDT", "condition": "below", "threshold": 100.0})
 
 	logs := &countLogs{}

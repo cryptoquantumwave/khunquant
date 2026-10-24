@@ -587,6 +587,229 @@
         }
       },
       "proactive": {
+        "views": {
+          "overview": "Overview",
+          "controls": "Controls",
+          "settings": "Settings"
+        },
+        "timeline": {
+          "title": "Timeline",
+          "description": "What the assistant noticed, said and did, newest first, with how you answered and how it looked afterwards. Updates live.",
+          "live": {
+            "live": "Live",
+            "connecting": "Connecting",
+            "reconnecting": "Reconnecting",
+            "unavailable": "Gateway unavailable"
+          },
+          "from": "From",
+          "to": "To",
+          "any": "Any",
+          "trigger": "Trigger kind",
+          "more": "Load more",
+          "trades": "{{count}} trades",
+          "response": {
+            "useful": "Useful",
+            "not_useful": "Not useful",
+            "snooze": "Snoozed",
+            "mute": "Muted",
+            "reply": "Replied",
+            "acted_on": "Acted on",
+            "reaction": "Reaction",
+            "approved": "Approved",
+            "rejected": "Rejected",
+            "expired": "Expired",
+            "none": "No response"
+          }
+        },
+        "metrics": {
+          "title": "How it is going",
+          "description": "Numbers over your own calendar days. A number with no data says why, instead of showing 0.",
+          "days": "{{count}} days",
+          "no_data": "No data",
+          "no_responses": "No responses in this period.",
+          "window": "{{from}} to {{to}} ({{zone}})",
+          "per_day": "{{value}} a day ({{total}} total)",
+          "llm_value": "{{wakes}} wakes, {{tokens}} tokens a day",
+          "learning_value": "{{low}} moved to digest, {{holdout}} held out",
+          "chart_sends": "Messages sent per day",
+          "chart_responses": "Responses by kind",
+          "cards": {
+            "sends": "Sent per day",
+            "precision": "Precision of sent messages",
+            "precision_hint": "Useful out of rated messages",
+            "not_useful": "Not useful rate",
+            "mute": "Mute rate",
+            "no_response": "No-response rate",
+            "latency": "Median queue latency",
+            "critical_recall": "Critical recall",
+            "llm": "Model wakes and tokens",
+            "learning": "Learning activity"
+          },
+          "harm": {
+            "title": "Trading after alerts",
+            "note": "Shown so you can watch it. Nothing optimises for this number or reads it to decide anything.",
+            "after_alert": "Trades per alert day (trades / days), within 24 h after an alert",
+            "quiet": "Trades per quiet day (trades / days)",
+            "contracts": "Contract trades, alert days / quiet days",
+            "window": "Over the last {{days}} complete days with a fill history."
+          },
+          "approvals": {
+            "title": "Approval rate by tier",
+            "group": "Tier",
+            "approved": "Approved",
+            "rejected": "Rejected",
+            "expired": "Expired",
+            "rate": "Rate",
+            "groups": {
+              "T1": "T1 reducing order",
+              "T2": "T2 mandate",
+              "T3": "T3 other order",
+              "memory": "Memory",
+              "reflection": "Reflection"
+            }
+          }
+        },
+        "autonomy": {
+          "title": "Autonomy",
+          "description": "How much the assistant may do on its own, per tier. The dial can only tighten what it does today; it can never allow more.",
+          "tiers": {
+            "T1": "T1 Protective",
+            "T2": "T2 Mandated",
+            "T3": "T3 Discretionary"
+          },
+          "tier_about": {
+            "T1": "Orders that only reduce exposure (close, cancel, reduce-only).",
+            "T2": "Buys of a DCA plan inside a mandate you signed.",
+            "T3": "Any other consequential action, such as a new order."
+          },
+          "default_for": "Today, after {{who}}: {{what}}",
+          "columns": {
+            "owner": "your own message",
+            "trusted_autonomous": "an autonomous turn on exchange data",
+            "other": "an autonomous turn on other text, or another person"
+          },
+          "modes": {
+            "act": "acts on its own",
+            "ask": "asks you first",
+            "notify_only": "only tells you; does nothing",
+            "deny": "refused"
+          },
+          "settings": {
+            "default": "Default",
+            "ask": "Ask",
+            "notify": "Notify",
+            "off": "Off"
+          },
+          "setting_about": {
+            "default": "Keeps today's behaviour for this tier.",
+            "ask": "Asks you before doing it, every time.",
+            "notify": "Only tells you what it would do; does nothing itself.",
+            "off": "Does not do it at all."
+          },
+          "needs_owner": "Loosening needs the web to be the owner: {{reason}}",
+          "policy_note": "Policy is currently {{mode}}. The dial takes effect when the policy is live (mandated buys, T2, obey it always).",
+          "policy_modes": {
+            "off": "off",
+            "shadow": "in shadow mode (only recorded)",
+            "live": "live"
+          }
+        },
+        "mutes": {
+          "title": "Mutes",
+          "description": "Alerts you muted or snoozed. Remove a mute to hear them again.",
+          "empty": "Nothing is muted.",
+          "kind": {
+            "prefix": "Trigger or alert prefix",
+            "exact": "One alert (snooze)"
+          },
+          "until": "until {{time}}",
+          "unmute": "Unmute",
+          "confirm_title": "Unmute this?",
+          "confirm_description": "These alerts will reach you again."
+        },
+        "manage": {
+          "title": "Intents, proposals and mandates",
+          "description": "What the assistant is keeping track of and asking permission for. Refreshes every 10 seconds.",
+          "refresh": "Refresh",
+          "tabs": {
+            "intents": "Intents",
+            "proposals": "Proposals",
+            "mandates": "Mandates"
+          },
+          "loading": "Loading...",
+          "unreachable": "The gateway is not reachable, so there is nothing to show. Start the gateway and this page fills in.",
+          "unavailable": "Not available right now.",
+          "web_owner_blocked": "The web launcher is not the owner right now: {{reason}}",
+          "confirm": "Confirm",
+          "cancel": "Cancel",
+          "done": "Done",
+          "failed": "That did not work",
+          "suggested_by_assistant": "Suggested by the assistant",
+          "quote_fact": "Fact it wants to remember",
+          "quote_rationale": "Its reason",
+          "intents": {
+            "empty": "No open intents.",
+            "kind": "Kind",
+            "status": "Status",
+            "created_by": "Created by",
+            "expires": "Expires",
+            "never": "Does not expire",
+            "triggers": "Triggers: {{count}}",
+            "via_web": "confirmed or changed from the web",
+            "source": {
+              "explicit": "you",
+              "inferred": "the assistant (inferred)",
+              "reflection": "the nightly reflection"
+            },
+            "state": {
+              "proposed": "suggested",
+              "active": "active",
+              "paused": "paused"
+            },
+            "pause": "Pause",
+            "resume": "Resume",
+            "cancel_intent": "Cancel intent",
+            "confirm_intent": "Confirm",
+            "pause_description": "The intent stops watching until you resume it.",
+            "resume_description": "The intent becomes active again and may notify you.",
+            "cancel_description": "The intent is ended for good.",
+            "confirm_description": "The suggestion becomes active and starts working."
+          },
+          "proposals": {
+            "empty": "Nothing is waiting for your decision.",
+            "kind": {
+              "order": "Order",
+              "mandate": "Mandate",
+              "memory": "Memory",
+              "trigger_param": "Reflection: trigger setting",
+              "intent_cleanup": "Reflection: intent clean-up",
+              "mute": "Reflection: mute"
+            },
+            "code": "Code",
+            "expires_in": "Expires in {{time}}",
+            "expired": "Expired",
+            "pending": "pending",
+            "reducing": "Only reduces risk",
+            "approve": "Approve",
+            "reject": "Reject",
+            "approve_title": "Approve this?",
+            "reject_title": "Reject this?",
+            "approve_description": "The assistant will act on it once you approve.",
+            "reject_description": "Nothing will be done."
+          },
+          "mandates": {
+            "empty": "No mandates.",
+            "per_period": "Per {{period}} cap",
+            "used": "Used this period",
+            "usage_unknown": "Usage could not be read",
+            "per_run": "Per run cap",
+            "expires": "Expires",
+            "valid_from": "Valid from",
+            "revoke": "Revoke",
+            "revoke_title": "Revoke this mandate?",
+            "revoke_description": "Scheduled runs stop buying until you approve a new mandate."
+          }
+        },
         "stop": {
           "title": "停止",
           "description": "立即让助手停止行动：取消正在运行的回合、工作流、授权、待处理提案以及它下的未成交订单。监控和通知保持开启。发送 /resume 以重新允许批准。",
@@ -596,7 +819,13 @@
           "confirm": "停止",
           "cancel": "取消",
           "done": "已停止",
-          "error": "无法停止"
+          "error": "无法停止",
+"stopped_title": "Stopped",
+        "stopped_description": "The assistant is stopped: nothing is acted on until you resume. Monitoring and notifications stay on.",
+        "resume": "Resume",
+        "resume_blocked": "Resume needs the web to be the owner: {{reason}}",
+        "resumed": "Resumed",
+        "resume_error": "Could not resume"
         },
         "loading": "加载中...",
         "load_error": "加载主动通知设置失败。",

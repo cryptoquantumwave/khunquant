@@ -69,6 +69,11 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 }
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// An installed skill is loaded by later turns, so only the owner installs one.
+	if res := refuseNonOwnerChange(ctx, NameInstallSkill, "skills"); res != nil {
+		return res
+	}
+
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at a `workspace` level.
 	t.mu.Lock()

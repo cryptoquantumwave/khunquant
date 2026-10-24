@@ -139,6 +139,12 @@ func (t *PrepareDeltaNeutralPlanTool) Execute(ctx context.Context, args map[stri
 		return ErrorResult(out.String())
 	}
 
+	// Everything above only reads. Promoting a draft to "ready" is the change, so it is
+	// the owner's: while an owner is configured, nobody else's turn writes it.
+	if res := refuseNonOwnerChange(ctx, NamePrepareDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	// Compute and persist cost estimates (entry/exit fees; funding/breakeven need a snapshot).
 	costs := estimateCosts(*plan, nil)
 	plan.EstimatedEntryCostUSDT = costs.EntryCostUSDT

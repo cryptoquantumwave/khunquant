@@ -44,6 +44,7 @@ const (
 	actSnooze1d  = "snooze_1d"
 	actUseful    = "useful"
 	actNotUseful = "not_useful"
+	actMute      = "mute"
 )
 
 // classify decides, with no I/O and almost no allocation, whether in is a control
@@ -128,6 +129,8 @@ func classifyCallback(cb *Callback) (command, bool) {
 		return command{name: cmdUseful, viaCallback: true}, true
 	case actNotUseful:
 		return command{name: cmdNotUseful, viaCallback: true}, true
+	case actMute:
+		return command{name: cmdMute, viaCallback: true}, true
 	}
 	return command{}, false
 }

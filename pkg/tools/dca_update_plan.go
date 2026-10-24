@@ -122,6 +122,11 @@ func (t *UpdateDCAPlanTool) Parameters() map[string]any {
 }
 
 func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Every edit is the owner's (revoke_mandate keeps its own check below).
+	if res := refuseNonOwnerChange(ctx, NameUpdateDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {

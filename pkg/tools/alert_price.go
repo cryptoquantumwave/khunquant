@@ -68,6 +68,13 @@ func (t *SetPriceAlertTool) Parameters() map[string]any {
 func (t *SetPriceAlertTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	action, _ := args["action"].(string)
 
+	if action == "create" || action == "cancel" {
+		// An alert outlives the turn and speaks to the owner; list stays open.
+		if res := refuseNonOwnerChange(ctx, NameSetPriceAlert, "alerts"); res != nil {
+			return res
+		}
+	}
+
 	switch action {
 	case "list":
 		return t.listAlerts(ctx)

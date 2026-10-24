@@ -23,6 +23,12 @@ func TestExitStatus(t *testing.T) {
 	assert.Equal(t, 4, exitStatus(fmt.Errorf("wrapped: %w", exitErr{4})))
 }
 
+func TestIsReplay(t *testing.T) {
+	assert.True(t, isReplay([]string{"khunquant", "replay", "--events", "x"}))
+	assert.False(t, isReplay([]string{"khunquant"}))
+	assert.False(t, isReplay([]string{"khunquant", "status", "replay"}))
+}
+
 func TestNewKhunquantCommand(t *testing.T) {
 	cmd := NewKhunquantCommand()
 
@@ -55,6 +61,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"migrate",
 		"model",
 		"onboard",
+		"replay",
 		"owner",
 		"risk",
 		"skills",

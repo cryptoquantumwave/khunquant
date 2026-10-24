@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/sources"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
+	"github.com/cryptoquantumwave/khunquant/pkg/replay"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers/intents"
 )
@@ -155,6 +157,10 @@ type perceptionRuntime struct {
 	// unless triggers are on (dca_due_wiring.go).
 	dca *dcaRuntime
 
+	// recorder appends the pipeline's events to workspace/replay when
+	// proactive.record_events is on; nil otherwise.
+	recorder *replay.Recorder
+
 	mgrCancel context.CancelFunc
 	engCancel context.CancelFunc
 	engDone   chan struct{}
@@ -183,6 +189,17 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	rt.attachIntents(d, &opts)
 	if d.Policy != nil && d.Policy.store != nil {
 		opts.Housekeepers = append(opts.Housekeepers, d.Policy.store) // trims policy_decisions
+	}
+	if d.Cfg.Proactive.RecordEvents {
+		// A recorder that cannot be opened is logged and left out: recording is a
+		// convenience and never stops the pipeline.
+		if rec, err := replay.NewRecorder(filepath.Join(d.Cfg.WorkspacePath(), replay.DirName)); err != nil {
+			logger.WarnCF("perception", "Event recording is off: the replay directory is unavailable",
+				map[string]any{"error": err.Error()})
+		} else {
+			rt.recorder = rec
+			opts.Recorder = rec
+		}
 	}
 	rt.engine = engine.New(opts)
 	rt.manager = perception.NewManager(rt.engine.Emitter())
@@ -378,6 +395,7 @@ func (rt *perceptionRuntime) stop() {
 	case <-time.After(perceptionEngineStopTimeout):
 		logger.WarnCF("perception", "Pipeline engine did not stop in time", nil)
 	}
+	rt.recorder.Close() // after the drain: it writes every event the pipeline took
 	// After the drain, so that a firing the drain committed is counted: the compiler
 	// writes what is queued as it stops.
 	rt.stopIntentCompiler()

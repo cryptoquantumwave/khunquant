@@ -154,6 +154,11 @@ func (t *CreateDCAPlanTool) Parameters() map[string]any {
 }
 
 func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// A plan gets a job that places real buys, so only the owner makes one.
+	if res := refuseNonOwnerChange(ctx, NameCreateDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planName, _ := args["plan_name"].(string)
 	providerID, _ := args["provider"].(string)
 	account, _ := args["account"].(string)

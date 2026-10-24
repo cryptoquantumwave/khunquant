@@ -181,7 +181,9 @@ func TestOutbox_NonSendDecisionsAreNotBuffered(t *testing.T) {
 	}
 }
 
-func TestOutbox_DeliveryFailureReleasesEveryMember(t *testing.T) {
+// A failed delivery keeps every member reserved while the message is retried; once
+// the tries run out each member is in the digest, with nothing counted as sent.
+func TestOutbox_DeliveryFailureRetriesThenDigestsEveryMember(t *testing.T) {
 	for name, fn := range map[string]func(context.Context, Message) (bool, error){
 		"error":         failing,
 		"not delivered": func(context.Context, Message) (bool, error) { return false, nil },
@@ -198,21 +200,27 @@ func TestOutbox_DeliveryFailureReleasesEveryMember(t *testing.T) {
 				t.Fatalf("messages = %d", len(e.del.messages()))
 			}
 			for _, d := range ds {
+				// reserved, not released: a retry is pending.
+				if r := e.rowOf(d.ID); !reserved(r) {
+					t.Fatalf("row %s = %+v, want it reserved while a retry is pending", d.ID, r)
+				}
+			}
+			e.exhaustRetries()
+			for _, d := range ds {
 				r := e.rowOf(d.ID)
-				if r.delivered != 0 || !r.deliveredAtSet {
-					t.Fatalf("row %s = %+v, want released (delivered 0, delivered_at_ms set)", d.ID, r)
+				if r.delivered != 0 {
+					t.Fatalf("row %s = %+v", d.ID, r)
+				}
+				if n := e.count(`SELECT COUNT(*) FROM attention_digest_queue WHERE decision_id = ? AND flushed_ms IS NULL`, d.ID); n != 1 {
+					t.Fatalf("decision %s is not queued for the digest", d.ID)
 				}
 				if _, ok := e.state(d.Candidate.DedupKey); ok {
 					t.Fatalf("a failed send wrote dedup state for %s", d.Candidate.DedupKey)
 				}
 			}
-			// released: nothing counts against the budget and the same
-			// situations can be decided again.
+			// nothing counts against the budget as sent.
 			if n := e.count(`SELECT COUNT(*) FROM attention_decisions WHERE delivered = 1`); n != 0 {
 				t.Fatalf("%d delivered rows", n)
-			}
-			for _, k := range []string{"a", "b", "c"} {
-				expect(t, e.submit(cand(k, notice)), proactive.DispNotify, ReasonTemplate)
 			}
 		})
 	}

@@ -119,6 +119,11 @@ func (g *Governor) PendingDigest(ctx context.Context) (*Digest, error) {
 	if err := commit(tx); err != nil {
 		return nil, err
 	}
+	// The same instants, in the owner's zone: RenderDigest shows the time of a
+	// delayed item and has no profile to ask.
+	for i := range items {
+		items[i].At = items[i].At.In(loc)
+	}
 	return &Digest{Day: day, Items: items}, nil
 }
 
@@ -164,7 +169,8 @@ func (g *Governor) CompleteDigest(ctx context.Context, dg *Digest, r Delivery) e
 // item: its row becomes a digest row (reason ReasonDeferred) and joins the digest
 // queue, so the owner hears about it in the next digest instead of never. The
 // outbox does this for a message it could not hand over in time (a full lane, or
-// a wait past the decision's lease). Because the row stops being a notify, it no
+// a wait past the decision's lease) and for one the deliverer did not take after
+// its retries; RenderDigest marks such an item as delayed. Because the row stops being a notify, it no
 // longer reserves budget.
 //
 // It is idempotent: a decision already in the queue is left there once, and one
@@ -341,7 +347,9 @@ func setMeta(ctx context.Context, tx *sql.Tx, key, value string) error {
 // order their best item ranks, and the rest are summarised as "and N more".
 // Titles and subjects can carry text from outside the process, so each is
 // reduced to one clean line here: a newline in a title never becomes a second
-// item line. The message carries no actions and no footer.
+// item line. An item deferred from a message that could not be delivered
+// (ReasonDeferred) ends with a "delayed" note giving the time it was raised, in
+// the zone of its At. The message carries no actions and no footer.
 func RenderDigest(items []Decision) (title, body string) {
 	n := len(items)
 	if n == 0 {
@@ -364,6 +372,11 @@ func RenderDigest(items []Decision) (title, body string) {
 		}
 		if line == "" {
 			line = "(no title)"
+		}
+		if d.Reason == ReasonDeferred && !d.At.IsZero() {
+			// It missed its own message (see DeferToDigest). At is when it was
+			// raised, in the zone PendingDigest put it in.
+			line += " (delayed: raised at " + d.At.Format("15:04") + ", could not be delivered on time)"
 		}
 		if _, seen := bySubject[subject]; !seen {
 			order = append(order, subject)

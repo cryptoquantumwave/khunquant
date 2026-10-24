@@ -57,6 +57,10 @@ func (t *ResizeDeltaNeutralPositionTool) Parameters() map[string]any {
 }
 
 func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Resizing runs the owner's plan, up or down: the owner's own turn only.
+	if res := refuseNonOwnerExecution(ctx, NameResizeDeltaNeutralPosition, "resize a delta-neutral position"); res != nil {
+		return res
+	}
 	planID, _ := args["plan_id"].(float64)
 	deltaPct, hasDeltaPct := args["delta_pct"].(float64)
 	deltaNotional, hasDeltaNotional := args["delta_notional_usdt"].(float64)

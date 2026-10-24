@@ -52,6 +52,11 @@ func (t *OpenDeltaNeutralPositionTool) Parameters() map[string]any {
 }
 
 func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Opening runs the owner's plan with real money: the owner's own turn only, and before
+	// the plan is read, so a refused turn learns nothing and the dry-run is the owner's too.
+	if res := refuseNonOwnerExecution(ctx, NameOpenDeltaNeutralPosition, "open a delta-neutral position"); res != nil {
+		return res
+	}
 	planID, _ := args["plan_id"].(float64)
 	confirm, _ := args["confirm"].(bool)
 

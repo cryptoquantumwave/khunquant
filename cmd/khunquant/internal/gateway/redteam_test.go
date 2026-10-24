@@ -92,10 +92,18 @@ type redTeam struct {
 
 func newRedTeam(t *testing.T) *redTeam {
 	t.Helper()
+	return newRedTeamPolicy(t, config.ProactiveModeLive)
+}
+
+// newRedTeamPolicy is newRedTeam with the policy engine in the given mode. ProactiveModeOff
+// is the shipped default: no engine decides anything, so only the tools' own owner rules
+// stand between a person who is not the owner and the owner's plans.
+func newRedTeamPolicy(t *testing.T, policyMode string) *redTeam {
+	t.Helper()
 	useSources(t, false)
 	t.Cleanup(func() { tools.SetPolicyShadow(nil); tools.SetPolicyLive(nil) })
 	f := newAssemblyFixtureNoBuild(t, compose(withApprovals, liveWithPerception(), withTriggers(config.ProactiveModeLive),
-		withPolicy(config.ProactiveModeLive, true)))
+		withPolicy(policyMode, true)))
 	r := &redTeam{t: t, f: f, hashes: map[string][32]byte{}}
 	// The owner's files exist before anything runs, so that "untouched" means something.
 	seeds := map[string]string{"memory/MEMORY.md": seedMemory}
@@ -113,10 +121,11 @@ func newRedTeam(t *testing.T) *redTeam {
 		r.hashes[rel] = sha256.Sum256([]byte(content))
 	}
 	f.build(f.initial)
-	if f.services.Perception == nil || f.services.Perception.triggers == nil || f.services.Policy == nil ||
-		f.services.Approval == nil || f.services.Control == nil || f.services.Policy.mode != config.ProactiveModeLive {
-		t.Fatalf("the assembly lacks a part of the stack: perception %v, policy %v (mode %q), approval %v, control %v",
-			f.services.Perception != nil, f.services.Policy != nil, "", f.services.Approval != nil, f.services.Control != nil)
+	policyOK := policyMode == config.ProactiveModeOff || (f.services.Policy != nil && f.services.Policy.mode == policyMode)
+	if f.services.Perception == nil || f.services.Perception.triggers == nil || !policyOK ||
+		f.services.Approval == nil || f.services.Control == nil {
+		t.Fatalf("the assembly lacks a part of the stack: perception %v, policy %v (want mode %q), approval %v, control %v",
+			f.services.Perception != nil, f.services.Policy != nil, policyMode, f.services.Approval != nil, f.services.Control != nil)
 	}
 	r.reg = f.al.GetRegistry().GetDefaultAgent().Tools
 	r.money = &moneyProbe{}
@@ -667,6 +676,107 @@ func TestRedTeam_NonOwnerCannotCreatePlanOrAlert(t *testing.T) {
 	}
 	if st := draftStatus(); st != deltaneutral.PlanStatusReady {
 		t.Errorf("after the owner's prepare_delta_neutral_plan the plan is %q, want ready", st)
+	}
+	r.assertNothingHappened()
+}
+
+// A person who is not the owner talks to the agent, and the model obeys: it cannot run the
+// owner's plans. execute_dca_order, open_, unwind_ and resize_delta_neutral_position are
+// refused with the owner-only wording, with confirm=true, and no order, execution row or
+// plan change follows. The policy engine is in its shipped default (off) here: it decides
+// nothing, so the refusal is the tools' own. The owner's own turn is not stopped by the rule.
+func TestRedTeam_NonOwnerCannotExecutePlans(t *testing.T) {
+	r := newRedTeamPolicy(t, config.ProactiveModeOff)
+	broker.RegisterFactory("rtfakedca", func(*config.Config) (broker.Provider, error) { return rtFakeExchange{}, nil })
+	t.Cleanup(func() { broker.RegisterFactory("rtfakedca", nil) })
+	ctxb := context.Background()
+
+	dcaStore, err := dca.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dcaStore.Close() })
+	now := time.Now().UTC()
+	dcaID, err := dcaStore.SavePlan(ctxb, &dca.Plan{
+		Name: "buy BTC", Provider: "rtfakedca", Symbol: "BTC/USDT", AmountPerOrder: 100, FrequencyExpr: "0 9 * * 1",
+		Timezone: "UTC", Enabled: true, Side: "buy", StartDate: now, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnStore, err := deltaneutral.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dnStore.Close() })
+	newDN := func(name, status string) int64 {
+		id, err := dnStore.SavePlan(ctxb, &deltaneutral.Plan{
+			Name: name, Asset: "BTC", Status: status, Mode: deltaneutral.ExecutionModeApproval,
+			SpotProvider: "binance", SpotSymbol: "BTC/USDT", SpotSide: "buy", FuturesProvider: "okx", FuturesSymbol: "BTC/USDT:USDT",
+			FuturesSide: "short", FuturesMarginMode: "isolated", FuturesLeverage: 2, CapitalUSDT: 1000, SpotNotionalUSDT: 400,
+			FuturesNotionalUSDT: 400, ReserveMarginUSDT: 100, MonitorInterval: "5m", RiskPolicy: deltaneutral.DefaultRiskPolicy(),
+			CreatedAt: now, UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	readyID, activeID := newDN("ready", deltaneutral.PlanStatusReady), newDN("active", deltaneutral.PlanStatusActive)
+	r.reg.Register(tools.NewExecuteDCAOrderTool(r.f.initial, dcaStore))
+	r.reg.Register(tools.NewOpenDeltaNeutralPositionTool(r.f.initial, dnStore))
+	r.reg.Register(tools.NewUnwindDeltaNeutralPositionTool(r.f.initial, dnStore))
+	r.reg.Register(tools.NewResizeDeltaNeutralPositionTool(r.f.initial, dnStore))
+
+	calls := map[string]map[string]any{
+		tools.NameExecuteDCAOrder:            {"plan_id": float64(dcaID)},
+		tools.NameOpenDeltaNeutralPosition:   {"plan_id": float64(readyID), "confirm": true},
+		tools.NameUnwindDeltaNeutralPosition: {"plan_id": float64(activeID), "confirm": true},
+		tools.NameResizeDeltaNeutralPosition: {"plan_id": float64(activeID), "delta_notional_usdt": 100.0, "confirm": true},
+	}
+	remote := func(sender string) context.Context {
+		return tools.WithToolContext(tools.WithToolSender(tools.WithToolOrigin(ctxb, tools.OriginRemote), sender), "telegram", "chat")
+	}
+	const wording = "the owner's plans are executed only in the owner's own conversation"
+	for label, ctx := range map[string]context.Context{
+		"another person": remote("telegram:999"), "the owner's sub-turn": tools.WithSubTurn(remote(rtOwner)),
+	} {
+		got := map[string]*tools.ToolResult{}
+		for name, args := range calls {
+			got[name] = r.reg.ExecuteWithContext(ctx, name, args, "telegram", "chat", nil)
+			if res := got[name]; res == nil || !res.IsError || !strings.Contains(res.ForLLM, wording) {
+				t.Errorf("%s: %s was not refused as owner-only: %+v", label, name, res)
+			}
+		}
+		r.assertRefused(got, tools.NameExecuteDCAOrder, tools.NameOpenDeltaNeutralPosition,
+			tools.NameUnwindDeltaNeutralPosition, tools.NameResizeDeltaNeutralPosition)
+	}
+	if rows, err := dcaStore.GetExecutions(ctxb, dca.QueryFilter{PlanID: &dcaID, Limit: 10}); err != nil || len(rows) != 0 {
+		t.Errorf("a refused execute_dca_order left %d row(s) (%v)", len(rows), err)
+	}
+	for id, want := range map[int64]string{readyID: deltaneutral.PlanStatusReady, activeID: deltaneutral.PlanStatusActive} {
+		p, err := dnStore.GetPlan(ctxb, id)
+		if err != nil || p.Status != want {
+			t.Errorf("plan %d is %v (%v), want %q", id, p, err, want)
+		}
+	}
+	if execs, _ := dnStore.ListExecutions(ctxb, readyID, 10, 0); len(execs) != 0 {
+		t.Errorf("a refused open left %d execution(s)", len(execs))
+	}
+
+	// The owner's own turn is not stopped by the rule (a dry-run answers; nothing is placed).
+	for _, name := range []string{tools.NameOpenDeltaNeutralPosition, tools.NameUnwindDeltaNeutralPosition, tools.NameResizeDeltaNeutralPosition} {
+		args := map[string]any{}
+		for k, v := range calls[name] {
+			args[k] = v
+		}
+		args["confirm"] = false
+		if res := r.reg.ExecuteWithContext(remote(rtOwner), name, args, "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wording) {
+			t.Errorf("the owner's own %s was refused as owner-only: %s", name, res.ForLLM)
+		}
+	}
+	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameExecuteDCAOrder, calls[tools.NameExecuteDCAOrder], "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wording) {
+		t.Errorf("the owner's own execute_dca_order was refused as owner-only: %s", res.ForLLM)
 	}
 	r.assertNothingHappened()
 }

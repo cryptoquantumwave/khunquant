@@ -120,6 +120,25 @@ func refuseNonOwnerChange(ctx context.Context, tool, what string) *ToolResult {
 			"conversation. Nothing was changed. Tell the person to ask the owner.", what, what))
 }
 
+// refuseNonOwnerExecution gates a tool action that RUNS the owner's plan (a DCA buy, a
+// delta-neutral open, unwind or resize): while an owner is configured, only the owner's
+// own root conversation turn may run it. It is the same rule as refuseNonOwnerChange
+// (ownerOnlyApplies, so the owner's own sub-turn is refused too, and with no owner
+// configured nothing changes) worded for execution. Ad-hoc trading tools are not gated
+// here: a person on the allow-list keeps their own trades.
+//
+// It runs first in the tool, before the plan is read, so nothing is executed, recorded
+// or revealed for a turn that is refused. A caller with a legitimate non-owner route
+// (the scheduled DCA job) skips it itself; see ExecuteDCAOrderTool.Execute.
+func refuseNonOwnerExecution(ctx context.Context, tool, what string) *ToolResult {
+	if !ownerOnlyApplies(ctx) {
+		return nil
+	}
+	return policyRefusal(tool, fmt.Sprintf(
+		"this turn may not %s: an owner is configured, and the owner's plans are executed only in the "+
+			"owner's own conversation. Nothing was executed. Tell the person to ask the owner.", what))
+}
+
 // ownerRootAuthor is isOwnerRootTurn and the author checkOwnerTurn names.
 func ownerRootAuthor(ctx context.Context, cfg *config.Config) (by string, ok bool) {
 	if IsSubTurn(ctx) {

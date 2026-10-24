@@ -54,6 +54,12 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 }
 
 func (t *UnwindDeltaNeutralPositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
+	// An unwind only reduces exposure, but it is still the owner's plan being run: the
+	// owner's own turn only. The recovery a failed unwind starts is not this tool: it
+	// proposes to the owner, and an approved proposal is placed by the approval service.
+	if res := refuseNonOwnerExecution(ctx, NameUnwindDeltaNeutralPosition, "unwind a delta-neutral position"); res != nil {
+		return res
+	}
 	planID, _ := args["plan_id"].(float64)
 	confirm, _ := args["confirm"].(bool)
 

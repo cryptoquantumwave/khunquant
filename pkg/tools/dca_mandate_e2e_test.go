@@ -459,7 +459,10 @@ func TestExecuteDCAOrder_CronStandsDownForAPromotedPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewExecuteDCAOrderTool(e.cfg, e.store)
-	cronCtx := WithToolOrigin(context.Background(), OriginCron)
+	// The legacy job's own turn: a cron turn scoped to a "dca:" job of this plan, the
+	// one non-owner route into execute_dca_order while an owner is configured.
+	cronCtx := WithAutomationScope(WithToolOrigin(context.Background(), OriginCron),
+		AutomationScope{JobName: fmt.Sprintf("dca:%d:legacy", plan.ID), DCAPlanID: plan.ID})
 	res := tool.Execute(cronCtx, map[string]any{"plan_id": float64(plan.ID)})
 	if res.IsError || !strings.Contains(res.ForLLM, "executed by its mandate") || e.world.placed("spot") != 0 {
 		t.Errorf("cron run = %q, %d orders", res.ForLLM, e.world.placed("spot"))

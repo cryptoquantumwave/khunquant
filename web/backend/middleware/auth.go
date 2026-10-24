@@ -127,9 +127,17 @@ func SessionIDFromRequest(r *http.Request) string {
 
 // isTrustedLoopbackCaller returns true when the IP is loopback and the Origin
 // header, if present, matches the server so we don't auto-auth CSRF requests.
+//
+// It also refuses a Host that HostAllowlist would refuse. Origin == Host proves
+// nothing about a DNS-rebinding page (the browser sends the attacker's name as
+// both), so this holds even if SessionAuth is ever composed without
+// HostAllowlist in front of it.
 func isTrustedLoopbackCaller(r *http.Request) bool {
 	ip := clientIPFromRemoteAddr(r.RemoteAddr)
 	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	if !hostAllowed(r.Host) {
 		return false
 	}
 	origin := r.Header.Get("Origin")

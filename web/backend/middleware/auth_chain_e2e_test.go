@@ -38,6 +38,48 @@ func buildFullChain(t *testing.T, launcherToken, passwordHash string, store *mid
 	return accessControlled
 }
 
+// TestAuthChain_DNSRebindingRefusedBeforeAnyAuth drives the same stack main.go
+// builds, HostAllowlist outermost, against the real api.Handler: a rebound
+// page (loopback peer, Host == Origin == the attacker's name) gets 421 on a
+// real route and is never issued a session.
+func TestAuthChain_DNSRebindingRefusedBeforeAnyAuth(t *testing.T) {
+	h, store, hash := newTestHandler(t, "")
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	middleware.SetAllowedHosts([]string{"bot.example.com"})
+	t.Cleanup(func() { middleware.SetAllowedHosts(nil) })
+	chain := middleware.HostAllowlist([]string{"bot.example.com"},
+		buildFullChain(t, "launcher-secret", hash, store, mux))
+
+	send := func(host, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/system/launcher-config", nil)
+		req.Host = host
+		req.RemoteAddr = "127.0.0.1:5555"
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		chain.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := send("evil.example:18800", "http://evil.example:18800")
+	if rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("rebound request: status = %d, want 421", rec.Code)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("rebound request got cookies %v, want none", rec.Result().Cookies())
+	}
+
+	rec = send("localhost:18800", "http://localhost:18800")
+	if rec.Code != http.StatusOK || len(rec.Result().Cookies()) != 1 {
+		t.Fatalf("localhost request: status = %d cookies = %v, want 200 with the loopback session", rec.Code, rec.Result().Cookies())
+	}
+
+	rec = send("bot.example.com", "https://bot.example.com")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("allowed_hosts request: status = %d, want 200", rec.Code)
+	}
+}
+
 func newTestHandler(t *testing.T, password string) (*api.Handler, *middleware.SessionStore, string) {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -153,4 +195,3 @@ func TestAuthChain_HealthAndReadyReachableUnauthenticated(t *testing.T) {
 		}
 	}
 }
-

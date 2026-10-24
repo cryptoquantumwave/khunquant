@@ -83,6 +83,7 @@ var toolClasses = map[string]Class{
 	NameWebSearch:  ClassRead,
 	NameWebFetch:   ClassRead,
 	NameFindSkills: ClassRead,
+	NameLoadSkill:  ClassRead,
 	// Discovery tools only promote hidden tools into the definition list; the
 	// promoted tools are classified (or denied as unknown) on their own.
 	NameToolSearchRegex: ClassRead,
@@ -129,6 +130,7 @@ var toolClasses = map[string]Class{
 	NameGetDCAHistory:                 ClassRead,
 	NameGetDCASummary:                 ClassRead,
 	NameListDeltaNeutralPlans:         ClassRead,
+	NameGetProfile:                    ClassRead,
 	NameGetDeltaNeutralPlan:           ClassRead,
 	NameGetDeltaNeutralSummary:        ClassRead,
 	NameGetDeltaNeutralHistory:        ClassRead,
@@ -141,6 +143,11 @@ var toolClasses = map[string]Class{
 	NameMessage:                      ClassNotify,
 	NameSendFile:                     ClassNotify,
 	NameRenderDeltaNeutralYieldChart: ClassNotify,
+	// Declares what a proactive turn wants to tell the owner. It sends nothing
+	// itself - the runtime delivers - but "tell the user something" is its
+	// meaning, so it is classified with the tools that do. Only a proactive turn
+	// is given it (a per-turn registry), and it refuses any other origin.
+	NameRespondProactive: ClassNotify,
 
 	// Workspace writes.
 	NameWriteFile:    ClassLocalState,
@@ -148,7 +155,11 @@ var toolClasses = map[string]Class{
 	NameAppendFile:   ClassLocalState,
 	NameTakeSnapshot: ClassLocalState,
 
-	// Things that run later.
+	// Things that run later. update_profile is here although it only writes a
+	// row: the profile sets the quiet hours and notification budget that govern
+	// every later background message, so a background turn must never be able to
+	// change it (the autonomous ceiling denies this class).
+	NameUpdateProfile:           ClassAutomation,
 	NameCron:                    ClassAutomation,
 	NameSetPriceAlert:           ClassAutomation,
 	NameSetIndicatorAlert:       ClassAutomation,

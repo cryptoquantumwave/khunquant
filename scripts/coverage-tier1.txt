@@ -4,6 +4,7 @@
 # Excludes: cmd/*, web/frontend, TUI, hardware stubs, Tier 2 adapters (LLM providers, channel adapters, exchanges)
 
 github.com/cryptoquantumwave/khunquant/pkg/agent
+github.com/cryptoquantumwave/khunquant/pkg/attention
 github.com/cryptoquantumwave/khunquant/pkg/auth
 github.com/cryptoquantumwave/khunquant/pkg/bus
 github.com/cryptoquantumwave/khunquant/pkg/channels
@@ -17,6 +18,7 @@ github.com/cryptoquantumwave/khunquant/pkg/fileutil
 github.com/cryptoquantumwave/khunquant/pkg/health
 github.com/cryptoquantumwave/khunquant/pkg/heartbeat
 github.com/cryptoquantumwave/khunquant/pkg/identity
+github.com/cryptoquantumwave/khunquant/pkg/intent
 github.com/cryptoquantumwave/khunquant/pkg/logger
 github.com/cryptoquantumwave/khunquant/pkg/mcp
 github.com/cryptoquantumwave/khunquant/pkg/media
@@ -26,6 +28,7 @@ github.com/cryptoquantumwave/khunquant/pkg/migrate/internal
 github.com/cryptoquantumwave/khunquant/pkg/migrate/sources/openclaw
 github.com/cryptoquantumwave/khunquant/pkg/pairing
 github.com/cryptoquantumwave/khunquant/pkg/pid
+github.com/cryptoquantumwave/khunquant/pkg/proactive
 github.com/cryptoquantumwave/khunquant/pkg/providers
 github.com/cryptoquantumwave/khunquant/pkg/providers/broker
 github.com/cryptoquantumwave/khunquant/pkg/providers/common
@@ -34,6 +37,7 @@ github.com/cryptoquantumwave/khunquant/pkg/routing
 github.com/cryptoquantumwave/khunquant/pkg/session
 github.com/cryptoquantumwave/khunquant/pkg/skills
 github.com/cryptoquantumwave/khunquant/pkg/snapshot
+github.com/cryptoquantumwave/khunquant/pkg/sqlitex
 github.com/cryptoquantumwave/khunquant/pkg/state
 github.com/cryptoquantumwave/khunquant/pkg/ta
 github.com/cryptoquantumwave/khunquant/pkg/tokenizer

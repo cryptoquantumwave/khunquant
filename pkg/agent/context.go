@@ -7,13 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
-	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
@@ -29,23 +26,15 @@ type ContextBuilder struct {
 	toolDiscoveryRegex bool
 	splitOnMarker      bool
 
-	// Cache for system prompt to avoid rebuilding on every call.
+	// Cache for system prompts to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
-	// The cache auto-invalidates when workspace source files change (mtime check).
-	systemPromptMutex  sync.RWMutex
-	cachedSystemPrompt string
-	cachedAt           time.Time // max observed mtime across tracked paths at cache build time
-
-	// existedAtCache tracks which source file paths existed the last time the
-	// cache was built. This lets sourceFilesChanged detect files that are newly
-	// created (didn't exist at cache time, now exist) or deleted (existed at
-	// cache time, now gone) — both of which should trigger a cache rebuild.
-	existedAtCache map[string]bool
-
-	// skillFilesAtCache snapshots the skill tree file set and mtimes at cache
-	// build time. This catches nested file creations/deletions/mtime changes
-	// that may not update the top-level skill root directory mtime.
-	skillFilesAtCache map[string]time.Time
+	// Every entry auto-invalidates when workspace source files change (mtime
+	// check). There is one entry per promptCacheKey (mode, forced skills, memory
+	// cap), so a light background turn and a full user turn do not evict each
+	// other. The map is bounded: see maxPromptCacheEntries.
+	systemPromptMutex sync.RWMutex
+	promptCache       map[promptCacheKey]*promptCacheEntry
+	promptCacheSeq    uint64 // build counter, for oldest-first eviction
 
 	financialCollector *FinancialContextCollector
 }
@@ -178,127 +167,30 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 	// the model to fragment answers that are better whole; a marker is useful
 	// when the content genuinely divides, and harmful when it does not.
 	if cb.splitOnMarker {
-		parts = append(parts, "# Multi-Message Output\n\n"+
-			"You may insert "+channels.MessageSplitMarker+" where a response divides "+
-			"naturally into separate messages — for example distinct steps, or a "+
-			"summary followed by detail. Each part is delivered as its own message.\n\n"+
-			"Use it where the split helps the reader. A single coherent answer should "+
-			"stay a single message.")
+		parts = append(parts, multiMessageSection())
 	}
 
 	// Join with "---" separator
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-// BuildSystemPromptWithCache returns the cached system prompt if available
-// and source files haven't changed, otherwise builds and caches it.
-// Source file changes are detected via mtime checks (cheap stat calls).
-func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
-	// Try read lock first — fast path when cache is valid
-	cb.systemPromptMutex.RLock()
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
-		result := cb.cachedSystemPrompt
-		cb.systemPromptMutex.RUnlock()
-		return result
-	}
-	cb.systemPromptMutex.RUnlock()
-
-	// Acquire write lock for building
-	cb.systemPromptMutex.Lock()
-	defer cb.systemPromptMutex.Unlock()
-
-	// Double-check: another goroutine may have rebuilt while we waited
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
-		return cb.cachedSystemPrompt
-	}
-
-	// Snapshot the baseline (existence + max mtime) BEFORE building the prompt.
-	// This way cachedAt reflects the pre-build state: if a file is modified
-	// during BuildSystemPrompt, its new mtime will be > baseline.maxMtime,
-	// so the next sourceFilesChangedLocked check will correctly trigger a
-	// rebuild. The alternative (baseline after build) risks caching stale
-	// content with a too-new baseline, making the staleness invisible.
-	baseline := cb.buildCacheBaseline()
-	prompt := cb.BuildSystemPrompt()
-	cb.cachedSystemPrompt = prompt
-	cb.cachedAt = baseline.maxMtime
-	cb.existedAtCache = baseline.existed
-	cb.skillFilesAtCache = baseline.skillFiles
-
-	logger.DebugCF("agent", "System prompt cached",
-		map[string]any{
-			"length": len(prompt),
-		})
-
-	return prompt
-}
-
-// EstimateSystemTokens estimates the token count of the full system message
-// that would be sent to the LLM, mirroring the composition logic in BuildMessages.
-// It includes: static prompt, dynamic context, active skills, and summary with
-// wrapping prefixes and separators. This avoids needing all per-request parameters
-// that BuildMessages requires (media, channel, chatID, sender, etc.).
-func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []string) int {
-	staticPrompt := cb.BuildSystemPromptWithCache()
-
-	// Dynamic context is small and varies per request; use a representative estimate.
-	// Actual buildDynamicContext produces ~200-400 chars of time/runtime/session info.
-	const dynamicContextChars = 800
-
-	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
-
-	if skillsText := cb.buildActiveSkillsContext(activeSkills); skillsText != "" {
-		totalChars += utf8.RuneCountInString(skillsText)
-		totalChars += 7 // separator \n\n---\n\n
-	}
-
-	if summary != "" {
-		// Matches the CONTEXT_SUMMARY: prefix added in BuildMessages
-		const summaryPrefix = "CONTEXT_SUMMARY: The following is an approximate summary of prior conversation " +
-			"for reference only. It may be incomplete or outdated — always defer to explicit instructions.\n\n"
-		totalChars += utf8.RuneCountInString(summaryPrefix) + utf8.RuneCountInString(summary)
-		totalChars += 7 // separator
-	}
-
-	return totalChars * 2 / 5 // same heuristic as tokenizer.EstimateMessageTokens
-}
-
-// buildActiveSkillsContext returns the skills context text for a given set of
-// active skill names. When activeSkills is nil the full installed skills content
-// is returned (matches the common case in EstimateSystemTokens).
-func (cb *ContextBuilder) buildActiveSkillsContext(activeSkills []string) string {
-	if cb.skillsLoader == nil {
-		return ""
-	}
-	return cb.skillsLoader.BuildSkillsFullContent()
-}
-
-// InvalidateCache clears the cached system prompt.
-// Normally not needed because the cache auto-invalidates via mtime checks,
-// but this is useful for tests or explicit reload commands.
-func (cb *ContextBuilder) InvalidateCache() {
-	cb.systemPromptMutex.Lock()
-	defer cb.systemPromptMutex.Unlock()
-
-	cb.cachedSystemPrompt = ""
-	cb.cachedAt = time.Time{}
-	cb.existedAtCache = nil
-	cb.skillFilesAtCache = nil
-
-	logger.DebugCF("agent", "System prompt cache invalidated", nil)
-}
-
 // sourcePaths returns non-skill workspace source files tracked for cache
-// invalidation (bootstrap files + memory). Skill roots are handled separately
-// because they require both directory-level and recursive file-level checks.
+// invalidation (bootstrap files + memory + the daily notes the memory section
+// reads). Skill roots are handled separately because they require both
+// directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	return []string{
+	paths := []string{
 		filepath.Join(cb.workspace, "AGENTS.md"),
 		filepath.Join(cb.workspace, "SOUL.md"),
 		filepath.Join(cb.workspace, "USER.md"),
 		filepath.Join(cb.workspace, "IDENTITY.md"),
 		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
 	}
+	// Daily notes (memory/YYYYMM/YYYYMMDD.md) are in the prompt too.
+	if cb.memory != nil {
+		paths = append(paths, cb.memory.recentDailyNotePaths()...)
+	}
+	return paths
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -321,6 +213,7 @@ type cacheBaseline struct {
 	existed    map[string]bool
 	skillFiles map[string]time.Time
 	maxMtime   time.Time
+	day        string // calendar day of the snapshot; see promptCacheEntry.day
 }
 
 // buildCacheBaseline records which tracked paths currently exist and computes
@@ -370,69 +263,7 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 		maxMtime = time.Unix(1, 0)
 	}
 
-	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime}
-}
-
-// sourceFilesChangedLocked checks whether any workspace source file has been
-// modified, created, or deleted since the cache was last built.
-//
-// IMPORTANT: The caller MUST hold at least a read lock on systemPromptMutex.
-// Go's sync.RWMutex is not reentrant, so this function must NOT acquire the
-// lock itself (it would deadlock when called from BuildSystemPromptWithCache
-// which already holds RLock or Lock).
-func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
-	if cb.cachedAt.IsZero() {
-		return true
-	}
-
-	// Check tracked source files (bootstrap + memory).
-	if slices.ContainsFunc(cb.sourcePaths(), cb.fileChangedSince) {
-		return true
-	}
-
-	// --- Skill roots (workspace/global/builtin) ---
-	//
-	// For each root:
-	// 1. Creation/deletion and root directory mtime changes are tracked by fileChangedSince.
-	// 2. Nested file create/delete/mtime changes are tracked by the skill file snapshot.
-	for _, root := range cb.skillRoots() {
-		if cb.fileChangedSince(root) {
-			return true
-		}
-	}
-	if skillFilesChangedSince(cb.skillRoots(), cb.skillFilesAtCache) {
-		return true
-	}
-
-	return false
-}
-
-// fileChangedSince returns true if a tracked source file has been modified,
-// newly created, or deleted since the cache was built.
-//
-// Four cases:
-//   - existed at cache time, exists now -> check mtime
-//   - existed at cache time, gone now   -> changed (deleted)
-//   - absent at cache time,  exists now -> changed (created)
-//   - absent at cache time,  gone now   -> no change
-func (cb *ContextBuilder) fileChangedSince(path string) bool {
-	// Defensive: if existedAtCache was never initialized, treat as changed
-	// so the cache rebuilds rather than silently serving stale data.
-	if cb.existedAtCache == nil {
-		return true
-	}
-
-	existedBefore := cb.existedAtCache[path]
-	info, err := os.Stat(path)
-	existsNow := err == nil
-
-	if existedBefore != existsNow {
-		return true // file was created or deleted
-	}
-	if !existsNow {
-		return false // didn't exist before, doesn't exist now
-	}
-	return info.ModTime().After(cb.cachedAt)
+	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime, day: promptDay(time.Now())}
 }
 
 // errWalkStop is a sentinel error used to stop filepath.WalkDir early.
@@ -502,13 +333,12 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
-	bootstrapFiles := []string{
-		"AGENTS.md",
-		"SOUL.md",
-		"USER.md",
-		"IDENTITY.md",
-	}
+	return cb.loadBootstrapFiles("AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md")
+}
 
+// loadBootstrapFiles renders the named workspace files, in the order given,
+// each under a "## name" heading; a file that is missing is skipped.
+func (cb *ContextBuilder) loadBootstrapFiles(bootstrapFiles ...string) string {
 	var sb strings.Builder
 	for _, filename := range bootstrapFiles {
 		filePath := filepath.Join(cb.workspace, filename)
@@ -548,12 +378,29 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 	return sb.String()
 }
 
+// BuildMessages builds the request messages with the full system prompt, which
+// is what user turns get. It is BuildMessagesWithOptions in PromptFull.
 func (cb *ContextBuilder) BuildMessages(
 	history []providers.Message,
 	summary string,
 	currentMessage string,
 	media []string,
 	channel, chatID string,
+) []providers.Message {
+	return cb.BuildMessagesWithOptions(history, summary, currentMessage, media, channel, chatID,
+		BuildOptions{Mode: PromptFull})
+}
+
+// BuildMessagesWithOptions builds the request messages with the system prompt
+// the options select. Everything except the static prompt (dynamic context,
+// summary, history, the current message) is the same in every mode.
+func (cb *ContextBuilder) BuildMessagesWithOptions(
+	history []providers.Message,
+	summary string,
+	currentMessage string,
+	media []string,
+	channel, chatID string,
+	o BuildOptions,
 ) []providers.Message {
 	messages := []providers.Message{}
 
@@ -566,7 +413,7 @@ func (cb *ContextBuilder) BuildMessages(
 	//   contiguous system block makes this extraction straightforward.
 	// - Codex maps only the first system message to its instructions field.
 	// - OpenAI-compat passes messages through as-is.
-	staticPrompt := cb.BuildSystemPromptWithCache()
+	staticPrompt := cb.BuildSystemPromptFor(o)
 
 	// Build short dynamic context (time, runtime, session) — changes per request
 	dynamicCtx := cb.buildDynamicContext(channel, chatID)
@@ -599,10 +446,10 @@ func (cb *ContextBuilder) BuildMessages(
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
 
 	// Log system prompt summary for debugging (debug mode only).
-	// Read cachedSystemPrompt under lock to avoid a data race with
-	// concurrent InvalidateCache / BuildSystemPromptWithCache writes.
+	// Read the cache size under lock to avoid a data race with
+	// concurrent InvalidateCache / BuildSystemPromptFor writes.
 	cb.systemPromptMutex.RLock()
-	isCached := cb.cachedSystemPrompt != ""
+	isCached := len(cb.promptCache) > 0
 	cb.systemPromptMutex.RUnlock()
 
 	logger.DebugCF("agent", "System prompt built",
@@ -612,6 +459,7 @@ func (cb *ContextBuilder) BuildMessages(
 			"total_chars":   len(fullSystemPrompt),
 			"has_summary":   summary != "",
 			"cached":        isCached,
+			"mode":          int(o.Mode),
 		})
 
 	// Log preview of system prompt (avoid logging huge content)
@@ -804,10 +652,54 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 			continue
 		}
 
+		// A proactive message (pkg/notify) is appended to the session as an
+		// assistant message and can follow another assistant message. Several
+		// providers insist on alternating roles, so consecutive plain-text
+		// assistant messages become one. A message that carries tool calls is
+		// never merged: its tool results must stay paired with it.
+		if n := len(final); n > 0 && mergeableAssistantText(final[n-1]) && mergeableAssistantText(msg) {
+			final[n-1] = mergeAssistantText(final[n-1], msg)
+			continue
+		}
+
 		final = append(final, msg)
 	}
 
+	// A session can open with a proactive assistant message (pkg/notify writes
+	// it into a session that has no history yet). Chat APIs differ in how they
+	// treat a conversation that does not start with a user turn: Anthropic
+	// rejects it, Gemini-style backends can too. Fixing it here, once, keeps
+	// every provider adapter out of it. A leading assistant message that
+	// carries tool calls never gets here: the first pass drops it.
+	if len(final) > 0 && final[0].Role == "assistant" && len(final[0].ToolCalls) == 0 {
+		final = append([]providers.Message{{Role: "user", Content: providers.ConversationStartPlaceholder}}, final...)
+	}
+
 	return final
+}
+
+// mergeableAssistantText reports whether m is an assistant message that is
+// nothing but text (no tool calls, no media), the only kind that may be merged
+// with a neighbour.
+func mergeableAssistantText(m providers.Message) bool {
+	return m.Role == "assistant" && len(m.ToolCalls) == 0 && len(m.Media) == 0 && m.ToolCallID == ""
+}
+
+// mergeAssistantText joins two text-only assistant messages with a blank line.
+func mergeAssistantText(a, b providers.Message) providers.Message {
+	a.Content = joinNonEmpty(a.Content, b.Content)
+	a.ReasoningContent = joinNonEmpty(a.ReasoningContent, b.ReasoningContent)
+	return a
+}
+
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "\n\n" + b
 }
 
 func (cb *ContextBuilder) AddToolResult(

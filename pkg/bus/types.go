@@ -1,5 +1,7 @@
 package bus
 
+import "github.com/cryptoquantumwave/khunquant/pkg/proactive"
+
 // Peer identifies the routing peer for a message (direct, group, channel, etc.)
 type Peer struct {
 	Kind string `json:"kind"` // "direct" | "group" | "channel" | ""
@@ -71,7 +73,50 @@ type OutboundMessage struct {
 	Kind      string            `json:"kind,omitempty"`       // "" | "thought" | "tool_calls"
 	ModelName string            `json:"model_name,omitempty"` // model that produced this message
 	ToolCalls []VisibleToolCall `json:"tool_calls,omitempty"` // populated when Kind == "tool_calls"
+
+	// Proactive-message metadata. All of it is absent from an ordinary reply.
+	//
+	// Severity's zero value is SeverityInfo, which is a real severity, so the
+	// field cannot say "not proactive" by itself: it is meaningful only when
+	// InterventionID is set (see IsProactive). omitempty keeps a zero Severity
+	// out of the JSON of ordinary replies.
+	Severity proactive.Severity `json:"severity,omitempty"`
+	// DedupKey is the audit identity used to collapse repeats. It can embed
+	// symbols and amounts, so it must never be logged above DEBUG.
+	DedupKey string `json:"dedup_key,omitempty"`
+	// InterventionID ties the message to the proactive intervention that
+	// produced it, so a reply can later be linked back. When a message is split
+	// into several sends it is carried only by the last one.
+	InterventionID string `json:"intervention_id,omitempty"`
+	// Actions are optional buttons. The manager sends them only on the last
+	// chunk, and falls back to a text footer on channels that cannot render them.
+	Actions []Action `json:"actions,omitempty"`
+	// DisableNotification asks the platform to deliver silently (digests, info).
+	DisableNotification bool `json:"disable_notification,omitempty"`
 }
+
+// IsProactive reports whether the message was produced by a proactive
+// intervention rather than being an ordinary reply. Severity is meaningful only
+// when this is true.
+func (m OutboundMessage) IsProactive() bool { return m.InterventionID != "" }
+
+// Action is one button on an outbound message, with a text fallback for
+// channels that cannot render buttons.
+type Action struct {
+	ID          string `json:"id"`              // "approve", "reject", "snooze_1h", "not_useful"
+	Label       string `json:"label"`           // button text
+	Style       string `json:"style,omitempty"` // "primary" | "danger" | ""
+	Payload     string `json:"payload"`         // opaque; at most MaxActionPayloadBytes
+	TextCommand string `json:"text_command"`    // fallback, e.g. "/approve 7F3K"
+}
+
+const (
+	// MaxActionPayloadBytes bounds Action.Payload. Telegram's callback_data is
+	// limited to 64 bytes including the prefix the channel adds.
+	MaxActionPayloadBytes = 48
+	// MaxActions bounds the buttons on one message.
+	MaxActions = 8
+)
 
 // MediaPart describes a single media attachment to send.
 type MediaPart struct {

@@ -28,6 +28,7 @@ type Handler struct {
 	updateChecker              *updateChecker
 	sessions                   *middleware.SessionStore
 	dashboardPasswordHash      string
+	proactive                  proactiveState
 }
 
 // NewHandler creates an instance of the API handler.
@@ -111,6 +112,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Agent delta-neutral plans (workspace/memory/delta_neutral/delta_neutral.db)
 	h.registerAgentDeltaNeutralRoutes(mux)
+
+	// Proactive agent settings: owner, modes, profile and recent attention
+	// decisions (profile and decisions in workspace/memory/proactive/proactive.db)
+	h.registerAgentProactiveRoutes(mux)
 
 	// Skills and tools support/actions
 	h.registerSkillRoutes(mux)

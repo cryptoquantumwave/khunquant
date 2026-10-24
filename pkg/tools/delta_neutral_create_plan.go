@@ -190,6 +190,9 @@ func (t *CreateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	if planName == "" || asset == "" || spotProvider == "" || spotSymbol == "" || futuresProvider == "" || futuresSymbol == "" {
 		return ErrorResult("plan_name, asset, spot_provider, spot_symbol, futures_provider, and futures_symbol are required")
 	}
+	if msg := contractSymbolRefusal(spotSymbol); msg != "" {
+		return ErrorResult("spot_symbol: " + msg)
+	}
 	if capitalUSDT <= 0 {
 		return ErrorResult("capital_usdt must be positive")
 	}

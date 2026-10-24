@@ -441,6 +441,9 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 
 // executeSpotLeg places a spot order for the buy leg and records an ExecutionLeg.
 func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (bool, error) {
+	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
+		return false, fmt.Errorf("spot leg: %s", msg)
+	}
 	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
 	if err != nil {
 		return false, fmt.Errorf("spot provider: %w", err)

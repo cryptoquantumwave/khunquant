@@ -134,6 +134,10 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if v, ok := args["enabled"].(bool); ok {
+		// A stored plan on a contract symbol may be disabled but never (re-)enabled.
+		if msg := contractSymbolRefusal(plan.Symbol); v && msg != "" {
+			return ErrorResult(fmt.Sprintf("DCA plan %d (%s): %s", planID, plan.Name, msg))
+		}
 		plan.Enabled = v
 		t.cronService.EnableJob(plan.CronJobID, v)
 		changed = true

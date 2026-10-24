@@ -161,6 +161,9 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	if planName == "" || providerID == "" || symbol == "" {
 		return ErrorResult("plan_name, provider, and symbol are required")
 	}
+	if msg := contractSymbolRefusal(symbol); msg != "" {
+		return ErrorResult(msg)
+	}
 	if amountPerOrder <= 0 {
 		return ErrorResult("amount_per_order must be positive")
 	}

@@ -519,6 +519,9 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 
 // resizeSpotLeg adjusts the spot position by the given notional amount.
 func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (bool, error) {
+	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
+		return false, fmt.Errorf("spot leg: %s", msg)
+	}
 	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
 	if err != nil {
 		return false, fmt.Errorf("spot provider: %w", err)

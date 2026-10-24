@@ -11,6 +11,18 @@ import (
 
 const positionWarnThresholdUSD = 10_000
 
+// contractSymbolRefusal returns a non-empty refusal message when symbol is a
+// unified contract (futures/swap) symbol such as "BTC/USDT:USDT". The spot
+// order and DCA paths must never trade these: they skip the leverage check and
+// size the order in base units instead of contracts. Contracts belong to the
+// futures_* tools.
+func contractSymbolRefusal(symbol string) string {
+	if !strings.Contains(symbol, ":") {
+		return ""
+	}
+	return fmt.Sprintf("%s is a contract (futures/swap) symbol; use futures_open_position (or the other futures_* tools) for contracts", symbol)
+}
+
 // CreateOrderTool submits an order through 7 sequential safety gates.
 type CreateOrderTool struct {
 	cfg *config.Config
@@ -84,6 +96,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	// --- Gate 1: basic validation ---
 	if providerID == "" || symbol == "" || orderType == "" || side == "" {
 		return ErrorResult("provider, symbol, type, and side are required")
+	}
+	if msg := contractSymbolRefusal(symbol); msg != "" {
+		return ErrorResult(msg)
 	}
 	if amount <= 0 {
 		return ErrorResult("amount must be positive")

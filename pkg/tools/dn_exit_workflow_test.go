@@ -682,7 +682,9 @@ func TestDNResize_KillFlag(t *testing.T) {
 			t.Errorf("execution %q", e.State)
 		}
 	})
-	t.Run("increase_cut_between_legs_ends_in_recovery", func(t *testing.T) {
+	// The spot leg of an increase only completes the hedge the futures leg started:
+	// the flag, engaged once the futures leg has filled, does not stop it.
+	t.Run("increase_cut_between_legs_still_hedges", func(t *testing.T) {
 		r := newDNRig(t, true)
 		n := r.node()
 		r.seedHeld(n)
@@ -693,28 +695,14 @@ func TestDNResize_KillFlag(t *testing.T) {
 		}
 		id := r.startResize(n, deltaneutral.DirIncrease, exIncreaseUSD)
 		r.drive(n, id, true)
-		if res := r.resizeResult(n, id); res.Result != deltaneutral.ResultRecovery {
+		if res := r.resizeResult(n, id); res.Result != deltaneutral.ResultResized {
 			t.Fatalf("result: %+v", res)
 		}
-		if r.world.placed("spot") != 0 {
-			t.Error("the second leg must not be placed while the kill flag is engaged")
+		if r.world.placed("spot") != 1 {
+			t.Error("the second leg must complete the hedge while the kill flag is engaged")
 		}
-		e := r.opExec(n, "resize_")
-		if e.State != string(deltaneutral.ExecutionStateRecoveryRequired) {
+		if e := r.opExec(n, "resize_"); e.State != string(deltaneutral.ExecutionStateBothLegsFilled) {
 			t.Fatalf("execution %q", e.State)
-		}
-		rec := deltaneutral.RecoverID(e.ID)
-		if w, err := n.eng.Get(context.Background(), rec); err != nil || !w.Protective {
-			t.Fatalf("dn.recover was not started as a protective workflow: %+v %v", w, err)
-		}
-		// The recovery proposes the 4 contracts this resize added, not the 9 on the
-		// account above the other plan's, and not the plan's 5 + 4.
-		if w := r.drive(n, rec, false); w.Status != journal.StatusWaiting {
-			t.Fatalf("dn.recover must still run and ask while killed: %+v", w)
-		}
-		_, op := lastProposal(t, r, n)
-		if !op.ReduceOnly || op.Market != approval.MarketFutures || op.Side != "buy" || !near(op.Amount, exResizeLegs) {
-			t.Errorf("proposed %+v, want a reduce-only buy of the %v contracts the resize added", op, exResizeLegs)
 		}
 		r.assertNoOrphanedExecution(n)
 	})
@@ -776,6 +764,46 @@ func TestDNResize_Brakes_StopAnIncreaseNotADecrease(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The gates of an increase are decided for both legs before the first goes out; the
+// spot leg that follows the futures fill is a hedge completion and meets none of them.
+func TestDNResize_Increase_HedgeLegIsNotRegated(t *testing.T) {
+	t.Run("brakes_breached_after_the_first_leg", func(t *testing.T) {
+		r := newDNRig(t, true)
+		n := r.node()
+		r.seedHeld(n)
+		r.world.onCreate = func(leg string) {
+			if leg == "futures" {
+				r.cfg.TradingRisk.MaxOrderValueUSD = 1
+				r.cfg.TradingRisk.DailyLossLimitUSD = 100
+				tripLossTracker(t, 100)
+			}
+		}
+		id := r.startResize(n, deltaneutral.DirIncrease, exIncreaseUSD)
+		r.drive(n, id, true)
+		if res := r.resizeResult(n, id); res.Result != deltaneutral.ResultResized {
+			t.Fatalf("result: %+v", res)
+		}
+		if r.world.placed("futures") != 1 || r.world.placed("spot") != 1 {
+			t.Errorf("futures %d spot %d", r.world.placed("futures"), r.world.placed("spot"))
+		}
+	})
+	t.Run("second_leg_cap_breached_before_the_first_leg", func(t *testing.T) {
+		r := newDNRig(t, true)
+		n := r.node()
+		r.seedHeld(n)
+		// 4 contracts = 4000 USD passes; the spot buy of 40/0.999 x 100 = 4004 USD does not.
+		r.cfg.TradingRisk.MaxOrderValueUSD = 4002
+		id := r.startResize(n, deltaneutral.DirIncrease, exIncreaseUSD)
+		r.drive(n, id, true)
+		if res := r.resizeResult(n, id); res.Result != deltaneutral.ResultRefused {
+			t.Fatalf("result: %+v", res)
+		}
+		if r.world.placed("futures")+r.world.placed("spot") != 0 {
+			t.Error("the futures leg went out although the spot leg would be refused")
+		}
+	})
 }
 
 // A direction that is not exactly "decrease" is an increase: it is gated, and is not

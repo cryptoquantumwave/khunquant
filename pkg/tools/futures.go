@@ -324,6 +324,16 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(fmt.Sprintf("large futures position warning: notional %.2f USD (from %s price) exceeds %.0f USD. Re-run only after explicit user confirmation.", notional, notionalSource, float64(positionWarnThresholdUSD)))
 	}
 
+	// Point of no return: refuse here if the turn is already cancelled, otherwise finish
+	// leverage, entry and protection on a context the turn's cancellation cannot cut. A
+	// cancel between the entry and its stop-loss would leave an unprotected position.
+	seqCtx, endSeq, refused := beginFuturesSequence(ctx, NameFuturesOpenPosition, providerID)
+	if refused != nil {
+		return refused
+	}
+	defer endSeq()
+	ctx = seqCtx
+
 	// Rate limit: spent only now that the call is confirmed and about to mutate the exchange,
 	// so previews and size/notional refusals above cost nothing.
 	if !broker.DefaultLimiter.Allow(providerID) {

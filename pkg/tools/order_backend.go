@@ -105,6 +105,9 @@ func (b *ApprovalOrderBackend) Prepare(ctx context.Context, req approval.OrderRe
 
 	switch spec.market {
 	case approval.MarketSpot:
+		if strings.Contains(spec.symbol, ":") {
+			return approval.Prepared{}, errors.New(approval.ErrSpotContractSymbol)
+		}
 		if !positiveFinite(req.Amount) {
 			return approval.Prepared{}, errors.New("amount must be a positive, finite number of base units")
 		}
@@ -201,6 +204,13 @@ func (b *ApprovalOrderBackend) gate(ctx context.Context, spec orderSpec) (evalua
 }
 
 func (b *ApprovalOrderBackend) gateSpot(ctx context.Context, spec orderSpec) (evaluation, error) {
+	// Defence in depth (Prepare and the canonical params refuse it first, and a
+	// stored proposal reaches this gate again at Recheck): the spot path has no
+	// leverage check and values an order as amount x price, and the exchange
+	// library would resolve a contract symbol to the perpetual.
+	if strings.Contains(spec.symbol, ":") {
+		return evaluation{}, gateErr("market", errors.New(approval.ErrSpotContractSymbol))
+	}
 	_, p, err := broker.TradingProviderFor(b.cfg, spec.provider, spec.account)
 	if err != nil {
 		if errors.Is(err, broker.ErrOrderExecutionUnsupported) {

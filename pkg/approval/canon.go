@@ -141,6 +141,12 @@ func decodeVerified(p Proposal) (OrderParams, error) {
 	return op, nil
 }
 
+// ErrSpotContractSymbol is the refusal for a spot order on a contract symbol
+// (one containing ":"). The exchange library resolves such a symbol to the
+// perpetual, which would bypass the leverage opt-in and value the order without
+// the contract size, so the model is told how to recover.
+const ErrSpotContractSymbol = "a contract symbol (it contains \":\", e.g. BTC/USDT:USDT) is not a spot symbol: use market=futures for contract symbols"
+
 func finitePositive(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
 
 // validateOrderParams enforces what every stored order must satisfy: finite,
@@ -171,6 +177,8 @@ func validateOrderParams(p OrderParams) error {
 		return errors.New("futures-only fields set on a spot order")
 	case p.Market == MarketFutures && !strings.Contains(p.Symbol, ":"):
 		return errors.New("a futures symbol is a contract symbol such as BTC/USDT:USDT")
+	case p.Market == MarketSpot && strings.Contains(p.Symbol, ":"):
+		return errors.New(ErrSpotContractSymbol)
 	}
 	return nil
 }

@@ -78,6 +78,7 @@ func TestValidateOrderParams(t *testing.T) {
 		"spot reduce-only":          func(o *OrderParams) { o.ReduceOnly = true },
 		"spot with a position side": func(o *OrderParams) { o.PositionSide = "long" },
 		"futures spot-style symbol": func(o *OrderParams) { o.Market = MarketFutures },
+		"spot contract symbol":      func(o *OrderParams) { o.Symbol = "CHZ/USDT:USDT" },
 	}
 	if err := validateOrderParams(ok); err != nil {
 		t.Fatalf("the fixture is invalid: %v", err)
@@ -114,5 +115,19 @@ func TestCodes(t *testing.T) {
 	}
 	if n1, n2 := newNonce(), newNonce(); len(n1) != 16 || n1 == n2 {
 		t.Errorf("nonces %q %q", n1, n2)
+	}
+}
+
+// A spot proposal on a contract symbol is refused at canonicalisation with a
+// message the model can act on, and the same symbol is fine as a futures order.
+func TestCanonicalOrder_SpotRefusesContractSymbol(t *testing.T) {
+	_, spot := cardFixture("buy", 10, "CHZ/USDT:USDT", MarketSpot, ModeLive)
+	_, err := canonicalOrder(spot)
+	if err == nil || !strings.Contains(err.Error(), "use market=futures") {
+		t.Fatalf("err = %v, want a refusal that names market=futures", err)
+	}
+	_, fut := cardFixture("buy", 10, "CHZ/USDT:USDT", MarketFutures, ModeLive)
+	if _, err := canonicalOrder(fut); err != nil {
+		t.Errorf("the same symbol as a futures order was refused: %v", err)
 	}
 }

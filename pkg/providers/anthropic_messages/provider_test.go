@@ -493,7 +493,7 @@ func TestBuildRequestBodyEdgeCases(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "skip tool calls with empty names",
+			name: "empty-named tool call gets placeholder name",
 			messages: []Message{
 				{Role: "assistant", Content: "Calling tool", ToolCalls: []ToolCall{
 					{ID: "tool-empty", Name: "", Arguments: map[string]any{"ignored": true}},
@@ -528,7 +528,10 @@ func TestBuildRequestBodyEdgeCases(t *testing.T) {
 				t.Errorf("model = %v, want %v", got["model"], tt.model)
 			}
 
-			if tt.name == "skip tool calls with empty names" {
+			if tt.name == "empty-named tool call gets placeholder name" {
+				// T5-2: the empty-named tool call must NOT be dropped — it
+				// must still appear, under the unknown_tool placeholder name,
+				// so a paired tool_result for its ID isn't left orphaned.
 				messages, ok := got["messages"].([]any)
 				if !ok || len(messages) != 1 {
 					t.Fatalf("messages = %#v, want single assistant message", got["messages"])
@@ -543,13 +546,24 @@ func TestBuildRequestBodyEdgeCases(t *testing.T) {
 				if !ok {
 					t.Fatalf("assistant content = %#v, want []any", assistantMsg["content"])
 				}
-				if len(content) != 2 {
-					t.Fatalf("assistant content length = %d, want 2", len(content))
+				if len(content) != 3 {
+					t.Fatalf("assistant content length = %d, want 3 (text + 2 tool_use blocks)", len(content))
 				}
 
-				toolUse, ok := content[1].(map[string]any)
+				placeholderToolUse, ok := content[1].(map[string]any)
 				if !ok {
 					t.Fatalf("tool_use block = %#v, want map", content[1])
+				}
+				if gotName := placeholderToolUse["name"]; gotName != "unknown_tool" {
+					t.Fatalf("tool_use name = %v, want %q", gotName, "unknown_tool")
+				}
+				if gotID := placeholderToolUse["id"]; gotID != "tool-empty" {
+					t.Fatalf("tool_use id = %v, want %q", gotID, "tool-empty")
+				}
+
+				toolUse, ok := content[2].(map[string]any)
+				if !ok {
+					t.Fatalf("tool_use block = %#v, want map", content[2])
 				}
 				if gotName := toolUse["name"]; gotName != "test_tool" {
 					t.Fatalf("tool_use name = %v, want %q", gotName, "test_tool")
@@ -834,8 +848,10 @@ func TestBuildRequestBody_ToolCallMessage_RoundTripRecovery(t *testing.T) {
 	}
 }
 
-func TestBuildRequestBody_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
-	// Both Name and Function.Name empty => should skip the tool call
+func TestBuildRequestBody_ToolCallMessage_BothNamesEmptyPlaceholder(t *testing.T) {
+	// Both Name and Function.Name empty => the tool_use block must NOT be
+	// dropped (T5-2): it gets the "unknown_tool" placeholder name instead,
+	// so a paired tool_result for the same ID isn't left orphaned.
 	messages := []Message{
 		{Role: "user", Content: "Call the tool"},
 		{
@@ -879,14 +895,16 @@ func TestBuildRequestBody_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
 		t.Fatalf("expected content to be []any, got %T", assistantMsg["content"])
 	}
 
-	// First block should be text, second should be valid_tool (not call_empty)
-	if len(content) < 2 {
-		t.Fatalf("expected at least 2 content blocks, got %d", len(content))
+	// First block should be text, then both tool_use blocks (call_empty under
+	// the placeholder name, plus call_valid).
+	if len(content) < 3 {
+		t.Fatalf("expected at least 3 content blocks, got %d", len(content))
 	}
 
 	textFound := false
 	validToolFound := false
 	emptyToolFound := false
+	emptyToolPlaceholderName := false
 
 	for _, block := range content {
 		if blockMap, ok := block.(map[string]any); ok {
@@ -899,6 +917,9 @@ func TestBuildRequestBody_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
 				}
 				if blockMap["id"] == "call_empty" {
 					emptyToolFound = true
+					if blockMap["name"] == "unknown_tool" {
+						emptyToolPlaceholderName = true
+					}
 				}
 			}
 		}
@@ -910,8 +931,82 @@ func TestBuildRequestBody_ToolCallMessage_BothNamesEmptySkipped(t *testing.T) {
 	if !validToolFound {
 		t.Error("valid_tool not found")
 	}
-	if emptyToolFound {
-		t.Error("call_empty should have been skipped")
+	if !emptyToolFound {
+		t.Error("call_empty tool_use block must still be present (not dropped)")
+	}
+	if !emptyToolPlaceholderName {
+		t.Error("call_empty tool_use block should use the unknown_tool placeholder name")
+	}
+}
+
+func TestBuildRequestBody_OrphanedToolResult_Paired(t *testing.T) {
+	// T5-2: an assistant ToolCall with empty Name and nil Function, paired
+	// with a "tool"-role message carrying the same ID, must produce exactly
+	// one tool_use and one tool_result block with matching IDs — never an
+	// orphaned tool_result that the Anthropic API would reject with 400.
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{ID: "call_orphan", Name: "", Arguments: nil, Function: nil},
+			},
+		},
+		{Role: "tool", ToolCallID: "call_orphan", Content: "result"},
+	}
+	body, err := buildRequestBody(messages, nil, "test-model", map[string]any{"max_tokens": 8192})
+	if err != nil {
+		t.Fatalf("buildRequestBody() error: %v", err)
+	}
+
+	msgList, ok := body["messages"].([]any)
+	if !ok || len(msgList) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgList))
+	}
+
+	assistantMsg, ok := msgList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected assistant message to be map, got %T", msgList[0])
+	}
+	assistantContent, ok := assistantMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("expected assistant content to be []any, got %T", assistantMsg["content"])
+	}
+
+	toolUseCount := 0
+	var toolUseID, toolUseName string
+	for _, block := range assistantContent {
+		if blockMap, ok := block.(map[string]any); ok && blockMap["type"] == "tool_use" {
+			toolUseCount++
+			toolUseID, _ = blockMap["id"].(string)
+			toolUseName, _ = blockMap["name"].(string)
+		}
+	}
+	if toolUseCount != 1 {
+		t.Fatalf("expected exactly 1 tool_use block, got %d", toolUseCount)
+	}
+	if toolUseID != "call_orphan" {
+		t.Errorf("tool_use id = %q, want call_orphan", toolUseID)
+	}
+	if toolUseName != "unknown_tool" {
+		t.Errorf("tool_use name = %q, want unknown_tool placeholder", toolUseName)
+	}
+
+	toolMsg, ok := msgList[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool-result message to be map, got %T", msgList[1])
+	}
+	toolContent, ok := toolMsg["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected tool-result content to be []map[string]any, got %T", toolMsg["content"])
+	}
+	if len(toolContent) != 1 {
+		t.Fatalf("expected exactly 1 tool_result block, got %d", len(toolContent))
+	}
+	if toolContent[0]["type"] != "tool_result" {
+		t.Errorf("content block type = %v, want tool_result", toolContent[0]["type"])
+	}
+	if toolContent[0]["tool_use_id"] != "call_orphan" {
+		t.Errorf("tool_result tool_use_id = %v, want call_orphan (must match tool_use id)", toolContent[0]["tool_use_id"])
 	}
 }
 

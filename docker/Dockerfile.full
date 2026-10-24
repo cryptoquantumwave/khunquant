@@ -1,9 +1,9 @@
 # ============================================================
 # Stage 1: Build the khunquant binary
 # ============================================================
-# Go version pinned to match go.mod (1.26.9) for reproducible builds.
+# Go version pinned to match go.mod (1.26.10) for reproducible builds.
 # This ensures the builder uses exactly what CI tests.
-FROM golang:1.26.9-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
 RUN apk add --no-cache git make
 
@@ -30,14 +30,23 @@ RUN apk add --no-cache \
   python3 \
   py3-pip
 
-# Install uv and symlink to system path
+# Install uv into a system path. The installer writes to /root/.local/bin, so
+# copy rather than symlink: this image runs as a non-root user below, for which
+# /root is not traversable, and a symlink into it would dangle.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-  ln -s /root/.local/bin/uv /usr/local/bin/uv && \
-  ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
+  cp /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ && \
   uv --version
 
 # Copy binary
 COPY --from=builder /src/build/khunquant /usr/local/bin/khunquant
+
+# Run as a non-root user. The node base image already occupies UID 1000, so it
+# is removed and recreated as khunquant (mirrors Dockerfile.heavy).
+RUN deluser node 2>/dev/null; delgroup node 2>/dev/null; \
+    addgroup -g 1000 khunquant 2>/dev/null; \
+    adduser -D -u 1000 -G khunquant -h /home/khunquant khunquant 2>/dev/null || true
+
+USER khunquant
 
 # Create khunquant home directory
 # --yes is required, not a convenience: onboard prompts for terms acceptance

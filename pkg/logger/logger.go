@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -256,6 +257,8 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 		event.Str("caller", fmt.Sprintf("<none> %s:%d (%s)", callerFile, callerLine, callerFunc))
 	}
 
+	message = Redact(message)
+
 	appendFields(event, fields)
 	event.Msg(message)
 
@@ -276,12 +279,20 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	}
 }
 
+// appendFields writes fields with registered secrets redacted.
+//
+// H-9: the console writer redacts in formatFieldValue, but the file logger is
+// plain JSON with no formatter, so it wrote field values - error strings, tool
+// arguments - exactly as given. Redacting here covers both sinks.
 func appendFields(event *zerolog.Event, fields map[string]any) {
 	for k, v := range fields {
 		// Type switch to avoid double JSON serialization of strings
 		switch val := v.(type) {
 		case string:
-			event.Str(k, val)
+			event.Str(k, Redact(val))
+		case error:
+			// json.Marshal renders most errors as "{}", which logged nothing.
+			event.Str(k, Redact(val.Error()))
 		case int:
 			event.Int(k, val)
 		case int64:
@@ -291,7 +302,19 @@ func appendFields(event *zerolog.Event, fields map[string]any) {
 		case bool:
 			event.Bool(k, val)
 		default:
-			event.Interface(k, v) // Fallback for struct, slice and maps
+			// Fallback for struct, slice and maps: serialise, redact, and keep
+			// it as JSON when the result still is.
+			raw, err := json.Marshal(v)
+			if err != nil {
+				event.Interface(k, v)
+				continue
+			}
+			redacted := Redact(string(raw))
+			if json.Valid([]byte(redacted)) {
+				event.RawJSON(k, []byte(redacted))
+			} else {
+				event.Str(k, redacted)
+			}
 		}
 	}
 }

@@ -482,12 +482,14 @@ func (c *WeComAppChannel) handleVerification(ctx context.Context, w http.Respons
 	nonce := query.Get("nonce")
 	echostr := query.Get("echostr")
 
+	// H-13: neither the signature nor echostr is logged. echostr is the
+	// encrypted payload and msg_signature is the credential-derived MAC over it;
+	// together they let anyone with log access replay or attack the signature
+	// offline. timestamp/nonce/corp_id are enough to correlate a request.
 	logger.DebugCF("wecom_app", "Handling verification request", map[string]any{
-		"msg_signature": msgSignature,
-		"timestamp":     timestamp,
-		"nonce":         nonce,
-		"echostr":       echostr,
-		"corp_id":       c.config.CorpID,
+		"timestamp": timestamp,
+		"nonce":     nonce,
+		"corp_id":   c.config.CorpID,
 	})
 
 	if msgSignature == "" || timestamp == "" || nonce == "" || echostr == "" {
@@ -498,12 +500,11 @@ func (c *WeComAppChannel) handleVerification(ctx context.Context, w http.Respons
 
 	// Verify signature
 	if !verifySignature(c.config.Token.String(), msgSignature, timestamp, nonce, echostr) {
-		logger.WarnCF("wecom_app", "Signature verification failed", map[string]any{
-			"token":         c.config.Token.String(),
-			"msg_signature": msgSignature,
-			"timestamp":     timestamp,
-			"nonce":         nonce,
-		})
+		// H-13: this logged the shared token in full, at Warn, on a path any
+		// unauthenticated caller can trigger at will by sending a bad signature -
+		// so anyone who could reach the endpoint could also fill the log with the
+		// secret needed to forge a valid one.
+		logger.WarnC("wecom_app", "Signature verification failed")
 		http.Error(w, "Invalid signature", http.StatusForbidden)
 		return
 	}
@@ -512,9 +513,9 @@ func (c *WeComAppChannel) handleVerification(ctx context.Context, w http.Respons
 
 	// Decrypt echostr with CorpID verification
 	// For WeCom App (自建应用), receiveid should be corp_id
+	// The EncodingAESKey is a credential and never belongs in a log line.
 	logger.DebugCF("wecom_app", "Attempting to decrypt echostr", map[string]any{
-		"encoding_aes_key": c.config.EncodingAESKey.String(),
-		"corp_id":          c.config.CorpID,
+		"corp_id": c.config.CorpID,
 	})
 	decryptedEchoStr, err := decryptMessageWithVerify(echostr, c.config.EncodingAESKey.String(), c.config.CorpID)
 	if err != nil {
@@ -550,13 +551,20 @@ func (c *WeComAppChannel) handleMessageCallback(ctx context.Context, w http.Resp
 		return
 	}
 
-	// Read request body
-	body, err := io.ReadAll(r.Body)
+	// Read request body, bounded. The signature is verified further down, so an
+	// unauthenticated caller reaches this read and could otherwise exhaust
+	// memory by streaming an endless payload. Mirrors aibot.go's handler.
+	const maxBodySize = 4 << 20 // 4 MB
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
+	if len(body) > maxBodySize {
+		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	// Parse XML to get encrypted message
 	var encryptedMsg struct {

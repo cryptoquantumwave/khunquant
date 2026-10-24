@@ -37,7 +37,13 @@ func (t *FuturesClosePositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesClosePositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	symbol := normalizeFuturesSymbol(stringArg(args, "symbol"))
@@ -58,14 +64,12 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	if orderType == "limit" && limitPrice == nil {
 		return ErrorResult("limit_price is required for limit close orders")
 	}
-	if err := broker.CheckLeverage(t.cfg, "close futures position"); err != nil {
+	// A close only reduces exposure: the leverage switch must never block it.
+	if err := broker.CheckLeverage(t.cfg, "close futures position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -80,6 +84,9 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	}
 	var closeAmount float64
 	var positionSide, positionMarginMode string
+	// C-4: snapshot the unrealised PnL before the close; afterwards the position
+	// is gone and the loss it realised is unrecoverable.
+	var pnlBeforeClose *float64
 	for _, p := range positions {
 		if p.Contracts == nil || *p.Contracts == 0 {
 			continue
@@ -92,6 +99,7 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 			continue
 		}
 		closeAmount = math.Abs(*p.Contracts)
+		pnlBeforeClose = p.UnrealizedPnl
 		if p.Side != nil {
 			positionSide = *p.Side
 		}
@@ -113,6 +121,11 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 			symbol, providerID, closeSide, closeAmount, orderType))
 	}
 
+	// Rate limit: spent only on a confirmed close, right before the order.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
+	}
+
 	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
 		Symbol:       symbol,
 		OrderType:    orderType,
@@ -129,7 +142,10 @@ func (t *FuturesClosePositionTool) Execute(ctx context.Context, args map[string]
 	closeID := orderID(order)
 
 	// Verify fill
-	filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, symbol, closeAmount)
+	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, closeAmount)
+	// closeAmount is the whole position here, so it is both the requested
+	// amount and the denominator.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, closeAmount, closeAmount, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, closeAmount)
@@ -168,7 +184,13 @@ func (t *FuturesReducePositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesReducePositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	symbol := normalizeFuturesSymbol(stringArg(args, "symbol"))
@@ -202,14 +224,11 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 	if orderType == "limit" && limitPrice == nil {
 		return ErrorResult("limit_price is required for limit close orders")
 	}
-	if err := broker.CheckLeverage(t.cfg, "reduce futures position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "reduce futures position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -223,6 +242,7 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 	}
 	var positionSize float64
 	var positionSide, posMarginMode string
+	var pnlBeforeClose *float64
 	for _, p := range positions {
 		if p.Contracts == nil || *p.Contracts == 0 {
 			continue
@@ -235,6 +255,7 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 			continue
 		}
 		positionSize = math.Abs(*p.Contracts)
+		pnlBeforeClose = p.UnrealizedPnl
 		if p.Side != nil {
 			positionSide = *p.Side
 		}
@@ -268,6 +289,11 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 			symbol, providerID, finalAmount, finalAmount/positionSize*100, closeSide, finalAmount, orderType))
 	}
 
+	// Rate limit: spent only on a confirmed reduce, right before the order.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
+	}
+
 	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
 		Symbol:       symbol,
 		OrderType:    orderType,
@@ -282,7 +308,11 @@ func (t *FuturesReducePositionTool) Execute(ctx context.Context, args map[string
 		return ErrorResult(fmt.Sprintf("futures_reduce_position failed: %v", err)).WithError(err)
 	}
 	closeID := orderID(order)
-	filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
+	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
+	// The snapshot describes the whole position, so prorate against the
+	// position's size - dividing by finalAmount would over-record by 1/fraction.
+	// finalAmount is what was requested, used only if the fill is unverifiable.
+	recordRealisedLoss(symbol, pnlBeforeClose, filled, finalAmount, positionSize, verifyErr)
 	fillNote := ""
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, finalAmount)
@@ -314,7 +344,13 @@ func (t *FuturesEmergencyFlattenTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	providerID := stringArg(args, "provider")
 	account := stringArg(args, "account")
 	confirm, _ := args["confirm"].(bool)
@@ -322,7 +358,7 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 	if providerID == "" {
 		return ErrorResult("provider is required")
 	}
-	if err := broker.CheckLeverage(t.cfg, "emergency flatten"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "emergency flatten", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
@@ -342,6 +378,7 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 	type activePos struct {
 		symbol, side, marginMode string
 		contracts                float64
+		pnlBeforeClose           *float64
 	}
 	var active []activePos
 	for _, p := range positions {
@@ -349,8 +386,9 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 			continue
 		}
 		ap := activePos{
-			symbol:    normalizeFuturesSymbol(*p.Symbol),
-			contracts: math.Abs(*p.Contracts),
+			symbol:         normalizeFuturesSymbol(*p.Symbol),
+			contracts:      math.Abs(*p.Contracts),
+			pnlBeforeClose: p.UnrealizedPnl,
 		}
 		if p.Side != nil {
 			ap.side = *p.Side
@@ -407,7 +445,9 @@ func (t *FuturesEmergencyFlattenTool) Execute(ctx context.Context, args map[stri
 			continue
 		}
 		closeID := orderID(order)
-		filled, status, partial, _ := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
+		filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
+		// Flatten closes many positions; each records its own loss.
+		recordRealisedLoss(ap.symbol, ap.pnlBeforeClose, filled, ap.contracts, ap.contracts, verifyErr)
 		fillNote := ""
 		if partial {
 			fillNote = fmt.Sprintf(" partial %.8g/%.8g", filled, ap.contracts)

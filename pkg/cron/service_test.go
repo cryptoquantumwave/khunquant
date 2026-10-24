@@ -89,8 +89,16 @@ func TestCheckJobs_DueJob_ExecutesAndUpdates(t *testing.T) {
 		if id != "j-due" {
 			t.Errorf("executed job ID = %q, want j-due", id)
 		}
-	case <-time.After(2 * time.Second):
-		t.Error("expected checkJobs to execute due job")
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected checkJobs to execute due job")
+	}
+
+	// The handler runs on a pool worker; wait for its state update (and the store
+	// write it makes) before the test's temp dir is removed.
+	waitFor(t, "state update", func() bool { return !isRunning(cs, "j-due") })
+	st := cs.GetJob("j-due").State
+	if st.LastStatus != StatusOK || st.LastRunAtMS == nil || st.NextRunAtMS == nil {
+		t.Errorf("state after run = %+v, want ok with last/next run recorded", st)
 	}
 }
 

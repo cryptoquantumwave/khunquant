@@ -21,6 +21,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
 )
 
 const (
@@ -141,7 +142,7 @@ func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/oauth/flows/{id}", h.handleGetOAuthFlow)
 	mux.HandleFunc("POST /api/oauth/flows/{id}/poll", h.handlePollOAuthFlow)
 	mux.HandleFunc("POST /api/oauth/logout", h.handleOAuthLogout)
-	mux.HandleFunc("GET /oauth/callback", h.handleOAuthCallback)
+	mux.HandleFunc("GET "+middleware.OAuthCallbackPath, h.handleOAuthCallback)
 }
 
 func (h *Handler) handleListOAuthProviders(w http.ResponseWriter, r *http.Request) {
@@ -705,7 +706,7 @@ func buildOAuthRedirectURI(r *http.Request) string {
 	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
 		scheme = strings.Split(forwarded, ",")[0]
 	}
-	return fmt.Sprintf("%s://%s/oauth/callback", scheme, r.Host)
+	return fmt.Sprintf("%s://%s%s", scheme, r.Host, middleware.OAuthCallbackPath)
 }
 
 func flowToResponse(flow *oauthFlow) oauthFlowResponse {

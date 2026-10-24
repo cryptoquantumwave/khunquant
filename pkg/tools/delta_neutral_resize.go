@@ -82,10 +82,20 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("plan status is %q, not active. Cannot resize.", plan.Status))
 	}
 
-	// --- Safety gates (same sequence as open) ---
+	// Direction is known from the arguments alone (the sign of the requested change), before
+	// any network call. A resize-down only reduces exposure, so it passes the risk-adding
+	// gates (leverage switch, daily-loss limit, order-value cap); a resize-up, or an
+	// unclassifiable (NaN) request, is gated exactly like an open.
+	isDecrease := (hasDeltaNotional && deltaNotional < 0) || (hasDeltaPct && deltaPct < 0)
+	dir := broker.RiskIncrease
+	if isDecrease {
+		dir = broker.RiskReduce
+	}
+
+	// --- Safety gates (same sequence as open, risk-adding ones for increases only) ---
 
 	// Gate 1: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position", dir); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -99,20 +109,20 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("spot leg permission denied: %v", err))
 	}
 
-	// Gate 3: daily loss limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	// Gate 3: daily loss limit — only for a resize-up. Getting smaller must stay possible
+	// after the limit trips.
+	if !isDecrease {
+		for _, key := range []string{
+			broker.AccountKey(t.cfg, plan.FuturesProvider, plan.FuturesAccount),
+			broker.AccountKey(t.cfg, plan.SpotProvider, plan.SpotAccount),
+		} {
+			if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, key); err != nil {
+				return ErrorResult(err.Error())
+			}
+		}
 	}
 
-	// Gate 4: rate limit on both providers
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
-	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
+	// The rate limit is taken after the dry-run return, right before the first order.
 
 	// Compute the delta notional (USDT), applied to BOTH legs equally
 	var deltaN float64
@@ -132,13 +142,19 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 			if err != nil || len(positions) == 0 {
 				baseNotional = plan.FuturesNotionalUSDT
 			} else {
+				sizes := &positionContractSizeResolver{fp: fp}
 				for _, p := range positions {
 					if p.Contracts != nil && *p.Contracts != 0 {
 						markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
 						if err == nil && markPrice > 0 {
-							// Live position notional
-							baseNotional = math.Abs(*p.Contracts) * markPrice
-							break
+							// Contracts is a contract COUNT: value it with the contract size, never
+							// guessing 1 — if the size is unknown the plan notional is used below.
+							if cs, ok := sizes.size(ctx, p, plan.FuturesSymbol); ok {
+								baseNotional = positionNotionalUSD(*p.Contracts, cs, markPrice)
+								if baseNotional > 0 {
+									break
+								}
+							}
 						}
 					}
 				}
@@ -152,13 +168,21 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Determine direction and guard against over-decrease
-	isDecrease := deltaN < 0
+	// (isDecrease was fixed from the arguments above, so the gates and the sizing agree.)
 	absDeltaN := math.Abs(deltaN)
 
 	if isDecrease && absDeltaN > plan.FuturesNotionalUSDT {
 		return ErrorResult(fmt.Sprintf(
 			"cannot decrease position by %.2f USDT; current notional is %.2f USDT",
 			absDeltaN, plan.FuturesNotionalUSDT))
+	}
+
+	// Gate 4: per-order value cap on the delta each leg trades — resize-up only. Before the
+	// dry-run so a preview tells the truth; a resize-down is never blocked by it.
+	if !isDecrease {
+		if err := broker.CheckRiskNotional(t.cfg, absDeltaN); err != nil {
+			return ErrorResult(fmt.Sprintf("delta-neutral resize leg: %v", err))
+		}
 	}
 
 	// Compute new notionals
@@ -199,6 +223,12 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 
 	// --- On confirm: execute the resize (adjust both legs by |deltaN|) ---
 
+	// Rate limit: both tokens up front (nothing is placed yet), so a missing second token
+	// cannot strand a half-resized position. A dry-run above never reaches this point.
+	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
+		return r
+	}
+
 	// Create an Execution record for the resize attempt
 	now := time.Now()
 	attemptID := fmt.Sprintf("resize_%d_%d", plan.ID, now.UnixNano())
@@ -235,92 +265,97 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Execute the first leg
+	var firstOut legOutcome
 	var firstLegErr error
-	var firstLegFilled bool
 
 	if firstLegType == deltaneutral.LegTypeFutures {
-		firstLegFilled, firstLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
+		firstOut, firstLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
 	} else {
-		firstLegFilled, firstLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
+		firstOut, firstLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
 	}
 
-	if firstLegErr != nil {
-		// First leg failed — transition to first_leg_failed, then failed
+	if !firstOut.Filled {
+		// No order was accepted for the first leg: the existing position is untouched.
+		// Record the failed attempt on the EXECUTION only and leave the PLAN active so the
+		// monitor keeps watching the original position and unwind can still close it.
+		// (Marking an active plan "failed" would hide a live position from both.)
+		failMsg := "first leg did not fill"
+		if firstLegErr != nil {
+			failMsg = firstLegErr.Error()
+		}
 		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = firstLegErr.Error()
-		t.store.UpdateExecution(ctx, exec)
+		exec.ErrorMsg = failMsg
+		updateExecutionLogged(ctx, t.store, exec)
 
 		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
+		updateExecutionLogged(ctx, t.store, exec)
 
-		// Update plan status to reflect failure
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
-
-		return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position unchanged.", firstLegErr))
+		if firstLegErr != nil {
+			return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position unchanged; plan remains active.", firstLegErr))
+		}
+		return ErrorResult("first leg did not fill. Second leg not placed. Position unchanged; plan remains active.")
 	}
 
-	if !firstLegFilled {
-		// First leg did not fill — abort second leg
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = "first leg did not fill"
-		t.store.UpdateExecution(ctx, exec)
-
-		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
-
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
-		return ErrorResult("first leg did not fill. Second leg not placed. Position unchanged.")
-	}
+	// From here on an order has been accepted by the exchange, so the position has
+	// changed. Every failure below must end in recovery_required, never "failed".
+	firstBkErr := firstOut.BookkeepingErr
 
 	// First leg filled — transition to first_leg_filled, then placing_second_leg
 	exec.State = string(deltaneutral.ExecutionStateFirstLegFilled)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to first_leg_filled: %v", err))
+		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
 
 	exec.State = string(deltaneutral.ExecutionStatePlacingSecondLeg)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to placing_second_leg: %v", err))
+		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
 
 	// Execute the second leg
+	var secondOut legOutcome
 	var secondLegErr error
-	var secondLegFilled bool
 
 	if firstLegType == deltaneutral.LegTypeFutures {
 		// If futures was first, spot is second
-		secondLegFilled, secondLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
+		secondOut, secondLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
 	} else {
 		// If spot was first, futures is second
-		secondLegFilled, secondLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
+		secondOut, secondLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
 	}
+	secondBkErr := secondOut.BookkeepingErr
 
-	if secondLegErr != nil || !secondLegFilled {
-		// Second leg failed — transition to recovery_required (unhedged exposure)
-		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
+	if !secondOut.Filled {
+		// Second leg failed — delta is broken (first leg already resized).
+		secondMsg := "second leg did not fill"
 		if secondLegErr != nil {
-			exec.ErrorMsg = secondLegErr.Error()
-		} else {
-			exec.ErrorMsg = "second leg did not fill"
+			secondMsg = secondLegErr.Error()
 		}
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to update execution: %v", err))
-		}
+		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
+		exec.ErrorMsg = execErrMsg(secondMsg, firstBkErr)
+		updateExecutionLogged(ctx, t.store, exec)
 
-		exec.State = string(deltaneutral.ExecutionStateRecoveryRequired)
-		exec.ErrorMsg = "second leg failed — delta broken. Run unwind_delta_neutral_position to rebalance."
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to transition to recovery_required: %v", err))
-		}
-
-		// Update plan status to recovery_required
-		t.store.UpdatePlanStatus(ctx, plan.ID, "recovery_required")
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+			"second leg failed — delta broken. Run unwind_delta_neutral_position to rebalance.", firstBkErr))
 
 		return ErrorResult(fmt.Sprintf(
 			"CRITICAL: Second leg execution failed — DELTA BROKEN. "+
 				"First leg resized but second leg failed/unfilled. "+
-				"Run unwind_delta_neutral_position immediately to close/rebalance. Error: %v",
-			secondLegErr))
+				"Plan set to recovery_required. "+
+				"Run unwind_delta_neutral_position immediately to close/rebalance. Error: %v%s%s",
+			secondLegErr, bkNote(firstBkErr), note))
+	}
+
+	if firstBkErr != nil || secondBkErr != nil {
+		// Both orders went through but at least one leg row is missing: the position
+		// really changed but the plan's recorded quantities are now wrong.
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+			"both legs resized but a leg record could not be saved — reconcile the exchange positions manually.",
+			firstBkErr, secondBkErr))
+		return ErrorResult(fmt.Sprintf(
+			"CRITICAL: both legs were resized on the exchange but a leg record could not be saved. "+
+				"Plan set to recovery_required. Verify the positions on the exchange and close or rebalance manually "+
+				"(futures_close_position / create_order); unwind sizes only from recorded legs.%s%s%s",
+			bkNote(firstBkErr), bkNote(secondBkErr), note))
 	}
 
 	// Both legs filled — success. Update plan notionals.
@@ -328,7 +363,12 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	completedNow := time.Now()
 	exec.CompletedAt = &completedNow
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to finalize execution: %v", err))
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, fmt.Sprintf(
+			"both legs resized but the execution could not be finalized (%v). Legs are recorded; verify the plan state.", err))
+		return ErrorResult(fmt.Sprintf(
+			"both legs resized but the execution could not be finalized (%v). Plan set to recovery_required; "+
+				"both legs are recorded, so unwind_delta_neutral_position can close it.%s",
+			err, note))
 	}
 
 	// Update plan: set new equal notionals
@@ -343,7 +383,11 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	plan.UpdatedAt = completedNow
 
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update plan: %v", err))
+		note := escalateToRecovery(ctx, t.store, plan.ID, nil, "")
+		return ErrorResult(fmt.Sprintf(
+			"both legs resized but the plan notionals could not be updated (%v). Plan set to recovery_required; "+
+				"both legs are recorded, so unwind_delta_neutral_position can close it.%s",
+			err, note))
 	}
 
 	return UserResult(fmt.Sprintf(
@@ -361,26 +405,39 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		newNotional))
 }
 
+// firstLegBookkeepingFailed handles a failed execution-state write after the first leg
+// filled. The second leg is NOT placed (the store is unreliable), the plan goes to
+// recovery_required and the user is told to unwind.
+func (t *ResizeDeltaNeutralPositionTool) firstLegBookkeepingFailed(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, err, firstBkErr error) *ToolResult {
+	note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+		fmt.Sprintf("first leg resized but execution bookkeeping failed (%v); second leg NOT placed. Run unwind_delta_neutral_position.", err),
+		firstBkErr))
+	return ErrorResult(fmt.Sprintf(
+		"CRITICAL: first leg resized but the execution state could not be saved (%v). Second leg NOT placed — "+
+			"DELTA BROKEN. Plan set to recovery_required; run unwind_delta_neutral_position.%s%s",
+		err, bkNote(firstBkErr), note))
+}
+
 // resizeFuturesLeg adjusts the futures position by the given notional amount.
-func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (bool, error) {
+func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (legOutcome, error) {
 	fp, err := futuresProvider(ctx, t.cfg, plan.FuturesProvider, plan.FuturesAccount)
 	if err != nil {
-		return false, fmt.Errorf("futures provider: %w", err)
+		return legOutcome{}, fmt.Errorf("futures provider: %w", err)
 	}
 
 	// Fetch mark price and market metadata to compute the correct contract count.
 	markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
 	if err != nil {
-		return false, fmt.Errorf("fetch mark price: %w", err)
+		return legOutcome{}, fmt.Errorf("fetch mark price: %w", err)
 	}
 	if markPrice <= 0 {
-		return false, fmt.Errorf("invalid mark price: %.2f", markPrice)
+		return legOutcome{}, fmt.Errorf("invalid mark price: %.2f", markPrice)
 	}
 
 	// Derive order side and position side from plan's position side string.
 	entrySide, positionSide, err := futuresPositionSide(plan.FuturesSide)
 	if err != nil {
-		return false, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
+		return legOutcome{}, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
 	}
 
 	leverage := plan.FuturesLeverage
@@ -390,7 +447,7 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 
 	mkt, err := validateActiveSwapMarket(ctx, fp, plan.FuturesSymbol, int64(leverage))
 	if err != nil {
-		return false, fmt.Errorf("market validation: %w", err)
+		return legOutcome{}, fmt.Errorf("market validation: %w", err)
 	}
 	perContractSize := 1.0
 	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
@@ -412,17 +469,40 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 	}
 	numContracts, err := contractsFromNotional(hedgeNotional, markPrice, perContractSize, minAmount)
 	if err != nil {
-		return false, fmt.Errorf("contract count computation: %w", err)
+		return legOutcome{}, fmt.Errorf("contract count computation: %w", err)
 	}
 	baseQty := numContracts * perContractSize
 
 	side := entrySide
 	reduceOnly := false
 
+	// C-4: a reduce-only resize realises part of the position's loss, so the
+	// unrealised PnL is snapshotted before the order. Only decreases pay for the
+	// extra position fetch.
+	var pnlBeforeClose *float64
+	var liveContracts float64
+
 	// If decrease: use reduce-only close (opposite side)
 	if isDecrease {
 		side = futuresCloseSide(positionSide)
 		reduceOnly = true
+
+		if positions, posErr := fp.FetchFuturesPositions(ctx, []string{plan.FuturesSymbol}); posErr == nil {
+			for _, p := range positions {
+				if p.Contracts == nil || *p.Contracts == 0 || p.Symbol == nil {
+					continue
+				}
+				if normalizeFuturesSymbol(*p.Symbol) != normalizeFuturesSymbol(plan.FuturesSymbol) {
+					continue
+				}
+				liveContracts = *p.Contracts
+				if liveContracts < 0 {
+					liveContracts = -liveContracts
+				}
+				pnlBeforeClose = p.UnrealizedPnl
+				break
+			}
+		}
 	} else {
 		// If increase: set leverage before entering
 		if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, positionSide); err != nil {
@@ -443,7 +523,7 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 				UpdatedAt:             time.Now(),
 			}
 			t.store.SaveExecutionLeg(ctx, leg)
-			return false, fmt.Errorf("set leverage: %w", err)
+			return legOutcome{}, fmt.Errorf("set leverage: %w", err)
 		}
 	}
 
@@ -477,7 +557,7 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = err.Error()
 		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
+		return legOutcome{}, err
 	}
 
 	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
@@ -486,6 +566,16 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 		if fetched, fetchErr := fp.FetchFuturesOrder(ctx, oid, plan.FuturesSymbol); fetchErr == nil {
 			order = mergeOrderFillData(order, fetched)
 		}
+	}
+
+	// Record the loss this reduce realised, prorated against the live position:
+	// a resize closes only part of it.
+	if isDecrease {
+		filledContracts := numContracts
+		if order.Filled != nil && *order.Filled > 0 {
+			filledContracts = *order.Filled
+		}
+		recordRealisedLoss(plan.FuturesSymbol, pnlBeforeClose, filledContracts, numContracts, liveContracts, nil)
 	}
 
 	// Use actual fill data from the order; fall back to pre-fill estimates.
@@ -513,43 +603,44 @@ func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, p
 		leg.FeeUSDT = -(*order.Fee.Cost) // negative = cost
 	}
 
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
+	// The order has been accepted: from here the leg counts as FILLED whatever happens to
+	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
+	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
 }
 
 // resizeSpotLeg adjusts the spot position by the given notional amount.
-func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (bool, error) {
+func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (legOutcome, error) {
 	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
 	if err != nil {
-		return false, fmt.Errorf("spot provider: %w", err)
+		return legOutcome{}, fmt.Errorf("spot provider: %w", err)
 	}
 
 	tp, ok := sp.(broker.TradingProvider)
 	if !ok {
-		return false, fmt.Errorf("spot provider does not support order execution")
+		return legOutcome{}, fmt.Errorf("spot provider does not support order execution")
 	}
 
 	// Fetch current spot price
 	status, err := sp.GetMarketStatus(ctx, plan.SpotSymbol)
 	if err == nil && status == broker.MarketClosed {
-		return false, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
+		return legOutcome{}, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
 	}
 
 	// Fetch live spot price
 	md, ok := sp.(broker.MarketDataProvider)
 	if !ok {
-		return false, fmt.Errorf("spot provider does not support market data")
+		return legOutcome{}, fmt.Errorf("spot provider does not support market data")
 	}
 	ticker, err := md.FetchTicker(ctx, plan.SpotSymbol)
 	if err != nil {
-		return false, fmt.Errorf("fetch spot ticker: %w", err)
+		return legOutcome{}, fmt.Errorf("fetch spot ticker: %w", err)
 	}
 	price := 0.0
 	if ticker.Last != nil {
 		price = *ticker.Last
 	}
 	if price <= 0 {
-		return false, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
+		return legOutcome{}, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
 	}
 
 	// Quantity from notional and live price
@@ -588,7 +679,7 @@ func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = err.Error()
 		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
+		return legOutcome{}, err
 	}
 
 	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
@@ -624,6 +715,7 @@ func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan
 		leg.FeeUSDT = -fee // negative = cost
 	}
 
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
+	// The order has been accepted: from here the leg counts as FILLED whatever happens to
+	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
+	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
 }

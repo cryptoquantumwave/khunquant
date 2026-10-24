@@ -11,9 +11,9 @@ services:
     profiles:
       - agent
     volumes:
-      - ../config/config.json:/root/.khunquant/config.json:ro
-      - khunquant-workspace:/root/.khunquant/workspace
-      - khunquant-npm-cache:/root/.npm # npm cache for faster MCP server installs
+      - ../config/config.json:/home/khunquant/.khunquant/config.json:ro
+      - khunquant-workspace:/home/khunquant/.khunquant/workspace
+      - khunquant-npm-cache:/home/khunquant/.npm # npm cache for faster MCP server installs
     entrypoint: ["khunquant", "agent"]
     stdin_open: true
     tty: true
@@ -32,11 +32,11 @@ services:
       - gateway
     volumes:
       # Configuration file
-      - ../config/config.json:/root/.khunquant/config.json:ro
+      - ../config/config.json:/home/khunquant/.khunquant/config.json:ro
       # Persistent workspace (sessions, memory, logs)
-      - khunquant-workspace:/root/.khunquant/workspace
+      - khunquant-workspace:/home/khunquant/.khunquant/workspace
       # NPM cache for faster MCP server installs
-      - khunquant-npm-cache:/root/.npm
+      - khunquant-npm-cache:/home/khunquant/.npm
     command: ["gateway"]
 
 volumes:

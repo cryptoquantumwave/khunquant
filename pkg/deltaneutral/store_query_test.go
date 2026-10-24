@@ -157,26 +157,149 @@ func TestPlanOpenQuantities_WithResizeDecrease(t *testing.T) {
 	}
 }
 
-// TestPlanOpenQuantities_NonBothLegsFilled: legs in a non-both_legs_filled
-// execution (e.g. failed open) must NOT be included in the open quantities.
-func TestPlanOpenQuantities_NonBothLegsFilledExcluded(t *testing.T) {
+// TestPlanOpenQuantities_CountsLegsOfAnyExecutionState: filled legs count whatever the
+// state of their execution (a recovery_required open still holds a real position).
+// This replaces the old both_legs_filled-only semantics, which made a recovery_required
+// plan look flat and let unwind fall back to whole-account balances.
+func TestPlanOpenQuantities_CountsLegsOfAnyExecutionState(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	planID := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusActive)
+	planID := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusRecoveryRequired)
 
-	// A failed execution — should not count
-	failedExec := seedExecution(t, store, planID, string(ExecutionStateFailed))
-	seedLeg(t, store, failedExec, string(LegTypeFutures), "sell", string(LegStateFilled), 999.0, 0)
-	seedLeg(t, store, failedExec, string(LegTypeSpot), "buy", string(LegStateFilled), 999.0, 0)
+	recExec := seedExecution(t, store, planID, string(ExecutionStateRecoveryRequired))
+	seedLeg(t, store, recExec, string(LegTypeFutures), "sell", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, recExec, string(LegTypeSpot), "buy", string(LegStateFilled), 253.5, 0)
 
 	futBase, spotQty, err := store.PlanOpenQuantities(context.Background(), planID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if futBase != 0 || spotQty != 0 {
-		t.Errorf("failed execution legs should be excluded: got (%.4f, %.4f)", futBase, spotQty)
+	if futBase != 250.0 || spotQty != 253.5 {
+		t.Errorf("recovery_required legs must count: got (%.4f, %.4f), want (250, 253.5)", futBase, spotQty)
 	}
+}
+
+// TestOpenLegQuantities_NetsAcrossExecutionStates: open (both_legs_filled), a
+// recovery_required half-open, a resize-down (both_legs_filled, opposite side) and an
+// unwind (unwound, opposite side) all net together; failed legs never count.
+func TestOpenLegQuantities_NetsAcrossExecutionStates(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	planID := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusActive)
+	other := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusActive)
+
+	open := seedExecution(t, store, planID, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, open, string(LegTypeFutures), "sell", string(LegStateFilled), 100.0, 0)
+	seedLeg(t, store, open, string(LegTypeSpot), "buy", string(LegStateFilled), 100.0, 0)
+
+	// A later, half-completed increase: futures filled, spot failed.
+	half := seedExecution(t, store, planID, string(ExecutionStateRecoveryRequired))
+	seedLeg(t, store, half, string(LegTypeFutures), "sell", string(LegStateFilled), 40.0, 0)
+	seedLeg(t, store, half, string(LegTypeSpot), "buy", string(LegStateFailed), 40.0, 0)
+
+	// Resize down.
+	down := seedExecution(t, store, planID, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, down, string(LegTypeFutures), "buy", string(LegStateFilled), 30.0, 0)
+	seedLeg(t, store, down, string(LegTypeSpot), "sell", string(LegStateFilled), 30.0, 0)
+
+	// An unwinding row that only closed the futures leg so far.
+	unw := seedExecution(t, store, planID, string(ExecutionStateUnwinding))
+	seedLeg(t, store, unw, string(LegTypeFutures), "buy", string(LegStateFilled), 10.0, 0)
+
+	// Another plan must not leak in.
+	oe := seedExecution(t, store, other, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, oe, string(LegTypeFutures), "sell", string(LegStateFilled), 999.0, 0)
+
+	fut, spot, err := store.OpenLegQuantities(ctx, planID)
+	if err != nil {
+		t.Fatalf("OpenLegQuantities: %v", err)
+	}
+	if math.Abs(fut-(100+40-30-10)) > 1e-9 {
+		t.Errorf("futures net: got %.6f, want 100", fut)
+	}
+	if math.Abs(spot-(100-30)) > 1e-9 {
+		t.Errorf("spot net: got %.6f, want 70", spot)
+	}
+}
+
+// TestHasOpenExposure covers flat, open, offset-by-unwind, fee dust and unrecorded fills.
+func TestHasOpenExposure(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	check := func(name string, planID int64, want bool) {
+		t.Helper()
+		got, err := store.HasOpenExposure(ctx, planID)
+		if err != nil {
+			t.Fatalf("%s: HasOpenExposure: %v", name, err)
+		}
+		if got != want {
+			t.Errorf("%s: HasOpenExposure = %v, want %v", name, got, want)
+		}
+	}
+
+	// No executions at all.
+	empty := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusFailed)
+	check("no legs", empty, false)
+
+	// Opened, never unwound: a failed plan still holding a position.
+	openPlan := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusFailed)
+	oe := seedExecution(t, store, openPlan, string(ExecutionStateRecoveryRequired))
+	seedLeg(t, store, oe, string(LegTypeFutures), "sell", string(LegStateFilled), 250.0, 0)
+	check("open futures only", openPlan, true)
+
+	// Fully unwound (opposite-side legs of the same size).
+	flat := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusClosed)
+	fe := seedExecution(t, store, flat, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, fe, string(LegTypeFutures), "sell", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, fe, string(LegTypeSpot), "buy", string(LegStateFilled), 253.5, 0)
+	ue := seedExecution(t, store, flat, string(ExecutionStateUnwound))
+	seedLeg(t, store, ue, string(LegTypeFutures), "buy", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, ue, string(LegTypeSpot), "sell", string(LegStateFilled), 253.5, 0)
+	check("fully unwound", flat, false)
+
+	// Spot fee dust: buy leg records gross 253.5, the unwind could only sell the
+	// fee-reduced free balance (0.1% less). Must NOT count as exposure.
+	dust := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusClosed)
+	de := seedExecution(t, store, dust, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, de, string(LegTypeFutures), "sell", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, de, string(LegTypeSpot), "buy", string(LegStateFilled), 253.5, 0)
+	due := seedExecution(t, store, dust, string(ExecutionStateUnwound))
+	seedLeg(t, store, due, string(LegTypeFutures), "buy", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, due, string(LegTypeSpot), "sell", string(LegStateFilled), 253.5*0.999, 0)
+	check("unwound with spot fee dust", dust, false)
+
+	// A real residual (spot half sold) is exposure.
+	half := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusRecoveryRequired)
+	he := seedExecution(t, store, half, string(ExecutionStateBothLegsFilled))
+	seedLeg(t, store, he, string(LegTypeFutures), "sell", string(LegStateFilled), 250.0, 0)
+	seedLeg(t, store, he, string(LegTypeSpot), "buy", string(LegStateFilled), 250.0, 0)
+	hue := seedExecution(t, store, half, string(ExecutionStateRecoveryRequired))
+	seedLeg(t, store, hue, string(LegTypeFutures), "buy", string(LegStateFilled), 250.0, 0)
+	check("futures closed, spot still open", half, true)
+
+	// Failed legs never count.
+	failedLeg := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusFailed)
+	fle := seedExecution(t, store, failedLeg, string(ExecutionStateFailed))
+	seedLeg(t, store, fle, string(LegTypeFutures), "sell", string(LegStateFailed), 250.0, 0)
+	check("only failed legs", failedLeg, false)
+
+	// An order that went through but whose leg row was never saved.
+	unrec := seedMinimalPlan(t, store, "binance", "BTC/USDT:USDT", PlanStatusRecoveryRequired)
+	ure := seedExecution(t, store, unrec, string(ExecutionStatePlacingFirstLeg))
+	exec, err := store.GetExecution(ctx, ure)
+	if err != nil {
+		t.Fatalf("GetExecution: %v", err)
+	}
+	exec.ErrorMsg = UnrecordedFillMarker + " order_id=abc symbol=BTC/USDT:USDT side=sell filled_qty=250"
+	if err := store.UpdateExecution(ctx, exec); err != nil {
+		t.Fatalf("UpdateExecution: %v", err)
+	}
+	check("unrecorded fill marker", unrec, true)
 }
 
 // TestPlanOpenQuantities_FailedLegStateExcluded: a filled execution whose legs

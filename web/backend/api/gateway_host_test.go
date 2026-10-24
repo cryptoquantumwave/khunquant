@@ -6,15 +6,21 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 )
 
-func TestGatewayHostOverrideUsesExplicitRuntimePublic(t *testing.T) {
+// TestGatewayBindHostIgnoresLauncherPublic pins H-10, inverting the assertion
+// this test used to make. Running the launcher with -public forced
+// KHUNQUANT_GATEWAY_HOST=0.0.0.0 onto the gateway child process, putting
+// webhooks and pico on the LAN whatever gateway.host said. The launcher's own
+// listen address is now its own business.
+func TestGatewayBindHostIgnoresLauncherPublic(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	launcherPath := launcherconfig.PathForAppConfig(configPath)
 	if err := launcherconfig.Save(launcherPath, launcherconfig.Config{
 		Port:   18800,
-		Public: false,
+		Public: true,
 	}); err != nil {
 		t.Fatalf("launcherconfig.Save() error = %v", err)
 	}
@@ -22,8 +28,17 @@ func TestGatewayHostOverrideUsesExplicitRuntimePublic(t *testing.T) {
 	h := NewHandler(configPath)
 	h.SetServerOptions(18800, true, true, nil)
 
-	if got := h.gatewayHostOverride(); got != "0.0.0.0" {
-		t.Fatalf("gatewayHostOverride() = %q, want %q", got, "0.0.0.0")
+	cfg := config.DefaultConfig()
+	cfg.Gateway.Host = "127.0.0.1"
+	if got := h.effectiveGatewayBindHost(cfg); got != "127.0.0.1" {
+		t.Fatalf("effectiveGatewayBindHost() = %q, want %q (launcher -public must not override it)",
+			got, "127.0.0.1")
+	}
+
+	// An unset gateway.host stays unset rather than becoming 0.0.0.0.
+	cfg.Gateway.Host = ""
+	if got := h.effectiveGatewayBindHost(cfg); got != "" {
+		t.Fatalf("effectiveGatewayBindHost() = %q, want \"\" for an unset gateway.host", got)
 	}
 }
 

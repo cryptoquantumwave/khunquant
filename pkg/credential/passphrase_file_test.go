@@ -3,6 +3,7 @@ package credential
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -394,5 +395,28 @@ func TestLoadPassphraseFile_Symlink(t *testing.T) {
 	result := LoadPassphraseFile()
 	if result != "symlink-test" {
 		t.Errorf("LoadPassphraseFile via symlink = %q, want 'symlink-test'", result)
+	}
+}
+
+// H-14: a passphrase file other users can read is refused.
+func TestLoadPassphraseFile_RefusesGroupOrWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no Unix mode bits on Windows")
+	}
+	t.Setenv(khunquantHome, t.TempDir())
+	path := PassphraseFilePath()
+	if err := os.WriteFile(path, []byte("perm-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadPassphraseFile(); got != "perm-test" {
+		t.Fatalf("0600 file not loaded (%q); the refusals below prove nothing", got)
+	}
+	for _, mode := range []os.FileMode{0o640, 0o604, 0o644} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if got := LoadPassphraseFile(); got != "" {
+			t.Errorf("mode %#o: passphrase loaded (%q), want refused", mode, got)
+		}
 	}
 }

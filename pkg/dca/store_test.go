@@ -361,67 +361,40 @@ func TestStore_CountExecutions(t *testing.T) {
 	}
 }
 
+// TestStore_CountExecutionsInPeriod counts hour/day/week periods against a fixed
+// clock (Wed 2026-03-11 10:30 in a UTC+7 zone). MR-006: it used to save
+// local-time rows against time.Now(), which can never see an offset mismatch;
+// rows now carry assorted offsets and are compared as instants.
 func TestStore_CountExecutionsInPeriod(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
+	planID, _ := s.SavePlan(ctx, minimalPlan("GuardrailPlan"))
 
-	plan := minimalPlan("GuardrailPlan")
-	planID, _ := s.SavePlan(ctx, plan)
+	ict := time.FixedZone("ICT", 7*3600)
+	now := time.Date(2026, 3, 11, 10, 30, 0, 0, ict)
 
-	now := time.Now()
-	y, mo, d := now.Date()
-	startOfToday := time.Date(y, mo, d, 0, 0, 0, 0, now.Location())
-
-	// Execution 1: now (in current hour, day, week)
-	exec1 := minimalExecution(planID)
-	exec1.ExecutedAt = now
-	if _, err := s.SaveExecution(ctx, exec1); err != nil {
-		t.Fatalf("SaveExecution 1: %v", err)
-	}
-
-	// Execution 2: 30 minutes into today — always within the current calendar day
-	// and week, avoiding the midnight-crossing flake of a fixed relative offset.
-	// It falls in the current hour only when running in the 00:xx hour.
-	exec2 := minimalExecution(planID)
-	exec2.ExecutedAt = startOfToday.Add(30 * time.Minute)
-	if _, err := s.SaveExecution(ctx, exec2); err != nil {
-		t.Fatalf("SaveExecution 2: %v", err)
+	for _, at := range []time.Time{
+		now,                                         // this hour, day, week
+		time.Date(2026, 3, 11, 0, 30, 0, 0, ict),    // today (local), not this hour
+		time.Date(2026, 3, 9, 8, 0, 0, 0, ict),      // Monday: this week only
+		time.Date(2026, 3, 8, 23, 0, 0, 0, ict),     // Sunday: last week
+		now.Add(-14 * 24 * time.Hour).In(time.UTC), // two weeks ago, written in UTC
+	} {
+		e := minimalExecution(planID)
+		e.ExecutedAt = at
+		if _, err := s.SaveExecution(ctx, e); err != nil {
+			t.Fatalf("SaveExecution: %v", err)
+		}
 	}
 
-	// Execution 3: now - 14 days (not in current hour, day, or week)
-	exec3 := minimalExecution(planID)
-	exec3.ExecutedAt = now.Add(-14 * 24 * time.Hour)
-	if _, err := s.SaveExecution(ctx, exec3); err != nil {
-		t.Fatalf("SaveExecution 3: %v", err)
-	}
-
-	// exec2 is in the current hour only when running in the 00:xx hour (startOfToday+30min < 01:00).
-	wantHour := 1
-	if now.Hour() == 0 {
-		wantHour = 2
-	}
-	hourCount, err := s.CountExecutionsInPeriod(ctx, planID, "hour")
-	if err != nil {
-		t.Fatalf("CountExecutionsInPeriod(hour): %v", err)
-	}
-	if hourCount != wantHour {
-		t.Errorf("hour count = %d, want %d", hourCount, wantHour)
-	}
-
-	dayCount, err := s.CountExecutionsInPeriod(ctx, planID, "day")
-	if err != nil {
-		t.Fatalf("CountExecutionsInPeriod(day): %v", err)
-	}
-	if dayCount != 2 {
-		t.Errorf("day count = %d, want 2", dayCount)
-	}
-
-	weekCount, err := s.CountExecutionsInPeriod(ctx, planID, "week")
-	if err != nil {
-		t.Fatalf("CountExecutionsInPeriod(week): %v", err)
-	}
-	if weekCount != 2 {
-		t.Errorf("week count = %d, want 2", weekCount)
+	for period, want := range map[string]int{"hour": 1, "day": 2, "week": 3} {
+		got, err := s.CountExecutionsInPeriodAt(ctx, planID, period, now, false)
+		if err != nil {
+			t.Fatalf("CountExecutionsInPeriodAt(%s): %v", period, err)
+		}
+		if got != want {
+			t.Errorf("%s count = %d, want %d", period, got, want)
+		}
 	}
 }
 

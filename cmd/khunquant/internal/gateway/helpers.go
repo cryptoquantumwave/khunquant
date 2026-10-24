@@ -78,6 +78,7 @@ type gatewayServices struct {
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
 	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint
+	LossGuard        *lossGuardSampler               // non-nil only while daily_loss_limit_usd > 0
 }
 
 // sandboxStateReseter wraps StateManager and Store to implement the ResetState interface.
@@ -209,6 +210,8 @@ func setupAndStartServices(
 	msgBus *bus.MessageBus,
 ) (*gatewayServices, error) {
 	services := &gatewayServices{}
+	warnOpenPermissions(cfg)
+	services.LossGuard = startLossGuard(cfg)
 
 	// Setup cron tool and service
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
@@ -300,7 +303,8 @@ func setupAndStartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore)
+	ensureManagementToken(cfg)
+	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore, cfg.Gateway.ManagementToken)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, agentLoop)
 	}
@@ -340,6 +344,8 @@ func stopAndCleanupServices(
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
+	services.LossGuard.Stop()
+	services.LossGuard = nil
 	if services.ChannelManager != nil {
 		services.ChannelManager.StopAll(shutdownCtx)
 	}
@@ -510,6 +516,7 @@ func restartServices(
 
 	// Get current config from agent loop (which has been updated if this is a reload)
 	cfg := al.GetConfig()
+	services.LossGuard = startLossGuard(cfg)
 
 	// Re-create and start cron service with new config
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
@@ -594,7 +601,8 @@ func restartServices(
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore)
+	ensureManagementToken(cfg)
+	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore, cfg.Gateway.ManagementToken)
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(cfg, services, al)
 	} else {
@@ -842,6 +850,11 @@ func setupCronTool(
 
 	// Create cron service
 	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService.SetOptions(cronOptionsFromConfig(cfg))
+	cronService.SetOnMissed(missedJobNotifier(msgBus))
+	if msgBus != nil {
+		sendCeilingNotices(msgBus, cronService) // once per job; see ceiling_notice.go
+	}
 
 	// Create and register CronTool if enabled
 	var cronTool *tools.CronTool
@@ -877,21 +890,27 @@ func setupCronTool(
 
 	// Set onJob handler — alert, DCA, and DN jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
-	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-		if strings.HasPrefix(job.Name, "price_alert:") {
-			return handlePriceAlertJob(context.Background(), job, cfg, cronService, msgBus)
+	// The ctx carries the per-run job timeout and is cancelled when the cron service
+	// gives up waiting at stop; every handler uses it instead of context.Background().
+	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
+		if strings.HasPrefix(job.Name, tools.JobPrefixPriceAlert) {
+			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "indicator_alert:") {
-			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
+		if strings.HasPrefix(job.Name, tools.JobPrefixIndicatorAlert) {
+			return handleIndicatorAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "dca:") && dcaStore != nil {
-			return handleDCAAutoJob(context.Background(), job, cfg, dcaStore, cronTool)
+		if strings.HasPrefix(job.Name, tools.JobPrefixDCA) && dcaStore != nil {
+			res, err := handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
+			if msgBus != nil {
+				notifyDCAJobNotPlanOwned(msgBus, job, err)
+			}
+			return res, err
 		}
-		if strings.HasPrefix(job.Name, "dn:") && dnStore != nil {
-			return handleDeltaNeutralMonitorJob(context.Background(), job, cfg, dnStore, cronTool, msgBus)
+		if strings.HasPrefix(job.Name, tools.JobPrefixDeltaNeutral) && dnStore != nil {
+			return handleDeltaNeutralMonitorJob(ctx, job, cfg, dnStore, cronTool, msgBus)
 		}
 		if cronTool != nil {
-			return cronTool.ExecuteJob(context.Background(), job), nil
+			return cronTool.ExecuteJob(ctx, job)
 		}
 		return "", fmt.Errorf("no executor configured for job %q", job.Name)
 	})
@@ -937,18 +956,7 @@ func setupCronTool(
 	}
 
 	// Delta-neutral tools (Track F) — require cron service + the store opened above.
-	dnEnabled := cfg.Tools.IsToolEnabled("create_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("list_delta_neutral_plans") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("update_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_summary") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_history") ||
-		cfg.Tools.IsToolEnabled("prepare_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("open_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("unwind_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("render_delta_neutral_yield_chart")
-	if dnEnabled && dnStore != nil {
+	if dnToolsEnabled(cfg) && dnStore != nil {
 		if cfg.Tools.IsToolEnabled("create_delta_neutral_plan") {
 			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService))
 		}

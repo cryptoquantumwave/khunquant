@@ -13,37 +13,10 @@ import (
 // token regardless of whether a field is SecureString-backed.
 const redactedSentinel = "[NOT_HERE]"
 
-// secretFieldNames are the JSON keys whose values are credentials.
-//
-// Most credentials in this config are config.SecureString, which withholds its
-// own value on marshal and is restored from .security.yml on save. But three
-// large subtrees are tagged yaml:"-" — Providers, Tools, and Debug — so their
-// fields cannot be SecureString: they would marshal as withheld and then have
-// nothing to be restored from, silently blanking the credential on next save.
-// Those subtrees hold plain strings, and this set is what keeps them out of API
-// responses.
-//
-// Matching is by exact key name, so "max_tokens" is unaffected by "token".
-var secretFieldNames = map[string]bool{
-	"api_key":              true,
-	"api_keys":             true,
-	"token":                true,
-	"secret":               true,
-	"password":             true,
-	"passphrase":           true,
-	"app_secret":           true,
-	"client_secret":        true,
-	"bot_token":            true,
-	"app_token":            true,
-	"access_token":         true,
-	"channel_access_token": true,
-	"channel_secret":       true,
-	"verification_token":   true,
-	"encoding_aes_key":     true,
-	"webhook_secret":       true,
-	"private_key":          true,
-	"signing_secret":       true,
-}
+// secretFieldNames are the JSON keys whose values are credentials. The set
+// lives in pkg/config so log redaction uses the same definition; see
+// config.CredentialFieldNames for why it is keyed by name.
+var secretFieldNames = config.CredentialFieldNames
 
 // redactSecrets walks a marshaled config tree and replaces every non-empty
 // credential value with redactedSentinel.

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -725,7 +726,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			// Quoted media leads: it is the thing being referred to.
 			mediaPaths = append(quotedMedia, mediaPaths...)
 		}
-		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage, message.Quote)
 	}
 
 	if content == "" && len(mediaPaths) == 0 {
@@ -1226,18 +1227,124 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 // context, and any audio it carried is attached so the agent can hear what is
 // being referred to rather than only being told it exists.
 
-func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message) string {
-	quoted := strings.TrimSpace(telegramQuotedContent(reply))
+func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message, quote *telego.TextQuote) string {
+	quoted := strings.TrimSpace(sanitizeQuotedBody(telegramQuotedContent(reply, quote)))
 	if quoted == "" {
 		return content
 	}
 
-	author := telegramQuotedAuthor(reply)
+	author := sanitizeQuotedAuthor(telegramQuotedAuthor(reply))
 	role := c.telegramQuotedRole(reply)
-	if strings.TrimSpace(content) == "" {
-		return fmt.Sprintf("[quoted %s message from %s]: %s", role, author, quoted)
+	label := fmt.Sprintf("[quoted %s message from %s]", role, author)
+	if !c.telegramQuotedSenderAllowed(reply) {
+		// The replying (allowed) user chose to reference this message, so it is
+		// not dropped -- but the agent must be told the attribution is
+		// untrusted, since it did not come from a permitted sender.
+		label = fmt.Sprintf("[quoted %s message from %s (not an allowed sender)]", role, author)
 	}
-	return fmt.Sprintf("[quoted %s message from %s]: %s\n\n%s", role, author, quoted, content)
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("%s: %s", label, quoted)
+	}
+	return fmt.Sprintf("%s: %s\n\n%s", label, quoted, content)
+}
+
+// telegramQuotedSenderAllowed reports whether the sender of a quoted message
+// would itself be permitted to send messages to this channel, using the same
+// AllowFrom logic applied to inbound senders.
+func (c *TelegramChannel) telegramQuotedSenderAllowed(message *telego.Message) bool {
+	if message == nil {
+		return true
+	}
+	if message.From == nil {
+		// No identifiable user: a channel post (SenderChat) or an anonymous
+		// group admin. This is the *least* verifiable sender class, so it is
+		// flagged rather than rendered with the same trusted-looking plain
+		// label a known, permitted user gets.
+		return message.SenderChat == nil
+	}
+	if c == nil || c.BaseChannel == nil {
+		return true
+	}
+
+	platformID := fmt.Sprintf("%d", message.From.ID)
+	sender := bus.SenderInfo{
+		Platform:    "telegram",
+		PlatformID:  platformID,
+		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
+		Username:    message.From.Username,
+		DisplayName: message.From.FirstName,
+	}
+	return c.IsAllowedSender(sender)
+}
+
+// maxQuotedAuthorRunes caps the sanitised author label. This is display
+// context for the agent, not a place for an attacker-controlled first name to
+// smuggle an arbitrarily long payload.
+const maxQuotedAuthorRunes = 64
+
+// maxQuotedBodyRunes caps the sanitised quoted body. Documented cap: quoted
+// content beyond this length is truncated with quotedBodyTruncationMarker.
+const maxQuotedBodyRunes = 2000
+
+const quotedBodyTruncationMarker = "…"
+
+// quotedAuthorStructural strips characters that could forge a second
+// "[quoted ... from ...]:" attribution boundary inside the author field.
+var quotedAuthorStructural = regexp.MustCompile(`[\[\]:]`)
+
+// sanitizeQuotedAuthor strips characters that could forge a fake "[quoted ...]"
+// boundary or inject control characters, collapses whitespace (including
+// Unicode line/paragraph separators, not just ASCII space), and caps length.
+// Uses unicode.IsControl/IsSpace rather than an ASCII byte-range regex so C1
+// controls (e.g. U+0085 NEL) and Unicode space separators are also caught.
+func sanitizeQuotedAuthor(author string) string {
+	cleaned := quotedAuthorStructural.ReplaceAllString(author, "")
+
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range cleaned {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			if !prevSpace {
+				b.WriteRune(' ')
+			}
+			prevSpace = true
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	cleaned = strings.TrimSpace(b.String())
+	if cleaned == "" {
+		return "unknown"
+	}
+
+	runes := []rune(cleaned)
+	if len(runes) > maxQuotedAuthorRunes {
+		cleaned = string(runes[:maxQuotedAuthorRunes])
+	}
+	return cleaned
+}
+
+// sanitizeQuotedBody strips control characters (keeping newline/tab, which
+// are normal message formatting) and caps the body at maxQuotedBodyRunes.
+// Uses unicode.IsControl rather than an ASCII byte-range regex so C1 controls
+// (e.g. U+0085 NEL) are also stripped, not just the C0 block.
+func sanitizeQuotedBody(body string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, body)
+
+	runes := []rune(cleaned)
+	if len(runes) > maxQuotedBodyRunes {
+		cleaned = string(runes[:maxQuotedBodyRunes]) + quotedBodyTruncationMarker
+	}
+	return cleaned
 }
 
 func (c *TelegramChannel) telegramQuotedRole(message *telego.Message) string {
@@ -1291,17 +1398,30 @@ func telegramQuotedAuthor(message *telego.Message) string {
 	return "unknown"
 }
 
-func telegramQuotedContent(message *telego.Message) string {
+// telegramQuotedContent builds the quoted body for a reply. When the replying
+// message carries a Quote (the user's highlighted excerpt of the original,
+// telego's Message.Quote), that excerpt is used in place of the full message
+// text/caption -- it is what the user actually pointed at. Any media on the
+// original message is still noted, since a partial text excerpt does not
+// mean the attached photo/voice/etc. stopped being relevant.
+func telegramQuotedContent(message *telego.Message, quote *telego.TextQuote) string {
 	if message == nil {
 		return ""
 	}
 
 	var parts []string
-	if text := strings.TrimSpace(message.Text); text != "" {
-		parts = append(parts, text)
+	if quote != nil {
+		if text := strings.TrimSpace(quote.Text); text != "" {
+			parts = append(parts, text)
+		}
 	}
-	if caption := strings.TrimSpace(message.Caption); caption != "" {
-		parts = append(parts, caption)
+	if len(parts) == 0 {
+		if text := strings.TrimSpace(message.Text); text != "" {
+			parts = append(parts, text)
+		}
+		if caption := strings.TrimSpace(message.Caption); caption != "" {
+			parts = append(parts, caption)
+		}
 	}
 	switch {
 	case len(message.Photo) > 0:

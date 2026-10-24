@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -158,6 +161,110 @@ func TestExecute_DefaultsToRunWhenActionOmitted(t *testing.T) {
 	}
 	if !strings.Contains(res.ForLLM, "backward-compatible") {
 		t.Errorf("output %q does not contain the echoed text", res.ForLLM)
+	}
+}
+
+// restrictedGuardTestTool returns an ExecTool with restrictToWorkspace on, and
+// the workspace directory it was built with (containing a notes.txt file so
+// "cat ./notes.txt" is a real, existing, allowed path).
+func restrictedGuardTestTool(t *testing.T) (*ExecTool, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("failed to write notes.txt: %v", err)
+	}
+	tool, err := NewExecTool(dir, true)
+	if err != nil {
+		t.Fatalf("NewExecTool() error = %v", err)
+	}
+	return tool, dir
+}
+
+// T1-2: guardSessionInput must apply the same workspace path checks
+// guardCommand applies to a command about to run - otherwise a session
+// started inside the workspace can be handed a command that reads anything
+// on disk, and restrictToWorkspace protects nothing past the first line.
+func TestGuardSessionInput_AppliesWorkspaceChecks(t *testing.T) {
+	tool, _ := restrictedGuardTestTool(t)
+
+	blocked := []string{
+		"cat /etc/hosts\n",
+		"cat ../../secret\n",
+	}
+	for _, payload := range blocked {
+		t.Run(payload, func(t *testing.T) {
+			if got := tool.guardSessionInput(payload); got == "" {
+				t.Errorf("session input %q should be blocked by the workspace check", payload)
+			}
+		})
+	}
+
+	allowed := []string{
+		"ls\n",
+		"cat ./notes.txt\n",
+	}
+	for _, payload := range allowed {
+		t.Run(payload, func(t *testing.T) {
+			if got := tool.guardSessionInput(payload); got != "" {
+				t.Errorf("session input %q should be allowed, got blocked: %s", payload, got)
+			}
+		})
+	}
+}
+
+// Same checks, but through the "write" action against a real running
+// session, so the blocked cases are proven to fail before ever reaching the
+// session (they must never turn into "session not found"), and the allowed
+// cases are proven to actually reach and succeed against a live process.
+func TestExecuteWrite_AppliesWorkspaceChecksOnLiveSession(t *testing.T) {
+	tool, _ := restrictedGuardTestTool(t)
+	sessionID := startBackgroundSession(t, tool, "cat")
+	t.Cleanup(func() {
+		tool.Execute(context.Background(), map[string]any{"action": "kill", "sessionId": sessionID})
+	})
+
+	for _, payload := range []string{"cat /etc/hosts\n", "cat ../../secret\n"} {
+		res := tool.Execute(context.Background(), map[string]any{
+			"action": "write", "sessionId": sessionID, "data": payload,
+		})
+		if res == nil || !res.IsError {
+			t.Errorf("write %q should be blocked by the workspace check, got: %+v", payload, res)
+			continue
+		}
+		if !strings.Contains(res.ForLLM, "safety guard") {
+			t.Errorf("block message %q does not name the guard", res.ForLLM)
+		}
+	}
+
+	for _, payload := range []string{"ls\n", "cat ./notes.txt\n"} {
+		res := tool.Execute(context.Background(), map[string]any{
+			"action": "write", "sessionId": sessionID, "data": payload,
+		})
+		if res == nil || res.IsError {
+			t.Errorf("write %q should be allowed, got blocked: %+v", payload, res)
+		}
+	}
+}
+
+// Same again for send-keys, which is the second door into a session besides
+// write: literal text typed through it must clear the same workspace checks.
+func TestExecuteSendKeys_AppliesWorkspaceChecks(t *testing.T) {
+	tool, _ := restrictedGuardTestTool(t)
+
+	res := tool.Execute(context.Background(), map[string]any{
+		"action":    "send-keys",
+		"sessionId": "does-not-matter",
+		"keys":      "cat /etc/hosts,enter",
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("send-keys with an outside-workspace path was not rejected: %+v", res)
+	}
+	if !strings.Contains(res.ForLLM, "safety guard") {
+		t.Errorf("result %q does not name the guard", res.ForLLM)
+	}
+	// It must fail on the guard, not merely because the session is missing.
+	if strings.Contains(res.ForLLM, "session not found") {
+		t.Error("rejected for a missing session rather than by the guard; the guard must run first")
 	}
 }
 

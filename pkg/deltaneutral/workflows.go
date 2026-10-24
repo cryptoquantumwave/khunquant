@@ -483,9 +483,15 @@ func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int)
 			if has {
 				return validateOut{Refused: fmt.Sprintf("plan %d still has open or unreconciled exposure from a previous attempt", plan.ID)}, nil
 			}
+			// The reservation: this workflow's id is new, so the attempt id alone cannot
+			// tell two opens of one plan apart. One conditional insert gives the plan to
+			// exactly one of them; the other places nothing.
 			now := time.Now()
 			exec = &Execution{PlanID: plan.ID, AttemptID: attemptID, State: string(ExecutionStateValidating), RequestedAt: now, CreatedAt: now, UpdatedAt: now}
-			if _, err := d.Store.SaveExecution(ctx, exec); err != nil {
+			if err := d.Store.ReserveExecution(ctx, exec); err != nil {
+				if errors.Is(err, ErrPlanBusy) {
+					return validateOut{Refused: err.Error()}, nil
+				}
 				return nil, err
 			}
 		} else if ExecutionState(exec.State) == ExecutionStateFailed {
@@ -499,6 +505,27 @@ func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int)
 				return nil, uerr
 			}
 			return validateOut{Refused: why, ExecutionID: exec.ID}, nil
+		}
+		if ExecutionState(exec.State) == ExecutionStateValidating {
+			// Holding the plan, look again: the status and the exposure read above may
+			// predate an open that finished in between (it released its reservation).
+			// Own legs cannot exist yet, so a re-run of this step checks too.
+			cur, perr := d.Store.GetPlan(ctx, plan.ID)
+			if perr != nil {
+				return refuse(fmt.Sprintf("cannot load plan %d: %v", plan.ID, perr))
+			}
+			switch cur.Status {
+			case PlanStatusDraft, PlanStatusReady, PlanStatusFailed:
+			default:
+				return refuse(fmt.Sprintf("plan status is %q; only draft, ready, or failed plans can be opened", cur.Status))
+			}
+			has, herr := d.Store.HasOpenExposure(ctx, plan.ID)
+			if herr != nil {
+				return refuse(fmt.Sprintf("cannot verify that plan %d has no open exposure: %v", plan.ID, herr))
+			}
+			if has {
+				return refuse(fmt.Sprintf("plan %d still has open or unreconciled exposure from a previous attempt", plan.ID))
+			}
 		}
 		sz, err := d.Exchange.Quote(ctx, plan, in.FirstLeg)
 		if err != nil {

@@ -144,22 +144,17 @@ func (d *Deps) exitOrder(ctx context.Context, c *journal.Ctx, ex Exchange, p *Pl
 }
 
 // busy says why another execution of the plan is in the way, or "". ownAttempt is the
-// caller's own execution, which a re-run finds again.
+// caller's own execution, which a re-run finds again. It is the cheap early refusal,
+// made before the work of validation: the authoritative, atomic one is the reservation
+// (Store.ReserveExecution), which it agrees with (same states, same window).
 func (d *Deps) busy(ctx context.Context, planID int64, ownAttempt string) string {
 	execs, err := d.Store.ListExecutions(ctx, planID, 50, 0)
 	if err != nil {
-		return fmt.Sprintf("cannot check whether plan %d has an operation in progress: %v", planID, err)
+		return fmt.Sprintf("cannot check whether plan %d has an execution in progress: %v", planID, err)
 	}
 	for _, e := range execs {
-		if e.AttemptID == ownAttempt {
-			continue
-		}
-		switch ExecutionState(e.State) {
-		case ExecutionStateValidating, ExecutionStateAwaitingApproval, ExecutionStatePlacingFirstLeg,
-			ExecutionStateFirstLegFilled, ExecutionStatePlacingSecondLeg, ExecutionStateUnwinding:
-			if time.Since(e.UpdatedAt) < busyFor {
-				return fmt.Sprintf("plan %d has an operation in progress (execution %d, %s); wait for it to finish", planID, e.ID, e.State)
-			}
+		if e.AttemptID != ownAttempt && inFlight(e) {
+			return (&PlanBusyError{PlanID: planID, ExecutionID: e.ID, State: e.State}).Error()
 		}
 	}
 	return ""
@@ -205,11 +200,43 @@ func (d *Deps) execFor(ctx context.Context, planID int64, attemptID string, stat
 	if err != nil || exec != nil {
 		return exec, false, err
 	}
+	// The reservation: one conditional insert, so of two operations that passed busy()
+	// at the same moment only one gets a row. The other gets an ErrPlanBusy refusal
+	// and has placed nothing.
 	now := time.Now()
 	exec = &Execution{PlanID: planID, AttemptID: attemptID, State: string(state), RequestedAt: now, CreatedAt: now, UpdatedAt: now}
-	id, err := d.Store.SaveExecution(ctx, exec)
-	exec.ID = id
-	return exec, true, err
+	if err := d.Store.ReserveExecution(ctx, exec); err != nil {
+		return nil, false, err
+	}
+	return exec, true, nil
+}
+
+// changedSince is the check made right after a reservation is taken: validate read the
+// plan status and the recorded legs before it held the plan, so an operation that
+// finished in between (and released its reservation) has left them different, and the
+// sizing validate derived from them is stale. It says why, and has then ended the
+// just-created execution as failed so that it does not hold the plan; "" means the plan
+// is as validate read it.
+func (d *Deps) changedSince(ctx context.Context, exec *Execution, status string, was LegExposure) string {
+	why := ""
+	cur, err := d.Store.GetPlan(ctx, exec.PlanID)
+	now, eerr := d.Store.OpenLegExposure(ctx, exec.PlanID)
+	switch {
+	case err != nil || eerr != nil:
+		why = fmt.Sprintf("cannot re-read plan %d after reserving it", exec.PlanID)
+	case cur.Status != status || now.FuturesBase != was.FuturesBase || now.SpotQty != was.SpotQty ||
+		now.FuturesOpen != was.FuturesOpen || now.SpotOpen != was.SpotOpen || len(now.UnrecordedFills) != len(was.UnrecordedFills):
+		why = fmt.Sprintf("plan %d changed while this operation was being validated; nothing was placed, try again", exec.PlanID)
+	default:
+		return ""
+	}
+	if uerr := d.advance(ctx, exec, func(e *Execution) error {
+		e.ErrorMsg = why
+		return e.Transition(ExecutionStateFailed)
+	}); uerr != nil {
+		logger.ErrorCF("deltaneutral", "Could not release a reservation", map[string]any{"execution_id": exec.ID, "error": uerr.Error()})
+	}
+	return why
 }
 
 // tellIfLong tells the owner how an operation that outlasted the tool's wait ended.
@@ -440,8 +467,17 @@ func (d *Deps) validateUnwind(c *journal.Ctx, in UnwindInput) func(context.Conte
 			if rerr := d.Exchange.Reserve(plan); rerr != nil {
 				return refuse(rerr.Error())
 			}
-			if exec, _, err = d.execFor(ctx, plan.ID, attemptID, ExecutionStateUnwinding); err != nil {
+			var created bool
+			if exec, created, err = d.execFor(ctx, plan.ID, attemptID, ExecutionStateUnwinding); err != nil {
+				if errors.Is(err, ErrPlanBusy) {
+					return refuse(err.Error())
+				}
 				return nil, err
+			}
+			if created {
+				if why := d.changedSince(ctx, exec, plan.Status, exp); why != "" {
+					return refuse(why)
+				}
 			}
 		}
 		out.ExecutionID = exec.ID
@@ -764,8 +800,17 @@ func (d *Deps) validateResize(c *journal.Ctx, in ResizeInput) func(context.Conte
 					return refuse(rerr.Error())
 				}
 			}
-			if exec, _, err = d.execFor(ctx, plan.ID, attemptID, ExecutionStateValidating); err != nil {
+			var created bool
+			if exec, created, err = d.execFor(ctx, plan.ID, attemptID, ExecutionStateValidating); err != nil {
+				if errors.Is(err, ErrPlanBusy) {
+					return refuse(err.Error())
+				}
 				return nil, err
+			}
+			if created {
+				if why := d.changedSince(ctx, exec, plan.Status, exp); why != "" {
+					return refuse(why)
+				}
 			}
 		}
 		// The approval is the user's confirm; the machine still walks its states.

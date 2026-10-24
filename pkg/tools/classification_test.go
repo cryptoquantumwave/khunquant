@@ -160,7 +160,7 @@ func TestAutonomousTurn_CannotCallAnyTradeOrFundsTool(t *testing.T) {
 
 	for ctxName, ctx := range autonomousContexts() {
 		for _, name := range names {
-			if refusal := checkToolPolicy(ctx, name, nil); refusal == nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal == nil {
 				t.Errorf("%s: %s (%s) was allowed", ctxName, name, ClassOf(name))
 			} else if !refusal.IsError || refusal.ForUser == "" || !strings.Contains(refusal.ForLLM, "not permitted in an autonomous") {
 				t.Errorf("%s: %s refusal malformed: %+v", ctxName, name, refusal)
@@ -182,7 +182,7 @@ func TestAutonomousTurn_AutomationSystemUnknownDenied(t *testing.T) {
 			NameDelegate, NameSubagent, NameI2C, NameSPI, NameSerial, NameDeleteSnapshots,
 			"mcp_github_create_issue", "some_unregistered_tool", "",
 		} {
-			if refusal := checkToolPolicy(ctx, name, nil); refusal == nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal == nil {
 				t.Errorf("%s: %q was allowed", ctxName, name)
 			}
 		}
@@ -190,14 +190,14 @@ func TestAutonomousTurn_AutomationSystemUnknownDenied(t *testing.T) {
 
 	// spawn is the heartbeat's alone.
 	hb := autonomousContexts()["heartbeat"]
-	if refusal := checkToolPolicy(hb, NameSpawn, nil); refusal != nil {
+	if refusal := checkToolPolicy(hb, NameSpawn, nil, false); refusal != nil {
 		t.Errorf("heartbeat may spawn, got %q", refusal.ForLLM)
 	}
 	for ctxName, ctx := range autonomousContexts() {
 		if ctxName == "heartbeat" {
 			continue
 		}
-		if refusal := checkToolPolicy(ctx, NameSpawn, nil); refusal == nil {
+		if refusal := checkToolPolicy(ctx, NameSpawn, nil, false); refusal == nil {
 			t.Errorf("%s: spawn was allowed; only a heartbeat may spawn", ctxName)
 		}
 	}
@@ -213,7 +213,7 @@ func TestAutonomousTurn_ReadNotifyLocalStateAllowed(t *testing.T) {
 			NameWebSearch, NameWebFetch, NameReadFile, NameCalculateIndicators,
 			NameMessage, NameSendFile, NameWriteFile, NameEditFile, NameAppendFile, NameTakeSnapshot,
 		} {
-			if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal != nil {
 				t.Errorf("%s: %s refused: %q", ctxName, name, refusal.ForLLM)
 			}
 		}
@@ -229,12 +229,12 @@ func TestCronDCATurn_CanExecuteOnlyOwnPlan(t *testing.T) {
 	dca := WithAutomationScope(cron, AutomationScope{JobName: "dca:7:weekly", DCAPlanID: 7})
 
 	// Policy level: the job may call the tool.
-	if refusal := checkToolPolicy(dca, NameExecuteDCAOrder, nil); refusal != nil {
+	if refusal := checkToolPolicy(dca, NameExecuteDCAOrder, nil, false); refusal != nil {
 		t.Fatalf("a dca: job was refused its own tool: %q", refusal.ForLLM)
 	}
 	// ...but only that tool; the rest of the trade class stays closed.
 	for _, name := range []string{NameCreateOrder, NameFuturesClosePosition, NameTransferFunds, NameUnwindDeltaNeutralPosition} {
-		if refusal := checkToolPolicy(dca, name, nil); refusal == nil {
+		if refusal := checkToolPolicy(dca, name, nil, false); refusal == nil {
 			t.Errorf("a dca: job was allowed %s", name)
 		}
 	}
@@ -256,7 +256,7 @@ func TestCronDCATurn_CanExecuteOnlyOwnPlan(t *testing.T) {
 
 	// Every other autonomous context is refused at both levels.
 	for ctxName, ctx := range autonomousContexts() {
-		if refusal := checkToolPolicy(ctx, NameExecuteDCAOrder, nil); refusal == nil {
+		if refusal := checkToolPolicy(ctx, NameExecuteDCAOrder, nil, false); refusal == nil {
 			t.Errorf("%s: execute_dca_order allowed", ctxName)
 		}
 		if refusal := dcaScopeRefusal(ctx, 7); refusal == nil {
@@ -287,12 +287,12 @@ func TestCronDNTurn_CannotUnwind(t *testing.T) {
 		NameUnwindDeltaNeutralPosition, NameResizeDeltaNeutralPosition, NameOpenDeltaNeutralPosition,
 		NameFuturesClosePosition, NameFuturesEmergencyFlatten, NameEmergencyStop, NameCancelOrder,
 	} {
-		if refusal := checkToolPolicy(ctx, name, nil); refusal == nil {
+		if refusal := checkToolPolicy(ctx, name, nil, false); refusal == nil {
 			t.Errorf("a dn: job was allowed %s", name)
 		}
 	}
 	for _, name := range []string{NameGetDeltaNeutralPlan, NameGetDeltaNeutralSummary, NameFuturesGetPositions, NameMessage} {
-		if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
+		if refusal := checkToolPolicy(ctx, name, nil, false); refusal != nil {
 			t.Errorf("a dn: job was refused %s: %q", name, refusal.ForLLM)
 		}
 	}
@@ -310,28 +310,28 @@ func TestUserTurn_Unchanged(t *testing.T) {
 			if name == "" {
 				continue
 			}
-			if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal != nil {
 				t.Errorf("%s turn: %s refused: %q", origin, name, refusal.ForLLM)
 			}
 		}
 		for name := range riskReducingTools {
-			if refusal := checkToolPolicy(ctx, name, nil); refusal != nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal != nil {
 				t.Errorf("%s turn: exit %s refused: %q", origin, name, refusal.ForLLM)
 			}
 		}
 		// An unclassified (MCP-style) tool is not the ceiling's business here.
-		if refusal := checkToolPolicy(ctx, "mcp_anything", nil); refusal != nil {
+		if refusal := checkToolPolicy(ctx, "mcp_anything", nil, false); refusal != nil {
 			t.Errorf("%s turn: unknown tool refused: %q", origin, refusal.ForLLM)
 		}
 
 		// Paper mode still refuses the tool with no simulation, still allows the
 		// ones that simulate.
 		armPolicy(t, true, nil)
-		if refusal := checkToolPolicy(ctx, NameFuturesOpenPosition, nil); refusal == nil ||
+		if refusal := checkToolPolicy(ctx, NameFuturesOpenPosition, nil, false); refusal == nil ||
 			!strings.Contains(refusal.ForLLM, "paper_trading_mode") {
 			t.Errorf("%s turn: paper-mode backstop did not fire: %+v", origin, refusal)
 		}
-		if refusal := checkToolPolicy(ctx, NameCreateOrder, nil); refusal != nil {
+		if refusal := checkToolPolicy(ctx, NameCreateOrder, nil, false); refusal != nil {
 			t.Errorf("%s turn: create_order refused under paper mode: %q", origin, refusal.ForLLM)
 		}
 	}

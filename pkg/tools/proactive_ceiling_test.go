@@ -83,7 +83,7 @@ func TestProactiveCeiling_NamedTools(t *testing.T) {
 			if turnMayCall(ctx, name) {
 				t.Errorf("kind %q may call %s", kind, name)
 			}
-			if refusal := checkToolPolicy(ctx, name, nil); refusal == nil {
+			if refusal := checkToolPolicy(ctx, name, nil, false); refusal == nil {
 				t.Errorf("kind %q: checkToolPolicy allowed %s", kind, name)
 			} else if !strings.Contains(refusal.ForLLM, "not permitted in an autonomous (proactive) turn") ||
 				!strings.Contains(refusal.ForLLM, NameRespondProactive) {
@@ -198,7 +198,7 @@ func TestProactiveTurn_ApprovalRequiredToolIsRefusedWithoutNotifying(t *testing.
 
 	ctx := WithToolSender(proactiveTurnCtx(proactive.TurnProactive), "telegram:424242")
 	ctx = WithToolContext(ctx, "telegram", "424242")
-	refusal := checkToolPolicy(ctx, approvalTool, map[string]any{"symbol": "BTC/USDT"})
+	refusal := checkToolPolicy(ctx, approvalTool, map[string]any{"symbol": "BTC/USDT"}, false)
 	if refusal == nil || !strings.Contains(refusal.ForLLM, "proactive turn cannot ask for") {
 		t.Fatalf("refusal = %+v", refusal)
 	}
@@ -208,7 +208,7 @@ func TestProactiveTurn_ApprovalRequiredToolIsRefusedWithoutNotifying(t *testing.
 
 	person := WithToolSender(WithToolOrigin(context.Background(), OriginRemote), "telegram:424242")
 	person = WithToolContext(person, "telegram", "424242")
-	if r := checkToolPolicy(person, approvalTool, map[string]any{"symbol": "BTC/USDT"}); r == nil || len(sent) != 1 {
+	if r := checkToolPolicy(person, approvalTool, map[string]any{"symbol": "BTC/USDT"}, false); r == nil || len(sent) != 1 {
 		t.Errorf("a person's turn no longer gets its approval request: %+v, sent %v", r, sent)
 	}
 }

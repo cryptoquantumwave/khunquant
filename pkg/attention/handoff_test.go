@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,8 +260,10 @@ func TestAccept_EveryMemberIsMarked(t *testing.T) {
 				if name == "delivered" && (r.delivered != 1 || r.intervention != msgs[0].InterventionID) {
 					t.Fatalf("row %s = %+v", d.ID, r)
 				}
-				if name == "failed" && (r.delivered != 0 || !r.deliveredAtSet) {
-					t.Fatalf("row %s = %+v, want released", d.ID, r)
+				// not released yet: the message waits for a retry (retry_test.go
+				// follows it to the digest).
+				if name == "failed" && !reserved(r) {
+					t.Fatalf("row %s = %+v, want it reserved while a retry is pending", d.ID, r)
 				}
 			}
 		})
@@ -571,22 +574,29 @@ func TestAccept_PanickingDelivererAndComposerAreSurvived(t *testing.T) {
 	d, _ := e.accept(cand("a", notice))
 	e.tickAsyncAt(t0.Add(time.Minute))
 	e.waitIdle()
-	if r := e.rowOf(d.ID); r.delivered != 0 || !r.deliveredAtSet {
-		t.Fatalf("row after a panicking deliverer = %+v, want released", r)
+	// a panic is a failed delivery: the message is retried, not lost.
+	if r := e.rowOf(d.ID); !reserved(r) {
+		t.Fatalf("row after a panicking deliverer = %+v, want it reserved for a retry", r)
 	}
-	if e.ob.Stats().Panics != 1 {
-		t.Fatalf("stats = %+v", e.ob.Stats())
+	if st := e.ob.Stats(); st.Panics != 1 || st.RetryPending != 1 {
+		t.Fatalf("stats = %+v", st)
 	}
 
 	// a panicking composer falls back to the template.
 	e.del.setFn(nil)
 	e.ob.Composer = panicComposer{}
 	e.accept(cand("llm", warning, composeLLM))
-	e.tickAsyncAt(t0.Add(3 * time.Minute))
+	e.tickAsyncAt(t0.Add(3 * time.Minute)) // also hands over the retry, which is due
 	e.waitIdle()
-	msgs := e.del.messages()
-	if last := msgs[len(msgs)-1]; last.Title != "title llm" {
-		t.Fatalf("message after a panicking composer = %+v", last)
+	var titles []string
+	for _, m := range e.del.messages() {
+		titles = append(titles, m.Title)
+	}
+	if !slices.Contains(titles, "title llm") {
+		t.Fatalf("no template message after a panicking composer: %v", titles)
+	}
+	if r := e.rowOf(d.ID); r.delivered != 1 {
+		t.Fatalf("row after the retry = %+v", r)
 	}
 }
 

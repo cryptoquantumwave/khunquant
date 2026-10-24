@@ -41,8 +41,8 @@ import (
 //
 // An action that only reduces risk needs the launcher's dashboard authentication
 // alone, as the kill switch does: pause or cancel an intent, revoke a mandate, tighten
-// the autonomy dial, remove a mute. Resume (clear the kill switch) and a loosening of
-// the dial need the web owner. All are recorded as "web".
+// the autonomy dial, remove a mute. Resume (clear the kill switch, unless no owner is
+// configured at all) and a loosening of the dial need the web owner. All are recorded as "web".
 
 // manageDeps is what the routes act on, for one generation of services. Nothing is
 // opened here: each store is the one the running services already use. A part that
@@ -160,6 +160,22 @@ func ownerInfo(cfg *config.Config) map[string]any {
 		missing = "proactive.owner.web_is_owner is off"
 	}
 	return map[string]any{"web_owner_active": active, "web_owner_missing": missing}
+}
+
+// mayClearKill says whether the launcher may clear the kill switch. With an owner
+// configured, letting the assistant act again needs the web to be that owner. With no
+// valid owner there is no one to be, and requiring it would leave a flag the launcher's
+// Stop persisted with nothing able to clear it, so clearing is open as it was before
+// the web-owner gate (the dashboard's authentication and the management token still
+// guard the route). No configuration at all is a wiring fault, not "no owner": refused.
+func mayClearKill(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if _, ok := cfg.Proactive.OwnerRoute(); !ok {
+		return true
+	}
+	return cfg.WebOwnerActive()
 }
 
 // refuseNotWebOwner answers 403 for a risk-increasing action while the web is not the owner.

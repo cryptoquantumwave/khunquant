@@ -218,15 +218,16 @@ func (rt *controlRuntime) handleAutonomyPut(w http.ResponseWriter, r *http.Reque
 	writeManage(w, http.StatusOK, m.autonomyBody(cur))
 }
 
-// handleResume clears the kill switch. Resuming lets the assistant act again, so it
-// needs the web to be the owner; the gateway alone can tell.
+// handleResume clears the kill switch. Resuming lets the assistant act again, so with
+// an owner configured it needs the web to be the owner (the gateway alone can tell);
+// with none configured nothing could ever clear the flag, so it is open (mayClearKill).
 func (rt *controlRuntime) handleResume(w http.ResponseWriter, r *http.Request) {
 	m := rt.managed()
 	if m == nil || m.disp.Deps().Kill == nil {
 		manageError(w, http.StatusServiceUnavailable, "the kill switch is not available (proactive is off)")
 		return
 	}
-	if !m.cfg.WebOwnerActive() {
+	if !mayClearKill(m.cfg) {
 		refuseNotWebOwner(w, m.cfg)
 		return
 	}

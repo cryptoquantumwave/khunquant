@@ -235,8 +235,10 @@ func (rt *controlRuntime) detach() {
 // the management token and refuse requests a browser could have made. Unlike the
 // token middleware, which lets everything through when the configured token is
 // empty, they refuse every request while no token is configured. Clearing (DELETE)
-// additionally needs cfg.WebOwnerActive(), as POST /api/proactive/resume does:
-// engaging the brake is never gated, letting the assistant act again is.
+// additionally needs cfg.WebOwnerActive() when an owner is configured, as POST
+// /api/proactive/resume does (see mayClearKill; with no owner configured it is open,
+// or nothing could clear a flag Stop set): engaging the brake is never gated, letting
+// the assistant act again is.
 func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string, cfg *config.Config) {
 	h := controlKillHandler(kill, stop, token, cfg)
 	guarded := loopbackOnly(bearerTokenMiddleware(token, noBrowser(h)))
@@ -276,7 +278,7 @@ func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, to
 			}
 			changed, err = kill.Engage(r.Context(), "api", "gateway route")
 		case http.MethodDelete:
-			if !cfg.WebOwnerActive() { // nil-safe: no configuration is no web owner
+			if !mayClearKill(cfg) { // nil-safe: no configuration may not clear
 				refuseNotWebOwner(w, cfg)
 				return
 			}

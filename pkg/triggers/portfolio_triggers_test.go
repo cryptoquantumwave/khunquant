@@ -193,6 +193,28 @@ func TestMoveVsVol_ProtectiveAt15Pct10Weight(t *testing.T) {
 	}
 }
 
+// TestMoveVsVol_ProtectiveKeyDiffersFromWarning: the tier-3 Warning and the protective
+// Critical that follows it on the same move (an equity: tier 3 from 9%, protective
+// from 15%) carry different dedup keys, so an exact
+// mute (Snooze, Mute) taken from the Warning can never match the Critical.
+func TestMoveVsVol_ProtectiveKeyDiffersFromWarning(t *testing.T) {
+	holds := []hold{{"COIN", "us_equity", 200}}
+	r := newRig(t, KindMoveVsVol, `{}`, nil)
+	start := noon.Add(-time.Duration(warmSteps) * snapEvery)
+	last := warm(r, start, warmSteps, 100000, holds, func(int) map[string]float64 { return map[string]float64{"COIN": 100} })
+	warn := mustOne(t, r.snapshot(last.Add(snapEvery), pfOf(100000, map[string]float64{"COIN": 110}, holds...)))
+	crit := mustOne(t, r.snapshot(last.Add(2*snapEvery), pfOf(100000, map[string]float64{"COIN": 116}, holds...)))
+	if warn.Severity != proactive.SeverityWarning || warn.Protective || crit.Severity != proactive.SeverityCritical || !crit.Protective {
+		t.Fatalf("warn %+v crit %+v", warn, crit)
+	}
+	if warn.DedupKey != MoveKey("COIN", "1h", 3) || crit.DedupKey != MoveKey("COIN", "1h", moveProtectiveRank) {
+		t.Fatalf("keys: warning %q critical %q", warn.DedupKey, crit.DedupKey)
+	}
+	if warn.DedupKey == crit.DedupKey || strings.HasPrefix(crit.DedupKey, warn.DedupKey) || strings.HasPrefix(warn.DedupKey, crit.DedupKey) {
+		t.Fatalf("the Warning and the protective Critical share a key: %q / %q", warn.DedupKey, crit.DedupKey)
+	}
+}
+
 // TestMoveVsVol_TiersEscalateOnly drives one asset through 1x, 2x, back to 1x, 3x of
 // its floor: a higher tier inside the window is a new message, a lower one is not.
 func TestMoveVsVol_TiersEscalateOnly(t *testing.T) {

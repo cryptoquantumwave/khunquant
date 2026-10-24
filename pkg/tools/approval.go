@@ -243,10 +243,35 @@ func ApprovalArgsHash(args map[string]any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// toolDeclaresConfirm reports whether a tool's parameter schema declares a
+// boolean "confirm" property - the contract under which confirm=false means
+// "place nothing".
+func toolDeclaresConfirm(params map[string]any) bool {
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	prop, ok := props["confirm"].(map[string]any)
+	if !ok {
+		return false
+	}
+	typ, _ := prop["type"].(string)
+	return typ == "boolean"
+}
+
 // isPreviewCall reports whether a call explicitly asked for a dry run. Those
 // place nothing, so they are not gated - gating them would force two approvals
 // for one order.
-func isPreviewCall(args map[string]any) bool {
+//
+// Only a tool that declares a boolean "confirm" parameter gives confirm=false
+// that meaning. Argument validation lets undeclared properties through, so for
+// any other tool "confirm":false is just an extra key the model chose to add,
+// and honouring it would let the model skip the gate on a tool that executes
+// regardless.
+func isPreviewCall(args map[string]any, declaresConfirm bool) bool {
+	if !declaresConfirm {
+		return false
+	}
 	confirm, present := args["confirm"]
 	if !present {
 		return false
@@ -298,9 +323,10 @@ func SetApprovalStore(s *ApprovalStore) *ApprovalStore {
 
 // checkApproval gates a call to a RequiresApproval tool. It returns nil to let
 // the call run, or a result telling the model to wait and the operator how to
-// approve.
-func checkApproval(ctx context.Context, name string, args map[string]any) *ToolResult {
-	if isPreviewCall(args) {
+// approve. declaresConfirm is whether the tool's schema declares a boolean
+// "confirm"; only then is confirm=false treated as an ungated preview.
+func checkApproval(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
+	if isPreviewCall(args, declaresConfirm) {
 		return nil
 	}
 

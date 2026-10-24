@@ -184,7 +184,11 @@ func PolicyFor(name string) (ToolPolicy, bool) {
 //
 // The refusal sets ForUser as well as ForLLM: a block the operator never sees
 // is indistinguishable from the tool quietly doing nothing.
-func checkToolPolicy(ctx context.Context, name string, args map[string]any) *ToolResult {
+//
+// declaresConfirm is whether the registered tool's schema declares a boolean
+// "confirm" parameter. The approval gate waves through confirm=false calls only
+// for such tools; see isPreviewCall.
+func checkToolPolicy(ctx context.Context, name string, args map[string]any, declaresConfirm bool) *ToolResult {
 	// The class ceiling comes first and answers one question for autonomous
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
@@ -229,7 +233,7 @@ func checkToolPolicy(ctx context.Context, name string, args map[string]any) *Too
 	// Approval runs last: a call that would be refused anyway must not cost the
 	// operator an approval they then cannot use.
 	if needsApproval {
-		return checkApproval(ctx, name, args)
+		return checkApproval(ctx, name, args, declaresConfirm)
 	}
 
 	return nil

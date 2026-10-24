@@ -76,7 +76,7 @@ func approvalCtx(channel, chatID, sender string) context.Context {
 func requestCode(t *testing.T, ctx context.Context, name string, args map[string]any) string {
 	t.Helper()
 	before := len(lastSent.texts)
-	held := checkToolPolicy(ctx, name, args)
+	held := checkToolPolicy(ctx, name, args, false)
 	if held == nil {
 		t.Fatalf("%s ran without approval", name)
 	}
@@ -113,7 +113,7 @@ func TestApproval_ApproveThenIdenticalCallRunsOnce(t *testing.T) {
 		t.Errorf("Approve returned tool %q, want %q", tool, NameCreateOrder)
 	}
 
-	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1)); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false); refusal != nil {
 		t.Fatalf("approved call was still held: %q", refusal.ForLLM)
 	}
 
@@ -126,7 +126,7 @@ func TestApproval_CodeIsNotInModelContext(t *testing.T) {
 	armApproval(t, NameCreateOrder)
 	ctx := approvalCtx("telegram", "chat1", "alice")
 
-	held := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1))
+	held := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false)
 	code := requestCode(t, ctx, NameCreateOrder, orderArgs(1))
 	// held and code only correspond because Request reuses the pending entry
 	// for an identical call. Pin that, or this test could compare a stale
@@ -176,7 +176,7 @@ func TestApproval_PreviewIsNotHeld(t *testing.T) {
 
 	preview := orderArgs(1)
 	preview["confirm"] = false
-	if refusal := checkToolPolicy(ctx, NameCreateOrder, preview); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, preview, true); refusal != nil {
 		t.Fatalf("a confirm=false preview was held: %q", refusal.ForLLM)
 	}
 	// And the executing form of the same call is held.
@@ -198,7 +198,7 @@ func TestApproval_ChangedArgumentsNeedANewApproval(t *testing.T) {
 	}
 
 	// The original approval is untouched and still usable for its own call.
-	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1)); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false); refusal != nil {
 		t.Fatalf("the approved call was held after an unrelated request: %q", refusal.ForLLM)
 	}
 }
@@ -226,7 +226,7 @@ func TestApproval_OnlyTheRequesterCanApprove(t *testing.T) {
 	}
 
 	// None of those attempts consumed or granted it; the requester still can.
-	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1)); refusal == nil {
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false); refusal == nil {
 		t.Fatal("a failed approval attempt granted the call")
 	}
 	if _, err := store.Approve(code, "telegram", "chat1", "alice"); err != nil {
@@ -269,7 +269,7 @@ func TestApproval_Expiry(t *testing.T) {
 		t.Fatalf("Approve: %v", err)
 	}
 	now = now.Add(DefaultApprovalTTL + time.Second)
-	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1)); refusal == nil {
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false); refusal == nil {
 		t.Fatal("an expired grant still let the call run")
 	}
 }
@@ -278,7 +278,7 @@ func TestApproval_NoIdentityRefusesWithoutACode(t *testing.T) {
 	armApproval(t, NameCreateOrder)
 
 	ctx := WithToolContext(WithToolOrigin(context.Background(), OriginRemote), "telegram", "chat1")
-	refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1))
+	refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false)
 	if refusal == nil {
 		t.Fatal("a call with no sender ran despite requiring approval")
 	}
@@ -291,7 +291,7 @@ func TestApproval_NoNotifierRefusesWithoutACode(t *testing.T) {
 	store := armApproval(t, NameCreateOrder)
 	SetApprovalNotifier(nil)
 
-	if refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1)); refusal == nil {
+	if refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1), false); refusal == nil {
 		t.Fatal("a gated call ran with no way to reach the operator")
 	}
 	if n := len(store.entries); n != 0 {
@@ -304,7 +304,7 @@ func TestApproval_DeliveryFailureIsReported(t *testing.T) {
 		return errors.New("channel down")
 	}, NameCreateOrder)
 
-	refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1))
+	refusal := checkToolPolicy(approvalCtx("telegram", "chat1", "alice"), NameCreateOrder, orderArgs(1), false)
 	if refusal == nil || !strings.Contains(refusal.ForLLM, "channel down") {
 		t.Fatalf("delivery failure not reported: %+v", refusal)
 	}
@@ -331,7 +331,7 @@ func TestApproval_RiskReducingToolsCannotBeGated(t *testing.T) {
 	}
 
 	ctx := approvalCtx("telegram", "chat1", "alice")
-	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, map[string]any{"confirm": true}); refusal != nil {
+	if refusal := checkToolPolicy(ctx, NameFuturesClosePosition, map[string]any{"confirm": true}, false); refusal != nil {
 		t.Fatalf("closing a position was held for approval: %q", refusal.ForLLM)
 	}
 	// The same call honoured the other name, so the ignore was selective.
@@ -346,7 +346,7 @@ func TestApproval_BlockedOriginWinsOverApproval(t *testing.T) {
 
 	ctx := WithToolOrigin(context.Background(), OriginCron)
 	ctx = WithToolSender(WithToolContext(ctx, "telegram", "chat1"), "cron")
-	refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1))
+	refusal := checkToolPolicy(ctx, NameCreateOrder, orderArgs(1), false)
 	if refusal == nil {
 		t.Fatal("cron call ran")
 	}
@@ -399,5 +399,145 @@ func TestApproval_RegistryHoldsThenRuns(t *testing.T) {
 	reg.ExecuteWithContext(ctx, NameCreateOrder, orderArgs(1), "telegram", "chat1", nil)
 	if tool.calls != 1 {
 		t.Fatalf("approved call executed %d times, want 1", tool.calls)
+	}
+}
+
+// confirmCountingTool is a countingTool whose schema may or may not declare a
+// boolean "confirm", which is what decides whether confirm=false is a preview.
+type confirmCountingTool struct {
+	countingTool
+	declaresConfirm bool
+}
+
+func (c *confirmCountingTool) Parameters() map[string]any {
+	props := map[string]any{"amount": map[string]any{"type": "number"}}
+	if c.declaresConfirm {
+		props["confirm"] = map[string]any{"type": "boolean"}
+	}
+	return map[string]any{"type": "object", "properties": props}
+}
+
+func TestToolDeclaresConfirm(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{"nil schema", nil, false},
+		{"no properties", map[string]any{"type": "object"}, false},
+		{"other properties only", map[string]any{"properties": map[string]any{"amount": map[string]any{"type": "number"}}}, false},
+		{"boolean confirm", map[string]any{"properties": map[string]any{"confirm": map[string]any{"type": "boolean"}}}, true},
+		{"non-boolean confirm", map[string]any{"properties": map[string]any{"confirm": map[string]any{"type": "string"}}}, false},
+		{"confirm without a type", map[string]any{"properties": map[string]any{"confirm": map[string]any{}}}, false},
+	}
+	for _, tc := range cases {
+		if got := toolDeclaresConfirm(tc.params); got != tc.want {
+			t.Errorf("%s: toolDeclaresConfirm = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestIsPreviewCall(t *testing.T) {
+	cases := []struct {
+		name            string
+		args            map[string]any
+		declaresConfirm bool
+		want            bool
+	}{
+		{"declared, confirm false", map[string]any{"confirm": false}, true, true},
+		{"declared, confirm true", map[string]any{"confirm": true}, true, false},
+		{"declared, confirm absent", map[string]any{}, true, false},
+		{"declared, string false", map[string]any{"confirm": "false"}, true, false},
+		{"declared, nil confirm", map[string]any{"confirm": nil}, true, false},
+		{"undeclared, confirm false", map[string]any{"confirm": false}, false, false},
+		{"undeclared, confirm true", map[string]any{"confirm": true}, false, false},
+	}
+	for _, tc := range cases {
+		if got := isPreviewCall(tc.args, tc.declaresConfirm); got != tc.want {
+			t.Errorf("%s: isPreviewCall = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A model can add "confirm":false to a tool that has no such parameter -
+// argument validation lets undeclared properties through. It must not read as
+// a preview, or it would skip the gate on a tool that executes regardless.
+func TestApproval_ConfirmFalseOnUndeclaringToolIsStillGated(t *testing.T) {
+	armApproval(t, NameCreateOrder)
+	ctx := approvalCtx("telegram", "chat1", "alice")
+
+	args := map[string]any{"amount": 1.0, "confirm": false}
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, args, false); refusal == nil {
+		t.Fatal("confirm=false on a tool that does not declare confirm skipped approval")
+	}
+	// Identical to the call with no confirm argument at all: same hold, and an
+	// operator-visible code.
+	requestCode(t, ctx, NameCreateOrder, args)
+	requestCode(t, ctx, NameCreateOrder, map[string]any{"amount": 1.0})
+	codes := approvalCodePattern.FindAllStringSubmatch(strings.Join(lastSent.texts, "\n"), -1)
+	if len(codes) != 3 || codes[0][1] != codes[1][1] || codes[1][1] != codes[2][1] {
+		t.Fatalf("confirm=false and no-confirm calls were not treated as the same call: %q", lastSent.texts)
+	}
+}
+
+// Through the registry, where "declares confirm" is computed from the
+// registered tool: the undeclaring tool never executes.
+func TestApproval_RegistryConfirmFalseUndeclaringToolNeverRuns(t *testing.T) {
+	armApproval(t, NameCreateOrder)
+	tool := &confirmCountingTool{countingTool: countingTool{name: NameCreateOrder}}
+	reg := NewToolRegistry()
+	reg.Register(tool)
+	ctx := WithToolSender(WithToolOrigin(context.Background(), OriginRemote), "alice")
+
+	res := reg.ExecuteWithContext(ctx, NameCreateOrder,
+		map[string]any{"amount": 1.0, "confirm": false}, "telegram", "chat1", nil)
+	if tool.calls != 0 {
+		t.Fatal("confirm=false executed a tool that requires approval and does not declare confirm")
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("registry did not hold the call: %+v", res)
+	}
+	if approvalCodePattern.FindStringSubmatch(lastSent.last()) == nil {
+		t.Fatalf("operator was not asked to approve: %q", lastSent.last())
+	}
+}
+
+// The existing preview behaviour for tools that do declare confirm, via the
+// registry: confirm=false is not gated, confirm=true is.
+func TestApproval_RegistryConfirmFalseDeclaringToolPreviews(t *testing.T) {
+	armApproval(t, NameCreateOrder)
+	tool := &confirmCountingTool{countingTool: countingTool{name: NameCreateOrder}, declaresConfirm: true}
+	reg := NewToolRegistry()
+	reg.Register(tool)
+	ctx := WithToolSender(WithToolOrigin(context.Background(), OriginRemote), "alice")
+
+	reg.ExecuteWithContext(ctx, NameCreateOrder,
+		map[string]any{"amount": 1.0, "confirm": false}, "telegram", "chat1", nil)
+	if tool.calls != 1 {
+		t.Fatalf("confirm=false preview ran %d times, want 1 (ungated)", tool.calls)
+	}
+	if len(lastSent.texts) != 0 {
+		t.Fatalf("a preview asked the operator for approval: %q", lastSent.texts)
+	}
+
+	res := reg.ExecuteWithContext(ctx, NameCreateOrder,
+		map[string]any{"amount": 1.0, "confirm": true}, "telegram", "chat1", nil)
+	if tool.calls != 1 {
+		t.Fatal("confirm=true on a declaring tool ran without approval")
+	}
+	if res == nil || !res.IsError || len(lastSent.texts) != 1 {
+		t.Fatalf("confirm=true was not held and offered for approval: %+v / %q", res, lastSent.texts)
+	}
+}
+
+// A non-boolean confirm is not a preview even on a declaring tool. Checked at
+// the policy layer: the registry's own validation rejects it earlier.
+func TestApproval_NonBoolConfirmIsNotAPreview(t *testing.T) {
+	armApproval(t, NameCreateOrder)
+	ctx := approvalCtx("telegram", "chat1", "alice")
+
+	args := map[string]any{"amount": 1.0, "confirm": "false"}
+	if refusal := checkToolPolicy(ctx, NameCreateOrder, args, true); refusal == nil {
+		t.Fatal(`confirm="false" (a string) skipped approval on a declaring tool`)
 	}
 }

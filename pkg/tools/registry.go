@@ -240,7 +240,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// It does NOT cover callers that construct a tool and invoke Execute
 	// directly, such as the launcher's delta-neutral force-unwind. Those need
 	// their own guard; see the paper-mode refusal in agent_delta_neutral.go.
-	if refusal := checkToolPolicy(ctx, name, args); refusal != nil {
+	if refusal := checkToolPolicy(ctx, name, args, toolDeclaresConfirm(tool.Parameters())); refusal != nil {
 		logger.WarnCF("tool", "Tool call refused by policy",
 			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
 		return refusal

@@ -579,21 +579,30 @@ func (hs *HeartbeatService) buildPrompt() string {
 		return ""
 	}
 
-	now := hs.clock.Now().Format("2006-01-02 15:04:05")
+	clockNow := hs.clock.Now()
+	now := clockNow.Format("2006-01-02 15:04:05")
 	if contract == ContractGoverned {
 		// The proactive turn puts its own contract (respond_proactive, silence
 		// by default) ahead of this text, so it must not ask for HEARTBEAT_OK or
 		// for actions.
 		return GovernedPrompt(now, content)
 	}
-	return LegacyPrompt(now, content)
+	// The legacy time carries the UTC offset, so the model can apply quiet hours
+	// in the owner's timezone.
+	return LegacyPrompt(clockNow.Format("2006-01-02 15:04:05 -07:00"), content, recentSent(hs.workspace, clockNow))
 }
 
 // LegacyPrompt is the prompt a legacy heartbeat gives its turn: the time and
 // HEARTBEAT.md's content, with the request for HEARTBEAT_OK when nothing needs
-// attention. now is formatted by the caller. It is exported, like GovernedPrompt,
-// so that a legacy turn can be tested on the real text.
-func LegacyPrompt(now, content string) string {
+// attention, then the legacy guardrails, then the alerts the ledger shows were
+// sent in the last 24h, so the model can dedup without writing anything. now is
+// formatted by the caller (with a UTC offset, for quiet hours). It is exported,
+// like GovernedPrompt, so that a legacy turn can be tested on the real text.
+//
+// The guardrails are here and not in HEARTBEAT.md because that file is also read
+// by governed and sweep turns, which have their own contract and must not pay for
+// rules that are not theirs. HEARTBEAT.md's tasks can override them.
+func LegacyPrompt(now, content string, sent []SentAlert) string {
 	return fmt.Sprintf(`# Heartbeat Check
 
 Current time: %s
@@ -603,8 +612,20 @@ Review the following tasks and execute any necessary actions using available ski
 If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK
 
 %s
-`, now, content)
+%s
+%s`, now, content, LegacyGuardrails, sentSection(sent))
 }
+
+// LegacyGuardrails is the block LegacyPrompt puts between the tasks and the list
+// of alerts already sent: the rules the v1 template used to carry, which a legacy
+// heartbeat has no other code to enforce.
+const LegacyGuardrails = `Guardrails:
+- Quiet hours 22:00-07:00 in the timezone in USER.md: critical events only.
+- Skip move-detection on markets closed for hours.
+- Do not repeat an alert listed below unless it crossed the next severity tier; then say it is an update.
+- At most ONE message per heartbeat, and about 3 non-critical briefings a day.
+If the tasks above give different rules, follow the tasks.
+`
 
 // createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file: the v2
 // template with no tasks, in every mode, so it runs nothing until one is added.
@@ -671,11 +692,15 @@ func (hs *HeartbeatService) sendResponse(response string) {
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
-	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+	if err := msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Channel: platform,
 		ChatID:  userID,
 		Content: response,
-	})
+	}); err != nil {
+		hs.logErrorf("Heartbeat result not sent to %s: %v", platform, err)
+		return
+	}
+	hs.RecordSent(platform, userID, response)
 
 	hs.logInfof("Heartbeat result sent to %s", platform)
 }

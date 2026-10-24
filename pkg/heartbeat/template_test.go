@@ -114,11 +114,13 @@ func TestBuildPrompt_WrapperByContract(t *testing.T) {
 	hs := NewHeartbeatService(ws, 30, true, nil)
 	hs.clock = clk
 
-	// Legacy: byte-for-byte what it has always been.
-	wantLegacy := "# Heartbeat Check\n\nCurrent time: 2026-07-13 09:00:00\n\n" +
+	// Legacy: the wrapper it has always had, with the time's UTC offset and the
+	// list of alerts already sent (none here).
+	wantLegacy := "# Heartbeat Check\n\nCurrent time: 2026-07-13 09:00:00 +00:00\n\n" +
 		"You are a proactive AI assistant. This is a scheduled heartbeat check.\n" +
 		"Review the following tasks and execute any necessary actions using available skills.\n" +
-		"If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK\n\n- check SOL\n\n"
+		"If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK\n\n- check SOL\n\n" +
+		LegacyGuardrails + "\nAlerts you already sent in the last 24h:\n(none)\n"
 	if got := hs.buildPrompt(); got != wantLegacy {
 		t.Fatalf("legacy prompt changed:\n%q\nwant\n%q", got, wantLegacy)
 	}

@@ -371,8 +371,10 @@ func (s *Store) CountExecutions(ctx context.Context, planID int64) (int, error) 
 	return count, err
 }
 
-// CountExecutionsInPeriod returns the number of completed executions for a plan
-// within the current calendar period ("hour", "day", "week").
+// CountExecutionsInPeriod returns the number of executions for a plan within the
+// current calendar period ("hour", "day", "week") that placed, or may have
+// placed, an order: completed, plus pending/unknown (an order may be live on
+// the exchange, so the guardrail must not let the next run buy again blind).
 func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, period string) (int, error) {
 	if period == "" {
 		return 0, nil
@@ -399,7 +401,7 @@ func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, perio
 	var count int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM dca_executions
-		 WHERE plan_id = ? AND status = 'completed' AND executed_at >= ?`,
+		 WHERE plan_id = ? AND status IN ('completed', 'pending', 'unknown') AND executed_at >= ?`,
 		planID, since.Format(time.RFC3339),
 	).Scan(&count)
 	return count, err

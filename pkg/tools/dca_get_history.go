@@ -78,8 +78,11 @@ func (t *GetDCAHistoryTool) Execute(ctx context.Context, args map[string]any) *T
 	sb.WriteString(strings.Repeat("-", 75) + "\n")
 	for _, e := range execs {
 		statusMark := "✓"
-		if e.Status == "failed" {
+		switch e.Status {
+		case "failed":
 			statusMark = "✗"
+		case "pending", "unknown":
+			statusMark = "?"
 		}
 		sb.WriteString(fmt.Sprintf("%-22s %-12.4f %-14.6f %-12.4f %s %s\n",
 			e.ExecutedAt.Format("2006-01-02 15:04 UTC"),

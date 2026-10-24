@@ -232,6 +232,12 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// Always inject — tools validate what they require.
 	ctx = WithToolContext(ctx, channel, chatID)
 
+	// A tool that may return text from outside lowers the trust of a proactive
+	// turn that is allowed to propose orders (see ProposalScope). The tool loop has
+	// already marked the whole batch before any call of it ran; this covers a caller
+	// that reaches the registry directly, and is set before the call executes.
+	NoteToolCalls(ctx, name)
+
 	// C-2: enforce per-tool policy here rather than inside each tool. This is
 	// the single funnel for LLM-driven calls — Execute delegates to it — so a
 	// tool cannot be reached without passing this, and a new tool inherits its

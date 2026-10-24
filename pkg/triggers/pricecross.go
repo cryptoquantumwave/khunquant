@@ -83,7 +83,7 @@ func PriceCrossFactory(cfg CrossConfig) Factory {
 			return nil, err
 		}
 		return &priceCross{
-			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg, owner: OwnerAlertSpec(spec.Kind, spec.Origin),
+			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg, owner: OwnerAlertSpec(spec.Kind, spec.Origin), intent: intentOf(spec),
 			line: newLine(p.Direction, p.Threshold, p.Threshold*p.hysteresisPct()/100, cooldownOrDefault(p.CooldownMin), p.fireIfAlready(), p.Recurring),
 		}, nil
 	}
@@ -109,6 +109,8 @@ type priceCross struct {
 	// owner: the spec is an alert the owner set (OwnerAlertSpec); its candidates are
 	// marked OwnerRequested.
 	owner bool
+	// intent: the intent the spec was compiled from, if any (see intentspec.go).
+	intent intentRef
 }
 
 func (t *priceCross) ID() string { return t.id }
@@ -178,5 +180,6 @@ func (t *priceCross) candidate(price float64, trust proactive.Trust, v worldmode
 		crossDetail(thai, t.p.Provider, thr, now), msg,
 		ev, trust, t.p.CooldownMin, v.Now())
 	c.OwnerRequested = t.owner
+	c = t.intent.shape(KindPriceCross, t.p.Symbol, thai, c)
 	return c
 }

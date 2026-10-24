@@ -97,6 +97,13 @@ type ClockOptions struct {
 	Clock perception.Clock
 	// MaxSleep overrides ClockMaxSleep (tests).
 	MaxSleep time.Duration
+	// Timers keeps the scheduled timers across restarts; nil keeps them in memory
+	// only. The source must not import the database package, so the gateway supplies
+	// the store.
+	Timers perception.TimerStore
+	// MisfireGrace is how late a timer may be seen and still fire (default
+	// DefaultMisfireGrace).
+	MisfireGrace time.Duration
 }
 
 // ClockStats are the clock source's counters.
@@ -114,6 +121,9 @@ type ClockStats struct {
 	Reanchors   uint64
 	ZoneChanges uint64
 	Wakes       uint64
+	// TimerEvents counts the timers that fired and TimersMissed those among them
+	// that were past the misfire grace.
+	TimerEvents, TimersMissed uint64
 }
 
 // ClockSource emits a perception.clock.session event at each session boundary of
@@ -156,6 +166,15 @@ type ClockSource struct {
 	locFn    func() *time.Location
 	clk      perception.Clock
 	maxSleep time.Duration
+	grace    time.Duration
+	store    perception.TimerStore
+
+	// tmu guards the timers (clock_timers.go). It is never held across a store call.
+	tmu       sync.Mutex
+	timers    map[string]perception.Timer
+	fired     map[string]firedMark
+	timerWake chan struct{}
+	loadOnce  sync.Once
 
 	mu       sync.Mutex
 	lastWake time.Time
@@ -168,6 +187,7 @@ type ClockSource struct {
 	sessionEvents, dayStartEvents, reconcileEvents, lateEvents atomic.Uint64
 	skippedBoundaries, skippedDays, reanchors, zoneChanges     atomic.Uint64
 	wakes                                                      atomic.Uint64
+	timerEvents, timersMissed                                  atomic.Uint64
 }
 
 // NewClockSource builds the source. It starts nothing.
@@ -175,6 +195,12 @@ func NewClockSource(o ClockOptions) *ClockSource {
 	c := &ClockSource{
 		cal: o.Calendar, markets: o.Markets, locFn: o.Location, clk: o.Clock, maxSleep: o.MaxSleep,
 		through: map[calendar.Market]time.Time{},
+		store:   o.Timers, grace: o.MisfireGrace,
+		timers: map[string]perception.Timer{}, fired: map[string]firedMark{},
+		timerWake: make(chan struct{}, 1),
+	}
+	if c.grace <= 0 {
+		c.grace = DefaultMisfireGrace
 	}
 	if c.cal == nil {
 		c.cal = calendar.Default
@@ -201,6 +227,7 @@ func (c *ClockSource) Stats() ClockStats {
 		ReconcileEvents: c.reconcileEvents.Load(), LateEvents: c.lateEvents.Load(),
 		SkippedBoundaries: c.skippedBoundaries.Load(), SkippedDays: c.skippedDays.Load(),
 		Reanchors: c.reanchors.Load(), ZoneChanges: c.zoneChanges.Load(), Wakes: c.wakes.Load(),
+		TimerEvents: c.timerEvents.Load(), TimersMissed: c.timersMissed.Load(),
 	}
 }
 
@@ -216,17 +243,22 @@ func (c *ClockSource) Health() perception.SourceHealth {
 // never returns an error: there is nothing in it that fails and is worth a restart.
 func (c *ClockSource) Start(ctx context.Context, out perception.Emitter) error {
 	c.arm(c.clk.Now())
+	c.loadTimers(ctx)
 	for {
 		now := c.clk.Now()
-		for _, ev := range c.step(now) {
+		evs := c.step(now)
+		tevs, ops := c.stepTimers(now)
+		for _, ev := range append(evs, tevs...) {
 			if ctx.Err() != nil {
 				return nil
 			}
 			out.Emit(ev)
 		}
+		c.applyTimerOps(ops)
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-c.timerWake: // a timer was scheduled: look again
 		case <-c.clk.After(c.nextWait(c.clk.Now())):
 		}
 	}
@@ -401,6 +433,11 @@ func (c *ClockSource) nextWait(now time.Time) time.Duration {
 	y, mo, d := now.In(loc).Date()
 	if dur := time.Date(y, mo, d+1, 0, 0, 0, 0, loc).Sub(now); dur < wait {
 		wait = dur
+	}
+	if at, ok := c.nextTimer(); ok {
+		if dur := at.Sub(now); dur < wait {
+			wait = dur
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

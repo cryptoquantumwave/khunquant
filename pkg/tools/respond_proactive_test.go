@@ -228,21 +228,50 @@ func TestRespondProactive_DedupKeyNormalisation(t *testing.T) {
 	}
 }
 
+// A propose is a propose only with approvals on AND a proposal_ref naming a
+// proposal this turn created; anything else is the ask it always was.
 func TestRespondProactive_ProposeDowngradedUnlessApprovals(t *testing.T) {
-	for _, approvals := range []bool{false, true} {
-		tool := NewRespondProactiveTool(nil, approvals)
-		ctx, c := proactiveCtx(proactive.TurnProactive)
-		res := tool.Execute(ctx, map[string]any{"decision": "propose", "text": "close the hedge"})
-		if res.IsError {
-			t.Fatalf("approvals=%v refused: %+v", approvals, res)
-		}
-		want := proactive.DecideAsk
-		if approvals {
-			want = proactive.DecidePropose
-		}
-		if got := c.Decisions()[0].Kind; got != want {
-			t.Errorf("approvals=%v: kind = %s, want %s", approvals, got, want)
-		}
+	cands := []proactive.Candidate{{ID: "c1", Trust: proactive.TrustExchange}}
+	for _, tc := range []struct {
+		name      string
+		approvals bool
+		created   string // code the turn created ("" = none)
+		ref       string
+		want      proactive.DecisionKind
+	}{
+		{"approvals off", false, "7F3K", "7F3K", proactive.DecideAsk},
+		{"no ref", true, "7F3K", "", proactive.DecideAsk},
+		{"ref of nothing created", true, "", "7F3K", proactive.DecideAsk},
+		{"ref of another proposal", true, "7F3K", "9ZZZ", proactive.DecideAsk},
+		{"ref of this turn's proposal", true, "7F3K", "7F3K", proactive.DecidePropose},
+		{"ref is matched case-insensitively", true, "7F3K", " 7f3k ", proactive.DecidePropose},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewRespondProactiveTool(nil, tc.approvals)
+			ctx, c := proactiveCtx(proactive.TurnProactive)
+			scope := NewProposalScope(cands, true, "", false)
+			if tc.created != "" {
+				scope.NoteCreated(tc.created)
+			}
+			ctx = WithProposalScope(ctx, scope)
+			args := map[string]any{"decision": "propose", "text": "close the hedge"}
+			if tc.ref != "" {
+				args["proposal_ref"] = tc.ref
+			}
+			if res := tool.Execute(ctx, args); res.IsError {
+				t.Fatalf("refused: %+v", res)
+			}
+			d := c.Decisions()[0]
+			if d.Kind != tc.want {
+				t.Fatalf("kind = %s, want %s", d.Kind, tc.want)
+			}
+			if tc.want == proactive.DecidePropose && d.ProposalRef != "7F3K" {
+				t.Errorf("ProposalRef = %q, want the normalised code", d.ProposalRef)
+			}
+			if tc.want != proactive.DecidePropose && d.ProposalRef != "" {
+				t.Errorf("a downgraded decision kept ProposalRef %q", d.ProposalRef)
+			}
+		})
 	}
 }
 

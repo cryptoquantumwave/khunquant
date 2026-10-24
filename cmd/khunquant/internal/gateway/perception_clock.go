@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/calendar"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/sources"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/timerstore"
 )
 
 // clockProfileTimeout bounds the profile read the clock source makes each time it
@@ -30,7 +31,29 @@ func clockSourcesFor(d assemblyDeps) []perception.Source {
 	}
 	return []perception.Source{sources.NewClockSource(sources.ClockOptions{
 		Location: profileZone(d),
+		Timers:   clockTimerStore(d),
 	})}
+}
+
+// clockTimerStore opens the table that keeps the clock's timers (reminders) across
+// restarts. Without it the timers live in memory only; that is logged, because a
+// reminder would then not survive a restart.
+func clockTimerStore(d assemblyDeps) perception.TimerStore {
+	db, err := proactiveDB(d)
+	if err != nil {
+		logger.WarnCF("perception", "Clock timers are not persisted: the proactive database is unavailable",
+			map[string]any{"error": err.Error()})
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), clockProfileTimeout)
+	defer cancel()
+	store, err := timerstore.New(ctx, db)
+	if err != nil {
+		logger.WarnCF("perception", "Clock timers are not persisted: the timer table could not be opened",
+			map[string]any{"error": err.Error()})
+		return nil
+	}
+	return store
 }
 
 // profileZone returns the function the clock source calls for the owner's zone. It

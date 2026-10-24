@@ -201,6 +201,58 @@ func dcaSpecID(planID int64) string { return fmt.Sprintf("plan-%d", planID) }
 // is idempotent, so an interruption at any step is repaired by the next read.
 type dcaSpecs struct {
 	reg *triggers.Registry
+	// mandate returns the mandate a plan's spec is live for, or "" (shadow). It is
+	// set by the mandate sync once the plan's mandate is promoted; nil means none.
+	mandate func(planID int64) string
+}
+
+// modeFor is the spec mode of a plan: live only with a promoted mandate.
+func modeFor(mandateID string) string {
+	if mandateID != "" {
+		return triggers.ModeLive
+	}
+	return triggers.ModeShadow
+}
+
+func (s dcaSpecs) mandateOf(planID int64) string {
+	if s.mandate == nil {
+		return ""
+	}
+	return s.mandate(planID)
+}
+
+// apply brings one plan's spec to the given mandate ("" = shadow, no mandate). A
+// spec going live starts from nothing (UpdateFresh): what it learnt in shadow must
+// not decide what it does when its candidates start orders.
+func (s dcaSpecs) apply(ctx context.Context, p *dca.Plan, mandateID string) error {
+	params := triggers.DCADueParamsFor(dcaPerceptionPlan(p))
+	params.MandateID = mandateID
+	if err := params.Validate(); err != nil {
+		return err
+	}
+	id, mode := dcaSpecID(p.ID), modeFor(mandateID)
+	have, err := s.reg.List(ctx, triggers.ListFilter{Kind: triggers.KindDCADue, Origin: triggers.DCASpecOrigin})
+	if err != nil {
+		return err
+	}
+	for _, sp := range have {
+		if sp.ID != id {
+			continue
+		}
+		if sp.Mode == mode && string(sp.Params) == string(params.JSON()) {
+			return nil
+		}
+		sp.Mode, sp.Params = mode, params.JSON()
+		if mode == triggers.ModeLive {
+			return s.reg.UpdateFresh(ctx, sp)
+		}
+		return s.reg.Update(ctx, sp)
+	}
+	_, err = s.reg.Add(ctx, triggers.Spec{ID: id, Kind: triggers.KindDCADue, Mode: mode, Origin: triggers.DCASpecOrigin, Params: params.JSON()})
+	if errors.Is(err, triggers.ErrExists) {
+		return nil
+	}
+	return err
 }
 
 func (s dcaSpecs) sync(ctx context.Context, plans []perception.DCAPlan) {
@@ -210,6 +262,7 @@ func (s dcaSpecs) sync(ctx context.Context, plans []perception.DCAPlan) {
 			continue
 		}
 		params := triggers.DCADueParamsFor(p)
+		params.MandateID = s.mandateOf(p.ID)
 		if params.Validate() != nil || len(params.JSON()) > triggers.MaxParamsBytes {
 			continue
 		}
@@ -228,8 +281,8 @@ func (s dcaSpecs) sync(ctx context.Context, plans []perception.DCAPlan) {
 			if err := s.reg.Remove(ctx, sp.ID); err != nil && !errors.Is(err, triggers.ErrNotFound) {
 				logger.WarnCF("perception", "DCA trigger spec could not be removed", map[string]any{"error": err.Error()})
 			}
-		case string(sp.Params) != string(params.JSON()):
-			sp.Params = params.JSON()
+		case string(sp.Params) != string(params.JSON()) || sp.Mode != modeFor(params.MandateID):
+			sp.Params, sp.Mode = params.JSON(), modeFor(params.MandateID)
 			if err := s.reg.Update(ctx, sp); err != nil {
 				logger.WarnCF("perception", "DCA trigger spec could not be updated", map[string]any{"error": err.Error()})
 			}
@@ -245,7 +298,7 @@ func (s dcaSpecs) sync(ctx context.Context, plans []perception.DCAPlan) {
 	for _, id := range ids {
 		params := want[id]
 		_, err := s.reg.Add(ctx, triggers.Spec{
-			ID: id, Kind: triggers.KindDCADue, Mode: triggers.ModeShadow, Origin: triggers.DCASpecOrigin,
+			ID: id, Kind: triggers.KindDCADue, Mode: modeFor(params.MandateID), Origin: triggers.DCASpecOrigin,
 			Params: params.JSON(),
 		})
 		if err != nil && !errors.Is(err, triggers.ErrExists) {
@@ -286,7 +339,7 @@ func (rt *perceptionRuntime) attachDCADue(d assemblyDeps) {
 		store: store, now: time.Now,
 		paper: func() bool { return cfg.TradingRisk.PaperTradingMode },
 	}
-	specs := dcaSpecs{reg: rt.triggers}
+	specs := dcaSpecs{reg: rt.triggers, mandate: d.Shared.promotedMandate}
 	src := sources.NewDCAPlansSource(sources.DCAPlansOptions{
 		Reader:       reader,
 		MisfireGrace: cronOptionsFromConfig(cfg).MisfireGrace,

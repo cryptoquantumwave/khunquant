@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 )
@@ -64,6 +65,12 @@ func (t *ListDCAPlansTool) Execute(ctx context.Context, args map[string]any) *To
 		sb.WriteString(fmt.Sprintf("      Schedule:      %s (%s)\n", p.FrequencyExpr, p.Timezone))
 		if p.Trigger != nil {
 			sb.WriteString(fmt.Sprintf("      Trigger:       %s @ %s\n", p.Trigger.Expression, p.Trigger.Timeframe))
+		}
+		if ms, err := t.store.MandateStatus(ctx, p.ID, time.Now()); err == nil && ms != "" {
+			if reason, _ := t.store.Unproven(ctx, p.ID); reason != "" {
+				ms += " (blocked: an earlier run could not be proven - check the exchange)"
+			}
+			sb.WriteString(fmt.Sprintf("      Mandate:       %s\n", ms))
 		}
 		if p.TotalInvested > 0 {
 			sb.WriteString(fmt.Sprintf("      Total invested: %.2f | Avg cost: %.4f | Qty: %.6f\n",

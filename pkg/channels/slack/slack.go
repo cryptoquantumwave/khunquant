@@ -19,6 +19,10 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
+// maxMessageLength is the length Slack allows a message's text (the Manager
+// splits to it).
+const maxMessageLength = 40000
+
 type SlackChannel struct {
 	*channels.BaseChannel
 	config       config.SlackConfig
@@ -29,6 +33,8 @@ type SlackChannel struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	pendingAcks  sync.Map
+	// ackFn acknowledges a socket-mode request (socketClient.Ack; a test replaces it).
+	ackFn func(socketmode.Request, ...any) error
 }
 
 type slackMessageRef struct {
@@ -49,7 +55,7 @@ func NewSlackChannel(cfg config.SlackConfig, messageBus *bus.MessageBus) (*Slack
 	socketClient := socketmode.New(api)
 
 	base := channels.NewBaseChannel("slack", cfg, messageBus, cfg.AllowFrom,
-		channels.WithMaxMessageLength(40000),
+		channels.WithMaxMessageLength(maxMessageLength),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
 		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
@@ -59,6 +65,7 @@ func NewSlackChannel(cfg config.SlackConfig, messageBus *bus.MessageBus) (*Slack
 		config:       cfg,
 		api:          api,
 		socketClient: socketClient,
+		ackFn:        socketClient.Ack,
 	}, nil
 }
 
@@ -126,21 +133,51 @@ func (c *SlackChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage)
 		return nil, fmt.Errorf("invalid slack chat ID: %s", msg.ChatID)
 	}
 
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(msg.Content, false),
+	// Buttons: the text fallback of the actions stays in the body (the Manager
+	// leaves it out for a channel that renders actions), and the buttons go on the
+	// last message only. If any action cannot be encoded the message goes without
+	// buttons: all of them or none.
+	chunks := []string{msg.Content}
+	var actionsBlock *slack.ActionBlock
+	if len(msg.Actions) > 0 {
+		chunks = channels.AppendActionFooter(chunks, msg.Actions, maxMessageLength)
+		var bErr error
+		if actionsBlock, bErr = buildActionsBlock(msg.Actions); bErr != nil {
+			logger.WarnCF("slack", "Invalid message actions, sending the message without buttons", map[string]any{
+				"intervention_id": msg.InterventionID,
+				"actions":         len(msg.Actions),
+				"error":           bErr.Error(),
+			})
+			actionsBlock = nil
+		}
 	}
 
-	if msg.ReplyToMessageID != "" && threadTS == "" {
-		// Answer to the message by creating a Thread under it
-		opts = append(opts, slack.MsgOptionTS(msg.ReplyToMessageID))
-	} else if threadTS != "" {
-		// If we are already in a thread, continue in the thread
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
+	var ids []string
+	for i, chunk := range chunks {
+		opts := []slack.MsgOption{
+			slack.MsgOptionText(chunk, false),
+		}
 
-	_, ts, err := c.api.PostMessageContext(ctx, channelID, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("slack send: %w", channels.ErrTemporary)
+		if msg.ReplyToMessageID != "" && threadTS == "" {
+			// Answer to the message by creating a Thread under it
+			opts = append(opts, slack.MsgOptionTS(msg.ReplyToMessageID))
+		} else if threadTS != "" {
+			// If we are already in a thread, continue in the thread
+			opts = append(opts, slack.MsgOptionTS(threadTS))
+		}
+		if actionsBlock != nil && i == len(chunks)-1 {
+			// With blocks, the text above is only the notification; the body is the
+			// section blocks.
+			opts = append(opts, slack.MsgOptionBlocks(append(sectionBlocks(chunk), actionsBlock)...))
+		}
+
+		_, ts, err := c.api.PostMessageContext(ctx, channelID, opts...)
+		if err != nil {
+			return ids, fmt.Errorf("slack send: %w", channels.ErrTemporary)
+		}
+		if ts != "" {
+			ids = append(ids, ts)
+		}
 	}
 
 	if ref, ok := c.pendingAcks.LoadAndDelete(msg.ChatID); ok {
@@ -156,10 +193,7 @@ func (c *SlackChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage)
 		"thread_ts":  threadTS,
 	})
 
-	if ts == "" {
-		return nil, nil
-	}
-	return []string{ts}, nil
+	return ids, nil
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -253,9 +287,7 @@ func (c *SlackChannel) eventLoop() {
 			case socketmode.EventTypeSlashCommand:
 				c.handleSlashCommand(event)
 			case socketmode.EventTypeInteractive:
-				if event.Request != nil {
-					c.socketClient.Ack(*event.Request)
-				}
+				c.handleInteractive(event)
 			}
 		}
 	}
@@ -291,11 +323,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	}
 
 	// check allowlist to avoid downloading attachments for rejected users
-	sender := bus.SenderInfo{
-		Platform:    "slack",
-		PlatformID:  ev.User,
-		CanonicalID: identity.BuildCanonicalID("slack", ev.User),
-	}
+	sender := slackSender(ev.User)
 	if !c.IsAllowedSender(sender) {
 		logger.DebugCF("slack", "Message rejected by allowlist", map[string]any{
 			"user_id": ev.User,
@@ -322,7 +350,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	content = c.stripBotMention(content)
 
 	// In non-DM channels, apply group trigger filtering
-	if !strings.HasPrefix(channelID, "D") {
+	if !isDMChannel(channelID) {
 		respond, cleaned := c.ShouldRespondInGroup(false, content)
 		if !respond {
 			return
@@ -365,7 +393,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 
 	peerKind := "channel"
 	peerID := channelID
-	if strings.HasPrefix(channelID, "D") {
+	if isDMChannel(channelID) {
 		peerKind = "direct"
 		peerID = senderID
 	}
@@ -395,11 +423,7 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 		return
 	}
 
-	if !c.IsAllowedSender(bus.SenderInfo{
-		Platform:    "slack",
-		PlatformID:  ev.User,
-		CanonicalID: identity.BuildCanonicalID("slack", ev.User),
-	}) {
+	if !c.IsAllowedSender(slackSender(ev.User)) {
 		logger.DebugCF("slack", "Mention rejected by allowlist", map[string]any{
 			"user_id": ev.User,
 		})
@@ -407,11 +431,7 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 	}
 
 	senderID := ev.User
-	mentionSender := bus.SenderInfo{
-		Platform:    "slack",
-		PlatformID:  senderID,
-		CanonicalID: identity.BuildCanonicalID("slack", senderID),
-	}
+	mentionSender := slackSender(senderID)
 	channelID := ev.Channel
 	threadTS := ev.ThreadTimeStamp
 	messageTS := ev.TimeStamp
@@ -436,7 +456,7 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 
 	mentionPeerKind := "channel"
 	mentionPeerID := channelID
-	if strings.HasPrefix(channelID, "D") {
+	if isDMChannel(channelID) {
 		mentionPeerKind = "direct"
 		mentionPeerID = senderID
 	}
@@ -465,11 +485,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 		c.socketClient.Ack(*event.Request)
 	}
 
-	cmdSender := bus.SenderInfo{
-		Platform:    "slack",
-		PlatformID:  cmd.UserID,
-		CanonicalID: identity.BuildCanonicalID("slack", cmd.UserID),
-	}
+	cmdSender := slackSender(cmd.UserID)
 	if !c.IsAllowedSender(cmdSender) {
 		logger.DebugCF("slack", "Slash command rejected by allowlist", map[string]any{
 			"user_id": cmd.UserID,
@@ -536,6 +552,19 @@ func (c *SlackChannel) stripBotMention(text string) string {
 	text = strings.ReplaceAll(text, mention, "")
 	return strings.TrimSpace(text)
 }
+
+// slackSender is the sender of a message or a tap in the one canonical form
+// ("slack:<id>") the allow-list and the control path compare.
+func slackSender(userID string) bus.SenderInfo {
+	return bus.SenderInfo{
+		Platform:    "slack",
+		PlatformID:  userID,
+		CanonicalID: identity.BuildCanonicalID("slack", userID),
+	}
+}
+
+// isDMChannel reports whether a Slack channel ID is a direct message (an IM).
+func isDMChannel(channelID string) bool { return strings.HasPrefix(channelID, "D") }
 
 func parseSlackChatID(chatID string) (channelID, threadTS string) {
 	parts := strings.SplitN(chatID, "/", 2)

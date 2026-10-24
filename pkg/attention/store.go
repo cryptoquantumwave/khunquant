@@ -91,6 +91,15 @@ CREATE TABLE attention_meta (
 	value TEXT NOT NULL
 );`,
 	},
+	{
+		Component: Component,
+		Version:   3,
+		// exact marks a mute that matches one dedup key and nothing longer (a
+		// snooze); every existing row is a prefix mute and stays one. An exact
+		// mute is stored under "=" + the dedup key, so it can never be the same
+		// row as a prefix mute of the same text.
+		SQL: `ALTER TABLE attention_mutes ADD COLUMN exact INTEGER NOT NULL DEFAULT 0;`,
+	},
 }
 
 // dispositionsSent are the dispositions that put a message in front of the owner
@@ -153,22 +162,30 @@ func deleteExpiredMutes(ctx context.Context, tx *sql.Tx, nowMs int64) error {
 // isMuted reports whether an active mute applies to c. Prefixes are compared
 // literally (substr, not LIKE) so a key containing % or _ cannot widen a mute.
 // A protective Critical candidate is only muted by a prefix that equals its full
-// DedupKey or full TriggerID.
+// DedupKey or full TriggerID. An exact mute (a snooze) matches the candidate's
+// DedupKey and nothing longer; it is by definition the full key.
 func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64) (bool, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT key FROM attention_mutes
+		`SELECT key, exact FROM attention_mutes
 		  WHERE until_ms > ?
-		    AND (substr(?, 1, length(key)) = key OR substr(?, 1, length(key)) = key)`,
-		nowMs, c.DedupKey, c.TriggerID)
+		    AND ((exact = 0 AND (substr(?, 1, length(key)) = key OR substr(?, 1, length(key)) = key))
+		      OR (exact = 1 AND substr(key, 2) = ?))`,
+		nowMs, c.DedupKey, c.TriggerID, c.DedupKey)
 	if err != nil {
 		return false, fmt.Errorf("attention: read mutes: %w", err)
 	}
 	var keys []string
+	exactHit := false
 	for rows.Next() {
 		var k string
-		if err := rows.Scan(&k); err != nil {
+		var exact int
+		if err := rows.Scan(&k, &exact); err != nil {
 			_ = rows.Close()
 			return false, fmt.Errorf("attention: read mutes: %w", err)
+		}
+		if exact == 1 {
+			exactHit = true
+			continue
 		}
 		keys = append(keys, k)
 	}
@@ -177,6 +194,9 @@ func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64
 	}
 	if err := rows.Err(); err != nil {
 		return false, fmt.Errorf("attention: read mutes: %w", err)
+	}
+	if exactHit {
+		return true, nil
 	}
 	if len(keys) == 0 {
 		return false, nil

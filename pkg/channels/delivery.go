@@ -52,6 +52,26 @@ func (m *Manager) SetDeliveryObserver(fn func(DeliveryReceipt)) {
 // manager strips message actions while this is false.
 func (m *Manager) SetControlEnabled(enabled bool) { m.controlEnabled.Store(enabled) }
 
+// SetControlRouter installs the control path on every channel (and on every channel
+// the manager creates later) and, because the text commands in an action footer
+// are then handled before any model sees them, enables message actions. nil
+// removes the router from the channels that take one and disables actions again.
+func (m *Manager) SetControlRouter(r ControlRouter) {
+	if r == nil {
+		m.controlRouter.Store(nil)
+	} else {
+		m.controlRouter.Store(&controlRouterBox{r: r})
+	}
+	m.mu.RLock()
+	for _, ch := range m.channels {
+		if setter, ok := ch.(interface{ SetControlRouter(r ControlRouter) }); ok {
+			setter.SetControlRouter(r)
+		}
+	}
+	m.mu.RUnlock()
+	m.SetControlEnabled(r != nil)
+}
+
 // ControlEnabled reports whether message actions may be sent. It is false until
 // the control-command dispatcher is registered.
 func (m *Manager) ControlEnabled() bool { return m.controlEnabled.Load() }
@@ -256,6 +276,19 @@ func actionFooter(actions []bus.Action) string {
 		return ""
 	}
 	return actionFooterPrefix + strings.Join(cmds, actionFooterSep)
+}
+
+// AppendActionFooter adds the text fallback of actions to the last of chunks,
+// for a channel that renders the actions as buttons and keeps the fallback in
+// the message anyway, so that a client which cannot show the buttons still has
+// the commands. Like the Manager's own footer it is all or nothing: a footer
+// longer than half of maxLen is left out. The chunks are changed in place.
+func AppendActionFooter(chunks []string, actions []bus.Action, maxLen int) []string {
+	footer := actionFooter(actions)
+	if footer == "" || (maxLen > 0 && runeLen(footer) > maxLen/2) {
+		return chunks
+	}
+	return appendActionFooter(chunks, footer, maxLen)
 }
 
 // appendActionFooter adds footer to the last chunk. When that would push the

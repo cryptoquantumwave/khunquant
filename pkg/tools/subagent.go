@@ -133,6 +133,9 @@ func (sm *SubagentManager) Spawn(
 }
 
 func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, callback AsyncCallback) {
+	// The task runs with the origin and sender of the turn that spawned it and,
+	// below, its channel; this marks it as a sub-turn all the same.
+	ctx = WithSubTurn(ctx)
 	// Under mu like every other write to the task: GetTask hands the same
 	// *SubagentTask to readers on other goroutines.
 	sm.mu.Lock()
@@ -243,6 +246,7 @@ After completing the task, provide a clear summary of what was done.`
 // runSyncTask runs a subagent task synchronously using the manager's provider.
 // Used by SubagentTool as a fallback when no SubTurnSpawner is configured.
 func (sm *SubagentManager) runSyncTask(ctx context.Context, label, task string) *ToolResult {
+	ctx = WithSubTurn(ctx)
 	systemPrompt := `You are a subagent. Complete the given task independently and provide a clear, concise result.
 You have access to tools - use them as needed to complete your task.`
 

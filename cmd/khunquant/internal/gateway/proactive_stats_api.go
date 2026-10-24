@@ -26,6 +26,11 @@ type busStatsResponse struct {
 	// are those of the current generation of services: a config reload rebuilds the
 	// pipeline and they start again from zero (the bus counters above do not).
 	Perception *perceptionStatsResponse `json:"perception,omitempty"`
+
+	// Journal is present only while the workflow engine runs (it does not until a
+	// workflow definition is registered). Its counters are those of the current
+	// generation of services.
+	Journal *journalStatsResponse `json:"journal,omitempty"`
 }
 
 type subscriberStatsResponse struct {
@@ -37,6 +42,29 @@ type subscriberStatsResponse struct {
 	Dropped  uint64 `json:"dropped"`
 	Panicked uint64 `json:"panicked"`
 	TimedOut uint64 `json:"timed_out"`
+}
+
+// statsPart fills one component's section of the stats response.
+type statsPart func(*busStatsResponse)
+
+// withPerceptionStats adds the perception pipeline's counters; f may be nil, and
+// may return nil while the pipeline is not running.
+func withPerceptionStats(f func() *perceptionStatsResponse) statsPart {
+	return func(r *busStatsResponse) {
+		if f != nil {
+			r.Perception = f()
+		}
+	}
+}
+
+// withJournalStats adds the workflow engine's counters; f may be nil, and may
+// return nil while the engine is not running.
+func withJournalStats(f func() *journalStatsResponse) statsPart {
+	return func(r *busStatsResponse) {
+		if f != nil {
+			r.Journal = f()
+		}
+	}
 }
 
 func newBusStatsResponse(s events.Stats) busStatsResponse {
@@ -63,19 +91,20 @@ func newBusStatsResponse(s events.Stats) busStatsResponse {
 // The handler reads the bus it was given at registration, and the shared bus is
 // the same one across reloads, so the counts do not reset when the config does.
 //
-// perception, when given, supplies the perception pipeline's counters (nil while it
-// is not running). It is a function because the route is registered before the
-// pipeline is built.
-func registerProactiveStatsAPI(mux handleMux, bus *events.EventBus, token string, perception ...func() *perceptionStatsResponse) {
+// parts, when given, add the counters of components that are built after the route
+// is registered and may not be running at all (the perception pipeline, the
+// workflow engine). Each is a function because of that; see withPerceptionStats
+// and withJournalStats.
+func registerProactiveStatsAPI(mux handleMux, bus *events.EventBus, token string, parts ...statsPart) {
 	mux = &guardedMux{inner: mux, token: token}
 
 	mux.Handle("GET /api/proactive/stats", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		out := newBusStatsResponse(bus.Stats())
-		for _, p := range perception {
+		for _, p := range parts {
 			if p != nil {
-				out.Perception = p()
+				p(&out)
 			}
 		}
 		_ = json.NewEncoder(w).Encode(out)

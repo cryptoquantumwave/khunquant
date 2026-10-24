@@ -587,6 +587,17 @@
         }
       },
       "proactive": {
+        "stop": {
+          "title": "停止",
+          "description": "立即让助手停止行动：取消正在运行的回合、工作流、授权、待处理提案以及它下的未成交订单。监控和通知保持开启。发送 /resume 以重新允许批准。",
+          "button": "全部停止",
+          "confirm_title": "停止助手？",
+          "confirm_description": "正在进行的工作将被取消，授权将被撤销，待处理提案将被取消。授权需要重新批准。",
+          "confirm": "停止",
+          "cancel": "取消",
+          "done": "已停止",
+          "error": "无法停止"
+        },
         "loading": "加载中...",
         "load_error": "加载主动通知设置失败。",
         "owner": {

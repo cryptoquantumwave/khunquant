@@ -79,6 +79,11 @@ type gatewayServices struct {
 	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
 	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
 	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
+	journalLive      *atomic.Pointer[journalRuntime]    // the workflow engine, nil until a definition is registered; what the stats route reads and stopServices stops
+	Control          *controlRuntime                    // the kill flag and the control-command dispatcher (control_wiring.go); built on every generation
+	Approval         *approvalRuntime                   // order approvals (pkg/approval); nil unless approvals are effectively on and the workflow engine runs
+	DNFlow           *dnFlowRuntime                     // dn.open / dn.recover dependencies; nil unless the delta-neutral tools are on
+	DCAFlow          *dcaFlowRuntime                    // dca.execute dependencies and the mandate sync; nil unless mandates are on
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled

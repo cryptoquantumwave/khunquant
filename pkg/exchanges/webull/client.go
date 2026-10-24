@@ -4,17 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
@@ -286,6 +291,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	// (a re-signed request is required for HMAC auth), and the body reader is rebuilt
 	// each iteration.
 	const maxTransientRetries = 3
+	mutating := mutatesOrders(method, path)
 	reAuthed := false
 	transient := 0
 	for {
@@ -304,6 +310,16 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
 		if err != nil {
 			return fmt.Errorf("webull: create request: %w", err)
+		}
+		// For an order-mutating POST, note whether any byte of the request was
+		// handed to the connection: a transport error before that provably sent
+		// nothing, one after it may have been accepted (see mutatesOrders).
+		var wrote atomic.Bool
+		if mutating {
+			req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+				WroteHeaders: func() { wrote.Store(true) },
+				WroteRequest: func(httptrace.WroteRequestInfo) { wrote.Store(true) },
+			}))
 		}
 
 		// Set headers
@@ -330,6 +346,12 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		// Send request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			if mutating && wrote.Load() {
+				// The request may have reached Webull and been accepted: sending it
+				// again would be a second order. The caller reconciles instead.
+				return fmt.Errorf("webull: %s %s: the request may have been accepted (%s): %w: %w",
+					method, path, transportErrClass(err), broker.ErrOutcomeUnknown, err)
+			}
 			// Transport error: retry with backoff up to the transient cap.
 			if transient < maxTransientRetries {
 				if serr := utils.SleepWithCtx(ctx, retryDelayFn(nil, transient)); serr != nil {
@@ -365,13 +387,22 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 
 		// Auth error: re-authenticate once, immediately (no backoff). Subscription
 		// 401s ("insufficient permission") are excluded by isAuthError.
-		if !skipToken && !reAuthed && isAuthError(resp.StatusCode, apiErr) {
+		// (An order-mutating request is re-sent after a re-auth only on a 4xx: a 5xx
+		// may have been accepted.)
+		if !skipToken && !reAuthed && isAuthError(resp.StatusCode, apiErr) && !(mutating && resp.StatusCode >= 500) {
 			c.invalidateToken()
 			reAuthed = true
 			continue
 		}
 
-		// Transient error (429/5xx): back off and retry up to the cap.
+		// A 5xx on an order-mutating request may mean Webull accepted it: never re-send.
+		if mutating && resp.StatusCode >= 500 {
+			return fmt.Errorf("webull: %s %s: HTTP %d: the request may have been accepted: %w: %s",
+				method, path, resp.StatusCode, broker.ErrOutcomeUnknown, errorBody(apiErr, respBytes))
+		}
+
+		// Transient error (429/5xx): back off and retry up to the cap. A 429 is
+		// safe to repeat even for an order: Webull refused it and did nothing.
 		if utils.ShouldRetry(resp.StatusCode) && transient < maxTransientRetries {
 			if serr := utils.SleepWithCtx(ctx, retryDelayFn(resp, transient)); serr != nil {
 				return fmt.Errorf("webull: %s %s: %w", method, path, serr)
@@ -386,6 +417,41 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		}
 		return fmt.Errorf("webull: %s %s: HTTP %d: %s%s", method, path, resp.StatusCode, string(respBytes), c.authErrorHint(resp.StatusCode, host))
 	}
+}
+
+// mutatesOrders reports whether a request places, replaces or cancels an order.
+// Such a request is never re-sent after a failure that may have reached Webull:
+// a retry of it is a second order (or a second cancel), not a second look. Every
+// order-mutating call of this client is a POST to one of these paths (PlaceOrder,
+// used for equity and option orders, and CancelOrder, used for both and for
+// cancelByClientOrderID); endpointOrderReplace has no caller today and is covered
+// so that one added later is safe by default.
+func mutatesOrders(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	switch path {
+	case endpointOrderPlace, endpointOrderCancel, endpointOrderReplace:
+		return true
+	}
+	return false
+}
+
+// transportErrClass names a transport failure without quoting it.
+func transportErrClass(err error) string {
+	var ne interface{ Timeout() bool }
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "timeout"
+	}
+	return "connection error"
+}
+
+// errorBody is the text the terminal-error message of a failed request carries.
+func errorBody(apiErr ErrorResponse, raw []byte) string {
+	if apiErr.Message != "" {
+		return apiErr.Error()
+	}
+	return string(raw)
 }
 
 // authErrorHint appends the host and region to a 401 so the failure is
@@ -1003,7 +1069,14 @@ func (c *Client) CancelOrder(ctx context.Context, req CancelOrderRequest) (*Plac
 	return &resp, nil
 }
 
-// FetchOpenOrders fetches all open orders for the account.
+// OrderPageSize is the page_size sent with the open-order and order-history
+// listings: the documented maximum (docs/webull-api-spec.md; the default is 10).
+// A listing that returns this many records may continue on a next page that this
+// client does not read, so callers treat a full page as possibly truncated.
+const OrderPageSize = 100
+
+// FetchOpenOrders fetches one page (OrderPageSize records) of the account's open
+// orders. A full page may be truncated.
 func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	accountID, err := c.AccountID(ctx)
 	if err != nil {
@@ -1011,6 +1084,7 @@ func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	}
 	query := url.Values{}
 	query.Set("account_id", accountID)
+	query.Set("page_size", strconv.Itoa(OrderPageSize))
 	var resp []ComboOrder
 	if err := c.doRequest(ctx, http.MethodGet, endpointOrderOpen, query, nil, &resp, false); err != nil {
 		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
@@ -1018,7 +1092,8 @@ func (c *Client) FetchOpenOrders(ctx context.Context) ([]ComboOrder, error) {
 	return resp, nil
 }
 
-// FetchOrderHistory fetches closed orders within a date range.
+// FetchOrderHistory fetches one page (OrderPageSize records) of closed orders
+// within a date range. A full page may be truncated.
 // startDate and endDate are optional yyyy-MM-dd format strings; if empty, defaults to last 7 days.
 func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate string) ([]ComboOrder, error) {
 	accountID, err := c.AccountID(ctx)
@@ -1027,6 +1102,7 @@ func (c *Client) FetchOrderHistory(ctx context.Context, startDate, endDate strin
 	}
 	query := url.Values{}
 	query.Set("account_id", accountID)
+	query.Set("page_size", strconv.Itoa(OrderPageSize))
 	if startDate != "" {
 		query.Set("start_date", startDate)
 	}

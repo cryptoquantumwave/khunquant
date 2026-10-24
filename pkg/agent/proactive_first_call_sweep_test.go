@@ -83,7 +83,7 @@ func atCapHandledTopics() []sweep.Topic {
 
 // firstCallOfSweep runs a sweep-shaped turn on the default workspace with the real
 // changes contributor attached to the loop, and measures its first provider call.
-func firstCallOfSweep(t *testing.T, heartbeatFile string, callerSupplies bool) (firstCall, *worldmodel.Store, *AgentLoop) {
+func firstCallOfSweep(t *testing.T, heartbeatFile string, callerSupplies bool, fixtures ...budgetFixture) (firstCall, *worldmodel.Store, *AgentLoop) {
 	t.Helper()
 	store := busyWorld(t)
 	diff, err := store.SinceMark(context.Background(), sweep.Mark)
@@ -103,7 +103,7 @@ func firstCallOfSweep(t *testing.T, heartbeatFile string, callerSupplies bool) (
 		len(prompt)-len(changes)-len(sweep.RenderHandled(atCapHandledTopics()))-len(hbPrompt), len(hbPrompt))
 
 	prov := script(respondResponse(map[string]any{"decision": "silent"}))
-	al, _ := defaultWorkspaceLoop(t, prov)
+	al, _ := defaultWorkspaceLoopWith(t, prov, fixtures...)
 	registerGatewayReadTools(al)
 	detach := al.SetBackgroundSection(worldmodel.NewChangesContributor(store))
 	t.Cleanup(detach)

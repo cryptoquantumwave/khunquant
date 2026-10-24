@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -156,10 +157,10 @@ func candidateTurnRequest() ProactiveTurnRequest {
 	return req
 }
 
-func runAndMeasure(t *testing.T, req ProactiveTurnRequest) firstCall {
+func runAndMeasure(t *testing.T, req ProactiveTurnRequest, fixtures ...budgetFixture) firstCall {
 	t.Helper()
 	prov := script(respondResponse(map[string]any{"decision": "silent"}))
-	al, _ := defaultWorkspaceLoop(t, prov)
+	al, _ := defaultWorkspaceLoopWith(t, prov, fixtures...)
 	registerGatewayReadTools(al)
 	mustRun(t, al, req)
 	return measureFirstCall(t, prov)
@@ -200,7 +201,10 @@ func TestProactiveTurn_DefaultSubsetsAreOfferedInFull(t *testing.T) {
 			for _, p := range fc.tools {
 				offered[p.name] = true
 			}
-			for _, name := range tc.want {
+			// propose_order is in the candidate list but exists only while approvals
+			// are on (off here): the list is the same, the registry decides.
+			want := slices.DeleteFunc(slices.Clone(tc.want), func(n string) bool { return n == tools.NameProposeOrder })
+			for _, name := range want {
 				if !offered[name] {
 					t.Errorf("default subset names %q but the turn was not offered it (offered: %v)", name, offered)
 				}
@@ -208,9 +212,9 @@ func TestProactiveTurn_DefaultSubsetsAreOfferedInFull(t *testing.T) {
 			if !offered[tools.NameRespondProactive] {
 				t.Error("respond_proactive is not offered")
 			}
-			if got, want := len(fc.tools), len(tc.want)+1; got != want {
+			if got, wantN := len(fc.tools), len(want)+1; got != wantN {
 				t.Errorf("turn was offered %d tools, want exactly the %d of its default subset plus respond_proactive",
-					got, want-1)
+					got, wantN-1)
 			}
 		})
 	}

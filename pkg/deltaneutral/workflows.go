@@ -456,6 +456,21 @@ func isStepError(err error) bool {
 	return errors.As(err, &se)
 }
 
+// OpenStatusRefusal is why a plan in this status cannot be opened, or "" when it can. Only a
+// ready plan opens: ready is what prepare_delta_neutral_plan promotes a draft or a failed plan
+// to after its checks, so an open never starts from a plan nobody validated. The open tool and
+// the dn.open workflow both ask it (the workflow is where it is enforced for a resumed or
+// directly started open).
+func OpenStatusRefusal(status string) string {
+	switch status {
+	case PlanStatusReady:
+		return ""
+	case PlanStatusDraft, PlanStatusFailed:
+		return fmt.Sprintf("plan status is %q; only a ready plan can be opened (run prepare_delta_neutral_plan first)", status)
+	}
+	return fmt.Sprintf("plan status is %q; only a ready plan can be opened", status)
+}
+
 // validate is step 1.
 func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int) (any, error) {
 	return func(ctx context.Context, _ int) (any, error) {
@@ -464,10 +479,8 @@ func (d *Deps) validate(c *journal.Ctx, in OpenInput) func(context.Context, int)
 		if err != nil {
 			return validateOut{Refused: fmt.Sprintf("cannot load plan %d: %v", in.PlanID, err)}, nil
 		}
-		switch plan.Status {
-		case PlanStatusDraft, PlanStatusReady, PlanStatusFailed:
-		default:
-			return validateOut{Refused: fmt.Sprintf("plan status is %q; only draft, ready, or failed plans can be opened", plan.Status)}, nil
+		if why := OpenStatusRefusal(plan.Status); why != "" {
+			return validateOut{Refused: why}, nil
 		}
 		attemptID := AttemptID(plan.ID, c.WorkflowID())
 		exec, err := d.Store.ExecutionByAttempt(ctx, attemptID)

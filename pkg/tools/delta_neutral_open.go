@@ -40,7 +40,7 @@ func (t *OpenDeltaNeutralPositionTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"plan_id": map[string]any{
 				"type":        "integer",
-				"description": "ID of the delta-neutral plan to open. Accepts draft, ready, or failed (retry).",
+				"description": "ID of the delta-neutral plan to open. It must be ready: run prepare_delta_neutral_plan first (also for a failed plan being retried).",
 			},
 			"confirm": map[string]any{
 				"type":        "boolean",
@@ -70,14 +70,6 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		return ErrorResult(fmt.Sprintf("cannot load plan %d: %v", int64(planID), err))
 	}
 
-	// Allow opening from draft, ready, or failed (retry/restart). Other states are invalid.
-	switch plan.Status {
-	case deltaneutral.PlanStatusDraft, deltaneutral.PlanStatusReady, deltaneutral.PlanStatusFailed:
-		// ok
-	default:
-		return ErrorResult(fmt.Sprintf("plan status is %q; only draft, ready, or failed plans can be opened.", plan.Status))
-	}
-
 	// Never open on top of an existing position, whatever the plan status says: a plan
 	// that failed or was left half-open can still hold real exposure, and a retry would
 	// stack a second position on it. The check fails closed.
@@ -91,6 +83,14 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 				"Refusing to open another position on top of it. Run unwind_delta_neutral_position first "+
 				"(or close the position manually on the exchange if unwind reports no recorded exposure).",
 			plan.ID, plan.Status))
+	}
+
+	// Only a ready plan opens: prepare_delta_neutral_plan validates a draft (or a failed
+	// plan, to retry) and promotes it. The dn.open workflow checks the same on its own.
+	// It comes after the exposure check so a plan holding a position is told to unwind,
+	// not to prepare.
+	if why := deltaneutral.OpenStatusRefusal(plan.Status); why != "" {
+		return ErrorResult(why + ".")
 	}
 
 	// --- Safety gates (sequence from futures.go §225-290) ---

@@ -170,6 +170,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: "No target channel/chat specified", IsError: true}
 	}
 
+	if refusal := autonomousTargetRefusal(ctx, NameMessage, channel, chatID); refusal != nil {
+		return refusal
+	}
+
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}

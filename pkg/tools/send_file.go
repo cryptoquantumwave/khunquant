@@ -101,6 +101,21 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("no target channel/chat available")
 	}
 
+	// The schema offers no target, so the file goes to the turn's own chat. An
+	// autonomous turn that names one anyway is refused rather than ignored: the
+	// attempt is the signal that something is steering it elsewhere.
+	if IsAutonomousOrigin(ToolOrigin(ctx)) {
+		if c, _ := args["channel"].(string); c != "" && c != channel {
+			return autonomousTargetRefusal(ctx, NameSendFile, c, chatID)
+		}
+		if id, _ := args["chat_id"].(string); id != "" && id != chatID {
+			return autonomousTargetRefusal(ctx, NameSendFile, channel, id)
+		}
+		if refusal := autonomousTargetRefusal(ctx, NameSendFile, channel, chatID); refusal != nil {
+			return refusal
+		}
+	}
+
 	if t.mediaStore == nil {
 		return ErrorResult("media store not configured")
 	}

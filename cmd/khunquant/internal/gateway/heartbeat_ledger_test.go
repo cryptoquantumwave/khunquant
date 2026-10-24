@@ -24,7 +24,8 @@ func TestLegacyHeartbeat_MessageSendsAreLedgered(t *testing.T) {
 		if !ok {
 			t.Fatal("the default agent has no message tool")
 		}
-		ctx := context.Background()
+		// The turn's own route: an autonomous turn may only message its own chat.
+		ctx := tools.WithToolContext(context.Background(), "telegram", "7")
 		if origin != "" {
 			ctx = tools.WithToolOrigin(ctx, origin)
 		}

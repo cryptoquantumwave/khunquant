@@ -68,7 +68,13 @@ func TestDecide_WrongNonce(t *testing.T) {
 	w := newWorld(t)
 	p := w.newProc(t0)
 	prop := p.propose(sellBTC())
-	for _, nonce := range []string{"0000000000000000", prop.Nonce[:15], prop.Nonce + "0", strings.ToUpper(prop.Nonce), "x"} {
+	wrong := []string{"0000000000000000", prop.Nonce[:15], prop.Nonce + "0", "x"}
+	// An upper-cased copy is a wrong nonce only when the nonce has a letter to change: a
+	// hex nonce of digits alone upper-cases to itself (about 1 run in 1,800).
+	if up := strings.ToUpper(prop.Nonce); up != prop.Nonce {
+		wrong = append(wrong, up)
+	}
+	for _, nonce := range wrong {
 		_, err := decide(p, prop, nonce, true, ownerID)
 		mustErrIs(t, err, ErrNotFound)
 		if err.Error() != "not found or no longer pending" {

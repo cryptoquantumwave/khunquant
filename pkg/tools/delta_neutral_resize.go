@@ -86,6 +86,12 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("plan status is %q, not active. Cannot resize.", plan.Status))
 	}
 
+	// The spot leg must be a spot symbol, in either direction: the resize would trade it
+	// through the spot path.
+	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
+		return ErrorResult("spot leg: " + msg)
+	}
+
 	// Direction is known from the arguments alone (the sign of the requested change), before
 	// any network call. A resize-down only reduces exposure, so it passes the risk-adding
 	// gates (leverage switch, daily-loss limit, order-value cap); a resize-up, or an

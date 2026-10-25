@@ -211,6 +211,9 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
+	if msg := contractSymbolRefusal(plan.Symbol); msg != "" {
+		return ErrorResult(fmt.Sprintf("DCA plan %d (%s): %s", planID, plan.Name, msg))
+	}
 	if !plan.Enabled {
 		return ErrorResult(fmt.Sprintf("DCA plan %d (%s) is disabled — enable it first with update_dca_plan", planID, plan.Name))
 	}

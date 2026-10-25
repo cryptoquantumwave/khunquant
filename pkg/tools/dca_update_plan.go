@@ -164,6 +164,10 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if hasEnabledArg {
+		// A stored plan on a contract symbol may be disabled but never (re-)enabled.
+		if msg := contractSymbolRefusal(plan.Symbol); enabledArg && msg != "" {
+			return ErrorResult(fmt.Sprintf("DCA plan %d (%s): %s", planID, plan.Name, msg))
+		}
 		plan.Enabled = enabledArg
 		changed = true
 	}

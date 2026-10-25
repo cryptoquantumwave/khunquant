@@ -37,7 +37,7 @@ func (t *SnapshotSummaryTool) Parameters() map[string]any {
 			},
 			"label": map[string]any{
 				"type":        "string",
-				"description": "Filter by label.",
+				"description": "Filter by label. Scheduled automatic snapshots are counted only with label \"auto\".",
 			},
 			"source": map[string]any{
 				"type":        "string",

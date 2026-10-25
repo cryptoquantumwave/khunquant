@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
+	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/dingtalk"
@@ -49,12 +51,11 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/heartbeat"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/pid"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
-	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
-	"github.com/cryptoquantumwave/khunquant/pkg/voice"
 )
 
 // Timeout constants for service operations
@@ -72,12 +73,28 @@ type gatewayServices struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
+	NotifyService    *notify.Service                    // nil when proactive is off or the service could not be built; nil means delivery is disabled
+	Attention        *attention.Outbox                  // nil when attention mode is off or the database is unavailable; submit candidates here
+	attentionRun     *attentionRunner                   // the outbox's Run loop; nil unless attention is live and can deliver
+	Perception       *perceptionRuntime                 // the sources, manager and engine; nil unless perception is on and the outbox exists
+	Alerts           *alertRuntime                      // the route from the alert tools to the trigger registry, and the migration of the cron alerts
+	perceptionLive   *atomic.Pointer[perceptionRuntime] // what the stats route reads; set once per generation, before the routes
+	journalLive      *atomic.Pointer[journalRuntime]    // the workflow engine, nil until a definition is registered; what the stats route reads and stopServices stops
+	Cognition        *cognitionRuntime                  // the turn scheduler; nil unless cognition is effectively on and the shared database opened
+	Control          *controlRuntime                    // the kill flag and the control-command dispatcher (control_wiring.go); built on every generation
+	Policy           *policyRuntime                     // the policy engine's shadow record (policy_wiring.go); nil unless proactive is on and proactive.policy.mode is shadow or live
+	Reflection       *reflectionRuntime                 // the nightly reflection loop; nil unless it is effectively on and everything it reads runs
+	Feedback         *feedbackRuntime                   // the owner-response recorder; nil unless proactive.learning is effectively on
+	Approval         *approvalRuntime                   // order approvals (pkg/approval); nil unless approvals are effectively on and the workflow engine runs
+	DNFlow           *dnFlowRuntime                     // dn.open / dn.recover dependencies; nil unless the delta-neutral tools are on
+	DCAFlow          *dcaFlowRuntime                    // dca.execute dependencies and the mandate sync; nil unless mandates are on
 	HealthServer     *health.Server
+	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
-	LogBuf           *debugtap.LogBuffer             // persists across reloads while dev-mcp is on
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
 	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint
+	LossGuard        *lossGuardSampler               // non-nil only while daily_loss_limit_usd > 0
 }
 
 // sandboxStateReseter wraps StateManager and Store to implement the ResetState interface.
@@ -132,6 +149,15 @@ func gatewayCmd(debug bool) error {
 	msgBus := bus.NewMessageBus()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
 
+	// Long-lived resources: built once here, shared by every service generation,
+	// closed only when the gateway shuts down (never on reload).
+	shared := newSharedResources()
+	defer func() {
+		if err := shared.Close(); err != nil {
+			logger.Warn(fmt.Sprintf("Closing shared gateway resources: %v", err))
+		}
+	}()
+
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
@@ -164,8 +190,19 @@ func gatewayCmd(debug bool) error {
 	}
 	defer pid.RemovePidFileIfPID(home, os.Getpid())
 
+	// Startup-only: reload does not re-run this. A reload that adds an account with
+	// no explicit permissions therefore goes unwarned until the next start (known gap).
+	warnOpenPermissions(cfg)
+	armWebOwner(configPath, cfg)
+
 	// Setup and start all services
-	services, err := setupAndStartServices(cfg, agentLoop, msgBus)
+	services, err := buildServices(context.Background(), assemblyDeps{
+		Cfg:       cfg,
+		AgentLoop: agentLoop,
+		Bus:       msgBus,
+		State:     agentLoop.State(),
+		Shared:    shared,
+	})
 	if err != nil {
 		return err
 	}
@@ -194,168 +231,10 @@ func gatewayCmd(debug bool) error {
 			return nil
 
 		case newCfg := <-configReloadChan:
-			err := handleConfigReload(ctx, agentLoop, newCfg, &provider, services, msgBus)
+			err := handleConfigReload(ctx, agentLoop, newCfg, &provider, services, shared, msgBus)
 			if err != nil {
 				logger.Errorf("Config reload failed: %v", err)
 			}
-		}
-	}
-}
-
-// setupAndStartServices initializes and starts all services
-func setupAndStartServices(
-	cfg *config.Config,
-	agentLoop *agent.AgentLoop,
-	msgBus *bus.MessageBus,
-) (*gatewayServices, error) {
-	services := &gatewayServices{}
-
-	// Setup cron tool and service
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var setupDNStore *deltaneutral.Store
-	services.CronService, setupDNStore = setupCronTool(
-		agentLoop,
-		msgBus,
-		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
-		cfg,
-	)
-	if err := services.CronService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting cron service: %w", err)
-	}
-	fmt.Println("✓ Cron service started")
-
-	// Setup heartbeat service
-	services.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-	)
-	services.HeartbeatService.SetBus(msgBus)
-	services.HeartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
-		// Use cli:direct as fallback if no valid channel
-		if channel == "" || chatID == "" {
-			channel, chatID = "cli", "direct"
-		}
-		// Use ProcessHeartbeat - no session history, each heartbeat is independent
-		var response string
-		var err error
-		response, err = agentLoop.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
-		if err != nil {
-			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
-		}
-		if response == "HEARTBEAT_OK" {
-			return tools.SilentResult("Heartbeat OK")
-		}
-		// For heartbeat, always return silent - the subagent result will be
-		// sent to user via processSystemMessage when the async task completes
-		return tools.SilentResult(response)
-	})
-	if err := services.HeartbeatService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
-	}
-	fmt.Println("✓ Heartbeat service started")
-
-	// Create media store for file lifecycle management with TTL cleanup
-	services.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
-	})
-	// Start the media store if it's a FileMediaStore with cleanup
-	if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-		fms.Start()
-	}
-
-	// Create channel manager
-	var err error
-	services.ChannelManager, err = channels.NewManager(cfg, msgBus, services.MediaStore)
-	if err != nil {
-		// Stop the media store if it's a FileMediaStore with cleanup
-		if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-			fms.Stop()
-		}
-		return nil, fmt.Errorf("error creating channel manager: %w", err)
-	}
-
-	// Inject channel manager and media store into agent loop
-	agentLoop.SetChannelManager(services.ChannelManager)
-	agentLoop.SetMediaStore(services.MediaStore)
-
-	// Wire up voice transcription if a supported provider is configured.
-	if transcriber := voice.DetectTranscriber(cfg); transcriber != nil {
-		agentLoop.SetTranscriber(transcriber)
-		logger.InfoCF("voice", "Transcription enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
-	}
-
-	enabledChannels := services.ChannelManager.GetEnabledChannels()
-	if len(enabledChannels) > 0 {
-		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
-	} else {
-		fmt.Println("⚠ Warning: No channels enabled")
-	}
-
-	// Setup shared HTTP server with health endpoints and webhook handlers
-	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
-	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, setupDNStore)
-	if cfg.Debug.DevMCP.Enabled {
-		registerDevMCP(cfg, services, agentLoop)
-	}
-	if cfg.Debug.Sandbox.Enabled {
-		if err := startAndRegisterSandbox(cfg, services); err != nil {
-			logger.Errorf("sandbox: failed to start: %v", err)
-		}
-	}
-
-	if err := services.ChannelManager.StartAll(context.Background()); err != nil {
-		return nil, fmt.Errorf("error starting channels: %w", err)
-	}
-
-	fmt.Printf("✓ Health endpoints available at http://%s:%d/health and /ready\n", cfg.Gateway.Host, cfg.Gateway.Port)
-
-	// Setup state manager and device service
-	stateManager := state.NewManager(cfg.WorkspacePath())
-	services.DeviceService = devices.NewService(devices.Config{
-		Enabled:    cfg.Devices.Enabled,
-		MonitorUSB: cfg.Devices.MonitorUSB,
-	}, stateManager)
-	services.DeviceService.SetBus(msgBus)
-	if err := services.DeviceService.Start(context.Background()); err != nil {
-		logger.ErrorCF("device", "Error starting device service", map[string]any{"error": err.Error()})
-	} else if cfg.Devices.Enabled {
-		fmt.Println("✓ Device event service started")
-	}
-
-	return services, nil
-}
-
-// stopAndCleanupServices stops all services and cleans up resources
-func stopAndCleanupServices(
-	services *gatewayServices,
-	shutdownTimeout time.Duration,
-) {
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
-
-	if services.ChannelManager != nil {
-		services.ChannelManager.StopAll(shutdownCtx)
-	}
-	if services.DeviceService != nil {
-		services.DeviceService.Stop()
-	}
-	if services.HeartbeatService != nil {
-		services.HeartbeatService.Stop()
-	}
-	if services.CronService != nil {
-		services.CronService.Stop()
-	}
-	if services.MediaStore != nil {
-		// Stop the media store if it's a FileMediaStore with cleanup
-		if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-			fms.Stop()
 		}
 	}
 }
@@ -371,7 +250,7 @@ func shutdownGateway(
 		cp.Close()
 	}
 
-	stopAndCleanupServices(services, gracefulShutdownTimeout)
+	stopServices(services, gracefulShutdownTimeout)
 
 	// Stop sandbox server after all services are stopped
 	if services.SandboxServer != nil {
@@ -395,6 +274,7 @@ func handleConfigReload(
 	newCfg *config.Config,
 	providerRef *providers.LLMProvider,
 	services *gatewayServices,
+	shared *sharedResources,
 	msgBus *bus.MessageBus,
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
@@ -408,16 +288,16 @@ func handleConfigReload(
 
 	// Stop all services before reloading
 	logger.Info("  Stopping all services...")
-	stopAndCleanupServices(services, serviceShutdownTimeout)
+	stopServices(services, serviceShutdownTimeout)
 
 	// Create new provider from updated config first to ensure validity
 	// This will use the correct API key and settings from newCfg.ModelList
-	newProvider, newModelID, err := providers.CreateProvider(newCfg)
+	newProvider, newModelID, err := createProvider(newCfg)
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
 		// Try to restart services with old configuration
-		if restartErr := restartServices(al, services, msgBus); restartErr != nil {
+		if restartErr := reloadServices(al, services, shared, msgBus); restartErr != nil {
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
 		}
 		return fmt.Errorf("error creating new provider: %w", err)
@@ -440,7 +320,7 @@ func handleConfigReload(
 			cp.Close()
 		}
 		logger.Warn("  Attempting to restart services with old provider and config...")
-		if restartErr := restartServices(al, services, msgBus); restartErr != nil {
+		if restartErr := reloadServices(al, services, shared, msgBus); restartErr != nil {
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
 		}
 		return fmt.Errorf("error reloading agent loop: %w", err)
@@ -471,12 +351,12 @@ func handleConfigReload(
 		logger.Debugf("sandbox: disabled and state cleared")
 	} else if !wasEnabled && isEnabled {
 		// Enable: arm state (already done by config reload watcher, but arm again)
-		// and prepare to start server in restartServices
+		// and prepare to start server in buildServices
 		logger.Info("  Enabling sandbox...")
 		sandbox.SetGlobalState(true, "")
 		logger.Debugf("sandbox: state armed for restart")
 	} else if wasEnabled && isEnabled {
-		// Sandbox stays enabled: stop the old server so a fresh one can start in restartServices
+		// Sandbox stays enabled: stop the old server so a fresh one can start in buildServices
 		logger.Info("  Reloading sandbox configuration...")
 		services.SandboxServer.Stop()
 		sandbox.SetGlobalState(false, "")
@@ -487,7 +367,7 @@ func handleConfigReload(
 
 	// Restart all services with new config
 	logger.Info("  Restarting all services with new configuration...")
-	if err := restartServices(al, services, msgBus); err != nil {
+	if err := reloadServices(al, services, shared, msgBus); err != nil {
 		logger.Errorf("  ⚠ Error restarting services: %v", err)
 		return fmt.Errorf("error restarting services: %w", err)
 	}
@@ -496,159 +376,12 @@ func handleConfigReload(
 	return nil
 }
 
-// restartServices restarts all services after a config reload
-func restartServices(
-	al *agent.AgentLoop,
-	services *gatewayServices,
-	msgBus *bus.MessageBus,
-) error {
-	// Create an independent context with timeout for service restart operations
-	// (cron, heartbeat, device startup). This is intentionally separate from the
-	// context passed to StartAll below, which must outlive this function.
-	ctx, cancel := context.WithTimeout(context.Background(), serviceRestartTimeout)
-	defer cancel()
-
-	// Get current config from agent loop (which has been updated if this is a reload)
-	cfg := al.GetConfig()
-
-	// Re-create and start cron service with new config
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var restartDNStore *deltaneutral.Store
-	services.CronService, restartDNStore = setupCronTool(
-		al,
-		msgBus,
-		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
-		cfg,
-	)
-	if err := services.CronService.Start(); err != nil {
-		return fmt.Errorf("error restarting cron service: %w", err)
-	}
-	fmt.Println("  ✓ Cron service restarted")
-
-	// Re-create and start heartbeat service with new config
-	services.HeartbeatService = heartbeat.NewHeartbeatService(
-		cfg.WorkspacePath(),
-		cfg.Heartbeat.Interval,
-		cfg.Heartbeat.Enabled,
-	)
-	services.HeartbeatService.SetBus(msgBus)
-	services.HeartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
-		if channel == "" || chatID == "" {
-			channel, chatID = "cli", "direct"
-		}
-		var response string
-		var err error
-		response, err = al.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
-		if err != nil {
-			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
-		}
-		if response == "HEARTBEAT_OK" {
-			return tools.SilentResult("Heartbeat OK")
-		}
-		return tools.SilentResult(response)
-	})
-	if err := services.HeartbeatService.Start(); err != nil {
-		return fmt.Errorf("error restarting heartbeat service: %w", err)
-	}
-	fmt.Println("  ✓ Heartbeat service restarted")
-
-	// Stop the old media store before creating a new one
-	if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-		fms.Stop()
-	}
-
-	// Re-create media store with new config
-	services.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
-	})
-	// Start the media store if it's a FileMediaStore with cleanup
-	if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-		fms.Start()
-	}
-	al.SetMediaStore(services.MediaStore)
-
-	// Re-create channel manager with new config
-	var err error
-	services.ChannelManager, err = channels.NewManager(cfg, msgBus, services.MediaStore)
-	if err != nil {
-		// Stop the media store if it's a FileMediaStore with cleanup
-		if fms, ok := services.MediaStore.(*media.FileMediaStore); ok {
-			fms.Stop()
-		}
-		return fmt.Errorf("error recreating channel manager: %w", err)
-	}
-	al.SetChannelManager(services.ChannelManager)
-
-	enabledChannels := services.ChannelManager.GetEnabledChannels()
-	if len(enabledChannels) > 0 {
-		fmt.Printf("  ✓ Channels enabled: %s\n", enabledChannels)
-	} else {
-		fmt.Println("  ⚠ Warning: No channels enabled")
-	}
-
-	// Setup HTTP server with new config
-	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-	services.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
-	services.ChannelManager.SetupHTTPServer(addr, services.HealthServer)
-	registerCronAPI(services.ChannelManager, services.CronService, restartDNStore)
-	if cfg.Debug.DevMCP.Enabled {
-		registerDevMCP(cfg, services, al)
-	} else {
-		teardownDevMCP(services, al)
-	}
-	if cfg.Debug.Sandbox.Enabled {
-		if err := startAndRegisterSandbox(cfg, services); err != nil {
-			logger.Errorf("sandbox: failed to restart: %v", err)
-		}
-	}
-
-	// Use context.Background() so channel goroutines (e.g. pico WebSocket readLoops)
-	// are not cancelled when this function returns. Channels are stopped explicitly
-	// via StopAll() on the next reload or shutdown.
-	if err := services.ChannelManager.StartAll(context.Background()); err != nil {
-		return fmt.Errorf("error restarting channels: %w", err)
-	}
-	fmt.Printf(
-		"  ✓ Channels restarted, health endpoints at http://%s:%d/health and ready\n",
-		cfg.Gateway.Host,
-		cfg.Gateway.Port,
-	)
-
-	// Re-create device service with new config
-	stateManager := state.NewManager(cfg.WorkspacePath())
-	services.DeviceService = devices.NewService(devices.Config{
-		Enabled:    cfg.Devices.Enabled,
-		MonitorUSB: cfg.Devices.MonitorUSB,
-	}, stateManager)
-	services.DeviceService.SetBus(msgBus)
-	if err := services.DeviceService.Start(ctx); err != nil {
-		logger.WarnCF("device", "Failed to restart device service", map[string]any{"error": err.Error()})
-	} else if cfg.Devices.Enabled {
-		fmt.Println("  ✓ Device event service restarted")
-	}
-
-	// Wire up voice transcription with new config
-	transcriber := voice.DetectTranscriber(cfg)
-	al.SetTranscriber(transcriber) // This will set it to nil if disabled
-	if transcriber != nil {
-		logger.InfoCF("voice", "Transcription re-enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
-	} else {
-		logger.InfoCF("voice", "Transcription disabled", nil)
-	}
-
-	return nil
-}
-
 // startAndRegisterSandbox initializes and starts the sandbox server, then registers
-// its API endpoints on the channel manager's mux. Must be called after the mux is
-// set up and before channels start.
-func startAndRegisterSandbox(cfg *config.Config, services *gatewayServices) error {
+// its API endpoints on mux. Called only from registerGatewayRoutes: after the mux
+// is set up and before channels start.
+func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewayServices) error {
 	// Stop any server left over from a previous start. handleConfigReload's
-	// recovery paths call restartServices directly when the new provider or the
+	// recovery paths call reloadServices directly when the new provider or the
 	// agent loop fails to load, bypassing the enable/disable toggle that would
 	// otherwise stop the old server — without this, every failed reload strands
 	// another listener for the lifetime of the process.
@@ -724,7 +457,7 @@ func startAndRegisterSandbox(cfg *config.Config, services *gatewayServices) erro
 	services.SandboxToken = cfg.Debug.Sandbox.Token
 
 	// Register API routes (pass store separately since Server doesn't expose it)
-	registerSandboxAPI(services.ChannelManager, store, services.SandboxToken, services.SimulatorReseter, fixturesDir)
+	registerSandboxAPI(mux, store, services.SandboxToken, services.SimulatorReseter, fixturesDir)
 
 	baseURL := srv.BaseURL()
 	fmt.Printf("🏜️  Sandbox: %s\n   Token:    %s\n", baseURL, services.SandboxToken)
@@ -830,6 +563,16 @@ func getFileSize(path string) int64 {
 	return info.Size()
 }
 
+// cronHooks are the late-bound hooks the gateway gives the tools setupCronTool
+// registers. Both are optional: without them the tools behave as they always did.
+type cronHooks struct {
+	// Alerts routes the alert tools to the trigger registry, when one is live.
+	Alerts tools.AlertTriggersFunc
+	// DNSync asks for a (debounced) pass of the delta-neutral hand-over after a plan
+	// tool changed a plan's cron job.
+	DNSync tools.DNSyncFunc
+}
+
 func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
@@ -837,11 +580,17 @@ func setupCronTool(
 	restrict bool,
 	execTimeout time.Duration,
 	cfg *config.Config,
+	hooks ...cronHooks,
 ) (*cron.CronService, *deltaneutral.Store) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
 	// Create cron service
 	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService.SetOptions(cronOptionsFromConfig(cfg))
+	cronService.SetOnMissed(missedJobNotifier(msgBus))
+	if msgBus != nil {
+		sendCeilingNotices(msgBus, cronService) // once per job; see ceiling_notice.go
+	}
 
 	// Create and register CronTool if enabled
 	var cronTool *tools.CronTool
@@ -875,33 +624,53 @@ func setupCronTool(
 		dnStore = store
 	}
 
+	var h cronHooks
+	if len(hooks) > 0 {
+		h = hooks[0]
+	}
+	// triggersLive says, at the moment a job runs, whether the trigger registry is
+	// live and so owns the alert families a promotion switched off.
+	triggersLive := func() bool { return h.Alerts != nil && h.Alerts().Live() }
+
 	// Set onJob handler — alert, DCA, and DN jobs are handled directly in code;
 	// all other jobs are routed through the agent LLM via cronTool.
-	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-		if strings.HasPrefix(job.Name, "price_alert:") {
-			return handlePriceAlertJob(context.Background(), job, cfg, cronService, msgBus)
+	// The ctx carries the per-run job timeout and is cancelled when the cron service
+	// gives up waiting at stop; every handler uses it instead of context.Background().
+	cronService.SetOnJobCtx(func(ctx context.Context, job *cron.CronJob) (string, error) {
+		// The legacy handlers below stay for rollback; a job of a family the triggers
+		// replaced that runs while they are live is said so (once per job per day).
+		legacyJobs.check(job, triggersLive)
+		if strings.HasPrefix(job.Name, tools.JobPrefixPriceAlert) {
+			return handlePriceAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "indicator_alert:") {
-			return handleIndicatorAlertJob(context.Background(), job, cfg, cronService, msgBus)
+		if strings.HasPrefix(job.Name, tools.JobPrefixIndicatorAlert) {
+			return handleIndicatorAlertJob(ctx, job, cfg, cronService, msgBus)
 		}
-		if strings.HasPrefix(job.Name, "dca:") && dcaStore != nil {
-			return handleDCAAutoJob(context.Background(), job, cfg, dcaStore, cronTool)
+		if strings.HasPrefix(job.Name, tools.JobPrefixDCA) && dcaStore != nil {
+			res, err := handleDCAAutoJob(ctx, job, cfg, dcaStore, cronTool)
+			if msgBus != nil {
+				notifyDCAJobNotPlanOwned(msgBus, job, err)
+			}
+			return res, err
 		}
-		if strings.HasPrefix(job.Name, "dn:") && dnStore != nil {
-			return handleDeltaNeutralMonitorJob(context.Background(), job, cfg, dnStore, cronTool, msgBus)
+		if strings.HasPrefix(job.Name, tools.JobPrefixDeltaNeutral) && dnStore != nil {
+			return handleDeltaNeutralMonitorJob(ctx, job, cfg, dnStore, cronTool, msgBus)
 		}
 		if cronTool != nil {
-			return cronTool.ExecuteJob(context.Background(), job), nil
+			return cronTool.ExecuteJob(ctx, job)
 		}
 		return "", fmt.Errorf("no executor configured for job %q", job.Name)
 	})
 
 	// Alert tools (Track D) — require cron service, registered after it is created.
+	// The tools write to the trigger registry only while one is live (decided on every
+	// call, see tools.AlertTriggers); otherwise they are the cron tools they always were.
+	route := h.Alerts
 	if cfg.Tools.IsToolEnabled("set_price_alert") {
-		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetPriceAlertTool(cfg, cronService).WithTriggers(route))
 	}
 	if cfg.Tools.IsToolEnabled("set_indicator_alert") {
-		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService))
+		agentLoop.RegisterTool(tools.NewSetIndicatorAlertTool(cfg, cronService).WithTriggers(route))
 	}
 
 	// DCA tools (Track E) — require cron service + the store opened above.
@@ -937,20 +706,9 @@ func setupCronTool(
 	}
 
 	// Delta-neutral tools (Track F) — require cron service + the store opened above.
-	dnEnabled := cfg.Tools.IsToolEnabled("create_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("list_delta_neutral_plans") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("update_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_summary") ||
-		cfg.Tools.IsToolEnabled("get_delta_neutral_history") ||
-		cfg.Tools.IsToolEnabled("prepare_delta_neutral_plan") ||
-		cfg.Tools.IsToolEnabled("open_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("unwind_delta_neutral_position") ||
-		cfg.Tools.IsToolEnabled("render_delta_neutral_yield_chart")
-	if dnEnabled && dnStore != nil {
+	if dnToolsEnabled(cfg) && dnStore != nil {
 		if cfg.Tools.IsToolEnabled("create_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewCreateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("list_delta_neutral_plans") {
 			agentLoop.RegisterTool(tools.NewListDeltaNeutralPlansTool(dnStore))
@@ -959,10 +717,10 @@ func setupCronTool(
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralPlanTool(cfg, dnStore))
 		}
 		if cfg.Tools.IsToolEnabled("update_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewUpdateDeltaNeutralPlanTool(cfg, dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("delete_delta_neutral_plan") {
-			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService))
+			agentLoop.RegisterTool(tools.NewDeleteDeltaNeutralPlanTool(dnStore, cronService).WithSync(h.DNSync))
 		}
 		if cfg.Tools.IsToolEnabled("get_delta_neutral_summary") {
 			agentLoop.RegisterTool(tools.NewGetDeltaNeutralSummaryTool(cfg, dnStore))
@@ -991,10 +749,17 @@ func setupCronTool(
 }
 
 // registerDevMCP wires the read-only developer MCP server onto the shared
-// gateway HTTP mux. Only called when cfg.Debug.DevMCP.Enabled is true.
+// gateway HTTP mux. Only called, from registerGatewayRoutes, when
+// cfg.Debug.DevMCP.Enabled is true.
 // Must be called after SetupHTTPServer has created the mux on ChannelManager.
 // The mux is recreated on every reload, so the route is re-registered here each time.
-func registerDevMCP(cfg *config.Config, services *gatewayServices, al *agent.AgentLoop) {
+func registerDevMCP(
+	mux handleMux,
+	cfg *config.Config,
+	services *gatewayServices,
+	shared *sharedResources,
+	al *agent.AgentLoop,
+) {
 	// Auto-generate a token if not already configured, then persist it so the
 	// WebUI status endpoint and subsequent restarts can read the same token.
 	if cfg.Debug.DevMCP.Token == "" {
@@ -1009,15 +774,15 @@ func registerDevMCP(cfg *config.Config, services *gatewayServices, al *agent.Age
 	al.SetDebugTap(store)
 
 	// Reuse the existing log buffer across reloads so history isn't lost.
-	if services.LogBuf == nil {
-		services.LogBuf = debugtap.NewLogBuffer(2000)
-		logger.SetAdditionalWriter(services.LogBuf)
+	if shared.LogBuf == nil {
+		shared.LogBuf = debugtap.NewLogBuffer(2000)
+		logger.SetAdditionalWriter(shared.LogBuf)
 	}
 
 	handler := devmcp.NewHTTPHandler(devmcp.Deps{
 		Loop:     al,
 		DebugTap: store,
-		LogBuf:   services.LogBuf,
+		LogBuf:   shared.LogBuf,
 		Cfg:      cfg,
 	})
 
@@ -1026,8 +791,8 @@ func registerDevMCP(cfg *config.Config, services *gatewayServices, al *agent.Age
 	guarded := loopbackOnly(bearerTokenMiddleware(cfg.Debug.DevMCP.Token,
 		http.StripPrefix(prefix, handler)))
 
-	services.ChannelManager.Handle(prefix, guarded)
-	services.ChannelManager.Handle(prefix+"/", guarded)
+	mux.Handle(prefix, guarded)
+	mux.Handle(prefix+"/", guarded)
 
 	fmt.Printf("🔌 Dev MCP: %s\n   Token:    %s\n", endpoint, cfg.Debug.DevMCP.Token)
 	logger.WarnCF("devmcp",
@@ -1037,13 +802,13 @@ func registerDevMCP(cfg *config.Config, services *gatewayServices, al *agent.Age
 
 // teardownDevMCP cleans up dev-MCP state when the flag is turned off.
 // It is a no-op when dev-MCP was never enabled (all fields are nil).
-func teardownDevMCP(services *gatewayServices, al *agent.AgentLoop) {
+func teardownDevMCP(services *gatewayServices, shared *sharedResources, al *agent.AgentLoop) {
 	if services.DebugTap != nil {
 		al.SetDebugTap(nil)
 		services.DebugTap = nil
 	}
-	if services.LogBuf != nil {
+	if shared.LogBuf != nil {
 		logger.SetAdditionalWriter(nil)
-		services.LogBuf = nil
+		shared.LogBuf = nil
 	}
 }

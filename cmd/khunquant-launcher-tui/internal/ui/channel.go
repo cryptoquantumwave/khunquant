@@ -293,8 +293,8 @@ func (s *appState) wecomForm() tview.Primitive {
 	form.AddInputField("Encoding AES Key", cfg.EncodingAESKey.String(), 128, nil, func(text string) {
 		cfg.EncodingAESKey.Set(strings.TrimSpace(text))
 	})
-	form.AddInputField("Webhook URL", cfg.WebhookURL, 128, nil, func(text string) {
-		cfg.WebhookURL = strings.TrimSpace(text)
+	form.AddInputField("Webhook URL", cfg.WebhookURL.String(), 128, nil, func(text string) {
+		cfg.WebhookURL.Set(strings.TrimSpace(text))
 	})
 	form.AddInputField("Webhook Host", cfg.WebhookHost, 64, nil, func(text string) {
 		cfg.WebhookHost = strings.TrimSpace(text)

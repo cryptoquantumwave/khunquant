@@ -72,3 +72,6 @@ dist/
 !web/backend/dist/
 web/backend/dist/*
 !web/backend/dist/.gitkeep
+
+# Credential passphrase (decrypts every stored secret) - never commit.
+.passphrase

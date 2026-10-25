@@ -16,10 +16,17 @@ type CreateDeltaNeutralPlanTool struct {
 	cfg         *config.Config
 	store       *deltaneutral.Store
 	cronService *cron.CronService
+	sync        DNSyncFunc
 }
 
 func NewCreateDeltaNeutralPlanTool(cfg *config.Config, store *deltaneutral.Store, cronService *cron.CronService) *CreateDeltaNeutralPlanTool {
 	return &CreateDeltaNeutralPlanTool{cfg: cfg, store: store, cronService: cronService}
+}
+
+// WithSync gives the tool the hook it calls once the plan's cron job exists. Nil is fine.
+func (t *CreateDeltaNeutralPlanTool) WithSync(f DNSyncFunc) *CreateDeltaNeutralPlanTool {
+	t.sync = f
+	return t
 }
 
 func (t *CreateDeltaNeutralPlanTool) Name() string { return NameCreateDeltaNeutralPlan }
@@ -170,6 +177,11 @@ func (t *CreateDeltaNeutralPlanTool) Parameters() map[string]any {
 }
 
 func (t *CreateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// A plan gets a monitor job on the owner's accounts: owner only.
+	if res := refuseNonOwnerChange(ctx, NameCreateDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	planName, _ := args["plan_name"].(string)
 	asset, _ := args["asset"].(string)
 	spotProvider, _ := args["spot_provider"].(string)
@@ -363,6 +375,7 @@ func (t *CreateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	}
 	job.Payload.NoHistory = true
 	t.cronService.UpdateJob(job)
+	t.sync.request() // the job exists: have the trigger path take it over soon
 
 	plan.CronJobID = job.ID
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {

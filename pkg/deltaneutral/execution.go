@@ -1,5 +1,10 @@
 package deltaneutral
 
+import (
+	"errors"
+	"fmt"
+)
+
 // ExecutionState represents the state of a two-leg execution attempt.
 type ExecutionState string
 
@@ -19,6 +24,12 @@ const (
 	ExecutionStateFailed           ExecutionState = "failed"
 	ExecutionStateCancelled        ExecutionState = "cancelled"
 )
+
+// UnrecordedFillMarker prefixes the execution error_msg trace that is written when an
+// exchange order went through but its leg row could not be persisted. The fill is then
+// invisible to Store.OpenLegExposure, so any plan carrying this marker is treated as
+// having open exposure and must be reconciled manually on the exchange.
+const UnrecordedFillMarker = "UNRECORDED_FILL"
 
 // LegState represents the state of a single execution leg (futures or spot).
 type LegState string
@@ -43,6 +54,18 @@ const (
 	LegTypeSpot    LegType = "spot"
 )
 
+// allExecutionStates is every state, for the store's "which states may move to X".
+var allExecutionStates = []ExecutionState{
+	ExecutionStatePending, ExecutionStateValidating, ExecutionStateAwaitingApproval, ExecutionStatePlacingFirstLeg,
+	ExecutionStateFirstLegFailed, ExecutionStateFirstLegFilled, ExecutionStatePlacingSecondLeg,
+	ExecutionStateSecondLegFailed, ExecutionStateBothLegsFilled, ExecutionStateRecoveryRequired,
+	ExecutionStateUnwinding, ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateCancelled,
+}
+
+// ErrIllegalTransition is returned by Store.UpdateExecution (and wrapped from
+// Execution.Transition) for a state change the table does not allow.
+var ErrIllegalTransition = errors.New("deltaneutral: illegal execution state transition")
+
 // AllowedTransitions returns the set of legal states reachable from the given state.
 // If the state is invalid or terminal, returns an empty slice.
 func AllowedTransitions(from ExecutionState) []ExecutionState {
@@ -53,14 +76,21 @@ func AllowedTransitions(from ExecutionState) []ExecutionState {
 		return []ExecutionState{ExecutionStateAwaitingApproval, ExecutionStateFailed, ExecutionStateCancelled}
 	case ExecutionStateAwaitingApproval:
 		return []ExecutionState{ExecutionStatePlacingFirstLeg, ExecutionStateCancelled}
+	// The three recovery_required edges below (from placing_first_leg,
+	// first_leg_filled and placing_second_leg) are the ones MR-309 added when
+	// UpdateExecution began to enforce the table: every one is a point at which an
+	// order has been or may have been accepted by the exchange while the machine
+	// cannot name an outcome (an unprovable placement, a leg record that could not
+	// be saved), and the code already ends there by way of escalateToRecovery. The
+	// alternatives, failed or a refused write, would hide a position.
 	case ExecutionStatePlacingFirstLeg:
-		return []ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed}
+		return []ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed, ExecutionStateRecoveryRequired}
 	case ExecutionStateFirstLegFailed:
 		return []ExecutionState{ExecutionStateFailed}
 	case ExecutionStateFirstLegFilled:
-		return []ExecutionState{ExecutionStatePlacingSecondLeg}
+		return []ExecutionState{ExecutionStatePlacingSecondLeg, ExecutionStateRecoveryRequired}
 	case ExecutionStatePlacingSecondLeg:
-		return []ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed}
+		return []ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed, ExecutionStateRecoveryRequired}
 	case ExecutionStateSecondLegFailed:
 		return []ExecutionState{ExecutionStateRecoveryRequired}
 	case ExecutionStateBothLegsFilled:
@@ -68,7 +98,7 @@ func AllowedTransitions(from ExecutionState) []ExecutionState {
 	case ExecutionStateRecoveryRequired:
 		return []ExecutionState{ExecutionStateUnwinding, ExecutionStateFailed}
 	case ExecutionStateUnwinding:
-		return []ExecutionState{ExecutionStateUnwound, ExecutionStateFailed}
+		return []ExecutionState{ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateRecoveryRequired}
 	case ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateCancelled:
 		// Terminal states - no outgoing transitions
 		return []ExecutionState{}
@@ -170,5 +200,23 @@ func (a *Attempt) Transition(to ExecutionState) error {
 		}
 	}
 	a.State = to
+	return nil
+}
+
+// Transition moves the execution to the given state through the state machine:
+// the only way code outside this package changes Execution.State. It is a no-op
+// when the execution is already there (a step that runs twice repeats it), and
+// otherwise returns an error wrapping ErrIllegalTransition and leaves the state as
+// it was. Persisting the change is UpdateExecution, which checks the table again
+// against the stored row.
+func (e *Execution) Transition(to ExecutionState) error {
+	if ExecutionState(e.State) == to {
+		return nil
+	}
+	a := Attempt{State: ExecutionState(e.State)}
+	if err := a.Transition(to); err != nil {
+		return fmt.Errorf("%w: %v", ErrIllegalTransition, err)
+	}
+	e.State = string(a.State)
 	return nil
 }

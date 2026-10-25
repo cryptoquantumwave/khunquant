@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func (t *CreateDCAPlanTool) Description() string {
 }
 
 func (t *CreateDCAPlanTool) Parameters() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"plan_name": map[string]any{"type": "string", "description": "Unique human-readable plan name (e.g. 'BTC RSI Dip Buy')."},
@@ -146,9 +147,18 @@ func (t *CreateDCAPlanTool) Parameters() map[string]any {
 		},
 		"required": []string{"plan_name", "provider", "symbol", "amount_per_order"},
 	}
+	for k, v := range mandateParameters {
+		params["properties"].(map[string]any)[k] = v
+	}
+	return params
 }
 
 func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// A plan gets a job that places real buys, so only the owner makes one.
+	if res := refuseNonOwnerChange(ctx, NameCreateDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planName, _ := args["plan_name"].(string)
 	providerID, _ := args["provider"].(string)
 	account, _ := args["account"].(string)
@@ -158,11 +168,17 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	startDateStr, _ := args["start_date"].(string)
 	endDateStr, _ := args["end_date"].(string)
 
+	ask, askErr := mandateAskFrom(t.cfg, args)
+	if askErr != "" {
+		return ErrorResult(askErr)
+	}
 	if planName == "" || providerID == "" || symbol == "" {
 		return ErrorResult("plan_name, provider, and symbol are required")
 	}
-	if amountPerOrder <= 0 {
-		return ErrorResult("amount_per_order must be positive")
+	// M-7: NaN passes every "<= 0" guard, because comparisons against it are
+	// false. It arrives straight from JSON tool arguments.
+	if math.IsNaN(amountPerOrder) || math.IsInf(amountPerOrder, 0) || amountPerOrder <= 0 {
+		return ErrorResult("amount_per_order must be a positive, finite number")
 	}
 	if side == "" {
 		side = "buy"
@@ -335,6 +351,11 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 
 	plan.CronJobID = job.ID
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {
+		// The gateway runs a dca: job only if it is the job the plan records. A job
+		// whose ID could not be recorded would be refused on every tick, and the
+		// plan would sit enabled with nothing running it: undo both halves.
+		t.cronService.RemoveJob(job.ID)
+		_ = t.store.DeletePlan(ctx, planID)
 		return ErrorResult(fmt.Sprintf("failed to update plan with cron job ID: %v", err))
 	}
 
@@ -356,6 +377,7 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	out += fmt.Sprintf("  Cron job ID:   %s\n", job.ID)
 	out += fmt.Sprintf("\nOn each cron tick the agent will receive:\n  \"%s\"\n", cronMsg)
 	out += fmt.Sprintf("The DCA skill will call execute_dca_order(plan_id=%d) automatically.\n", planID)
+	out += proposeMandateFor(ctx, t.cfg, t.store, plan, ask)
 	return UserResult(out)
 }
 

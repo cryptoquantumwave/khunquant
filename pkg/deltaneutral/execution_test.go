@@ -250,7 +250,7 @@ func TestAllowedTransitions(t *testing.T) {
 		},
 		{
 			ExecutionStatePlacingFirstLeg,
-			[]ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed},
+			[]ExecutionState{ExecutionStateFirstLegFilled, ExecutionStateFirstLegFailed, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStateFirstLegFailed,
@@ -258,11 +258,11 @@ func TestAllowedTransitions(t *testing.T) {
 		},
 		{
 			ExecutionStateFirstLegFilled,
-			[]ExecutionState{ExecutionStatePlacingSecondLeg},
+			[]ExecutionState{ExecutionStatePlacingSecondLeg, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStatePlacingSecondLeg,
-			[]ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed},
+			[]ExecutionState{ExecutionStateBothLegsFilled, ExecutionStateSecondLegFailed, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStateSecondLegFailed,
@@ -278,7 +278,7 @@ func TestAllowedTransitions(t *testing.T) {
 		},
 		{
 			ExecutionStateUnwinding,
-			[]ExecutionState{ExecutionStateUnwound, ExecutionStateFailed},
+			[]ExecutionState{ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateRecoveryRequired},
 		},
 		{
 			ExecutionStateUnwound,
@@ -367,6 +367,19 @@ func TestAttemptErrorType(t *testing.T) {
 	}
 	if attemptErr.Message == "" {
 		t.Error("error message should not be empty")
+	}
+}
+
+// TestUnwindingFailureEdges: an unwind that cannot finish must be able to leave
+// "unwinding" for failed (nothing closed) or recovery_required (partially closed).
+func TestUnwindingFailureEdges(t *testing.T) {
+	for _, to := range []ExecutionState{ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateRecoveryRequired} {
+		if !CanTransition(ExecutionStateUnwinding, to) {
+			t.Errorf("unwinding -> %s must be legal", to)
+		}
+	}
+	if CanTransition(ExecutionStateUnwinding, ExecutionStateBothLegsFilled) {
+		t.Error("unwinding -> both_legs_filled must stay illegal")
 	}
 }
 

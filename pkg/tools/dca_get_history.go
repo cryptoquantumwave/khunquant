@@ -77,9 +77,16 @@ func (t *GetDCAHistoryTool) Execute(ctx context.Context, args map[string]any) *T
 	sb.WriteString(fmt.Sprintf("%-22s %-12s %-14s %-12s %s\n", "Date", "Price", "Qty", "Spent", "Status"))
 	sb.WriteString(strings.Repeat("-", 75) + "\n")
 	for _, e := range execs {
-		statusMark := "✓"
-		if e.Status == "failed" {
+		statusMark, detail := "✓", "error"
+		switch e.Status {
+		case "failed":
 			statusMark = "✗"
+		case "skipped":
+			statusMark, detail = "–", "skipped"
+		}
+		status := e.Status
+		if e.Side == "sell" {
+			status += " (sell)"
 		}
 		sb.WriteString(fmt.Sprintf("%-22s %-12.4f %-14.6f %-12.4f %s %s\n",
 			e.ExecutedAt.Format("2006-01-02 15:04 UTC"),
@@ -87,10 +94,10 @@ func (t *GetDCAHistoryTool) Execute(ctx context.Context, args map[string]any) *T
 			e.FilledQuantity,
 			e.AmountQuote,
 			statusMark,
-			e.Status,
+			status,
 		))
 		if e.ErrorMsg != "" {
-			sb.WriteString(fmt.Sprintf("  ↳ error: %s\n", e.ErrorMsg))
+			sb.WriteString(fmt.Sprintf("  ↳ %s: %s\n", detail, e.ErrorMsg))
 		}
 	}
 

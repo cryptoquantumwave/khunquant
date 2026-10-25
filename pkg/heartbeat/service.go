@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
@@ -27,6 +28,15 @@ const (
 	minIntervalMinutes     = 30
 	defaultIntervalMinutes = 120
 	userTasksMarker        = "Add your heartbeat tasks below this line:"
+
+	// minFirstDelay is the shortest wait before the first run after a start or
+	// a reload: long enough for the rest of the gateway to come up.
+	minFirstDelay = time.Second
+
+	// stopWait bounds how long Stop waits for a governed run in flight to
+	// notice its cancelled context. A legacy run cannot be cancelled and is not
+	// waited for.
+	stopWait = 5 * time.Second
 )
 
 // HeartbeatHandler is the function type for handling heartbeat.
@@ -34,35 +44,112 @@ const (
 // channel and chatID are derived from the last active user channel.
 type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
 
+// ContextHandler is a HeartbeatHandler that is given the service's context. The
+// context ends when the service is stopped, so a handler that can be cancelled
+// (a governed turn) stops with it. Under ContractGoverned channel and chatID are
+// always empty: a governed heartbeat is not addressed to the last active chat.
+type ContextHandler func(ctx context.Context, prompt, channel, chatID string) *tools.ToolResult
+
+// clock is the service's view of time, so that scheduling can be tested without
+// real waiting.
+type clock interface {
+	Now() time.Time
+	NewTimer(d time.Duration) timer
+}
+
+// timer is the part of *time.Timer the schedule uses.
+type timer interface {
+	C() <-chan time.Time
+	Stop() bool
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) NewTimer(d time.Duration) timer { return realTimer{time.NewTimer(d)} }
+
+type realTimer struct{ t *time.Timer }
+
+func (r realTimer) C() <-chan time.Time { return r.t.C }
+
+func (r realTimer) Stop() bool { return r.t.Stop() }
+
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
 	workspace string
 	bus       *bus.MessageBus
 	state     *state.Manager
-	handler   HeartbeatHandler
+	handler   ContextHandler
 	interval  time.Duration
 	enabled   bool
+	contract  Contract
+	clock     clock
 	mu        sync.RWMutex
 	stopChan  chan struct{}
+
+	// Set by Start, ended by Stop.
+	done   chan struct{}      // closed when the schedule loop has returned
+	wake   chan struct{}      // nudges the loop after SetInterval
+	ctx    context.Context    // ends on Stop; what a ContextHandler is given
+	cancel context.CancelFunc // ends ctx
+
+	running atomic.Bool // a run is in flight
+
+	// runWithoutTasks: a run happens even when HEARTBEAT.md lists no task of the
+	// owner's (guarded by mu). A sweep heartbeat has work that does not depend on
+	// the file: it reconciles the sources and looks at what changed, and the file
+	// only tells the model what the owner cares about.
+	runWithoutTasks bool
 }
 
-// NewHeartbeatService creates a new heartbeat service
-func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *HeartbeatService {
-	// Apply minimum interval
+// normalizeInterval applies the minimum and the default to a configured
+// interval in minutes.
+func normalizeInterval(intervalMinutes int) time.Duration {
 	if intervalMinutes < minIntervalMinutes && intervalMinutes != 0 {
 		intervalMinutes = minIntervalMinutes
 	}
-
 	if intervalMinutes == 0 {
 		intervalMinutes = defaultIntervalMinutes
 	}
+	return time.Duration(intervalMinutes) * time.Minute
+}
 
+// NewHeartbeatService creates a new heartbeat service. stateMgr is the shared
+// state manager (normally the agent loop's), so the service sees the last
+// channel as it is now rather than as it was when the service was built, and
+// keeps the time of its last run where a restart or a reload can find it. A nil
+// manager is allowed: it reads as "no last channel" and "never ran", and the
+// time of a run is not kept.
+func NewHeartbeatService(
+	workspace string,
+	intervalMinutes int,
+	enabled bool,
+	stateMgr *state.Manager,
+) *HeartbeatService {
 	return &HeartbeatService{
 		workspace: workspace,
-		interval:  time.Duration(intervalMinutes) * time.Minute,
+		interval:  normalizeInterval(intervalMinutes),
 		enabled:   enabled,
-		state:     state.NewManager(workspace),
+		state:     stateMgr,
+		clock:     realClock{},
 	}
+}
+
+// lastChannel returns the last active channel from the shared state manager,
+// or "" when the service was built without one.
+func (hs *HeartbeatService) lastChannel() string {
+	if hs.state == nil {
+		return ""
+	}
+	return hs.state.GetLastChannel()
+}
+
+// LastDestination is the channel and chat a heartbeat would be addressed to
+// right now, resolved from the shared state manager on every call. Both are
+// empty when nothing usable has been recorded.
+func (hs *HeartbeatService) LastDestination() (channel, chatID string) {
+	return hs.parseLastChannel(hs.lastChannel())
 }
 
 // SetBus sets the message bus for delivering heartbeat results.
@@ -74,9 +161,75 @@ func (hs *HeartbeatService) SetBus(msgBus *bus.MessageBus) {
 
 // SetHandler sets the heartbeat handler.
 func (hs *HeartbeatService) SetHandler(handler HeartbeatHandler) {
+	if handler == nil {
+		hs.SetContextHandler(nil)
+		return
+	}
+	hs.SetContextHandler(func(_ context.Context, prompt, channel, chatID string) *tools.ToolResult {
+		return handler(prompt, channel, chatID)
+	})
+}
+
+// SetContextHandler sets a handler that is given the service's context.
+func (hs *HeartbeatService) SetContextHandler(handler ContextHandler) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.handler = handler
+}
+
+// SetContract sets how the heartbeat reports. Set it before Start; it decides
+// which default HEARTBEAT.md is written, which prompt the file is wrapped in, and
+// whether the last active chat is consulted (governed: never).
+func (hs *HeartbeatService) SetContract(c Contract) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.contract = c
+}
+
+// SetRunWithoutTasks makes the service run the handler on every tick, also when
+// HEARTBEAT.md is missing or holds no task of the owner's (the prompt is then the
+// file as it is, or the default for the contract). Set it before Start. It is for a
+// sweep heartbeat, whose reconciliation must not depend on the owner having written
+// a task.
+func (hs *HeartbeatService) SetRunWithoutTasks(v bool) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.runWithoutTasks = v
+}
+
+// Interval is the current interval, after the minimum and the default.
+func (hs *HeartbeatService) Interval() time.Duration { return hs.currentInterval() }
+
+// Contract reports how the heartbeat reports.
+func (hs *HeartbeatService) Contract() Contract {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	return hs.contract
+}
+
+// SetInterval changes the interval, in minutes, without firing a heartbeat.
+// The same minimum and default apply as at construction. On a running service
+// that has run before, the next run moves to the last run's start plus the new
+// interval; if that is already past it is one full new interval from now. A
+// change never causes a run by itself. A service that has not run yet keeps its
+// pending first run.
+func (hs *HeartbeatService) SetInterval(intervalMinutes int) {
+	d := normalizeInterval(intervalMinutes)
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.interval = d
+	if hs.wake != nil {
+		select {
+		case hs.wake <- struct{}{}:
+		default: // a nudge is already pending; the loop re-reads the interval
+		}
+	}
+}
+
+func (hs *HeartbeatService) currentInterval() time.Duration {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	return hs.interval
 }
 
 // Start begins the heartbeat service
@@ -94,28 +247,69 @@ func (hs *HeartbeatService) Start() error {
 		return nil
 	}
 
+	hs.warnTemplateMismatch()
+
 	hs.stopChan = make(chan struct{})
-	go hs.runLoop(hs.stopChan)
+	hs.done = make(chan struct{})
+	hs.wake = make(chan struct{}, 1)
+	hs.ctx, hs.cancel = context.WithCancel(context.Background())
+	go hs.runLoop(hs.stopChan, hs.wake, hs.done)
 
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
 		"interval_minutes": hs.interval.Minutes(),
+		"contract":         hs.contract.String(),
 	})
 
 	return nil
 }
 
-// Stop gracefully stops the heartbeat service
+// warnTemplateMismatch logs the advisory for a v1 HEARTBEAT.md (a warning when the
+// contract is governed, a notice when it is legacy), once per Start (the gateway builds a new service for every start
+// and reload). The caller holds hs.mu.
+func (hs *HeartbeatService) warnTemplateMismatch() {
+	data, err := os.ReadFile(filepath.Join(hs.workspace, "HEARTBEAT.md"))
+	if err != nil {
+		return
+	}
+	msg, warn := TemplateAdvisory(string(data), hs.contract)
+	switch {
+	case msg == "":
+	case warn:
+		warnLog(msg, map[string]any{"contract": hs.contract.String()})
+	default:
+		infoLog(msg, map[string]any{"contract": hs.contract.String()})
+	}
+}
+
+// Stop gracefully stops the heartbeat service. It cancels the context a
+// ContextHandler was given, stops the timer, and lets the schedule goroutine
+// return. For a governed run in flight it waits, up to stopWait, for the run to
+// end, so that whatever it decided has been handed over before the caller stops
+// what that is handed to; a legacy run cannot be cancelled and is not waited for.
 func (hs *HeartbeatService) Stop() {
 	hs.mu.Lock()
-	defer hs.mu.Unlock()
-
 	if hs.stopChan == nil {
+		hs.mu.Unlock()
 		return
 	}
 
 	logger.InfoC("heartbeat", "Stopping heartbeat service")
 	close(hs.stopChan)
 	hs.stopChan = nil
+	if hs.cancel != nil {
+		hs.cancel()
+	}
+	done, wait := hs.done, hs.contract == ContractGoverned
+	hs.mu.Unlock()
+
+	if done == nil || !wait {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(stopWait):
+		logger.WarnC("heartbeat", "A heartbeat run did not stop in time; its decisions will be dropped")
+	}
 }
 
 // IsRunning returns whether the service is running
@@ -125,24 +319,123 @@ func (hs *HeartbeatService) IsRunning() bool {
 	return hs.stopChan != nil
 }
 
-// runLoop runs the heartbeat ticker
-func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
-	ticker := time.NewTicker(hs.interval)
-	defer ticker.Stop()
+// firstRunDelay is how long a service that has just started waits for its first
+// run, given when the last run started.
+//
+//   - Never ran (zero): minFirstDelay, so a first-ever start gets its first look
+//     almost at once.
+//   - Ran at some time in the past: what is left of the interval, but not less
+//     than minFirstDelay. A run that is already overdue also waits minFirstDelay.
+//   - Ran "in the future" (the clock went backwards, or the file came from a
+//     machine with a later clock): the elapsed time cannot be known, so wait one
+//     full interval. That is the most a heartbeat can be late; the first run
+//     overwrites the bad timestamp.
+func firstRunDelay(last, now time.Time, interval time.Duration) time.Duration {
+	switch {
+	case last.IsZero():
+		return minFirstDelay
+	case last.After(now):
+		return interval
+	}
+	return max(interval-now.Sub(last), minFirstDelay)
+}
 
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
-		hs.executeHeartbeat()
-	})
+// nextRun is when the run after the one that started at fired is due. Ticks that
+// came due while a run was still in flight are skipped, not queued: the next one
+// is the first multiple of interval after fired that is still ahead of now.
+func nextRun(fired, now time.Time, interval time.Duration) (next time.Time, skipped int) {
+	next = fired.Add(interval)
+	for !next.After(now) {
+		next = next.Add(interval)
+		skipped++
+	}
+	return next, skipped
+}
+
+// runLoop is the schedule: a first run after firstRunDelay, then one every
+// interval from that run's start. It is a single goroutine and runs the
+// heartbeat inline, so two runs never overlap. It returns when stop is closed.
+func (hs *HeartbeatService) runLoop(stop <-chan struct{}, wake <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+
+	now := hs.clock.Now()
+	last := hs.lastRun()
+	interval := hs.currentInterval()
+	delay := firstRunDelay(last, now, interval)
+	// anchor is the start of the last run, the base an interval change counts
+	// from. A missing or future timestamp is no base.
+	anchor := last
+	if last.After(now) {
+		anchor = time.Time{}
+	}
+
+	t := hs.clock.NewTimer(delay)
+	defer func() { t.Stop() }()
+	rearm := func(d time.Duration) {
+		t.Stop()
+		t = hs.clock.NewTimer(d)
+	}
 
 	for {
 		select {
-		case <-stopChan:
+		case <-stop:
 			return
-		case <-ticker.C:
+		case <-wake:
+			interval = hs.currentInterval()
+			if anchor.IsZero() {
+				continue // nothing has run yet; the pending first run stands
+			}
+			now = hs.clock.Now()
+			next := anchor.Add(interval)
+			if !next.After(now) {
+				next = now.Add(interval)
+			}
+			rearm(next.Sub(now))
+		case <-t.C():
+			fired := hs.clock.Now()
 			hs.executeHeartbeat()
+			anchor = fired
+			interval = hs.currentInterval()
+			now = hs.clock.Now()
+			next, skipped := nextRun(fired, now, interval)
+			if skipped > 0 {
+				hs.logInfof("Skipped %d heartbeat tick(s) that came due while a heartbeat was still running", skipped)
+			}
+			rearm(next.Sub(now))
 		}
 	}
+}
+
+// lastRun is when the last heartbeat run started, zero when unknown.
+func (hs *HeartbeatService) lastRun() time.Time {
+	if hs.state == nil {
+		return time.Time{}
+	}
+	return hs.state.GetLastHeartbeatAt()
+}
+
+// recordRunStart persists that a run is starting. It is done before the handler
+// is called, so a crash in the middle of a turn does not make the next start run
+// again at once.
+func (hs *HeartbeatService) recordRunStart() {
+	if hs.state == nil {
+		return
+	}
+	if err := hs.state.SetLastHeartbeatAt(hs.clock.Now()); err != nil {
+		hs.logErrorf("Failed to record the heartbeat start time: %v", err)
+	}
+}
+
+// runContext is the context for a handler: it ends on Stop. A service whose
+// loop was not started (a test calling executeHeartbeat directly) gets a
+// background context.
+func (hs *HeartbeatService) runContext() context.Context {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	if hs.ctx != nil {
+		return hs.ctx
+	}
+	return context.Background()
 }
 
 // executeHeartbeat performs a single heartbeat check
@@ -150,6 +443,7 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.mu.RLock()
 	enabled := hs.enabled
 	handler := hs.handler
+	contract := hs.contract
 	if !hs.enabled || hs.stopChan == nil {
 		hs.mu.RUnlock()
 		return
@@ -159,6 +453,14 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	if !enabled {
 		return
 	}
+
+	// One run at a time: a run still in flight when the next is due makes that
+	// one skip rather than pile up behind it.
+	if !hs.running.CompareAndSwap(false, true) {
+		hs.logInfof("Heartbeat skipped: the previous run is still in flight")
+		return
+	}
+	defer hs.running.Store(false)
 
 	logger.DebugC("heartbeat", "Executing heartbeat")
 
@@ -173,14 +475,20 @@ func (hs *HeartbeatService) executeHeartbeat() {
 		return
 	}
 
-	// Get last channel info for context
-	lastChannel := hs.state.GetLastChannel()
-	channel, chatID := hs.parseLastChannel(lastChannel)
+	// A governed heartbeat is not addressed to anyone: its decisions go to the
+	// owner through attention, so the last active chat is not even looked up.
+	var channel, chatID string
+	if contract != ContractGoverned {
+		// Get last channel info for context
+		lastChannel := hs.lastChannel()
+		channel, chatID = hs.parseLastChannel(lastChannel)
 
-	// Debug log for channel resolution
-	hs.logInfof("Resolved channel: %s, chatID: %s (from lastChannel: %s)", channel, chatID, lastChannel)
+		// Debug log for channel resolution
+		hs.logInfof("Resolved channel: %s, chatID: %s (from lastChannel: %s)", channel, chatID, lastChannel)
+	}
 
-	result := handler(prompt, channel, chatID)
+	hs.recordRunStart()
+	result := handler(hs.runContext(), prompt, channel, chatID)
 
 	if result == nil {
 		hs.logInfof("Heartbeat handler returned nil result")
@@ -208,6 +516,13 @@ func (hs *HeartbeatService) executeHeartbeat() {
 		return
 	}
 
+	// A governed heartbeat delivers through attention and nothing else: whatever
+	// the handler returned, it is not sent to a chat from here.
+	if contract == ContractGoverned {
+		hs.logInfof("Heartbeat completed (governed, result not sent): %s", result.ForLLM)
+		return
+	}
+
 	// Send result to user
 	if result.ForUser != "" {
 		hs.sendResponse(result.ForUser)
@@ -218,26 +533,76 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.logInfof("Heartbeat completed: %s", result.ForLLM)
 }
 
+// GovernedPrompt is the prompt a governed heartbeat gives its proactive turn:
+// the time and HEARTBEAT.md's content, with no request for HEARTBEAT_OK or for
+// actions, because the proactive turn puts its own contract (respond_proactive,
+// silence by default) ahead of it. now is formatted by the caller. It is
+// exported so that the size of a governed turn can be measured on the real text.
+func GovernedPrompt(now, content string) string {
+	return fmt.Sprintf(`# Heartbeat Check
+
+Current time: %s
+
+This is a scheduled heartbeat check. Review the following tasks, look at the data
+with your read tools, and report through respond_proactive.
+
+%s
+`, now, content)
+}
+
 // buildPrompt builds the heartbeat prompt from HEARTBEAT.md
 func (hs *HeartbeatService) buildPrompt() string {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
 
+	hs.mu.RLock()
+	contract := hs.contract
+	always := hs.runWithoutTasks
+	hs.mu.RUnlock()
+
+	var content string
 	data, err := os.ReadFile(heartbeatPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			hs.createDefaultHeartbeatTemplate()
+	switch {
+	case err == nil:
+		content = string(data)
+	case os.IsNotExist(err):
+		hs.createDefaultHeartbeatTemplate()
+		if !always {
 			return ""
 		}
+		content = idleTemplateV2()
+	default:
 		hs.logErrorf("Error reading HEARTBEAT.md: %v", err)
 		return ""
 	}
 
-	content := string(data)
-	if !heartbeatHasUserTasks(content) {
+	if !always && !heartbeatHasUserTasks(content) {
 		return ""
 	}
 
-	now := time.Now().Format("2006-01-02 15:04:05")
+	clockNow := hs.clock.Now()
+	now := clockNow.Format("2006-01-02 15:04:05")
+	if contract == ContractGoverned {
+		// The proactive turn puts its own contract (respond_proactive, silence
+		// by default) ahead of this text, so it must not ask for HEARTBEAT_OK or
+		// for actions.
+		return GovernedPrompt(now, content)
+	}
+	// The legacy time carries the UTC offset, so the model can apply quiet hours
+	// in the owner's timezone.
+	return LegacyPrompt(clockNow.Format("2006-01-02 15:04:05 -07:00"), content, recentSent(hs.workspace, clockNow))
+}
+
+// LegacyPrompt is the prompt a legacy heartbeat gives its turn: the time and
+// HEARTBEAT.md's content, with the request for HEARTBEAT_OK when nothing needs
+// attention, then the legacy guardrails, then the alerts the ledger shows were
+// sent in the last 24h, so the model can dedup without writing anything. now is
+// formatted by the caller (with a UTC offset, for quiet hours). It is exported,
+// like GovernedPrompt, so that a legacy turn can be tested on the real text.
+//
+// The guardrails are here and not in HEARTBEAT.md because that file is also read
+// by governed and sweep turns, which have their own contract and must not pay for
+// rules that are not theirs. HEARTBEAT.md's tasks can override them.
+func LegacyPrompt(now, content string, sent []SentAlert) string {
 	return fmt.Sprintf(`# Heartbeat Check
 
 Current time: %s
@@ -247,38 +612,27 @@ Review the following tasks and execute any necessary actions using available ski
 If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK
 
 %s
-`, now, content)
+%s
+%s`, now, content, LegacyGuardrails, sentSection(sent))
 }
 
-// createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file
+// LegacyGuardrails is the block LegacyPrompt puts between the tasks and the list
+// of alerts already sent: the rules the v1 template used to carry, which a legacy
+// heartbeat has no other code to enforce.
+const LegacyGuardrails = `Guardrails:
+- Quiet hours 22:00-07:00 in the timezone in USER.md: critical events only.
+- Skip move-detection on markets closed for hours.
+- Do not repeat an alert listed below unless it crossed the next severity tier; then say it is an update.
+- At most ONE message per heartbeat, and about 3 non-critical briefings a day.
+If the tasks above give different rules, follow the tasks.
+`
+
+// createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file: the v2
+// template with no tasks, in every mode, so it runs nothing until one is added.
 func (hs *HeartbeatService) createDefaultHeartbeatTemplate() {
 	heartbeatPath := filepath.Join(hs.workspace, "HEARTBEAT.md")
 
-	defaultContent := `# Heartbeat Check List
-
-This file contains tasks for the heartbeat service to check periodically.
-
-## Examples
-
-- Check for unread messages
-- Review upcoming calendar events
-- Check device status (e.g., MaixCam)
-
-## Instructions
-
-- Execute ALL tasks listed below. Do NOT skip any task.
-- For simple tasks (e.g., report current time), respond directly.
-- For complex tasks that may take time, use the spawn tool to create a subagent.
-- The spawn tool is async - subagent results will be sent to the user automatically.
-- After spawning a subagent, CONTINUE to process remaining tasks.
-- Only respond with HEARTBEAT_OK when ALL tasks are done AND nothing needs attention.
-
----
-
-Add your heartbeat tasks below this line:
-`
-
-	if err := fileutil.WriteFileAtomic(heartbeatPath, []byte(defaultContent), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomic(heartbeatPath, []byte(idleTemplateV2()), 0o644); err != nil {
 		hs.logErrorf("Failed to create default HEARTBEAT.md: %v", err)
 	} else {
 		hs.logInfof("Created default HEARTBEAT.md template")
@@ -323,7 +677,7 @@ func (hs *HeartbeatService) sendResponse(response string) {
 	}
 
 	// Get last channel from state
-	lastChannel := hs.state.GetLastChannel()
+	lastChannel := hs.lastChannel()
 	if lastChannel == "" {
 		hs.logInfof("No last channel recorded, heartbeat result not sent")
 		return
@@ -338,11 +692,15 @@ func (hs *HeartbeatService) sendResponse(response string) {
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
-	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+	if err := msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Channel: platform,
 		ChatID:  userID,
 		Content: response,
-	})
+	}); err != nil {
+		hs.logErrorf("Heartbeat result not sent to %s: %v", platform, err)
+		return
+	}
+	hs.RecordSent(platform, userID, response)
 
 	hs.logInfof("Heartbeat result sent to %s", platform)
 }

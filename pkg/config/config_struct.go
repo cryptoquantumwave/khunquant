@@ -548,7 +548,7 @@ func (c LINEConfig) IsZero() bool {
 }
 
 func (c WeComConfig) IsZero() bool {
-	return c.Token.String() == "" && c.EncodingAESKey.String() == ""
+	return c.Token.String() == "" && c.EncodingAESKey.String() == "" && c.WebhookURL.String() == ""
 }
 
 func (c WeComAppConfig) IsZero() bool {

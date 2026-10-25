@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test sync-workspace
+.PHONY: all build install uninstall clean help test test-race sync-workspace
 
 # Build variables
 BINARY_NAME=khunquant
@@ -305,6 +305,10 @@ vet: generate
 test: generate
 	@$(GO) test ./...
 
+## test-race: Run the agent loop and tool tests under the race detector (optional; CI does not run -race)
+test-race: generate
+	@$(GO) test -race ./pkg/agent/... ./pkg/tools/...
+
 ## cover-core: Measure Tier 1 weighted coverage (target ≥80%)
 cover-core: deps
 	@bash scripts/cover-core.sh
@@ -344,9 +348,15 @@ run: build
 	@$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
 
 ## docker-build: Build Docker image (minimal Alpine-based)
+# Built directly rather than through docker-compose.yml: that file's services
+# run the published images and carry no build: key, so `compose build` warned
+# "No services to build" and exited 0 - reporting success having built nothing.
+# Same Dockerfile and context CI builds (.github/workflows/pr.yml).
 docker-build:
 	@echo "Building minimal Docker image (Alpine-based)..."
-	docker compose -f docker/docker-compose.yml build khunquant-agent khunquant-gateway
+	docker build -f docker/Dockerfile -t $(BINARY_NAME):latest .
+	@echo "Built $(BINARY_NAME):latest. 'make docker-run' starts the published"
+	@echo "image; run this one with: docker run --rm -it $(BINARY_NAME):latest"
 
 ## docker-build-full: Build Docker image with full MCP support (Node.js 24)
 docker-build-full:

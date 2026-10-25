@@ -5,11 +5,42 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// futuresSequenceTimeout bounds a multi-call futures sequence (entry plus protection,
+// cancel plus replace, cancel plus flatten) once it has begun. The sequence runs
+// detached from the caller's cancellation, so this is its only deadline.
+const futuresSequenceTimeout = 60 * time.Second
+
+// beginFuturesSequence marks the point of no return of a multi-call futures tool: the
+// first mutating exchange call is about to be made.
+//
+// A turn can be cancelled at any moment (the cognition scheduler's turn deadline, a
+// config reload draining jobs). Cancelling between the entry and its stop-loss would
+// leave a leveraged position with no stop, and cancelling inside a mutating HTTP call
+// leaves its outcome unknown. So the caller's ctx is consulted exactly once, here:
+//
+//   - already cancelled: the returned result refuses cleanly and nothing has been
+//     placed (the caller must return it);
+//   - otherwise: the returned context is detached from cancellation
+//     (context.WithoutCancel keeps the caller's values, e.g. origin and turn id) and
+//     bounded by futuresSequenceTimeout. The caller must use it for every remaining
+//     call of the sequence, and call the returned cancel func when done.
+func beginFuturesSequence(ctx context.Context, tool, providerID string) (context.Context, context.CancelFunc, *ToolResult) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, ErrorResult(fmt.Sprintf(
+			"%s refused: the request was cancelled before any order was sent to %s (%v). Nothing was changed on the exchange; re-run it if you still want it.",
+			tool, providerID, err)).WithError(err)
+	}
+	seqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), futuresSequenceTimeout)
+	return seqCtx, cancel, nil
+}
 
 // mergeOrderFillData merges fill and fee data from a CreateOrder response and a
 // subsequent FetchOrder response into a single ccxt.Order for leg recording.
@@ -158,6 +189,33 @@ func contractsFromNotional(notionalUSD, markPrice, contractSize, minAmount float
 	return rounded, nil
 }
 
+// positionNotionalUSD returns the USD notional of a futures position given its
+// contract count, the base-currency size of one contract and the mark price. The
+// arithmetic lives in broker.PositionNotionalUSD, where the perception sources
+// share it; see there for the rules (a position's Contracts is a contract count,
+// a missing size is treated as 1, non-finite input is 0).
+func positionNotionalUSD(contracts, contractSize, markPrice float64) float64 {
+	return broker.PositionNotionalUSD(contracts, contractSize, markPrice)
+}
+
+// positionContractSizeResolver finds the contract size of futures positions: the
+// position's own ContractSize when present and positive, otherwise the market's. The
+// market catalogue is loaded at most once, and only if some position needs it. It
+// wraps broker.ContractSizeResolver, which the perception sources share.
+type positionContractSizeResolver struct {
+	fp broker.FuturesProvider
+	r  *broker.ContractSizeResolver
+}
+
+// size returns (contractSize, true) when it can be determined, else (0, false).
+// symbol is the CCXT market symbol used for the catalogue lookup.
+func (r *positionContractSizeResolver) size(ctx context.Context, p ccxt.Position, symbol string) (float64, bool) {
+	if r.r == nil {
+		r.r = broker.NewContractSizeResolver(r.fp)
+	}
+	return r.r.Size(ctx, p, symbol)
+}
+
 // verifyFuturesFill re-fetches a futures order to detect partial fills.
 // Returns (filled, status, isPartial, err).
 func verifyFuturesFill(ctx context.Context, fp broker.FuturesProvider, id, symbol string, requestedAmount float64) (float64, string, bool, error) {
@@ -175,6 +233,63 @@ func verifyFuturesFill(ctx context.Context, fp broker.FuturesProvider, id, symbo
 	}
 	partial := filled > 0 && requestedAmount > 0 && math.Abs(filled-requestedAmount)/requestedAmount > 1e-6
 	return filled, status, partial, nil
+}
+
+// recordRealisedLoss feeds the daily loss limit (C-4) from a closing order.
+//
+// ccxt.Position also carries RealizedPnl, but no adapter in this repository
+// populates or reads it: its value is whatever ccxt's generic parser happened to
+// fill, and where non-nil its meaning varies by exchange (cumulative-since-open
+// on some, per-close on others). The honest source is the position's
+// UnrealizedPnl captured immediately before the close, prorated by how much of
+// the position actually filled.
+//
+// positionContracts must be the size of the POSITION the snapshot describes,
+// not the amount requested. Reducing 10% of a position and dividing by the
+// requested amount would record the entire position's loss.
+//
+// Only losses are recorded; gains do not offset the limit, matching
+// DailyLossTracker.RecordLoss.
+func recordRealisedLoss(symbol string, pnlBeforeClose *float64, filled, requested, positionContracts float64, verifyErr error) {
+	if pnlBeforeClose == nil {
+		return
+	}
+	pnl := *pnlBeforeClose
+	if math.IsNaN(pnl) || math.IsInf(pnl, 0) || pnl >= 0 {
+		return
+	}
+	loss := -pnl
+
+	switch {
+	case verifyErr != nil:
+		// The fill could not be verified, so filled is 0 and prorating by it
+		// would silently record nothing. A safety control must not under-count
+		// when its input is missing, but it must not wildly over-count either:
+		// assume the requested amount filled. For a full close that is the whole
+		// position; for a partial reduce it is the reduce amount, where charging
+		// the whole position's loss would over-record by 1/fraction.
+		if requested > 0 && positionContracts > 0 {
+			fraction := requested / positionContracts
+			if fraction > 1 {
+				fraction = 1
+			}
+			loss *= fraction
+		}
+		logger.WarnCF("tools", "Could not verify the closing fill; recording the requested amount's loss against the daily limit",
+			map[string]any{"symbol": symbol, "loss_usd": loss, "error": verifyErr.Error()})
+	case filled <= 0 || positionContracts <= 0:
+		return
+	default:
+		fraction := filled / positionContracts
+		if fraction > 1 {
+			fraction = 1
+		}
+		loss *= fraction
+	}
+
+	if loss > 0 && !math.IsNaN(loss) && !math.IsInf(loss, 0) {
+		broker.GlobalLossTracker.RecordLoss(loss)
+	}
 }
 
 // marginHealthFromPosition computes margin health from a ccxt.Position.

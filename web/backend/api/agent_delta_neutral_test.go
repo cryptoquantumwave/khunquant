@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -654,4 +655,132 @@ func findSubstring(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// setupPaperModeDNPlan writes a config with paper trading set as requested and
+// stores one plan, returning the config path and the plan's id.
+func setupPaperModeDNPlan(t *testing.T, paperMode bool) (string, int64) {
+	t.Helper()
+
+	configPath, _ := setupDeltaNeutralTestEnv(t)
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+	cfg.TradingRisk.PaperTradingMode = paperMode
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig error: %v", err)
+	}
+
+	store, err := deltaneutral.NewStore(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatalf("NewStore error: %v", err)
+	}
+
+	now := time.Now()
+	// Active status is what makes needsUnwind true. Without it the guard under
+	// test is never reached and the assertions below would prove nothing.
+	id, saveErr := store.SavePlan(context.Background(), &deltaneutral.Plan{
+		Name:            "paper-mode-plan",
+		Asset:           "ETH",
+		Status:          deltaneutral.PlanStatusActive,
+		Mode:            deltaneutral.ExecutionModeApproval,
+		SpotProvider:    "binance",
+		SpotAccount:     "spot-1",
+		SpotSymbol:      "ETHUSDT",
+		FuturesProvider: "binance",
+		FuturesAccount:  "futures-1",
+		FuturesSymbol:   "ETHUSDT",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	})
+	store.Close()
+	if saveErr != nil {
+		t.Fatalf("SavePlan error: %v", saveErr)
+	}
+
+	return configPath, id
+}
+
+func deleteDNPlanRequest(t *testing.T, configPath string, id int64, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	handler := NewHandler(configPath)
+	mux := http.NewServeMux()
+	handler.registerAgentDeltaNeutralRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/agent/delta-neutral/plans/%d", id), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
+// TestDeleteDeltaNeutralPlan_PaperModeRefusesForceUnwind covers H-6. The unwind
+// tool places real reduce-only orders and does not check paper trading mode
+// itself, so this handler is the only thing standing between a paper-mode
+// deployment and live orders.
+func TestDeleteDeltaNeutralPlan_PaperModeRefusesForceUnwind(t *testing.T) {
+	configPath, id := setupPaperModeDNPlan(t, true)
+
+	w := deleteDNPlanRequest(t, configPath, id, `{"force_unwind":true}`)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (Conflict); body = %s",
+			w.Code, http.StatusConflict, w.Body.String())
+	}
+
+	// The plan must survive the refusal. A 409 that deleted the plan anyway
+	// would leave the legs open with nothing tracking them.
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+	store, err := deltaneutral.NewStore(cfg.WorkspacePath())
+	if err != nil {
+		t.Fatalf("NewStore error: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.GetPlan(context.Background(), id); err != nil {
+		t.Fatalf("plan %d was deleted despite the refusal: %v", id, err)
+	}
+}
+
+// The operator keeps a way out: delete_without_unwind places no orders, so
+// paper mode does not block it. Refusing force_unwind therefore traps nobody.
+func TestDeleteDeltaNeutralPlan_PaperModeAllowsDeleteWithoutUnwind(t *testing.T) {
+	configPath, id := setupPaperModeDNPlan(t, true)
+
+	w := deleteDNPlanRequest(t, configPath, id, `{"delete_without_unwind":true}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp deleteDeltaNeutralPlanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !resp.DeletedWithoutUnwind {
+		t.Errorf("deleted_without_unwind = false, want true")
+	}
+}
+
+// With paper mode off the guard must not fire. This is what keeps the test
+// above honest: it proves the refusal is gated on paper mode rather than
+// rejecting every force_unwind.
+func TestDeleteDeltaNeutralPlan_LiveModeDoesNotRefuseForceUnwind(t *testing.T) {
+	configPath, id := setupPaperModeDNPlan(t, false)
+
+	w := deleteDNPlanRequest(t, configPath, id, `{"force_unwind":true}`)
+
+	if w.Code == http.StatusConflict {
+		t.Fatalf("live mode returned %d (Conflict): the paper-mode guard fired when it should not; body = %s",
+			w.Code, w.Body.String())
+	}
 }

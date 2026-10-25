@@ -1,0 +1,7 @@
+{{.ModeTag}}Proposal {{.Code}} - {{.SideWord}} {{.Amount}} {{.Unit}} (about ${{.USD}}) - {{.TypeWord}}{{if .PriceText}} @ {{.PriceText}}{{end}} - {{.Provider}}/{{.Account}}{{if .ReduceOnly}} - reduce-only{{end}}
+{{.PriceLine}}
+{{if .Why}}Why: {{.Why}}
+{{end}}Expires {{.Expires}} ({{.Minutes}} min)
+{{if .Outcome}}
+{{.Outcome}}
+{{end}}

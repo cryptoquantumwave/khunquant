@@ -59,14 +59,13 @@ func (t *FuturesModifyProtectionTool) Execute(ctx context.Context, args map[stri
 	if stopLoss == 0 && takeProfit == 0 {
 		return ErrorResult("at least one of stop_loss or take_profit is required")
 	}
-	if err := broker.CheckLeverage(t.cfg, "modify futures protection"); err != nil {
+	// Whether a protection change tightens or loosens risk cannot be known before the
+	// existing orders are fetched, so it is classified as RiskIncrease (fail closed).
+	if err := broker.CheckLeverage(t.cfg, "modify futures protection", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -123,6 +122,21 @@ func (t *FuturesModifyProtectionTool) Execute(ctx context.Context, args map[stri
 		}
 		return UserResult(fmt.Sprintf("Dry-run: would set %s protection on %s %s qty %.8g%s. Set confirm=true to execute.",
 			strings.Join(parts, " and "), symbol, positionSide, protectionQty, replaceNote))
+	}
+
+	// Point of no return: a cancel between removing the old protection and placing the
+	// new would leave the position unprotected, so refuse now if the turn is already
+	// cancelled, otherwise finish the replace on a context the cancellation cannot cut.
+	seqCtx, endSeq, refused := beginFuturesSequence(ctx, NameFuturesModifyProtection, providerID)
+	if refused != nil {
+		return refused
+	}
+	defer endSeq()
+	ctx = seqCtx
+
+	// Rate limit: spent only on a confirmed change, before the first cancel/placement.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	var sb strings.Builder
@@ -226,14 +240,12 @@ func (t *FuturesCancelOrdersTool) Execute(ctx context.Context, args map[string]a
 	if orderIDArg == "" && symbol == "" {
 		return ErrorResult("symbol is required when not cancelling by order_id")
 	}
-	if err := broker.CheckLeverage(t.cfg, "cancel futures orders"); err != nil {
+	// Cancelling orders only removes pending exposure, so it is a risk-reducing action.
+	if err := broker.CheckLeverage(t.cfg, "cancel futures orders", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
@@ -246,6 +258,11 @@ func (t *FuturesCancelOrdersTool) Execute(ctx context.Context, args map[string]a
 			return UserResult(fmt.Sprintf("Dry-run: would cancel futures order %s on %s %s. Set confirm=true to execute.", orderIDArg, providerID, symbol))
 		}
 		return UserResult(fmt.Sprintf("Dry-run: would cancel %q futures orders on %s %s. Set confirm=true to execute.", cancelType, providerID, symbol))
+	}
+
+	// Rate limit: spent only on a confirmed cancel, before the first cancellation.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	var sb strings.Builder

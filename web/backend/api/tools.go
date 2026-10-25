@@ -114,6 +114,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   tools.NameInstallSkill,
 	},
 	{
+		Name:        tools.NameLoadSkill,
+		Description: tools.DescLoadSkill,
+		Category:    tools.CatSkills,
+		ConfigKey:   tools.NameLoadSkill,
+	},
+	{
 		Name:        tools.NameSpawn,
 		Description: tools.DescSpawn,
 		Category:    tools.CatAgents,
@@ -372,6 +378,38 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   tools.NameFuturesEmergencyFlatten,
 	},
 
+	// Options (Track B3)
+	{
+		Name:        tools.NameOptionQuote,
+		Description: tools.DescOptionQuote,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionQuote,
+	},
+	{
+		Name:        tools.NameOptionCreateOrder,
+		Description: tools.DescOptionCreateOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionCreateOrder,
+	},
+	{
+		Name:        tools.NameOptionCancelOrder,
+		Description: tools.DescOptionCancelOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionCancelOrder,
+	},
+	{
+		Name:        tools.NameOptionGetOrder,
+		Description: tools.DescOptionGetOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionGetOrder,
+	},
+	{
+		Name:        tools.NameOptionOpenOrders,
+		Description: tools.DescOptionOpenOrders,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionOpenOrders,
+	},
+
 	// Alert and transfer tools (Track D)
 	{
 		Name:        tools.NameSetPriceAlert,
@@ -537,6 +575,20 @@ var toolCatalog = []toolCatalogEntry{
 		Category:    tools.CatPnL,
 		ConfigKey:   tools.NameGetPnLDetail,
 	},
+
+	// User profile
+	{
+		Name:        tools.NameGetProfile,
+		Description: tools.DescGetProfile,
+		Category:    tools.CatProfile,
+		ConfigKey:   tools.NameGetProfile,
+	},
+	{
+		Name:        tools.NameUpdateProfile,
+		Description: tools.DescUpdateProfile,
+		Category:    tools.CatProfile,
+		ConfigKey:   tools.NameUpdateProfile,
+	},
 }
 
 func (h *Handler) registerToolRoutes(mux *http.ServeMux) {
@@ -694,6 +746,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		if enabled {
 			cfg.Tools.Skills.Enabled = true
 		}
+	case tools.NameLoadSkill:
+		cfg.Tools.LoadSkill.Enabled = enabled
 	case tools.NameSpawn:
 		cfg.Tools.Spawn.Enabled = enabled
 		if enabled {
@@ -817,6 +871,10 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.ManageEarnPosition.Enabled = enabled
 	case tools.NameGetPnLSummary:
 		cfg.Tools.GetPnLSummary.Enabled = enabled
+	case tools.NameGetProfile:
+		cfg.Tools.GetProfile.Enabled = enabled
+	case tools.NameUpdateProfile:
+		cfg.Tools.UpdateProfile.Enabled = enabled
 	case tools.NameGetPnLDetail:
 		cfg.Tools.GetPnLDetail.Enabled = enabled
 	default:

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -167,5 +168,31 @@ func TestAuthEndpoints_RejectCrossSiteRequests(t *testing.T) {
 	}
 	if !store.Valid(id) {
 		t.Error("a cross-site logout revoked the session anyway")
+	}
+}
+
+// The login form shares the lockout with Basic auth.
+func TestHandleLogin_LocksOutAfterRepeatedFailures(t *testing.T) {
+	prev := middleware.DefaultAuthLimiter
+	middleware.DefaultAuthLimiter = middleware.NewAuthLimiter(3, time.Hour)
+	t.Cleanup(func() { middleware.DefaultAuthLimiter = prev })
+
+	h, store := newAuthHandler(t, "hunter2")
+	login := func(pass string) int {
+		rec := httptest.NewRecorder()
+		h.handleLogin(rec, postJSON(middleware.LoginPath, `{"password":"`+pass+`"}`))
+		return rec.Code
+	}
+
+	for i := 0; i < 3; i++ {
+		if code := login("wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("failure %d got %d, want 401", i+1, code)
+		}
+	}
+	if code := login("hunter2"); code != http.StatusTooManyRequests {
+		t.Fatalf("locked-out login got %d, want 429", code)
+	}
+	if store.Count() != 0 {
+		t.Fatal("a locked-out login minted a session")
 	}
 }

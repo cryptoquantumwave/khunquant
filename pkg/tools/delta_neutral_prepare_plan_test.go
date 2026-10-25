@@ -109,8 +109,8 @@ func TestPrepareDeltaNeutralPlan_RejectNonDraft(t *testing.T) {
 	if !result.IsError {
 		t.Errorf("expected error for active plan, got success")
 	}
-	if !strings.Contains(result.ForLLM, "only draft plans") {
-		t.Errorf("expected 'only draft plans' in error, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "only draft or failed plans") {
+		t.Errorf("expected 'only draft or failed plans' in error, got: %s", result.ForLLM)
 	}
 }
 

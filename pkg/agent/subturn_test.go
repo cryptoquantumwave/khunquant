@@ -17,14 +17,19 @@ import (
 
 // ====================== Test Helper: Event Collector ======================
 type eventCollector struct {
+	mu     sync.Mutex
 	events []any
 }
 
 func (c *eventCollector) collect(e any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.events = append(c.events, e)
 }
 
 func (c *eventCollector) hasEventOfType(typ any) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	targetType := reflect.TypeOf(typ)
 	for _, e := range c.events {
 		if reflect.TypeOf(e) == targetType {
@@ -109,9 +114,8 @@ func TestSpawnSubTurn(t *testing.T) {
 
 			// Replace mock with test collector
 			collector := &eventCollector{}
-			originalEmit := MockEventBus.Emit
-			MockEventBus.Emit = collector.collect
-			defer func() { MockEventBus.Emit = originalEmit }()
+			al.setEventSink(eventSinkFunc(collector.collect))
+			defer al.setEventSink(nil)
 
 			// Execute spawnSubTurn
 			result, err := spawnSubTurn(context.Background(), al, parent, tt.config)
@@ -262,15 +266,12 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 	}
 
 	collector := &eventCollector{}
-	originalEmit := MockEventBus.Emit
-	MockEventBus.Emit = collector.collect
-	defer func() { MockEventBus.Emit = originalEmit }()
 
 	// Simulate parent finishing before child delivers result
 	parent.Finish(false)
 
 	// Call deliverSubTurnResult directly to simulate a delayed child
-	deliverSubTurnResult(parent, "delayed-child", &tools.ToolResult{ForLLM: "late result"})
+	deliverSubTurnResult(eventSinkFunc(collector.collect), parent, "delayed-child", &tools.ToolResult{ForLLM: "late result"})
 
 	// Verify Orphan event is emitted
 	if !collector.hasEventOfType(SubTurnOrphanResultEvent{}) {
@@ -326,8 +327,7 @@ func TestDequeuePendingSubTurnResults(t *testing.T) {
 		session:        &ephemeralSessionStore{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 	}
-	al.activeTurnStates.Store(sessionKey, ts)
-	defer al.activeTurnStates.Delete(sessionKey)
+	registerTestTurn(t, al, sessionKey, ts)
 
 	// Put 3 results in
 	ts.pendingResults <- &tools.ToolResult{ForLLM: "result-1"}
@@ -348,7 +348,7 @@ func TestDequeuePendingSubTurnResults(t *testing.T) {
 	}
 
 	// After removing from activeTurnStates, returns nil
-	al.activeTurnStates.Delete(sessionKey)
+	al.activeTurnStates.unregister(ts)
 	if results := al.dequeuePendingSubTurnResults(sessionKey); results != nil {
 		t.Error("expected nil for unregistered session")
 	}
@@ -414,25 +414,31 @@ func TestHardAbortCascading(t *testing.T) {
 	}
 
 	// Register the root turn state
-	al.activeTurnStates.Store(sessionKey, rootTS)
-	defer al.activeTurnStates.Delete(sessionKey)
+	registerTestTurn(t, al, sessionKey, rootTS)
 
-	// Create a child turn state
-	childCtx, childCancel := context.WithCancel(rootTS.ctx)
+	// Create a child turn state the way spawnSubTurn does: on a context that
+	// is NOT derived from the parent's, so that the child can outlive a
+	// graceful finish. Cancelling the parent's context therefore cannot reach
+	// it; a hard abort has to, through the turn tree.
+	childCtx, childCancel := context.WithCancel(context.Background())
 	defer childCancel()
 	childTS := &turnState{
-		ctx:            childCtx,
-		cancelFunc:     childCancel,
-		turnID:         "child-1",
-		parentTurnID:   sessionKey,
-		depth:          1,
-		session:        &ephemeralSessionStore{},
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, 5),
+		ctx:             childCtx,
+		cancelFunc:      childCancel,
+		turnID:          "child-1",
+		parentTurnID:    sessionKey,
+		parentTurnState: rootTS,
+		depth:           1,
+		session:         &ephemeralSessionStore{},
+		pendingResults:  make(chan *tools.ToolResult, 16),
+		concurrencySem:  make(chan struct{}, 5),
 	}
 
 	// Attach cancelFunc to rootTS so Finish() can trigger it
 	rootTS.cancelFunc = parentCancel
+	if !rootTS.addChild(childTS) {
+		t.Fatal("a live parent refused a child")
+	}
 
 	// Verify contexts are not canceled yet
 	select {
@@ -496,12 +502,13 @@ func TestHardAbortSessionRollback(t *testing.T) {
 		depth:                0,
 		session:              sess,
 		initialHistoryLength: 2, // Snapshot: 2 messages
+		historySnapshotTaken: true,
 		pendingResults:       make(chan *tools.ToolResult, 16),
 		concurrencySem:       make(chan struct{}, 5),
 	}
 
 	// Register the turn state
-	al.activeTurnStates.Store("test-session", rootTS)
+	registerTestTurn(t, al, "test-session", rootTS)
 
 	// Simulate adding messages during the turn (e.g., user input + assistant response)
 	sess.AddMessage("", "user", "new user message")
@@ -544,11 +551,8 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 	var spawnedTurns []turnInfo
 	var mu sync.Mutex
 
-	// Override MockEventBus to capture spawn events
-	originalEmit := MockEventBus.Emit
-	defer func() { MockEventBus.Emit = originalEmit }()
-
-	MockEventBus.Emit = func(event any) {
+	// Capture spawn events on this loop's sink
+	al.setEventSink(eventSinkFunc(func(event any) {
 		if spawnEvent, ok := event.(SubTurnSpawnEvent); ok {
 			mu.Lock()
 			// Extract depth from context (we'll verify this matches expected depth)
@@ -558,7 +562,7 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 			})
 			mu.Unlock()
 		}
-	}
+	}))
 
 	// Create a root turn
 	rootSession := &ephemeralSessionStore{}
@@ -616,7 +620,7 @@ func TestDeliverSubTurnResultNoDeadlock(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			result := &tools.ToolResult{ForLLM: fmt.Sprintf("result-%d", id)}
-			deliverSubTurnResult(parent, fmt.Sprintf("child-%d", id), result)
+			deliverSubTurnResult(noopSink{}, parent, fmt.Sprintf("child-%d", id), result)
 		}(i)
 	}
 
@@ -673,11 +677,12 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 		depth:                0,
 		session:              sess,
 		initialHistoryLength: 1, // Snapshot: 1 message
+		historySnapshotTaken: true,
 		pendingResults:       make(chan *tools.ToolResult, 16),
 		concurrencySem:       make(chan struct{}, 5),
 	}
 
-	al.activeTurnStates.Store("test-session-order", rootTS)
+	registerTestTurn(t, al, "test-session-order", rootTS)
 
 	// Trigger HardAbort
 	err := al.HardAbort("test-session-order")
@@ -745,7 +750,7 @@ func TestFinishedChannelClosedState(t *testing.T) {
 
 	// Verify deliverSubTurnResult correctly uses Finished() channel and treats as orphan
 	result := &tools.ToolResult{ForLLM: "late result"}
-	deliverSubTurnResult(ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
+	deliverSubTurnResult(noopSink{}, ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
 }
 
 // TestFinalPollCapturesLateResults verifies that the final poll before Finish()
@@ -764,8 +769,7 @@ func TestFinalPollCapturesLateResults(t *testing.T) {
 		session:        &ephemeralSessionStore{},
 		pendingResults: make(chan *tools.ToolResult, 4),
 	}
-	al.activeTurnStates.Store(sessionKey, ts)
-	defer al.activeTurnStates.Delete(sessionKey)
+	registerTestTurn(t, al, sessionKey, ts)
 
 	// Simulate results arriving after last iteration poll
 	ts.pendingResults <- &tools.ToolResult{ForLLM: "result 1"}
@@ -811,9 +815,7 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 	}
 
 	collector := &eventCollector{}
-	originalEmit := MockEventBus.Emit
-	MockEventBus.Emit = collector.collect
-	defer func() { MockEventBus.Emit = originalEmit }()
+	al.setEventSink(eventSinkFunc(collector.collect))
 
 	// Test async call - result should still be delivered via channel
 	asyncCfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true}
@@ -910,8 +912,7 @@ func TestGetActiveTurn(t *testing.T) {
 	}
 
 	sessionKey := "test-session"
-	al.activeTurnStates.Store(sessionKey, rootTS)
-	defer al.activeTurnStates.Delete(sessionKey)
+	registerTestTurn(t, al, sessionKey, rootTS)
 
 	// Test: GetActiveTurn should return turn info
 	info := al.GetActiveTurn(sessionKey)
@@ -967,8 +968,7 @@ func TestGetActiveTurn_WithChildren(t *testing.T) {
 	}
 
 	sessionKey := "test-session-with-children"
-	al.activeTurnStates.Store(sessionKey, rootTS)
-	defer al.activeTurnStates.Delete(sessionKey)
+	registerTestTurn(t, al, sessionKey, rootTS)
 
 	info := al.GetActiveTurn(sessionKey)
 	if info == nil {
@@ -1112,7 +1112,7 @@ func TestInterruptHard_Alias(t *testing.T) {
 	}
 
 	sessionKey := "test-session-interrupt"
-	al.activeTurnStates.Store(sessionKey, rootTS)
+	registerTestTurn(t, al, sessionKey, rootTS)
 
 	// Test InterruptHard (alias for HardAbort)
 	err := al.InterruptHard(sessionKey)
@@ -1176,16 +1176,10 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 // TestDeliverSubTurnResult_RaceWithFinish verifies that deliverSubTurnResult handles
 // the race condition where Finish() is called while results are being delivered.
 func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
-	// Save original MockEventBus.Emit
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
-
 	// Collect events
 	var mu sync.Mutex
 	var deliveredCount, orphanCount int
-	MockEventBus.Emit = func(e any) {
+	sink := eventSinkFunc(func(e any) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch e.(type) {
@@ -1194,7 +1188,7 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 		case SubTurnOrphanResultEvent:
 			orphanCount++
 		}
-	}
+	})
 
 	ctx := context.Background()
 	parentTS := &turnState{
@@ -1226,7 +1220,7 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 				ForLLM: fmt.Sprintf("result-%d", id),
 			}
 			// This should not panic, even if Finish() is called concurrently
-			deliverSubTurnResult(parentTS, fmt.Sprintf("child-%d", id), result)
+			deliverSubTurnResult(sink, parentTS, fmt.Sprintf("child-%d", id), result)
 		}(i)
 	}
 
@@ -1535,33 +1529,46 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 	}
 	grandparentTS.ctx, grandparentTS.cancelFunc = context.WithCancel(ctx)
 
+	// Each level gets a context of its own, as spawnSubTurn gives it: NOT
+	// derived from the level above, so that a child can outlive a graceful
+	// finish. Context cancellation alone therefore cascades nowhere; the hard
+	// abort has to walk the turn tree.
+
 	// Create parent turn (depth 1) as child of grandparent
-	parentCtx, parentCancel := context.WithCancel(grandparentTS.ctx)
+	parentCtx, parentCancel := context.WithCancel(context.Background())
 	defer parentCancel()
 	parentTS := &turnState{
-		ctx:            parentCtx,
-		turnID:         "parent",
-		parentTurnID:   "grandparent",
-		depth:          1,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, maxConcurrentSubTurns),
+		ctx:             parentCtx,
+		turnID:          "parent",
+		parentTurnID:    "grandparent",
+		parentTurnState: grandparentTS,
+		depth:           1,
+		session:         newEphemeralSession(nil),
+		pendingResults:  make(chan *tools.ToolResult, 16),
+		concurrencySem:  make(chan struct{}, maxConcurrentSubTurns),
 	}
 	parentTS.cancelFunc = parentCancel
+	if !grandparentTS.addChild(parentTS) {
+		t.Fatal("a live grandparent refused a child")
+	}
 
 	// Create grandchild turn (depth 2) as child of parent
-	childCtx, childCancel := context.WithCancel(parentTS.ctx)
+	childCtx, childCancel := context.WithCancel(context.Background())
 	defer childCancel()
 	childTS := &turnState{
-		ctx:            childCtx,
-		turnID:         "grandchild",
-		parentTurnID:   "parent",
-		depth:          2,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, maxConcurrentSubTurns),
+		ctx:             childCtx,
+		turnID:          "grandchild",
+		parentTurnID:    "parent",
+		parentTurnState: parentTS,
+		depth:           2,
+		session:         newEphemeralSession(nil),
+		pendingResults:  make(chan *tools.ToolResult, 16),
+		concurrencySem:  make(chan struct{}, maxConcurrentSubTurns),
 	}
 	childTS.cancelFunc = childCancel
+	if !parentTS.addChild(childTS) {
+		t.Fatal("a live parent refused a child")
+	}
 
 	// Verify all contexts are active
 	select {
@@ -1583,8 +1590,8 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 	// Hard abort the grandparent
 	grandparentTS.Finish(true)
 
-	// Wait a bit for cancellation to propagate
-	time.Sleep(10 * time.Millisecond)
+	// Finish(true) cancels the whole tree before it returns, so there is
+	// nothing to wait for.
 
 	// Verify cascading cancellation
 	select {
@@ -1673,6 +1680,23 @@ func TestSpawnDuringAbort_RaceCondition(t *testing.T) {
 
 	// The important thing is that it doesn't panic or deadlock
 	t.Log("Race condition handled gracefully - no panic or deadlock")
+
+	// A hard abort is the half that must not be left to timing. The abort
+	// walks the children that exist at that moment; a child that slipped in
+	// afterwards would run to its own timeout with nothing left to cancel it.
+	// So once the parent is hard-aborted, a spawn is refused - whatever the
+	// caller's context says (here it is not cancelled at all).
+	parentTS.Finish(true)
+	_, lateSpawnErr := spawnSubTurn(context.Background(), al, parentTS, SubTurnConfig{Model: "gpt-4o-mini"})
+	if !errors.Is(lateSpawnErr, context.Canceled) {
+		t.Errorf("spawn after hard abort: err = %v, want context.Canceled", lateSpawnErr)
+	}
+	parentTS.mu.Lock()
+	running := len(parentTS.children)
+	parentTS.mu.Unlock()
+	if running != 0 {
+		t.Errorf("hard-aborted parent has %d running children, want 0", running)
+	}
 }
 
 // ====================== Slow SubTurn Cancellation Test ======================
@@ -1711,19 +1735,13 @@ func (m *slowMockProvider) GetDefaultModel() string {
 // 2. Parent finishes quickly
 // 3. SubTurn should be canceled with context canceled error
 func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
-	// Save original MockEventBus.Emit to capture events
-	originalEmit := MockEventBus.Emit
-	defer func() {
-		MockEventBus.Emit = originalEmit
-	}()
-
 	var mu sync.Mutex
 	var events []any
-	MockEventBus.Emit = func(e any) {
+	sink := eventSinkFunc(func(e any) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, e)
-	}
+	})
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1735,6 +1753,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &slowMockProvider{delay: 5 * time.Second} // SubTurn takes 5 seconds
 	al := NewAgentLoop(cfg, msgBus, provider)
+	al.setEventSink(sink)
 
 	ctx := context.Background()
 	parentTS := &turnState{
@@ -2112,7 +2131,7 @@ func TestSpawnSubTurn_NilTurnState(t *testing.T) {
 
 func TestAgentLoopSpawner_SpawnSubTurn_NilTurnState(t *testing.T) {
 	al := &AgentLoop{}
-	spawner := NewSubTurnSpawner(al)
+	spawner := NewSubTurnSpawner(al, "")
 	_, err := spawner.SpawnSubTurn(context.Background(), tools.SubTurnConfig{})
 	if err == nil {
 		t.Error("AgentLoopSpawner.SpawnSubTurn with no turnState should return error")

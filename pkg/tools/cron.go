@@ -11,9 +11,46 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/routing"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
+
+// llmJobSem admits one LLM-backed scheduled job at a time. It is package-level
+// so it also holds across a config reload, which builds a new CronTool while a
+// job from the previous one may still be running. Deterministic handlers never
+// touch it and keep using the remaining cron workers.
+var llmJobSem = make(chan struct{}, 1)
+
+// acquireLLMSlot waits for the LLM-job slot or ctx cancellation.
+func acquireLLMSlot(ctx context.Context) error {
+	select {
+	case llmJobSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseLLMSlot() { <-llmJobSem }
+
+// sessionResetter is implemented by executors that can empty a session. It is
+// optional: an executor without it simply leaves the cron session to grow.
+type sessionResetter interface {
+	ResetSession(ctx context.Context, sessionKey string) error
+}
+
+// jobError is the error ExecuteJob returns for a failed agent turn. Its message
+// is the friendly, classified text (what the job result used to carry), and it
+// still unwraps to the underlying error so callers can match on it.
+type jobError struct {
+	msg string
+	err error
+}
+
+func (e *jobError) Error() string { return e.msg }
+func (e *jobError) Unwrap() error { return e.err }
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
@@ -104,7 +141,7 @@ func (t *CronTool) Parameters() map[string]any {
 			"type": map[string]any{
 				"type":        "string",
 				"enum":        []string{"message", "directive"},
-				"description": "Message generation strategy. 'message' (default): content is sent directly as-is. 'directive': content is treated as instructions for an AI agent to execute before delivery.",
+				"description": "Message generation strategy. 'message' (default): with deliver=true the content is sent as-is; with deliver=false (the default) it is processed by the agent as a new turn. 'directive': content is always treated as instructions for the agent to execute, whatever deliver is.",
 			},
 			"deliver": map[string]any{
 				"type":        "boolean",
@@ -112,7 +149,7 @@ func (t *CronTool) Parameters() map[string]any {
 			},
 			"no_history": map[string]any{
 				"type":        "boolean",
-				"description": "If true, each run is stateless — no session history is loaded or accumulated between executions. Default: false.",
+				"description": "Accepted for compatibility. Scheduled agent runs are always stateless: each run starts without session history and does not see earlier runs or the main conversation.",
 			},
 		},
 		"required": []string{"action"},
@@ -124,6 +161,15 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	action, ok := args["action"].(string)
 	if !ok {
 		return ErrorResult("action is required")
+	}
+
+	switch action {
+	case "add", "update", "remove", "enable", "disable":
+		// Every action that changes a job is the owner's once one is configured; list
+		// and get stay open.
+		if res := refuseNonOwnerChange(ctx, NameCron, "scheduled jobs"); res != nil {
+			return res
+		}
 	}
 
 	switch action {
@@ -223,6 +269,13 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
+
+	// The job's name is its preview, and a few name prefixes select code-driven
+	// handlers that trust the name (see reserved_jobs.go). A job made here must
+	// not be able to claim one.
+	if IsReservedJobName(messagePreview) {
+		return ErrorResult(reservedJobNameMessage(messagePreview))
+	}
 
 	job, err := t.cronService.AddJob(
 		messagePreview,
@@ -337,8 +390,11 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 	return SilentResult(fmt.Sprintf("Cron job '%s' %s", updatedJob.Name, status))
 }
 
-// ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+// ExecuteJob executes a cron job through the agent. A non-nil error means the
+// run failed; the cron service records it as the job's LastError. Failures are
+// deliberately not pushed to the user's chat (see
+// TestCronTool_ExecuteJobReturnsErrorWithoutPublish).
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -361,7 +417,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 				ChatID:  chatID,
 				Content: fmt.Sprintf("Scheduled command '%s' skipped: command execution is disabled", job.Payload.Command),
 			})
-			return "ok"
+			return "ok", nil
 		}
 
 		args := map[string]any{
@@ -386,9 +442,9 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			ChatID:  chatID,
 			Content: output,
 		}); err != nil {
-			return err.Error()
+			return "", err
 		}
-		return "ok"
+		return "ok", nil
 	}
 
 	// Determine message generation strategy
@@ -405,15 +461,18 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			ChatID:  chatID,
 			Content: job.Payload.Message,
 		}); err != nil {
-			return err.Error()
+			return "", err
 		}
-		return "ok"
+		return "ok", nil
 	}
 
-	// For deliver=false OR directive mode, process through agent.
-	// Use a unique key per execution ("cron-{jobID}-{timestamp}") so conversation
-	// history does not accumulate across runs of the same job (upstream 36b9693d3).
-	sessionKey := fmt.Sprintf("cron-%s-%d", job.ID, time.Now().UnixMilli())
+	// For deliver=false OR directive mode, process through the agent, in a session
+	// of its own ("agent:<defaultAgent>:cron:<jobID>"). The "agent:" prefix is what
+	// makes the agent loop honour the key; anything else falls back to the routed
+	// main session and cron output would land in the user's conversation. History
+	// is not loaded for these turns (see noHistory below), so runs of one job do
+	// not accumulate context.
+	sessionKey := t.cronSessionKey(job.ID)
 
 	// Prepare the prompt based on type
 	prompt := job.Payload.Message
@@ -425,27 +484,62 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		)
 	}
 
-	// Call agent with the prepared prompt
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		prompt,
-		sessionKey,
-		channel,
-		chatID,
-		job.Payload.NoHistory,
-	)
+	// Tag the turn as cron-originated before handing it to the agent. This has to
+	// happen here, at the call site, rather than inside the agent loop: the loop
+	// reaches ProcessDirectWithChannel for CLI turns too (loop.go routes
+	// ProcessDirect through it), and that function hardcodes SenderID "cron" for
+	// every caller - so keying off the sender would label CLI turns as scheduled
+	// jobs and gate them as if no human were present.
+	ctx = WithToolOrigin(ctx, OriginCron)
+	// Record which job this turn runs for. Set-once: the DCA handler tags first,
+	// with the plan ID, and that tag is the one that survives.
+	ctx = WithAutomationScope(ctx, AutomationScope{JobName: job.Name})
+	ctx = WithTurnID(ctx, NewTurnID()) // PublishResponseIfNeeded below asks about this turn after it has returned
+
+	// At most one LLM-backed job at a time; wait for the slot honouring ctx so a
+	// job timeout or service stop is not stuck behind a long-running turn.
+	if err := acquireLLMSlot(ctx); err != nil {
+		return "", &jobError{msg: fmt.Sprintf("waiting for another scheduled agent job to finish: %v", err), err: err}
+	}
+
+	// Call agent with the prepared prompt. Every cron turn is stateless
+	// (noHistory=true) regardless of Payload.NoHistory: the session key is stable
+	// per job, so loading its history would accumulate context across runs.
+	// The session is emptied first, so it only ever holds the most recent run
+	// (kept after the run for debugging) instead of growing without bound.
+	response, err := func() (string, error) {
+		defer releaseLLMSlot()
+		if r, ok := t.executor.(sessionResetter); ok {
+			if rerr := r.ResetSession(ctx, sessionKey); rerr != nil {
+				logger.WarnCF("cron", "failed to reset the job's session before the run", map[string]any{
+					"job_id": job.ID, "session_key": sessionKey, "error": rerr.Error(),
+				})
+			}
+		}
+		return t.executor.ProcessDirectWithChannel(ctx, prompt, sessionKey, channel, chatID, true)
+	}()
 	if err != nil {
-		// Return a friendly, classified message as the job result instead of a
+		// Return a friendly, classified message as the job error instead of a
 		// raw error dump. We deliberately do NOT publish to the channel here —
 		// scheduled-job failures are surfaced via the job result, not pushed to
 		// the user's chat (see TestCronTool_ExecuteJobReturnsErrorWithoutPublish).
-		return providers.FriendlyError(err)
+		return "", &jobError{msg: providers.FriendlyError(err), err: err}
 	}
 
 	if response != "" {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
-	return "ok"
+	return "ok", nil
+}
+
+// cronSessionKey is the isolated session for a job's agent turns, built from the
+// same default agent ID the router falls back to.
+func (t *CronTool) cronSessionKey(jobID string) string {
+	agentID := routing.DefaultAgentID
+	if t.cfg != nil {
+		agentID = routing.NewRouteResolver(t.cfg).DefaultAgentID()
+	}
+	return fmt.Sprintf("agent:%s:cron:%s", agentID, jobID)
 }
 
 func (t *CronTool) getJob(ctx context.Context, args map[string]any) *ToolResult {
@@ -481,11 +575,23 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult(fmt.Sprintf("Job %s is not accessible from this channel", jobID))
 	}
 
+	// A job owned by a plan or alert carries a reserved name; rewriting its
+	// prompt here would run arbitrary text under that job's authority. Manage
+	// those through their own tools.
+	if IsReservedJobName(job.Name) {
+		return ErrorResult(fmt.Sprintf(
+			"Job %s belongs to an alert or plan (%q) and cannot be edited with the cron tool; use that tool instead",
+			jobID, job.Name))
+	}
+
 	patches := 0
 
 	if name, present, errResult := optionalNonEmptyString(args, "name"); errResult != nil {
 		return errResult
 	} else if present {
+		if IsReservedJobName(name) {
+			return ErrorResult(reservedJobNameMessage(name))
+		}
 		job.Name = name
 		patches++
 	}
@@ -662,4 +768,12 @@ func isCommandAllowedRemote(channel, chatID string, allowed []string) bool {
 	}
 
 	return false
+}
+
+// reservedJobNameMessage is the refusal for a job name with a reserved prefix.
+func reservedJobNameMessage(name string) string {
+	return fmt.Sprintf(
+		"job name %q starts with a reserved prefix (%s): those names belong to alerts, DCA and "+
+			"delta-neutral plans. Start the message differently.",
+		name, strings.Join(ReservedJobNamePrefixes, " "))
 }

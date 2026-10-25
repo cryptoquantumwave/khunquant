@@ -55,6 +55,16 @@ func (t *TakeSnapshotTool) Parameters() map[string]any {
 }
 
 func (t *TakeSnapshotTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// While an owner is configured, a person's turn writes a snapshot only as the owner's own
+	// root turn. An autonomous turn (the legacy heartbeat, a scheduled job) has no sender to
+	// check and is bounded by the class ceiling instead: it still reaches this tool where that
+	// ceiling lets it (see proactiveTurnMayCall), and a proactive kind the ceiling denies never
+	// gets here.
+	if !IsAutonomousOrigin(ToolOrigin(ctx)) {
+		if res := refuseNonOwnerChange(ctx, NameTakeSnapshot, "snapshots"); res != nil {
+			return res
+		}
+	}
 	opts := snapshot.CollectOptions{}
 	if v, ok := args["source"].(string); ok {
 		opts.Source = strings.TrimSpace(v)
@@ -70,6 +80,12 @@ func (t *TakeSnapshotTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 	if v, ok := args["note"].(string); ok {
 		opts.Note = strings.TrimSpace(v)
+	}
+
+	// "auto" labels the scheduled snapshots that are pruned after a month; refuse it
+	// before spending any exchange request.
+	if snapshot.IsReservedLabel(opts.Label) {
+		return ErrorResult(fmt.Sprintf("take_snapshot: %v; choose another label", snapshot.ErrReservedLabel))
 	}
 
 	collected, err := snapshot.CollectFromExchanges(ctx, t.cfg, opts)

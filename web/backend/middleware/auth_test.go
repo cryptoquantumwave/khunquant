@@ -7,7 +7,7 @@ import (
 )
 
 func TestSessionAuth_NonLoopbackAPIRequiresToken(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -22,7 +22,7 @@ func TestSessionAuth_NonLoopbackAPIRequiresToken(t *testing.T) {
 }
 
 func TestSessionAuth_QueryTokenIssuesCookieAndRedirects(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -51,7 +51,7 @@ func TestSessionAuth_QueryTokenIssuesCookieAndRedirects(t *testing.T) {
 }
 
 func TestSessionAuth_QueryTokenAllowsAPI(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -66,7 +66,7 @@ func TestSessionAuth_QueryTokenAllowsAPI(t *testing.T) {
 }
 
 func TestSessionAuth_LoopbackSameOriginStillAutoAuths(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -83,7 +83,7 @@ func TestSessionAuth_LoopbackSameOriginStillAutoAuths(t *testing.T) {
 }
 
 func TestSessionAuth_PicoWebSocketRequiresToken(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -98,7 +98,7 @@ func TestSessionAuth_PicoWebSocketRequiresToken(t *testing.T) {
 }
 
 func TestSessionAuth_PicoWebSocketWithTokenAllows(t *testing.T) {
-	h := SessionAuth("secret-token", NewSessionStore(0), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := SessionAuth("secret-token", NewSessionStore(0), "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

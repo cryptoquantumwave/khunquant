@@ -69,6 +69,11 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 }
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// An installed skill is loaded by later turns, so only the owner installs one.
+	if res := refuseNonOwnerChange(ctx, NameInstallSkill, "skills"); res != nil {
+		return res
+	}
+
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at a `workspace` level.
 	t.mu.Lock()
@@ -161,8 +166,12 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	// Build result with moderation warning if suspicious.
 	var output string
+	if result.Unverified {
+		output = fmt.Sprintf("⚠️ Warning: skill %q was installed WITHOUT moderation checks "+
+			"(metadata unavailable; allow_unverified is on).\n\n", slug)
+	}
 	if result.IsSuspicious {
-		output = fmt.Sprintf("⚠️ Warning: skill %q is flagged as suspicious (may contain risky patterns).\n\n", slug)
+		output += fmt.Sprintf("⚠️ Warning: skill %q is flagged as suspicious (may contain risky patterns).\n\n", slug)
 	}
 	output += fmt.Sprintf("Successfully installed skill %q v%s from %s registry.\nLocation: %s\n",
 		slug, result.Version, registry.Name(), targetDir)

@@ -2,6 +2,7 @@ import { IconChevronRight } from "@tabler/icons-react"
 import { AlertDot } from "@/components/ui/alert-dot"
 import {
   IconAtom,
+  IconBell,
   IconBrain,
   IconBuildingBank,
   IconChevronsDown,
@@ -225,6 +226,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             title: "navigation.cron",
             url: "/agent/cron",
             icon: IconClock,
+            translateTitle: true,
+          },
+          {
+            title: "navigation.proactive",
+            url: "/agent/proactive",
+            icon: IconBell,
             translateTitle: true,
           },
         ],

@@ -84,8 +84,8 @@ func TestOpenDeltaNeutralPositionDryRun(t *testing.T) {
 	}
 }
 
-// TestOpenDeltaNeutralPositionAllowsDraft tests that draft plans can be opened directly.
-func TestOpenDeltaNeutralPositionAllowsDraft(t *testing.T) {
+// TestOpenDeltaNeutralPositionRefusesDraft tests that a draft plan cannot be opened: it must be prepared first.
+func TestOpenDeltaNeutralPositionRefusesDraft(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{
 		TradingRisk: config.TradingRiskConfig{
@@ -127,12 +127,11 @@ func TestOpenDeltaNeutralPositionAllowsDraft(t *testing.T) {
 		"confirm": false,
 	})
 
-	if result.IsError {
-		t.Fatalf("opening a draft plan in dry-run should succeed, got: %v", result.ForLLM)
+	if !result.IsError || !strings.Contains(result.ForLLM, "run prepare_delta_neutral_plan first") {
+		t.Fatalf("opening a draft plan must be refused with a pointer to prepare, got: %+v", result)
 	}
-
-	if !strings.Contains(strings.ToLower(result.ForUser), "confirm=true") {
-		t.Fatalf("expected draft dry-run review prompting confirm=true:\n%s", result.ForUser)
+	if execs, _ := store.ListExecutions(ctx, plan.ID, 10, 0); len(execs) != 0 {
+		t.Fatalf("a refused open must leave no execution row, got %d", len(execs))
 	}
 }
 
@@ -365,6 +364,18 @@ func TestExecutionStateMachineTransitions(t *testing.T) {
 			name:    "unwinding_to_unwound",
 			from:    deltaneutral.ExecutionStateUnwinding,
 			to:      deltaneutral.ExecutionStateUnwound,
+			allowed: true,
+		},
+		{
+			name:    "unwinding_to_recovery_required",
+			from:    deltaneutral.ExecutionStateUnwinding,
+			to:      deltaneutral.ExecutionStateRecoveryRequired,
+			allowed: true,
+		},
+		{
+			name:    "unwinding_to_failed",
+			from:    deltaneutral.ExecutionStateUnwinding,
+			to:      deltaneutral.ExecutionStateFailed,
 			allowed: true,
 		},
 		{

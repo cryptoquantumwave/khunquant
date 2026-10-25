@@ -1,0 +1,129 @@
+package control
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/approval"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+)
+
+const approvalsOffText = "Order approvals are not available: proactive.approvals is off or the workflow engine is not running."
+
+func isNotFound(err error) bool { return errors.Is(err, approval.ErrNotFound) }
+
+// cmdApprove is "/approve CODE" (and the Approve button).
+func (d *Dispatcher) cmdApprove(ctx context.Context, in Input) (Reply, error) {
+	return d.decideCommand(ctx, in, true), nil
+}
+
+// cmdReject is "/reject CODE" (and the Reject button).
+func (d *Dispatcher) cmdReject(ctx context.Context, in Input) (Reply, error) {
+	return d.decideCommand(ctx, in, false), nil
+}
+
+// cmdYes is a reply to an approval card that says "yes": TryHandle has already
+// established that it points at a pending card, and put that card's code in the
+// command.
+func (d *Dispatcher) cmdYes(ctx context.Context, in Input) (Reply, error) {
+	return d.decideCommand(ctx, in, true), nil
+}
+
+func (d *Dispatcher) decideCommand(ctx context.Context, in Input, approve bool) Reply {
+	st := stateOf(ctx)
+	verb := "/reject"
+	if approve {
+		verb = "/approve"
+	}
+	if len(st.cmd.args) != 1 || !approval.ValidCode(approval.NormalizeCode(st.cmd.args[0])) {
+		setOutcome(ctx, outcomeUsage)
+		return Reply{Text: "Usage: " + verb + " CODE (the 4-character code on the proposal)."}
+	}
+	if st.deps.Approvals == nil {
+		setOutcome(ctx, outcomeOff)
+		return Reply{Text: approvalsOffText}
+	}
+	return d.decideProposal(ctx, st.deps, in, approval.NormalizeCode(st.cmd.args[0]), st.cmd.nonce, approve)
+}
+
+// decideProposal is the control path's one call of approval.Service.Decide: the owner's
+// decision on a proposal, from a message that did not go through a model. The
+// service checks the owner again, and the proposal's own conditions (pending,
+// unexpired, the right nonce when there is one, the kill switch).
+func (d *Dispatcher) decideProposal(ctx context.Context, deps *Deps, in Input, code, nonce string, approve bool) Reply {
+	if isWebOwner(deps, in) {
+		ctx = approval.WithWebDecider(ctx) // Decide checks the route again
+	}
+	p, err := deps.Approvals.Decide(ctx, code, nonce, approve, canonicalSender(in))
+	noteDecision(ctx, p, err)
+	var se *approval.StatusError
+	switch {
+	case err == nil:
+		return Reply{Text: decidedText(p, approve)}
+	case errors.Is(err, approval.ErrNotOwner):
+		setOutcome(ctx, outcomeDenied)
+		return Reply{Text: notAuthorizedText}
+	case errors.Is(err, approval.ErrKilled):
+		setOutcome(ctx, outcomeRefused)
+		return Reply{Text: fmt.Sprintf("Refused: the kill switch is engaged (/stop), and proposal %s does not only "+
+			"reduce risk. Only an order that reduces risk can be approved now. Send /resume to allow approvals "+
+			"again, or /reject %s.", code, code)}
+	case isNotFound(err):
+		setOutcome(ctx, outcomeNotFound)
+		return Reply{Text: fmt.Sprintf("No pending proposal %s. It may have expired or been decided already.", code)}
+	case errors.As(err, &se):
+		setOutcome(ctx, outcomeRefused)
+		return Reply{Text: fmt.Sprintf("Proposal %s is already %s.", se.Code, se.Status)}
+	}
+	logger.WarnCF("control", "A decision on a proposal failed", map[string]any{"error": err.Error()})
+	setOutcome(ctx, outcomeError)
+	return Reply{Text: failedText}
+}
+
+func decidedText(p approval.Proposal, approve bool) string {
+	summary := firstLine(p.Summary, 200)
+	if p.Kind == approval.KindMemory {
+		// The reply names the suggestion by code and category only: the fact reached the
+		// owner in the digest, and is not repeated into a conversation a model reads.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was saved to memory.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Saved %s to memory.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Saving it to memory now.", summary)
+	}
+	if approval.IsReflectionKind(p.Kind) {
+		// Named by code only: the change reached the owner in the digest.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Discarded %s. Nothing was changed.", summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Applied %s.", summary)
+		case p.Status == approval.StatusFailed:
+			return fmt.Sprintf("Approved %s, but it could no longer be applied; nothing was changed.", summary)
+		}
+		return fmt.Sprintf("Approved %s. Applying it now.", summary)
+	}
+	if p.Kind == approval.KindMandate {
+		// A mandate card places nothing: approving it lets code buy inside its limits.
+		switch {
+		case !approve:
+			return fmt.Sprintf("Rejected mandate %s: %s\nNothing was bought and no mandate was created.", p.Code, summary)
+		case p.Status == approval.StatusExecuted:
+			return fmt.Sprintf("Approved mandate %s: %s\nThe mandate is active. Nothing was bought by this approval; due runs now execute inside its limits.", p.Code, summary)
+		}
+		return fmt.Sprintf("Approved mandate %s: %s\nCreating the mandate now.", p.Code, summary)
+	}
+	if !approve {
+		return fmt.Sprintf("Rejected proposal %s: %s\nNothing was placed.", p.Code, summary)
+	}
+	switch p.Status {
+	case approval.StatusExecuted:
+		return fmt.Sprintf("Approved proposal %s: %s\nIt has been executed; the receipt follows.", p.Code, summary)
+	case approval.StatusFailed:
+		return fmt.Sprintf("Approved proposal %s: %s\nIt did not go through; the message that follows says why.", p.Code, summary)
+	}
+	return fmt.Sprintf("Approved proposal %s: %s\nPlacing the order now; you will get a receipt here.", p.Code, summary)
+}

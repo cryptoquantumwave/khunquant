@@ -224,6 +224,51 @@ func (a *BinanceBrokerAdapter) FetchMyTrades(_ context.Context, symbol string, s
 	return
 }
 
+// --- broker.ClientIDCapable / broker.ClientIDLookup ---
+//
+// Established from the pinned ccxt source (see the doc of broker.ClientIDCapable):
+// the unified params key "clientOrderId" is sent as "newClientOrderId" for spot and
+// USDT-M orders, and fetchOrder takes it back as "origClientOrderId". Length and
+// charset limits are not stated in the source, so the conservative 32 letters and
+// digits are used.
+
+// ClientOrderIDKey reports the params key and the longest client order ID for a
+// plain (market or limit) order in either market.
+func (a *BinanceBrokerAdapter) ClientOrderIDKey(market string) (string, int, bool) {
+	switch market {
+	case broker.OrderMarketSpot, broker.OrderMarketFutures:
+		return "clientOrderId", 32, true
+	}
+	return "", 0, false
+}
+
+// FetchOrderByClientID fetches one order by client order ID. found is false when
+// the exchange answers OrderNotFound (binance -2013, -2011).
+func (a *BinanceBrokerAdapter) FetchOrderByClientID(_ context.Context, market, symbol, clientOrderID string) (o ccxt.Order, found bool, err error) {
+	if err := a.requireAuth(); err != nil {
+		return o, false, err
+	}
+	opts := []ccxt.FetchOrderOptions{
+		ccxt.WithFetchOrderSymbol(symbol),
+		ccxt.WithFetchOrderParams(map[string]any{"clientOrderId": clientOrderID}),
+	}
+	switch market {
+	case broker.OrderMarketSpot:
+		err = catchPanic(func() error { o, err = a.spot.FetchOrder(clientOrderID, opts...); return err })
+	case broker.OrderMarketFutures:
+		err = catchPanic(func() error { o, err = a.usdm.FetchOrder(clientOrderID, opts...); return err })
+	default:
+		return o, false, fmt.Errorf("binance: unknown market %q", market)
+	}
+	if err != nil {
+		if broker.IsOrderNotFound(err) {
+			return ccxt.Order{}, false, nil
+		}
+		return ccxt.Order{}, false, err
+	}
+	return o, true, nil
+}
+
 // --- broker.TransferProvider ---
 
 func (a *BinanceBrokerAdapter) Transfer(_ context.Context, asset string, amount float64, fromAccount, toAccount string) (ccxt.TransferEntry, error) {

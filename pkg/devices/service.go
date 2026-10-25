@@ -14,8 +14,20 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 )
 
+// Notifier is the owner-routed delivery path (pkg/notify). It is declared here
+// so that pkg/devices does not import pkg/notify; the gateway adapts the real
+// service to it.
+type Notifier interface {
+	// CanDeliver reports whether a notification would currently reach the
+	// owner.
+	CanDeliver() bool
+	// NotifyInfo sends text to the owner as a low-priority, silent message.
+	NotifyInfo(ctx context.Context, text string) error
+}
+
 type Service struct {
 	bus     *bus.MessageBus
+	notify  Notifier
 	state   *state.Manager
 	sources []events.EventSource
 	enabled bool
@@ -30,24 +42,37 @@ type Config struct {
 	// Future: MonitorBluetooth, MonitorPCI, etc.
 }
 
+// SourcesFor builds the device monitors cfg asks for. NewService uses it, and so
+// does the perception adapter, which wraps the same monitors.
+func SourcesFor(cfg Config) []EventSource {
+	out := make([]EventSource, 0)
+	if cfg.Enabled && cfg.MonitorUSB {
+		out = append(out, sources.NewUSBMonitor())
+	}
+	return out
+}
+
 func NewService(cfg Config, stateMgr *state.Manager) *Service {
-	s := &Service{
+	return &Service{
 		state:   stateMgr,
 		enabled: cfg.Enabled,
-		sources: make([]EventSource, 0),
+		sources: SourcesFor(cfg),
 	}
-
-	if cfg.Enabled && cfg.MonitorUSB {
-		s.sources = append(s.sources, sources.NewUSBMonitor())
-	}
-
-	return s
 }
 
 func (s *Service) SetBus(msgBus *bus.MessageBus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bus = msgBus
+}
+
+// SetNotifier routes device events through n whenever n can deliver. Without
+// one, or while it cannot deliver, events keep going to the last active
+// channel as before. Pass nil to remove it.
+func (s *Service) SetNotifier(n Notifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notify = n
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -108,13 +133,32 @@ func (s *Service) handleEvents(kind events.Kind, eventCh <-chan *events.DeviceEv
 func (s *Service) sendNotification(ev *events.DeviceEvent) {
 	s.mu.RLock()
 	msgBus := s.bus
+	notifier := s.notify
 	s.mu.RUnlock()
+
+	// With an owner route the event goes to the owner's direct chat and the
+	// last active chat is not consulted at all.
+	if notifier != nil && notifier.CanDeliver() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := notifier.NotifyInfo(ctx, ev.FormatMessage()); err != nil {
+			logger.WarnCF("devices", "Device notification via owner route failed", map[string]any{
+				"kind":   ev.Kind,
+				"action": ev.Action,
+				"error":  err.Error(),
+			})
+		}
+		return
+	}
 
 	if msgBus == nil {
 		return
 	}
 
-	lastChannel := s.state.GetLastChannel()
+	var lastChannel string
+	if s.state != nil {
+		lastChannel = s.state.GetLastChannel()
+	}
 	if lastChannel == "" {
 		logger.DebugCF("devices", "No last channel, skipping notification", map[string]any{
 			"event": ev.FormatMessage(),

@@ -2,6 +2,7 @@ package pico
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -28,7 +29,12 @@ type picoConn struct {
 	id        string
 	conn      *websocket.Conn
 	sessionID string
-	writeMu   sync.Mutex
+	// headerAuth is true when the handshake presented the token in the
+	// Authorization header or the subprotocol, false when it was a URL query. A URL
+	// is logged, cached and sent in Referer headers, so a query-token connection is
+	// never offered the web launcher's owner standing (see bus.SenderInfo.WebAuthenticated).
+	headerAuth bool
+	writeMu    sync.Mutex
 	closed    atomic.Bool
 }
 
@@ -409,7 +415,8 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate
-	if !c.authenticate(r) {
+	authenticated, headerAuth := c.authenticate(r)
+	if !authenticated {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -454,6 +461,7 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 		return
 	}
+	pc.headerAuth = headerAuth // before readLoop starts, the only reader
 
 	logger.InfoCF("pico", "WebSocket client connected", map[string]any{
 		"conn_id":    pc.id,
@@ -467,33 +475,35 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 //  1. Authorization: Bearer <token> header
 //  2. Sec-WebSocket-Protocol "token.<value>" (for browsers that can't set headers)
 //  3. Query parameter "token" (only when AllowTokenQuery is on)
-func (c *PicoChannel) authenticate(r *http.Request) bool {
+//
+// headerAuth reports that the token came in 1 or 2, not in the URL.
+func (c *PicoChannel) authenticate(r *http.Request) (ok, headerAuth bool) {
 	token := c.config.Token.String()
 	if token == "" {
-		return false
+		return false, false
 	}
 
 	// Check Authorization header
 	auth := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
-		if after == token {
-			return true
+		if constantTimeTokenMatch(after, token) {
+			return true, true
 		}
 	}
 
 	// Check Sec-WebSocket-Protocol subprotocol ("token.<value>")
 	if c.matchedSubprotocol(r) != "" {
-		return true
+		return true, true
 	}
 
 	// Check query parameter only when explicitly allowed
 	if c.config.AllowTokenQuery {
-		if r.URL.Query().Get("token") == token {
-			return true
+		if constantTimeTokenMatch(r.URL.Query().Get("token"), token) {
+			return true, false
 		}
 	}
 
-	return false
+	return false, false
 }
 
 // matchedSubprotocol returns the "token.<value>" subprotocol that matches
@@ -501,11 +511,23 @@ func (c *PicoChannel) authenticate(r *http.Request) bool {
 func (c *PicoChannel) matchedSubprotocol(r *http.Request) string {
 	token := c.config.Token.String()
 	for _, proto := range websocket.Subprotocols(r) {
-		if after, ok := strings.CutPrefix(proto, "token."); ok && after == token {
+		if after, ok := strings.CutPrefix(proto, "token."); ok && constantTimeTokenMatch(after, token) {
 			return proto
 		}
 	}
 	return ""
+}
+
+// constantTimeTokenMatch compares a presented token against the configured one
+// without letting the comparison's duration reveal how much of it was correct.
+//
+// L-4: the three call sites used ==, which returns at the first differing byte.
+// A caller free to retry - and the Bearer, subprotocol and query paths all
+// allow that - can use the timing difference to recover the token one byte at a
+// time. Length is still distinguishable, which matches constantTimeEqual in the
+// launcher's auth middleware and is not what this defends against.
+func constantTimeTokenMatch(presented, expected string) bool {
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
 }
 
 // readLoop reads messages from a WebSocket connection.
@@ -648,6 +670,9 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	if !c.IsAllowedSender(sender) {
 		return
 	}
+	// Set after the allow-list, from the connection alone, so neither the message
+	// nor the sender id can claim it.
+	sender.WebAuthenticated = pc.headerAuth
 
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, nil, metadata, sender)
 }

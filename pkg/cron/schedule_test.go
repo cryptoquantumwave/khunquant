@@ -1,13 +1,12 @@
 package cron
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/adhocore/gronx"
 )
 
 // newTestSvc returns a minimal CronService suitable for pure-logic tests.
@@ -15,7 +14,7 @@ import (
 func newTestSvc(jobs ...CronJob) *CronService {
 	return &CronService{
 		store: &CronStore{Jobs: jobs},
-		gronx: gronx.New(),
+		opts:  DefaultOptions(),
 	}
 }
 
@@ -247,25 +246,6 @@ func TestStatus_RunningFalseWhenNotStarted(t *testing.T) {
 
 // --- RecomputeNextRuns ---
 
-func TestRecomputeNextRuns_UpdatesEnabledJobsOnly(t *testing.T) {
-	svc := newTestSvc(
-		CronJob{ID: "1", Enabled: true, Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(1000)}},
-		CronJob{ID: "2", Enabled: false, Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(1000)}},
-	)
-
-	svc.recomputeNextRuns()
-
-	j1 := svc.GetJob("1")
-	j2 := svc.GetJob("2")
-
-	if j1.State.NextRunAtMS == nil {
-		t.Error("enabled job should have NextRunAtMS computed")
-	}
-	if j2.State.NextRunAtMS != nil {
-		t.Error("disabled job should not have NextRunAtMS computed")
-	}
-}
-
 // --- GetJob ---
 
 func TestGetJob_ExistingJob(t *testing.T) {
@@ -450,25 +430,26 @@ func TestRunJobNow_ExecutesJobImmediate(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "cron.json")
 
-	executed := false
+	executed := make(chan struct{})
 	svc := NewCronService(storePath, func(job *CronJob) (string, error) {
-		executed = true
+		close(executed)
 		return "ok", nil
 	})
 
 	job, _ := svc.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "msg", false, "cli", "direct")
 	jobID := job.ID
 
-	result := svc.RunJobNow(jobID)
-	if !result {
-		t.Error("RunJobNow should return true for existing job")
+	if err := svc.RunJobNow(jobID); err != nil {
+		t.Errorf("RunJobNow should succeed for existing job, got %v", err)
 	}
 
-	// Give goroutine time to execute
-	time.Sleep(10 * time.Millisecond)
-	if !executed {
+	select {
+	case <-executed:
+	case <-time.After(5 * time.Second):
 		t.Error("job handler should have been called")
 	}
+	// Let the run's state update (and store write) finish before the temp dir goes.
+	waitFor(t, "run to finish", func() bool { return !isRunning(svc, jobID) })
 }
 
 func TestRunJobNow_NonExistentJob(t *testing.T) {
@@ -476,9 +457,8 @@ func TestRunJobNow_NonExistentJob(t *testing.T) {
 	storePath := filepath.Join(tmpDir, "cron.json")
 
 	svc := NewCronService(storePath, nil)
-	result := svc.RunJobNow("nonexistent")
-	if result {
-		t.Error("RunJobNow should return false for nonexistent job")
+	if err := svc.RunJobNow("nonexistent"); !errors.Is(err, ErrJobNotFound) {
+		t.Errorf("RunJobNow(nonexistent) = %v, want ErrJobNotFound", err)
 	}
 }
 

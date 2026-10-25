@@ -48,19 +48,28 @@ func TestSubagentManager_Spawn_CanceledContext(t *testing.T) {
 
 	// The task ID is "subagent-1" (nextID starts at 1). Wait for goroutine to process canceled context.
 	taskID := "subagent-1"
+	// The task goroutine writes Status under sm.mu, so it is read under it too.
+	status := func() (string, bool) {
+		sm.mu.RLock()
+		defer sm.mu.RUnlock()
+		task, ok := sm.tasks[taskID]
+		if !ok {
+			return "", false
+		}
+		return task.Status, true
+	}
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		task, ok := sm.GetTask(taskID)
-		if ok && task.Status == "canceled" {
+		if got, ok := status(); ok && got == "canceled" {
 			return // success
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	task, ok := sm.GetTask(taskID)
+	got, ok := status()
 	if !ok {
 		t.Fatal("task not found after spawn")
 	}
-	t.Errorf("task status = %q after canceled context, want canceled", task.Status)
+	t.Errorf("task status = %q after canceled context, want canceled", got)
 }
 
 func TestSubagentManager_Spawn_NoLabel(t *testing.T) {

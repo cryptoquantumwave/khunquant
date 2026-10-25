@@ -24,6 +24,7 @@ var secretProbes = map[string]string{
 	"provider":   "PROBE-provider-key",
 	"channel":    "PROBE-telegram-token",
 	"model":      "PROBE-model-key",
+	"wecom":      "PROBE-wecom-webhook-key",
 }
 
 // writeConfigWithSecrets plants a known credential in every field that reaches
@@ -35,6 +36,9 @@ func writeConfigWithSecrets(t *testing.T) string {
 	cfg := config.DefaultConfig()
 
 	cfg.Channels.Telegram.Token.Set(secretProbes["channel"])
+	cfg.Channels.WeCom.WebhookURL = *config.NewSecureString(
+		"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + secretProbes["wecom"],
+	)
 	cfg.Debug.DevMCP.Token = secretProbes["devmcp"]
 	cfg.Debug.Sandbox.Token = secretProbes["sandbox"]
 	cfg.Tools.Web.Brave.APIKey = secretProbes["brave"]
@@ -74,6 +78,34 @@ func TestHandleGetConfig_WithholdsEveryCredential(t *testing.T) {
 		if strings.Contains(body, secret) {
 			t.Errorf("GET /api/config leaked the %s credential (%q)", name, secret)
 		}
+	}
+}
+
+// TestHandleGetConfig_WeComWebhookURLIsRedacted is the belt-and-braces check
+// for the WeCom webhook URL specifically. It is a config.SecureString tagged
+// json:"webhook_url,omitzero" (the same pattern as Teams' webhook targets),
+// which omits the field from the response entirely rather than emitting the
+// sentinel - stronger than "[NOT_HERE]", since there is no key for a client to
+// even notice. "webhook_url" is also listed in secretFieldNames so that if the
+// field ever regresses to a plain string (as it used to be), redactSecrets
+// still catches it and emits the sentinel instead of leaking the value.
+func TestHandleGetConfig_WeComWebhookURLIsRedacted(t *testing.T) {
+	path := writeConfigWithSecrets(t)
+	body := getConfigBody(t, NewHandler(path))
+
+	var tree map[string]any
+	if err := json.Unmarshal([]byte(body), &tree); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	wecom, ok := tree["channels"].(map[string]any)["wecom"].(map[string]any)
+	if !ok {
+		t.Fatal("response missing channels.wecom")
+	}
+	if got, present := wecom["webhook_url"]; present && got != redactedSentinel {
+		t.Errorf("channels.wecom.webhook_url = %v, want it absent or %q", got, redactedSentinel)
+	}
+	if strings.Contains(body, secretProbes["wecom"]) {
+		t.Errorf("GET /api/config leaked the wecom webhook credential (%q)", secretProbes["wecom"])
 	}
 }
 

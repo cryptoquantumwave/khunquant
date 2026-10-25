@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,18 +14,46 @@ const LauncherTokenQueryParam = "launcher_token"
 
 // SessionAuth issues and validates session cookies for the launcher web UI.
 //
-// Trust rules (applied in order):
+// Trust rules when no dashboard password is configured (passwordHash == ""),
+// applied in order:
 //  1. Valid kq_session cookie → allow.
 //  2. Loopback caller whose Origin (if present) matches the server host → auto-issue cookie.
 //  3. Bearer / X-Launcher-Token header or launcher_token query parameter matches secret
 //     → auto-issue cookie.
 //  4. Otherwise → 401 for API requests.
 //
+// When a dashboard password IS configured, rules 2 and 3 above are disabled:
+// a loopback caller or a bearer token no longer auto-issues a session, because
+// doing so would let anyone reach the dashboard without ever presenting the
+// password (this was T2-1, a real bypass). A valid existing session (rule 1)
+// still short-circuits, but everything else is passed straight through to the
+// next handler unauthenticated-by-this-middleware.
+//
+// That pass-through is only safe because this middleware is meant to sit
+// *inside* PasswordAuth (main.go wires IPAllowlist → PasswordAuth →
+// SessionAuth → mux): PasswordAuth has already rejected any request that
+// didn't present a valid session, correct Basic credentials, the launcher
+// token, or hit an exempted path (health checks, /api/auth/login) before
+// SessionAuth ever runs. SessionAuth called directly with a non-empty
+// passwordHash and no PasswordAuth wrapped around it authenticates nothing —
+// callers must not do that.
+//
 // SameSite=Strict on the issued cookie blocks CSRF from cross-origin pages: a page
 // from evil.com cannot carry the cookie when reaching back to localhost.
-func SessionAuth(secret string, store *SessionStore, next http.Handler) http.Handler {
+func SessionAuth(secret string, store *SessionStore, passwordHash string, next http.Handler) http.Handler {
+	passwordConfigured := strings.TrimSpace(passwordHash) != ""
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hasValidSession(r, store) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if passwordConfigured {
+			// PasswordAuth, wrapped around this middleware, has already
+			// authorized the request (session, Basic credentials, launcher
+			// token, or an exempted path). Do not additionally apply the
+			// loopback/token auto-session rules below: those exist to stand
+			// in for a password check, and a password is configured.
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -97,9 +127,17 @@ func SessionIDFromRequest(r *http.Request) string {
 
 // isTrustedLoopbackCaller returns true when the IP is loopback and the Origin
 // header, if present, matches the server so we don't auto-auth CSRF requests.
+//
+// It also refuses a Host that HostAllowlist would refuse. Origin == Host proves
+// nothing about a DNS-rebinding page (the browser sends the attacker's name as
+// both), so this holds even if SessionAuth is ever composed without
+// HostAllowlist in front of it.
 func isTrustedLoopbackCaller(r *http.Request) bool {
 	ip := clientIPFromRemoteAddr(r.RemoteAddr)
 	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	if !hostAllowed(r.Host) {
 		return false
 	}
 	origin := r.Header.Get("Origin")
@@ -118,10 +156,16 @@ func checkRequestToken(r *http.Request, secret string) bool {
 		return false
 	}
 	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-		return tok == secret
+		return constantTimeEqual(tok, secret)
 	}
-	return r.Header.Get("X-Launcher-Token") == secret ||
-		r.URL.Query().Get(LauncherTokenQueryParam) == secret
+	return constantTimeEqual(r.Header.Get("X-Launcher-Token"), secret) ||
+		constantTimeEqual(r.URL.Query().Get(LauncherTokenQueryParam), secret)
+}
+
+// constantTimeEqual compares two secrets without leaking their length or
+// content through timing, so a caller cannot probe for a valid prefix.
+func constantTimeEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func shouldRedirectAfterQueryToken(r *http.Request) bool {
@@ -138,6 +182,17 @@ func sanitizedTokenURL(r *http.Request) string {
 	return u.String()
 }
 
+// secureCookies is set once at startup from launcher config (behind_tls_proxy).
+var secureCookies atomic.Bool
+
+// SetSecureCookies marks session cookies Secure regardless of r.TLS. M-12:
+// behind a TLS-terminating proxy the launcher sees plain HTTP, so r.TLS is nil
+// and the session cookie was issued without Secure - a browser would then send
+// it over any plain-HTTP request to the same host.
+func SetSecureCookies(on bool) { secureCookies.Store(on) }
+
+func cookieSecure(r *http.Request) bool { return r.TLS != nil || secureCookies.Load() }
+
 // issueSessionCookie mints a fresh session and sets it on the response. The
 // cookie carries a random session ID, never the launcher secret.
 func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionStore) {
@@ -148,7 +203,7 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 	if err != nil {
 		return
 	}
-	secure := r.TLS != nil
+	secure := cookieSecure(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    id,
@@ -156,7 +211,10 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
-		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		// Match the server-side session. The cookie used to live 7 days
+		// against a 12-hour session, so the browser kept presenting an ID
+		// the server had long forgotten.
+		Expires: time.Now().Add(store.TTL()),
 	})
 }
 
@@ -166,6 +224,8 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, store *SessionSt
 const (
 	LoginPath  = "/api/auth/login"
 	LogoutPath = "/api/auth/logout"
+	// OAuthCallbackPath is where an OAuth provider redirects the browser.
+	OAuthCallbackPath = "/oauth/callback"
 )
 
 // ClearSessionCookie expires the session cookie on the client. Pairs with
@@ -177,7 +237,7 @@ func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})

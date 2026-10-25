@@ -20,11 +20,11 @@ var commandRegistrationBackoff = []time.Duration{
 	10 * time.Minute,
 }
 
-func commandRegistrationDelay(attempt int) time.Duration {
-	if len(commandRegistrationBackoff) == 0 {
+func commandRegistrationDelay(backoff []time.Duration, attempt int) time.Duration {
+	if len(backoff) == 0 {
 		return 0
 	}
-	base := commandRegistrationBackoff[min(attempt, len(commandRegistrationBackoff)-1)]
+	base := backoff[min(attempt, len(backoff)-1)]
 	// Full jitter in [0.5, 1.0) to avoid synchronized retries across instances.
 	return time.Duration(float64(base) * (0.5 + rand.Float64()*0.5))
 }
@@ -67,6 +67,11 @@ func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []c
 		register = c.RegisterCommands
 	}
 
+	// The retry schedule is read here, once, not by the goroutine: a retry loop
+	// that outlives this call must not touch the package variable, which tests
+	// (and only tests) replace.
+	backoff := commandRegistrationBackoff
+
 	regCtx, cancel := context.WithCancel(ctx)
 	c.commandRegCancel = cancel
 
@@ -91,7 +96,7 @@ func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []c
 				return
 			}
 
-			delay := commandRegistrationDelay(attempt)
+			delay := commandRegistrationDelay(backoff, attempt)
 			logger.WarnCF("telegram", "Telegram command registration failed; will retry", map[string]any{
 				"error":       err.Error(),
 				"retry_after": delay.String(),

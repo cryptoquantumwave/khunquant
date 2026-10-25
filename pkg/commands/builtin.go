@@ -15,5 +15,8 @@ func BuiltinDefinitions() []Definition {
 		checkCommand(),
 		clearCommand(),
 		contextCommand(),
+		approveCommand(),
+		denyCommand(),
+		whoamiCommand(),
 	}
 }

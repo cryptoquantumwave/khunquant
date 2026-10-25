@@ -2,6 +2,8 @@ package deltaneutral
 
 import (
 	"math"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral/planhealth"
 )
 
 // Evaluate is the deterministic health evaluator for delta-neutral plans.
@@ -26,6 +28,8 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 			DataStatus:               DataStatusOK,
 		},
 		DataStatus: DataStatusOK,
+		PnLUSDT:    input.PnLUSDT,
+		PnLKnown:   input.PnLKnown && finiteNum(input.PnLUSDT),
 	}
 
 	// Step 1: Check data availability first
@@ -39,12 +43,16 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 			if input.Plan.RiskPolicy.EscalateOnDataFailure {
 				result.DataStatus = DataStatusError
 				result.ThresholdBreached = true
-				result.BreachCodes = []string{"data_unavailable"}
-				result.Severity = "critical"
-				result.RecommendedAction = "Data fetch failed for active plan. Check network connectivity and API keys. Manual intervention may be required."
+				codes := []string{planhealth.CodeDataUnavailable}
+				if input.Plan.Status == PlanStatusRecoveryRequired {
+					codes = append(codes, planhealth.CodeRecoveryRequired)
+				}
+				result.BreachCodes = codes
+				result.Severity = planhealth.Severity(codes)
+				result.RecommendedAction = planhealth.RecommendedAction(codes)
 				result.Snapshot.DataStatus = DataStatusError
 				result.Snapshot.ThresholdBreached = true
-				result.Snapshot.BreachCodes = []string{"data_unavailable"}
+				result.Snapshot.BreachCodes = codes
 				return result
 			}
 			// If escalation is off, continue with unavailable status
@@ -91,6 +99,8 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 		crossExchange,
 		input.FundingInfo.CurrentRate,
 	)
+	// The two components that need data of their own score nothing without it.
+	healthScore = clampScore(healthScore + liquidityPoints(input) + profitProgressPoints(input))
 	result.Snapshot.HealthScore = healthScore
 	result.Snapshot.HealthLabel = labelForScore(healthScore)
 
@@ -105,6 +115,24 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 		input.ExitSpreadPct,
 		input.Plan.ExitRules,
 	)
+	// Breaches that need more than the figures above: the quantities of the legs,
+	// the plan's status, and its profit and loss against the policy.
+	var legBreach bool
+	result.LegMismatchPct, legBreach = legMismatch(input)
+	if legBreach {
+		breachCodes = append(breachCodes, planhealth.CodeLegMismatch)
+	}
+	if input.Plan.Status == PlanStatusRecoveryRequired {
+		breachCodes = append(breachCodes, planhealth.CodeRecoveryRequired)
+	}
+	if input.PnLKnown && finiteNum(input.PnLUSDT) {
+		if dd := input.Plan.RiskPolicy.MaxDrawdownUSDT; dd > 0 && -input.PnLUSDT > dd {
+			breachCodes = append(breachCodes, planhealth.CodeMaxDrawdownBreached)
+		}
+		if pt := input.Plan.RiskPolicy.ProfitTargetUSDT; pt > 0 && input.PnLUSDT >= pt {
+			breachCodes = append(breachCodes, planhealth.CodeProfitTargetMet)
+		}
+	}
 	result.BreachCodes = breachCodes
 	result.ThresholdBreached = len(breachCodes) > 0
 	result.Snapshot.BreachCodes = breachCodes
@@ -221,14 +249,17 @@ func classifyMargin(marginRatioPct, liquidationDistancePct float64, policy RiskP
 	return "safe"
 }
 
-// computeHealthScore computes a 0-100 health score based on components
-// Components:
-// - Funding: 20 points
-// - Margin/liquidation: 25 points
-// - Delta balance: 20 points
-// - Liquidity/slippage: 10 points (assume ok for now)
-// - Exchange/execution risk: 10 points
-// - Profit progress: 15 points (assume ok for now)
+// computeHealthScore computes the part of the 0-100 health score that is judged from
+// the figures every check has. Components:
+//   - Funding: 20 points
+//   - Margin/liquidation: 25 points
+//   - Delta balance: 20 points
+//   - Exchange/execution risk: 10 points (6 when the legs are on different exchanges)
+//
+// The other two components, liquidity/slippage (10 points, see liquidityPoints) and
+// profit progress (15, see profitProgressPoints), need data of their own and score 0
+// without it. They used to be awarded unconditionally ("assume ok for now"), which
+// handed every plan 25 points it had not earned.
 func computeHealthScore(
 	fundingState string,
 	marginState string,
@@ -289,9 +320,6 @@ func computeHealthScore(
 	}
 	score += deltaScore
 
-	// Liquidity/slippage: 10 points (assume ok for now)
-	score += 10
-
 	// Exchange/execution risk: 10 points
 	exchangeScore := 10
 	if crossExchange {
@@ -300,34 +328,77 @@ func computeHealthScore(
 	}
 	score += exchangeScore
 
-	// Profit progress: 15 points (assume ok for now)
-	score += 15
+	return clampScore(score)
+}
 
-	// Clamp to 0-100
-	if score < 0 {
-		score = 0
-	} else if score > 100 {
-		score = 100
+func clampScore(score int) int {
+	return min(max(score, 0), 100)
+}
+
+// liquidityPoints scores the liquidity/slippage component (10 points) from a
+// measured slippage: full marks within the policy's limit (20 bps when it names
+// none), half within twice that, nothing beyond. No measurement, no points.
+func liquidityPoints(in EvaluationInput) int {
+	if in.Liquidity == nil || !finiteNum(in.Liquidity.SlippageBps) || in.Liquidity.SlippageBps < 0 {
+		return 0
 	}
+	limit := in.Plan.RiskPolicy.MaxSlippageBps
+	if limit <= 0 {
+		limit = 20
+	}
+	switch s := in.Liquidity.SlippageBps; {
+	case s <= limit:
+		return 10
+	case s <= 2*limit:
+		return 5
+	}
+	return 0
+}
 
-	return score
+// profitProgressPoints scores the profit progress component (15 points): the share
+// of the plan's profit target reached so far. It needs a known profit and loss and a
+// target, and scores nothing without both.
+func profitProgressPoints(in EvaluationInput) int {
+	target := in.Plan.RiskPolicy.ProfitTargetUSDT
+	if !in.PnLKnown || !finiteNum(in.PnLUSDT) || !finiteNum(target) || target <= 0 {
+		return 0
+	}
+	share := math.Min(math.Max(in.PnLUSDT/target, 0), 1)
+	return int(math.Round(15 * share))
+}
+
+func finiteNum(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// legMismatch measures how far the two legs are apart in QUANTITY: the spot quantity
+// against the futures base quantity, which is the contract count times the size of one
+// contract (a position's Contracts is a count, never a base quantity: 135 contracts of
+// CHZ/USDT:USDT on OKX is 1350 CHZ). It is distinct from delta drift, which compares
+// the legs' values and so moves with the price basis between spot and futures.
+//
+// It returns the mismatch in percent of the spot quantity (capped at 100) and whether
+// it breaches the policy's MaxDeltaDriftPct. It measures nothing, and so breaches
+// nothing, when a leg could not be read, the contract size is unknown or the spot
+// quantity is not positive.
+func legMismatch(in EvaluationInput) (pct float64, breach bool) {
+	if !in.SpotState.Available || !in.FuturesState.Available {
+		return 0, false
+	}
+	spotQty, size, contracts := in.SpotState.Quantity, in.FuturesState.ContractSize, in.FuturesState.Contracts
+	for _, v := range []float64{spotQty, size, contracts} {
+		if !finiteNum(v) {
+			return 0, false
+		}
+	}
+	if spotQty <= 0 || size <= 0 || contracts < 0 {
+		return 0, false
+	}
+	futuresBase := contracts * size
+	pct = math.Min(math.Abs(spotQty-futuresBase)/spotQty*100, 100)
+	return pct, math.Abs(spotQty-futuresBase)/spotQty*100 > in.Plan.RiskPolicy.MaxDeltaDriftPct
 }
 
 // labelForScore returns the health label for a given score
-func labelForScore(score int) string {
-	switch {
-	case score >= 90:
-		return HealthLabelExcellent
-	case score >= 75:
-		return HealthLabelHealthy
-	case score >= 60:
-		return HealthLabelWatch
-	case score >= 40:
-		return HealthLabelDanger
-	default:
-		return HealthLabelCritical
-	}
-}
+func labelForScore(score int) string { return planhealth.LabelForScore(score) }
 
 // detectBreaches detects threshold breaches and returns breach codes
 func detectBreaches(
@@ -384,105 +455,19 @@ func detectBreaches(
 	return breaches
 }
 
-// criticalBreachCodes are breach codes whose condition can deteriorate further
-// under the same code (e.g. liquidation distance shrinking, margin ratio climbing).
-// They always map to "critical" severity and must never be throttled by the alert
-// cooldown — see IsCriticalBreachCode.
-var criticalBreachCodes = map[string]bool{
-	"data_unavailable":         true,
-	"margin_critical":          true,
-	"liquidation_distance_low": true,
-}
+// IsCriticalBreachCode reports whether a breach code is critical severity: one whose
+// condition can deteriorate further under the same code (liquidation distance
+// shrinking, margin ratio climbing, a monitor gone blind). Critical codes always map to
+// "critical" severity and are protective: the legacy cron monitor never silenced them,
+// and the trigger path re-sends them on the protective repeat interval while they
+// persist. The definition is in planhealth, where the trigger reads it too.
+func IsCriticalBreachCode(code string) bool { return planhealth.IsCritical(code) }
 
-// IsCriticalBreachCode reports whether a breach code is critical severity. The cron
-// monitor uses this to bypass alert-cooldown silencing for critical breaches so a
-// worsening position keeps re-alerting on every tick.
-func IsCriticalBreachCode(code string) bool { return criticalBreachCodes[code] }
+// determineSeverity determines the worst severity among breaches: "critical",
+// "danger" or "warn".
+func determineSeverity(breachCodes []string) string { return planhealth.Severity(breachCodes) }
 
-// determineSeverity determines the worst severity among breaches
-func determineSeverity(breachCodes []string) string {
-	// Severity levels: critical > danger > warn > info
-	hasCritical := false
-	hasDanger := false
-
-	dangerCodes := map[string]bool{
-		"funding_negative":    true,
-		"funding_reversal":    true,
-		"margin_danger":       true,
-		"delta_drift_high":    true,
-		"funding_unavailable": true,
-	}
-
-	for _, code := range breachCodes {
-		if criticalBreachCodes[code] {
-			hasCritical = true
-		}
-		if dangerCodes[code] {
-			hasDanger = true
-		}
-	}
-
-	if hasCritical {
-		return "critical"
-	}
-	if hasDanger {
-		return "danger"
-	}
-	return "warn"
-}
-
-// recommendAction returns a recommended action based on breach codes and snapshot
-func recommendAction(breachCodes []string, snapshot MonitorSnapshot) string {
-	// Build recommendation based on breach codes
-	if len(breachCodes) == 0 {
-		return ""
-	}
-
-	// Critical breaches
-	for _, code := range breachCodes {
-		if code == "data_unavailable" {
-			return "Data fetch failed for active plan. Check network connectivity and API keys. Manual intervention may be required."
-		}
-		if code == "margin_critical" {
-			return "Margin ratio is critical. Consider reducing position size or unwinding immediately."
-		}
-		if code == "liquidation_distance_low" {
-			return "Liquidation distance is dangerously low. Reduce position or add margin immediately."
-		}
-	}
-
-	// Danger breaches
-	if containsAny(breachCodes, []string{"funding_negative", "funding_unavailable", "margin_danger"}) {
-		return "Plan health has degraded. Review position and consider unwinding or rebalancing."
-	}
-
-	if containsAny(breachCodes, []string{"delta_drift_high"}) {
-		return "Delta drift has exceeded policy threshold. Rebalance positions to restore hedge."
-	}
-
-	if containsAny(breachCodes, []string{"funding_reversal"}) {
-		return "Funding rates are reversing. Monitor closely; consider unwinding if reversal sustains."
-	}
-
-	if containsAny(breachCodes, []string{"funding_below_min"}) {
-		return "Current funding rate is below policy minimum. Plan profitability is declining."
-	}
-
-	if containsAny(breachCodes, []string{"exit_spread_target_met"}) {
-		return "Exit spread target met. Consider unwinding to lock in gains from basis convergence."
-	}
-
-	return "Plan threshold breached. Review metrics and consider appropriate action."
-}
-
-// containsAny checks if any string in the list is contained in the codes slice
-func containsAny(codes []string, list []string) bool {
-	for _, code := range codes {
-		for _, target := range list {
-			if code == target {
-				return true
-			}
-		}
-	}
-	return false
+// recommendAction returns a recommended action based on breach codes.
+func recommendAction(breachCodes []string, _ MonitorSnapshot) string {
+	return planhealth.RecommendedAction(breachCodes)
 }

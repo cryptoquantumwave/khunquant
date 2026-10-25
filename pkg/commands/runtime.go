@@ -24,4 +24,10 @@ type Runtime struct {
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
 	ClearHistory       func() error
+
+	// ApproveToolCall and DenyToolCall resolve a held tool call by its one-time
+	// code. The identity arguments must be the requester's own: the store
+	// refuses a code presented from any other channel, chat or sender.
+	ApproveToolCall func(code, channel, chatID, senderID string) (tool string, err error)
+	DenyToolCall    func(code, channel, chatID, senderID string) (tool string, err error)
 }

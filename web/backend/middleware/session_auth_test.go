@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,9 +31,10 @@ func TestSessionCookie_IsNotTheLauncherSecret(t *testing.T) {
 	store := NewSessionStore(0)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Host = "localhost:18800" // httptest's default "example.com" is not a local name
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
-	SessionAuth(secret, store, okHandler()).ServeHTTP(rec, req)
+	SessionAuth(secret, store, "", okHandler()).ServeHTTP(rec, req)
 
 	var cookie *http.Cookie
 	for _, c := range rec.Result().Cookies() {
@@ -99,7 +101,7 @@ func TestSessionAuth_RejectsRevokedSession(t *testing.T) {
 		req.RemoteAddr = "203.0.113.5:1234" // not loopback: cookie is the only way in
 		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: id})
 		rec := httptest.NewRecorder()
-		SessionAuth(secret, store, okHandler()).ServeHTTP(rec, req)
+		SessionAuth(secret, store, "", okHandler()).ServeHTTP(rec, req)
 		return rec.Code
 	}
 
@@ -197,5 +199,94 @@ func TestPasswordAuth_AllowsLoginPath(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("login path got %d, want 200 (it must be reachable unauthenticated)", rec.Code)
+	}
+}
+
+// Only IDs shaped like Create's output reach the comparison. Asserting that
+// Valid rejects junk would prove nothing - junk never matches a live session
+// anyway - so this checks the shape gate itself, and that Valid consults it.
+func TestSessionIDShapeGate(t *testing.T) {
+	store := NewSessionStore(0)
+	id, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validSessionIDShape(id) || !store.Valid(id) {
+		t.Fatal("a freshly created session id fails the shape gate")
+	}
+	for _, bad := range []string{
+		"", id[:63], id + "0", strings.ToUpper(id), strings.Repeat("g", 64), strings.Repeat("a", 1<<20),
+	} {
+		if validSessionIDShape(bad) {
+			t.Errorf("shape gate accepted a malformed id (len %d)", len(bad))
+		}
+	}
+
+	// Valid must consult the gate: a well-formed but unknown id is compared
+	// and rejected; a live id with its shape broken is rejected before that.
+	store.sessions[strings.ToUpper(id)] = time.Now().Add(time.Hour)
+	if store.Valid(strings.ToUpper(id)) {
+		t.Fatal("Valid accepted a live session whose id fails the shape gate: the gate is not consulted")
+	}
+}
+
+// The cookie must not outlive the session it names.
+func TestIssuedCookieLifetimeMatchesSessionTTL(t *testing.T) {
+	store := NewSessionStore(0)
+	rec := httptest.NewRecorder()
+	IssueSessionFor(rec, httptest.NewRequest(http.MethodPost, LoginPath, nil), store)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("got %d cookies, want 1", len(cookies))
+	}
+	lifetime := time.Until(cookies[0].Expires)
+	if lifetime > store.TTL()+time.Minute || lifetime < store.TTL()-time.Minute {
+		t.Fatalf("cookie lives %v, session lives %v", lifetime.Round(time.Minute), store.TTL())
+	}
+}
+
+// The provider redirect arrives without the SameSite=Strict session cookie, so
+// the OAuth callback must pass PasswordAuth on its own - and only it.
+func TestPasswordAuth_LetsOnlyTheOAuthCallbackThrough(t *testing.T) {
+	h := PasswordAuth(PasswordAuthConfig{
+		Sessions:     NewSessionStore(0),
+		PasswordHash: hashFor(t, "hunter2"),
+	}, okHandler())
+
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, OAuthCallbackPath + "?code=c&state=s", http.StatusOK},
+		{http.MethodPost, OAuthCallbackPath, http.StatusUnauthorized},
+		{http.MethodGet, OAuthCallbackPath + "x", http.StatusUnauthorized},
+		{http.MethodGet, "/api/config", http.StatusUnauthorized},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.want)
+		}
+	}
+}
+
+// behind_tls_proxy: the launcher sees plain HTTP, but the cookie must still be
+// Secure.
+func TestSessionCookieSecureBehindTLSProxy(t *testing.T) {
+	issue := func() bool {
+		rec := httptest.NewRecorder()
+		IssueSessionFor(rec, httptest.NewRequest(http.MethodPost, LoginPath, nil), NewSessionStore(0))
+		return rec.Result().Cookies()[0].Secure
+	}
+	prev := secureCookies.Load()
+	t.Cleanup(func() { SetSecureCookies(prev) })
+
+	if issue() {
+		t.Fatal("plain-HTTP cookie is Secure without behind_tls_proxy; the check below proves nothing")
+	}
+	SetSecureCookies(true)
+	if !issue() {
+		t.Fatal("cookie is not Secure with behind_tls_proxy set")
 	}
 }

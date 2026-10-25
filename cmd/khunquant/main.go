@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -20,12 +21,18 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/clean"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/cron"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/gateway"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/heartbeat"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/launcher"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/migrate"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/model"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/onboard"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/owner"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/replay"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/risk"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/status"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/trigger"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/uninstall"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/update"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/version"
@@ -50,12 +57,18 @@ func NewKhunquantCommand() *cobra.Command {
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),
 		gateway.NewGatewayCommand(),
+		heartbeat.NewHeartbeatCommand(),
+		launcher.NewLauncherCommand(),
 		status.NewStatusCommand(),
+		trigger.NewTriggerCommand(),
+		replay.NewReplayCommand(),
 		cron.NewCronCommand(),
 		clean.NewCleanCommand(),
 		migrate.NewMigrateCommand(),
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),
+		risk.NewRiskCommand(),
+		owner.NewOwnerCommand(),
 		uninstall.NewUninstallCommand(),
 		update.NewUpdateCommand(),
 		version.NewVersionCommand(),
@@ -108,11 +121,38 @@ func initTermuxSSL() {
 	}
 }
 
+// isReplay says whether the process was started as `khunquant replay`.
+func isReplay(args []string) bool { return len(args) > 1 && args[1] == "replay" }
+
+// exitStatus is how the process ends for an error from a command. A command that
+// silences cobra's own error output (`khunquant trigger`) returns an error that
+// names its exit status; its message is printed here, on stderr. Any other error
+// was already printed by cobra and ends the process with 1.
+func exitStatus(err error) int {
+	var ee interface {
+		error
+		ExitCode() int
+	}
+	if errors.As(err, &ee) {
+		if msg := ee.Error(); msg != "" {
+			fmt.Fprintln(os.Stderr, "Error:", msg)
+		}
+		return ee.ExitCode()
+	}
+	return 1
+}
+
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
 
-	fmt.Printf("%s", banner)
+	// `khunquant replay` prints its report and writes nothing but the file it was told
+	// to: no banner on its standard output, no cache file, no network call for news of
+	// an update.
+	quiet := isReplay(os.Args)
+	if !quiet {
+		fmt.Printf("%s", banner)
+	}
 
 	// Install a file-backed PassphraseProvider so enc:// credentials are
 	// decrypted automatically if ~/.khunquant/.passphrase exists.
@@ -121,7 +161,10 @@ func main() {
 
 	// Read the cached update result instantly (no network wait), and kick off
 	// a background refresh so the cache stays fresh for the next invocation.
-	info := updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
+	var info *updater.UpdateInfo
+	if !quiet {
+		info = updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
+	}
 	if info != nil && info.IsOutdated {
 		fmt.Printf(
 			"%s Update available: %s (you have %s)\n   → %s\n\n",
@@ -134,6 +177,6 @@ func main() {
 
 	cmd := NewKhunquantCommand()
 	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitStatus(err))
 	}
 }

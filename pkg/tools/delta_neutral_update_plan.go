@@ -17,10 +17,17 @@ type UpdateDeltaNeutralPlanTool struct {
 	cfg         *config.Config
 	store       *deltaneutral.Store
 	cronService *cron.CronService
+	sync        DNSyncFunc
 }
 
 func NewUpdateDeltaNeutralPlanTool(cfg *config.Config, store *deltaneutral.Store, cronService *cron.CronService) *UpdateDeltaNeutralPlanTool {
 	return &UpdateDeltaNeutralPlanTool{cfg: cfg, store: store, cronService: cronService}
+}
+
+// WithSync gives the tool the hook it calls after it touched the plan's cron job. Nil is fine.
+func (t *UpdateDeltaNeutralPlanTool) WithSync(f DNSyncFunc) *UpdateDeltaNeutralPlanTool {
+	t.sync = f
+	return t
 }
 
 func (t *UpdateDeltaNeutralPlanTool) Name() string { return NameUpdateDeltaNeutralPlan }
@@ -166,6 +173,11 @@ func (t *UpdateDeltaNeutralPlanTool) Parameters() map[string]any {
 }
 
 func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Every edit is the owner's.
+	if res := refuseNonOwnerChange(ctx, NameUpdateDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {
@@ -177,7 +189,29 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
 
+	// Paper mode: changing leverage on an ACTIVE plan calls SetFuturesLeverage
+	// on the live position, and there is no simulated futures venue. Refuse that
+	// one edit before anything is touched (the enable switch below has side
+	// effects of its own); every other edit - and a leverage edit on a draft or
+	// ready plan, which only stores a number - is unaffected.
+	if lev, ok := args["leverage"].(float64); ok && lev > 0 &&
+		plan.Status == deltaneutral.PlanStatusActive && broker.IsPaperMode(t.cfg) {
+		return ErrorResult("changing leverage on an active plan is not simulated in paper_trading_mode, and would change the " +
+			"LIVE leverage of a real position. Nothing was changed. Disable paper_trading_mode to apply it " +
+			"(other plan edits are still allowed).").
+			WithError(fmt.Errorf("%w: live leverage change on an active delta-neutral plan", broker.ErrPaperModeUnsupported))
+	}
+
 	changed := false
+	// jobTouched is set wherever the plan's cron job is enabled, disabled or replaced.
+	// Whatever happens after that, the hook is called on the way out: the job is what
+	// the trigger path has to catch up with, even when a later edit is refused.
+	jobTouched := false
+	defer func() {
+		if jobTouched {
+			t.sync.request()
+		}
+	}()
 
 	// Update name
 	if v, ok := args["name"].(string); ok && v != "" {
@@ -189,6 +223,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	if v, ok := args["enabled"].(bool); ok {
 		plan.Enabled = v
 		t.cronService.EnableJob(plan.CronJobID, v)
+		jobTouched = true
 		changed = true
 	}
 
@@ -219,7 +254,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			}
 
 			// Gate checks
-			if err := broker.CheckLeverage(t.cfg, "edit delta-neutral leverage"); err != nil {
+			if err := broker.CheckLeverage(t.cfg, "edit delta-neutral leverage", broker.RiskIncrease); err != nil {
 				return ErrorResult(err.Error())
 			}
 			if err := broker.CheckPermission(t.cfg, plan.FuturesProvider, plan.FuturesAccount, config.ScopeTrade); err != nil {
@@ -307,6 +342,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			// Remove old cron job and create new one
 			if plan.CronJobID != "" {
 				t.cronService.RemoveJob(plan.CronJobID)
+				jobTouched = true
 			}
 			cronMsg := fmt.Sprintf("[DN-MONITOR] plan_id=%d", planID)
 			job, err := t.cronService.AddJob(
@@ -322,6 +358,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 			}
 			job.Payload.NoHistory = true
 			t.cronService.UpdateJob(job)
+			jobTouched = true
 			plan.CronJobID = job.ID
 			plan.MonitorInterval = newInterval
 			changed = true
@@ -432,6 +469,7 @@ func (t *UpdateDeltaNeutralPlanTool) Execute(ctx context.Context, args map[strin
 	if job := t.cronService.GetJob(plan.CronJobID); job != nil {
 		job.Name = fmt.Sprintf("dn:%d:%s", plan.ID, plan.Name)
 		_ = t.cronService.UpdateJob(job)
+		jobTouched = true
 	}
 
 	status := "enabled"

@@ -101,8 +101,10 @@ func TestIntegrationPlanCreationAndSnapshot(t *testing.T) {
 	if latest.ThresholdBreached {
 		t.Errorf("Expected ThresholdBreached=false, got true")
 	}
-	if latest.HealthLabel != HealthLabelHealthy && latest.HealthLabel != HealthLabelExcellent {
-		t.Errorf("Expected healthy/excellent label, got %s", latest.HealthLabel)
+	// A perfect cross-exchange hedge scores 71 now that liquidity and profit progress
+	// are no longer awarded without data (it was 96): "watch", with the thresholds kept.
+	if latest.HealthLabel != HealthLabelWatch || latest.HealthScore != 71 {
+		t.Errorf("Expected watch/71 for a perfect cross-exchange plan, got %s/%d", latest.HealthLabel, latest.HealthScore)
 	}
 	if latest.HealthScore <= 0 {
 		t.Errorf("Expected positive health score, got %d", latest.HealthScore)

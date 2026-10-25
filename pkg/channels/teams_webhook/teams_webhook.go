@@ -2,12 +2,15 @@ package teamswebhook
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
 	"github.com/atc0005/go-teams-notify/v2/adaptivecard"
@@ -24,6 +27,72 @@ var statusCodeRe = regexp.MustCompile(`\b([45]\d{2})\b`)
 // markdownTableRe matches a markdown table block (header + separator + rows).
 // It captures the entire table including all rows.
 var markdownTableRe = regexp.MustCompile(`(?m)^(\|[^\n]+\|)\n(\|[-:\|\s]+\|)\n((?:\|[^\n]+\|\n?)+)`)
+
+// paragraphSplitRe splits content on blank-line boundaries. It is the same
+// separator markdownTableRe relies on to keep a whole table on one side of a
+// split (see splitContentWithTables), so the paragraph pass used to degrade
+// an oversized message never slices a table in half.
+var paragraphSplitRe = regexp.MustCompile(`\n{2,}`)
+
+const (
+	// defaultSendTimeout bounds a single webhook POST. The vendored
+	// go-teams-notify client's own http.Client.Timeout is left unset (its
+	// comment says a context should be used instead), and without this the
+	// long-lived ctx the manager passes down would let a stalled endpoint
+	// block a send indefinitely.
+	defaultSendTimeout = 30 * time.Second
+
+	// teamsCardSizeBudget is the byte ceiling for one Adaptive Card message,
+	// kept safely under Teams' ~28 KB webhook payload limit (see
+	// WithMaxMessageLength below) so an oversized card isn't silently
+	// dropped by Teams with a permanent 4xx.
+	teamsCardSizeBudget = 25 * 1024
+
+	// redactedWebhookURL replaces a webhook URL wherever it turns up in an
+	// error message returned from this package.
+	redactedWebhookURL = "[redacted-webhook-url]"
+)
+
+// suspiciousWebhookURLPattern is a defensive fallback for sanitizeWebhookError:
+// it matches any https:// URL that looks like a Teams/Power-Automate webhook
+// endpoint, in case an error embeds one that isn't the exact configured URL
+// (for example a URL surfaced by a redirect).
+var suspiciousWebhookURLPattern = regexp.MustCompile(
+	`https://\S*(?:webhook|logic\.azure|office\.com|powerautomate)\S*`,
+)
+
+// sanitizeWebhookError removes every URL in knownURLs, and defensively any
+// URL matching suspiciousWebhookURLPattern, from err's message. The webhook
+// URL is the bearer secret for this channel: the vendored go-teams-notify
+// client embeds it verbatim in its own URL-pattern-validation errors and in
+// net/http errors, and an unredacted error reaches logs/callers via
+// manager.go's err.Error() logging. HTTP status text (e.g. "401
+// Unauthorized") is untouched, so classifyTeamsError still works on the
+// result.
+//
+// Exact replacement runs before the regex pass so the regex cannot partially
+// mangle a URL that the literal pass would otherwise catch whole.
+func sanitizeWebhookError(err error, knownURLs ...string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	for _, u := range knownURLs {
+		if u == "" {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, u, redactedWebhookURL)
+		// net/url wraps a rejected URL via %q (see url.Error.Error), which
+		// re-escapes control/non-printable bytes - e.g. a raw 0x7f byte
+		// becomes the four characters `\x7f` - so it no longer matches the
+		// raw URL byte-for-byte. Also try the %q-quoted form.
+		if quoted := strconv.Quote(u); len(quoted) >= 2 {
+			msg = strings.ReplaceAll(msg, quoted[1:len(quoted)-1], redactedWebhookURL)
+		}
+	}
+	msg = suspiciousWebhookURLPattern.ReplaceAllString(msg, redactedWebhookURL)
+	return errors.New(msg)
+}
 
 // teamsMessageSender abstracts the Teams client for testability.
 type teamsMessageSender interface {
@@ -54,6 +123,19 @@ type TeamsWebhookChannel struct {
 	*channels.BaseChannel
 	config config.TeamsWebhookConfig
 	client teamsMessageSender
+
+	// sendTimeout bounds a single webhook POST; zero means defaultSendTimeout.
+	// It is only overridden by tests.
+	sendTimeout time.Duration
+}
+
+// effectiveSendTimeout returns the configured per-send timeout, falling back
+// to defaultSendTimeout when unset.
+func (c *TeamsWebhookChannel) effectiveSendTimeout() time.Duration {
+	if c.sendTimeout > 0 {
+		return c.sendTimeout
+	}
+	return defaultSendTimeout
 }
 
 // NewTeamsWebhookChannel creates a new Teams webhook channel.
@@ -78,7 +160,12 @@ func NewTeamsWebhookChannel(
 		}
 		parsed, err := url.Parse(webhookURL)
 		if err != nil {
-			return nil, fmt.Errorf("teams_webhook: webhook %q has invalid URL: %w", name, err)
+			// url.Parse errors embed the raw string it failed on, which is the
+			// webhook URL itself here.
+			return nil, fmt.Errorf(
+				"teams_webhook: webhook %q has invalid URL: %w",
+				name, sanitizeWebhookError(err, webhookURL),
+			)
 		}
 		if !strings.EqualFold(parsed.Scheme, "https") {
 			return nil, fmt.Errorf("teams_webhook: webhook %q must use HTTPS (got %q)", name, parsed.Scheme)
@@ -159,44 +246,240 @@ func (c *TeamsWebhookChannel) Send(ctx context.Context, msg bus.OutboundMessage)
 		return fmt.Errorf("teams_webhook: no webhook configured for target %q", targetName)
 	}
 
-	// Build an Adaptive Card for rich formatting
-	card, err := c.buildAdaptiveCard(msg, target)
+	// Build one or more Adaptive Card messages for rich formatting. More than
+	// one comes back only when the content is too large for a single card
+	// even after degrading table rendering; see buildTeamsMessages.
+	teamsMessages, err := c.buildTeamsMessages(msg, target)
 	if err != nil {
 		return fmt.Errorf("teams_webhook: failed to build card: %w", err)
 	}
 
-	// Create the message with the card
-	teamsMsg, err := adaptivecard.NewMessageFromCard(card)
-	if err != nil {
-		return fmt.Errorf("teams_webhook: failed to create message: %w", err)
-	}
-
-	// Send to Teams
-	if err := c.client.SendWithContext(ctx, target.WebhookURL.String(), teamsMsg); err != nil {
-		// Log without raw error to avoid leaking webhook URL (embedded in net/http errors)
-		logger.ErrorCF("teams_webhook", "Failed to send message to Teams webhook", map[string]any{
-			"target": msg.ChatID,
-		})
-		// Classify error based on status code extracted from error message.
-		// The go-teams-notify library includes status in errors like "401 Unauthorized".
-		// Use ClassifySendError for proper retry behavior (4xx = permanent, 5xx = temporary).
-		classifiedErr := classifyTeamsError(err)
-		return fmt.Errorf("teams_webhook: send failed: %w", classifiedErr)
+	// Send each card in turn. This is not atomic: if a later card fails,
+	// earlier ones have already been delivered to Teams.
+	webhookURL := target.WebhookURL.String()
+	for i, teamsMsg := range teamsMessages {
+		sendCtx, cancel := context.WithTimeout(ctx, c.effectiveSendTimeout())
+		sendErr := c.client.SendWithContext(sendCtx, webhookURL, teamsMsg)
+		cancel()
+		if sendErr != nil {
+			// Log without raw error to avoid leaking webhook URL (embedded in net/http errors)
+			logger.ErrorCF("teams_webhook", "Failed to send message to Teams webhook", map[string]any{
+				"target": msg.ChatID,
+				"part":   i + 1,
+				"parts":  len(teamsMessages),
+			})
+			// Sanitize before classification: the go-teams-notify client
+			// embeds the raw webhook URL in its own validation errors and in
+			// net/http errors, and that text must never reach a caller or log.
+			sanitizedErr := sanitizeWebhookError(sendErr, webhookURL)
+			// Classify error based on status code extracted from error message.
+			// The go-teams-notify library includes status in errors like "401 Unauthorized".
+			// Use ClassifySendError for proper retry behavior (4xx = permanent, 5xx = temporary).
+			classifiedErr := classifyTeamsError(sanitizedErr)
+			if len(teamsMessages) > 1 {
+				return fmt.Errorf("teams_webhook: send failed on part %d/%d: %w", i+1, len(teamsMessages), classifiedErr)
+			}
+			return fmt.Errorf("teams_webhook: send failed: %w", classifiedErr)
+		}
 	}
 
 	logger.DebugCF("teams_webhook", "Message sent successfully", map[string]any{
 		"target": msg.ChatID,
+		"parts":  len(teamsMessages),
 	})
 
 	return nil
 }
 
+// buildTeamsMessages builds one or more Adaptive Card messages for msg,
+// degrading in steps to stay under teamsCardSizeBudget so Teams doesn't
+// silently drop an oversized payload with a permanent 4xx:
+//
+//  1. tables rendered as native Adaptive Card Table elements (the normal,
+//     best-looking path)
+//  2. if that message is over budget, tables rendered as a fenced code block
+//     instead - Table elements inflate roughly 10x in JSON size versus the
+//     markdown they came from
+//  3. if still over budget, the content is split into multiple cards at
+//     paragraph boundaries (tables-as-code), sent sequentially by the caller
+func (c *TeamsWebhookChannel) buildTeamsMessages(
+	msg bus.OutboundMessage,
+	target config.TeamsWebhookTarget,
+) ([]goteamsnotify.TeamsMessage, error) {
+	for _, tablesAsCode := range []bool{false, true} {
+		card, err := c.buildAdaptiveCard(msg, target, tablesAsCode)
+		if err != nil {
+			return nil, err
+		}
+		size, err := cardMessageSize(card)
+		if err != nil {
+			return nil, err
+		}
+		if size <= teamsCardSizeBudget {
+			teamsMsg, err := adaptivecard.NewMessageFromCard(card)
+			if err != nil {
+				return nil, err
+			}
+			return []goteamsnotify.TeamsMessage{teamsMsg}, nil
+		}
+	}
+
+	return c.buildSplitTeamsMessages(msg, target)
+}
+
+// cardMessageSize measures the JSON size of the message actually sent over
+// the wire (adaptivecard.NewMessageFromCard's wrapper), not just the bare
+// card, since that wrapper is what counts against Teams' payload limit.
+func cardMessageSize(card adaptivecard.Card) (int, error) {
+	teamsMsg, err := adaptivecard.NewMessageFromCard(card)
+	if err != nil {
+		return 0, err
+	}
+	b, err := json.Marshal(teamsMsg)
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// buildSplitTeamsMessages is the last-resort degrade step: it splits msg's
+// content into paragraph-sized chunks (tables rendered as code) so each
+// chunk that fits on its own stays under teamsCardSizeBudget. A paragraph
+// that still doesn't fit alone (an unusually large single table, say) is
+// further split line-by-line via splitTextToFit.
+func (c *TeamsWebhookChannel) buildSplitTeamsMessages(
+	msg bus.OutboundMessage,
+	target config.TeamsWebhookTarget,
+) ([]goteamsnotify.TeamsMessage, error) {
+	fits := func(text string) (bool, error) {
+		card, err := c.buildAdaptiveCard(bus.OutboundMessage{Content: text}, target, true)
+		if err != nil {
+			return false, err
+		}
+		size, err := cardMessageSize(card)
+		if err != nil {
+			return false, err
+		}
+		return size <= teamsCardSizeBudget, nil
+	}
+
+	var chunks []string
+	var current string
+	for _, p := range splitIntoParagraphs(msg.Content) {
+		candidate := p
+		if current != "" {
+			candidate = current + "\n\n" + p
+		}
+		ok, err := fits(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			current = candidate
+			continue
+		}
+		if current != "" {
+			chunks = append(chunks, current)
+			current = ""
+		}
+		aloneOK, err := fits(p)
+		if err != nil {
+			return nil, err
+		}
+		if aloneOK {
+			current = p
+			continue
+		}
+		pieces, err := splitTextToFit(p, fits)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, pieces...)
+	}
+	if current != "" {
+		chunks = append(chunks, current)
+	}
+	if len(chunks) == 0 {
+		chunks = []string{msg.Content}
+	}
+
+	messages := make([]goteamsnotify.TeamsMessage, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunkMsg := msg
+		chunkMsg.Content = chunk
+		card, err := c.buildAdaptiveCard(chunkMsg, target, true)
+		if err != nil {
+			return nil, err
+		}
+		teamsMsg, err := adaptivecard.NewMessageFromCard(card)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, teamsMsg)
+	}
+	return messages, nil
+}
+
+// splitIntoParagraphs splits content on blank-line boundaries. Markdown
+// tables in this package's input are always preceded/followed by a blank
+// line (see splitContentWithTables), so a table lands in exactly one
+// paragraph and is never sliced in half by this pass alone.
+func splitIntoParagraphs(content string) []string {
+	parts := paragraphSplitRe.Split(content, -1)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return []string{content}
+	}
+	return out
+}
+
+// splitTextToFit recursively halves text's lines until each resulting piece
+// satisfies fits. It always terminates: a single line is returned as-is even
+// if it still doesn't fit, since there is nothing smaller left to try.
+func splitTextToFit(text string, fits func(string) (bool, error)) ([]string, error) {
+	ok, err := fits(text)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return []string{text}, nil
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= 1 {
+		return []string{text}, nil
+	}
+	mid := len(lines) / 2
+	first := strings.Join(lines[:mid], "\n")
+	second := strings.Join(lines[mid:], "\n")
+	firstParts, err := splitTextToFit(first, fits)
+	if err != nil {
+		return nil, err
+	}
+	secondParts, err := splitTextToFit(second, fits)
+	if err != nil {
+		return nil, err
+	}
+	return append(firstParts, secondParts...), nil
+}
+
 // buildAdaptiveCard creates a formatted Adaptive Card from the outbound message.
-// It detects markdown tables and converts them to native Adaptive Card Table elements,
-// since TextBlocks only support a limited markdown subset (no tables).
+// It detects markdown tables and converts them to native Adaptive Card Table
+// elements, since TextBlocks only support a limited markdown subset (no
+// tables) - unless tablesAsCode is set, in which case tables are rendered as
+// a fenced code block instead. A Table element's per-cell TextBlock objects
+// inflate roughly 10x in JSON size versus the markdown source, so
+// buildTeamsMessages falls back to tablesAsCode when the native rendering
+// pushes a message over budget.
 func (c *TeamsWebhookChannel) buildAdaptiveCard(
 	msg bus.OutboundMessage,
 	target config.TeamsWebhookTarget,
+	tablesAsCode bool,
 ) (adaptivecard.Card, error) {
 	card := adaptivecard.NewCard()
 	card.Type = adaptivecard.TypeAdaptiveCard
@@ -231,6 +514,14 @@ func (c *TeamsWebhookChannel) buildAdaptiveCard(
 
 	for _, seg := range segments {
 		if seg.isTable {
+			if tablesAsCode {
+				block := adaptivecard.NewTextBlock("```\n"+seg.content+"\n```", true)
+				block.Wrap = true
+				if err := card.AddElement(false, block); err != nil {
+					return card, err
+				}
+				continue
+			}
 			// Convert markdown table to Adaptive Card Table element
 			tableElement, err := parseMarkdownTable(seg.content)
 			if err != nil {

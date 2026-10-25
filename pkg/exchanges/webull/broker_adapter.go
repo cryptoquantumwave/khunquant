@@ -783,10 +783,11 @@ func (a *webullAdapter) CreateOrder(ctx context.Context, symbol, orderType, side
 		return ccxt.Order{}, fmt.Errorf("webull: unsupported time_in_force %q for equities (use \"DAY\" or \"GTC\")", timeInForce)
 	}
 
-	// Generate unique client_order_id (≤32 chars)
-	clientOrderID, err := generateClientOrderID()
+	// client_order_id: the caller's (params["client_order_id"], alphanumeric,
+	// at most 32 characters) or a generated unique one (≤32 chars).
+	clientOrderID, err := equityClientOrderID(params)
 	if err != nil {
-		return ccxt.Order{}, fmt.Errorf("webull: generate client_order_id: %w", err)
+		return ccxt.Order{}, err
 	}
 
 	// Build NewOrder
@@ -901,9 +902,29 @@ func (a *webullAdapter) FetchOrder(ctx context.Context, id, symbol string) (ccxt
 // to a ccxt.Order tagged with ccxtSymbol. Shared by the equity and option
 // open-orders paths.
 func (a *webullAdapter) fetchOpenOrdersFiltered(ctx context.Context, ccxtSymbol string, keep func(OrderItem) bool) ([]ccxt.Order, error) {
+	orders, _, err := a.fetchOpenOrdersPageFiltered(ctx, ccxtSymbol, keep)
+	return orders, err
+}
+
+// pageIsFull reports whether a listing answer may have been cut at page_size. The
+// spec says only "records per query": whether a record is a combo or an order
+// inside one is not stated, so the page counts as full when EITHER count reaches
+// OrderPageSize (the safe reading: more answers become inconclusive, none less).
+func pageIsFull(combos []ComboOrder) bool {
+	items := 0
+	for _, c := range combos {
+		items += len(c.Orders)
+	}
+	return len(combos) >= OrderPageSize || items >= OrderPageSize
+}
+
+// fetchOpenOrdersPageFiltered is fetchOpenOrdersFiltered plus whether the page
+// Webull returned was full (so the listing may continue past it). The flag is read
+// from the raw records, before the predicate drops any.
+func (a *webullAdapter) fetchOpenOrdersPageFiltered(ctx context.Context, ccxtSymbol string, keep func(OrderItem) bool) ([]ccxt.Order, bool, error) {
 	combos, err := a.client.FetchOpenOrders(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var result []ccxt.Order
@@ -916,25 +937,42 @@ func (a *webullAdapter) fetchOpenOrdersFiltered(ctx context.Context, ccxtSymbol 
 			result = append(result, orderItemToCCXT(ccxtSymbol, &item))
 		}
 	}
-	return result, nil
+	return result, pageIsFull(combos), nil
 }
 
-// FetchOpenOrders returns all open orders, optionally filtered by symbol.
+// FetchOpenOrders returns the open orders of the first page, optionally filtered by symbol.
 func (a *webullAdapter) FetchOpenOrders(ctx context.Context, symbol string) ([]ccxt.Order, error) {
+	orders, _, err := a.FetchOpenOrdersPage(ctx, symbol)
+	return orders, err
+}
+
+var _ broker.PagedListings = (*webullAdapter)(nil)
+
+// FetchOpenOrdersPage is FetchOpenOrders plus whether the page was full, so the
+// idempotent reconcile can tell "not listed" from "may be on the next page".
+func (a *webullAdapter) FetchOpenOrdersPage(ctx context.Context, symbol string) ([]ccxt.Order, bool, error) {
 	symbolFilter := toWebullSymbol(symbol) // "" → "", "AAPL/USD" → "AAPL"
-	orders, err := a.fetchOpenOrdersFiltered(ctx, symbol, func(item OrderItem) bool {
+	orders, truncated, err := a.fetchOpenOrdersPageFiltered(ctx, symbol, func(item OrderItem) bool {
 		return symbolFilter == "" || item.Symbol == symbolFilter
 	})
 	if err != nil {
-		return nil, fmt.Errorf("webull: FetchOpenOrders: %w", err)
+		return nil, false, fmt.Errorf("webull: FetchOpenOrders: %w", err)
 	}
-	return orders, nil
+	return orders, truncated, nil
 }
 
 // FetchClosedOrders returns closed/filled orders, optionally filtered by symbol.
 // since: optional Unix milliseconds timestamp; if provided, derives start_date.
 // limit: max number of orders to return (0 = no limit).
 func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, since *int64, limit int) ([]ccxt.Order, error) {
+	orders, _, err := a.FetchClosedOrdersPage(ctx, symbol, since, limit)
+	return orders, err
+}
+
+// FetchClosedOrdersPage is FetchClosedOrders plus whether the listing may hold
+// more than was read: the raw page Webull returned was full (counted before the
+// status and symbol filters), or limit cut the result short.
+func (a *webullAdapter) FetchClosedOrdersPage(ctx context.Context, symbol string, since *int64, limit int) ([]ccxt.Order, bool, error) {
 	// Derive start_date from since if provided (format yyyy-MM-dd)
 	var startDate string
 	if since != nil {
@@ -944,8 +982,9 @@ func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, si
 
 	combos, err := a.client.FetchOrderHistory(ctx, startDate, "")
 	if err != nil {
-		return nil, fmt.Errorf("webull: FetchClosedOrders: %w", err)
+		return nil, false, fmt.Errorf("webull: FetchClosedOrders: %w", err)
 	}
+	fullPage := pageIsFull(combos)
 
 	var result []ccxt.Order
 	symbolFilter := toWebullSymbol(symbol)
@@ -967,12 +1006,12 @@ func (a *webullAdapter) FetchClosedOrders(ctx context.Context, symbol string, si
 
 			// Respect limit
 			if limit > 0 && len(result) >= limit {
-				return result, nil
+				return result, true, nil
 			}
 		}
 	}
 
-	return result, nil
+	return result, fullPage, nil
 }
 
 // FetchMyTrades returns personal trade history.
@@ -1137,6 +1176,50 @@ func (a *webullAdapter) FetchOpenOptionOrders(ctx context.Context) ([]ccxt.Order
 
 // --- Helpers ---
 
+// maxClientOrderIDLen is Webull's documented client_order_id limit (the adapter's
+// own note); its character set is not stated, so only alphanumerics are
+// accepted from a caller.
+const maxClientOrderIDLen = 32
+
+// equityClientOrderID returns the caller's params["client_order_id"] when given
+// and valid, else a generated one. A caller's value that is not a non-empty
+// alphanumeric string within the limit is an error, not silently replaced: the
+// caller wants to find the order by it later.
+func equityClientOrderID(params map[string]interface{}) (string, error) {
+	v, ok := params["client_order_id"]
+	if !ok || v == nil {
+		id, err := generateClientOrderID()
+		if err != nil {
+			return "", fmt.Errorf("webull: generate client_order_id: %w", err)
+		}
+		return id, nil
+	}
+	id, isStr := v.(string)
+	if !isStr || id == "" || len(id) > maxClientOrderIDLen {
+		return "", fmt.Errorf("webull: client_order_id must be a non-empty alphanumeric string of at most %d characters", maxClientOrderIDLen)
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return "", fmt.Errorf("webull: client_order_id must be a non-empty alphanumeric string of at most %d characters", maxClientOrderIDLen)
+		}
+	}
+	return id, nil
+}
+
+// ClientOrderIDKey makes the adapter broker.ClientIDCapable for equity orders:
+// the API takes a client_order_id of at most 32 characters and the order
+// listings return it (as Order.Id and Order.ClientOrderId). There is no
+// FetchOrderByClientID: FetchOrder fails with untyped strings, so "no such
+// order" cannot be told from an outage, and the reconcile searches the open and
+// closed listings instead. Whether Webull refuses a repeated client_order_id is
+// not established. Webull has no futures here.
+func (a *webullAdapter) ClientOrderIDKey(market string) (string, int, bool) {
+	if market == broker.OrderMarketSpot {
+		return "client_order_id", maxClientOrderIDLen, true
+	}
+	return "", 0, false
+}
+
 // generateClientOrderID generates a unique client_order_id (≤32 chars).
 // Format: "kq" + 30 hex chars from crypto/rand = 32 chars total.
 func generateClientOrderID() (string, error) {
@@ -1223,16 +1306,18 @@ func orderItemToCCXT(symbol string, item *OrderItem) ccxt.Order {
 	// Remaining = total - filled
 	remaining := totalQty - filledQty
 
+	clientID := item.ClientOrderID
 	return ccxt.Order{
-		Id:        &id,
-		Symbol:    &sym,
-		Side:      &side,
-		Type:      &typ,
-		Status:    &status,
-		Amount:    &totalQty,
-		Filled:    &filledQty,
-		Remaining: &remaining,
-		Price:     &limitPrice,
+		Id:            &id,
+		ClientOrderId: &clientID,
+		Symbol:        &sym,
+		Side:          &side,
+		Type:          &typ,
+		Status:        &status,
+		Amount:        &totalQty,
+		Filled:        &filledQty,
+		Remaining:     &remaining,
+		Price:         &limitPrice,
 		Info: map[string]interface{}{
 			"order_id":        item.OrderID,
 			"client_order_id": item.ClientOrderID,

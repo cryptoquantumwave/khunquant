@@ -310,9 +310,9 @@ func (h *Handler) startGatewayLocked(initialStatus string) (int, error) {
 	if h.configPath != "" {
 		cmd.Env = append(cmd.Env, "KHUNQUANT_CONFIG="+h.configPath)
 	}
-	if host := h.gatewayHostOverride(); host != "" {
-		cmd.Env = append(cmd.Env, "KHUNQUANT_GATEWAY_HOST="+host)
-	}
+	// H-10: deliberately no KHUNQUANT_GATEWAY_HOST here. The launcher running
+	// with -public says nothing about where the gateway should listen; the
+	// gateway binds per gateway.host, which an operator sets explicitly.
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

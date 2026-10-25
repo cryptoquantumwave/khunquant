@@ -9,7 +9,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 )
 
-// PrepareDeltaNeutralPlanTool validates a draft plan and promotes it to "ready".
+// PrepareDeltaNeutralPlanTool validates a draft (or failed) plan and promotes it to "ready".
 type PrepareDeltaNeutralPlanTool struct {
 	cfg   *config.Config
 	store *deltaneutral.Store
@@ -31,7 +31,7 @@ func (t *PrepareDeltaNeutralPlanTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"plan_id": map[string]any{
 				"type":        "integer",
-				"description": "ID of the draft delta-neutral plan to prepare.",
+				"description": "ID of the draft (or failed) delta-neutral plan to prepare.",
 			},
 		},
 		"required": []string{"plan_id"},
@@ -54,9 +54,25 @@ func (t *PrepareDeltaNeutralPlanTool) Execute(ctx context.Context, args map[stri
 		return UserResult(fmt.Sprintf("Plan %d (%s) is already in 'ready' status — no action needed.", plan.ID, plan.Name))
 	}
 
-	// Only draft plans can be prepared.
-	if plan.Status != deltaneutral.PlanStatusDraft {
-		return ErrorResult(fmt.Sprintf("plan status is %q; only draft plans can be prepared (current status cannot be promoted to ready)", plan.Status))
+	// Only draft and failed plans can be prepared. A failed plan (an open that placed
+	// nothing) is re-prepared with the same checks: opening takes a ready plan only.
+	if plan.Status != deltaneutral.PlanStatusDraft && plan.Status != deltaneutral.PlanStatusFailed {
+		return ErrorResult(fmt.Sprintf("plan status is %q; only draft or failed plans can be prepared (current status cannot be promoted to ready)", plan.Status))
+	}
+	// A failed plan may still hold real exposure. The monitor watches a failed plan only
+	// while it does, and unwind takes a failed plan only while it does; a ready plan gets
+	// neither. Promoting it would leave the position unwatched and unclosable, so it is
+	// refused (and fails closed when the exposure cannot be read).
+	if plan.Status == deltaneutral.PlanStatusFailed {
+		hasExposure, err := t.store.HasOpenExposure(ctx, plan.ID)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("cannot verify that failed plan %d has no open exposure: %v. Not promoting it to ready.", plan.ID, err))
+		}
+		if hasExposure {
+			return ErrorResult(fmt.Sprintf(
+				"failed plan %d still has open or unreconciled exposure from a previous attempt, so it cannot be promoted to ready. "+
+					"Run unwind_delta_neutral_position first (or close the position manually on the exchange).", plan.ID))
+		}
 	}
 
 	var checks []string
@@ -137,6 +153,12 @@ func (t *PrepareDeltaNeutralPlanTool) Execute(ctx context.Context, args map[stri
 		fmt.Fprintf(&out, "\n\nFailed checks: %s\n", strings.Join(failures, ", "))
 		fmt.Fprintf(&out, "Fix the plan parameters with update_delta_neutral_plan and try again.\n")
 		return ErrorResult(out.String())
+	}
+
+	// Everything above only reads. Promoting a draft to "ready" is the change, so it is
+	// the owner's: while an owner is configured, nobody else's turn writes it.
+	if res := refuseNonOwnerChange(ctx, NamePrepareDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
 	}
 
 	// Compute and persist cost estimates (entry/exit fees; funding/breakeven need a snapshot).

@@ -1,0 +1,24 @@
+[
+  {
+    "match": "liquidation_distance:okx/main:BTC/USDT_USDT:long:critical",
+    "from": "2026-03-10T05:12:00Z",
+    "to": "2026-03-10T05:16:00Z",
+    "should_fire": true,
+    "critical": true,
+    "note": "mark within 15% of liquidation"
+  },
+  {
+    "match": "price_cross",
+    "from": "2026-03-10T05:12:00Z",
+    "to": "2026-03-10T05:16:00Z",
+    "should_fire": true,
+    "note": "the owner's own line"
+  },
+  {
+    "match": "liquidation_distance:okx/main:BTC/USDT_USDT:long:warning",
+    "from": "2026-03-10T05:20:00Z",
+    "to": "2026-03-10T05:30:00Z",
+    "should_fire": true,
+    "note": "the tier steps down to a warning on the way back"
+  }
+]

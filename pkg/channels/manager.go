@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -91,6 +92,14 @@ type Manager struct {
 	placeholders  sync.Map // "channel:chatID" → placeholderID (string)
 	typingStops   sync.Map // "channel:chatID" → func()
 	reactionUndos sync.Map // "channel:chatID" → reactionEntry
+
+	// observer receives one DeliveryReceipt per logical message; nil is free.
+	observer atomic.Pointer[func(DeliveryReceipt)]
+	// controlRouter is the control path handed to every channel; nil when there is none.
+	controlRouter atomic.Pointer[controlRouterBox]
+	// controlEnabled is false until the control-command dispatcher exists.
+	// While false, message actions are stripped before sending.
+	controlEnabled atomic.Bool
 }
 
 type asyncTask struct {
@@ -158,8 +167,9 @@ func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 }
 
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
-// Returns true if the message was edited into a placeholder (skip Send).
-func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMessage, ch Channel) bool {
+// It reports whether the message was edited into a placeholder (skip Send) and,
+// if so, the ID of the edited message.
+func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMessage, ch Channel) (bool, string) {
 	key := name + ":" + msg.ChatID
 
 	// 1. Stop typing
@@ -181,14 +191,14 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 			if editor, ok := ch.(MessageEditor); ok {
 				if err := editor.EditMessage(ctx, msg.ChatID, entry.id, msg.Content); err == nil {
-					return true // edited successfully, skip Send
+					return true, entry.id // edited successfully, skip Send
 				}
 				// edit failed → fall through to normal Send
 			}
 		}
 	}
 
-	return false
+	return false, ""
 }
 
 func NewManager(cfg *config.Config, messageBus *bus.MessageBus, store media.MediaStore) (*Manager, error) {
@@ -235,6 +245,12 @@ func (m *Manager) initChannel(name, displayName string) {
 		// Inject PlaceholderRecorder if channel supports it
 		if setter, ok := ch.(interface{ SetPlaceholderRecorder(r PlaceholderRecorder) }); ok {
 			setter.SetPlaceholderRecorder(m)
+		}
+		// Inject the control path, if there is one.
+		if b := m.controlRouter.Load(); b != nil {
+			if setter, ok := ch.(interface{ SetControlRouter(r ControlRouter) }); ok {
+				setter.SetControlRouter(b.r)
+			}
 		}
 		// Inject owner reference so BaseChannel.HandleMessage can auto-trigger typing/reaction
 		if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {
@@ -453,23 +469,28 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// Start the TTL janitor that cleans up stale typing/placeholder entries
 	go m.runTTLJanitor(dispatchCtx)
 
-	// Start shared HTTP server if configured
-	if m.httpServer != nil {
+	// Start shared HTTP server if configured. The goroutine gets its own
+	// reference: StopAll sets m.httpServer to nil under m.mu, and the goroutine
+	// (including its recover handler) runs without that lock, so reading the
+	// field there could dereference nil when the manager is stopped before the
+	// goroutine is scheduled. Shutdown before ListenAndServe makes the latter
+	// return http.ErrServerClosed, which is handled below.
+	if srv := m.httpServer; srv != nil {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.ErrorCF("channels", "HTTP server goroutine panic recovered",
 						map[string]any{
-							"addr":  m.httpServer.Addr,
+							"addr":  srv.Addr,
 							"panic": fmt.Sprintf("%v", r),
 							"stack": string(debug.Stack()),
 						})
 				}
 			}()
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
-				"addr": m.httpServer.Addr,
+				"addr": srv.Addr,
 			})
-			if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
 					"error": err.Error(),
 				})
@@ -568,30 +589,33 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 	}
 }
 
-// runWorker processes outbound messages for a single channel, splitting
-// messages that exceed the channel's maximum message length.
-// splitOutbound returns the messages to actually send for one outbound
-// message. Always returns at least one element.
-func (m *Manager) splitOutbound(content string, maxLen int) []string {
-	splitByLength := func(s string) []string {
-		if maxLen > 0 && len([]rune(s)) > maxLen {
-			return SplitMessage(s, maxLen)
-		}
-		return []string{s}
+// splitByLength splits s to fit the channel's length limit (0 = no limit).
+// Always returns at least one element.
+func splitByLength(s string, maxLen int) []string {
+	if maxLen > 0 && len([]rune(s)) > maxLen {
+		return SplitMessage(s, maxLen)
 	}
+	return []string{s}
+}
 
+// splitOutbound returns the messages to actually send for one outbound
+// message: the model's split marker first (when enabled), then the channel's
+// length limit on each part. Always returns at least one element.
+func (m *Manager) splitOutbound(content string, maxLen int) []string {
 	if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
 		if parts := SplitByMarker(content); len(parts) > 1 {
 			out := make([]string, 0, len(parts))
 			for _, part := range parts {
-				out = append(out, splitByLength(part)...)
+				out = append(out, splitByLength(part, maxLen)...)
 			}
 			return out
 		}
 	}
-	return splitByLength(content)
+	return splitByLength(content, maxLen)
 }
 
+// runWorker processes outbound messages for a single channel; deliver splits
+// messages that exceed the channel's maximum message length.
 func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
 	defer close(w.done)
 	for {
@@ -600,50 +624,51 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
-			maxLen := 0
-			if mlp, ok := w.ch.(MessageLengthProvider); ok {
-				maxLen = mlp.MaxMessageLength()
-			}
-			// Two independent splits, applied in order:
-			//  1. the marker, which is the model saying "these are separate
-			//     messages" — a semantic boundary;
-			//  2. the channel's length limit, which is a transport constraint.
-			// Length splitting runs on each marker part, so a long part is still
-			// chunked; doing it the other way round would let a length split
-			// cut across a marker and merge two intended messages.
-			for _, part := range m.splitOutbound(msg.Content, maxLen) {
-				partMsg := msg
-				partMsg.Content = part
-				m.sendWithRetry(ctx, name, w, partMsg)
-			}
+			m.deliver(ctx, name, w, msg, true)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// sendWithRetry sends a message through the channel with rate limiting and
-// retry logic. It classifies errors to determine the retry strategy:
+// sendWithRetry sends ONE message (a single chunk) through the channel with
+// rate limiting and retry logic, and returns the platform message IDs it
+// produced and the final error. It does no splitting and does not notify the
+// delivery observer; deliver wraps it for that. It classifies errors to
+// determine the retry strategy:
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) {
+//
+// IDs from every attempt are kept, including the partial IDs of a failed
+// attempt: they name messages the user can see, and a retry re-sends the whole
+// chunk, so a duplicate is real, not an artefact.
+func (m *Manager) sendWithRetry(
+	ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage,
+) ([]string, error) {
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
-		return
+		return nil, err
 	}
 
-	// Pre-send: stop typing and try to edit placeholder
-	if m.preSend(ctx, name, msg, w.ch) {
-		return // placeholder was edited successfully, skip Send
+	// Pre-send: stop typing and try to edit placeholder. A proactive message is
+	// not the answer a typing indicator or "Thinking..." placeholder is waiting
+	// for, so it must not consume them.
+	if !skipsPreSend(ctx) {
+		if edited, id := m.preSend(ctx, name, msg, w.ch); edited {
+			return []string{id}, nil // placeholder was edited successfully, skip Send
+		}
 	}
 
+	var ids []string
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		lastErr = w.ch.Send(ctx, msg)
+		var sent []string
+		sent, lastErr = m.sendOnce(ctx, w.ch, msg)
+		ids = append(ids, sent...)
 		if lastErr == nil {
-			return
+			return ids, nil
 		}
 
 		// Permanent failures — don't retry
@@ -662,7 +687,7 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 			case <-time.After(rateLimitDelay):
 				continue
 			case <-ctx.Done():
-				return
+				return ids, ctx.Err()
 			}
 		}
 
@@ -671,7 +696,7 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
-			return
+			return ids, ctx.Err()
 		}
 	}
 
@@ -682,6 +707,16 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
 	})
+	return ids, lastErr
+}
+
+// sendOnce makes exactly one adapter call: SendWithIDs when the channel reports
+// IDs, Send otherwise. Never both.
+func (m *Manager) sendOnce(ctx context.Context, ch Channel, msg bus.OutboundMessage) ([]string, error) {
+	if r, ok := ch.(IDReportingSender); ok {
+		return r.SendWithIDs(ctx, msg)
+	}
+	return nil, ch.Send(ctx, msg)
 }
 
 func dispatchLoop[M any](
@@ -969,19 +1004,8 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel %s has no active worker", msg.Channel)
 	}
 
-	maxLen := 0
-	if mlp, ok := w.ch.(MessageLengthProvider); ok {
-		maxLen = mlp.MaxMessageLength()
-	}
-	if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
-		for _, chunk := range SplitMessage(msg.Content, maxLen) {
-			chunkMsg := msg
-			chunkMsg.Content = chunk
-			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
-		}
-	} else {
-		m.sendWithRetry(ctx, msg.Channel, w, msg)
-	}
+	// Length-split only: SendMessage has never honoured the split marker.
+	m.deliver(ctx, msg.Channel, w, msg, false)
 	return nil
 }
 

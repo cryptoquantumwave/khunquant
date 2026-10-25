@@ -3,12 +3,14 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -132,14 +134,16 @@ func (t *FuturesSetLeverageTool) Execute(ctx context.Context, args map[string]an
 	if lev > 125 {
 		return ErrorResult("leverage must be <= 125")
 	}
-	if err := broker.CheckLeverage(t.cfg, "set leverage"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "set leverage", broker.RiskIncrease); err != nil {
+		return ErrorResult(err.Error())
+	}
+	// Permission is checked before the dry-run return so a preview on an
+	// account that may not trade is refused the same way the live call is.
+	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if !confirm {
 		return UserResult(fmt.Sprintf("Dry-run: would set %dx leverage on %s %s (%s). Set confirm=true to apply.", lev, providerID, symbol, marginMode))
-	}
-	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTrade); err != nil {
-		return ErrorResult(err.Error())
 	}
 	fp, err := futuresProvider(ctx, t.cfg, providerID, account)
 	if err != nil {
@@ -182,7 +186,12 @@ func (t *FuturesOpenPositionTool) Parameters() map[string]any {
 			"price":       map[string]any{"type": "number", "description": "Required for limit entry orders."},
 			"stop_loss":   map[string]any{"type": "number", "description": "Optional stop-loss trigger price."},
 			"take_profit": map[string]any{"type": "number", "description": "Optional take-profit trigger price."},
-			"params":      map[string]any{"type": "object", "description": "Extra CCXT/exchange params."},
+			"params": map[string]any{
+				"type": "object",
+				"description": "Extra CCXT/exchange execution params (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly. " +
+					"Margin and leverage keys are refused unless trading_risk permits them, and unrecognised keys are refused; " +
+					"use the side, leverage and margin_mode arguments rather than passing them here.",
+			},
 			"confirm":     map[string]any{"type": "boolean", "description": "Must be true to place live futures orders."},
 		},
 		"required": []string{"provider", "symbol", "side", "leverage", "confirm"},
@@ -203,7 +212,13 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		orderType = "market"
 	}
 	confirm, _ := args["confirm"].(bool)
-	params := copyToolParams(args["params"])
+	// H-5: filtered against the risk flags rather than forwarded verbatim. The
+	// tool's own margin mode and position side travel as dedicated request
+	// fields, so nothing here depends on those arriving through params.
+	params, paramsErr := sanitizeOrderParams(args["params"], t.cfg.TradingRisk)
+	if paramsErr != nil {
+		return ErrorResult(paramsErr.Error())
+	}
 
 	var price *float64
 	if v := numberArg(args, "price"); v > 0 {
@@ -233,7 +248,7 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 
 	// Step 2: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "open futures position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "open futures position", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -242,12 +257,9 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(err.Error())
 	}
 
-	// Step 4: daily loss limit and rate limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+	// Step 4: daily loss limit (the rate limit is taken after the dry-run, before the first mutation)
+	if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
 		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q - try again in a minute", providerID)).WithError(broker.ErrRateLimited)
 	}
 
 	// Step 5 (dry-run): return before any network calls — all permission/risk gates above
@@ -312,6 +324,22 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(fmt.Sprintf("large futures position warning: notional %.2f USD (from %s price) exceeds %.0f USD. Re-run only after explicit user confirmation.", notional, notionalSource, float64(positionWarnThresholdUSD)))
 	}
 
+	// Point of no return: refuse here if the turn is already cancelled, otherwise finish
+	// leverage, entry and protection on a context the turn's cancellation cannot cut. A
+	// cancel between the entry and its stop-loss would leave an unprotected position.
+	seqCtx, endSeq, refused := beginFuturesSequence(ctx, NameFuturesOpenPosition, providerID)
+	if refused != nil {
+		return refused
+	}
+	defer endSeq()
+	ctx = seqCtx
+
+	// Rate limit: spent only now that the call is confirmed and about to mutate the exchange,
+	// so previews and size/notional refusals above cost nothing.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q - try again in a minute", providerID)).WithError(broker.ErrRateLimited)
+	}
+
 	// Step 8: set leverage
 	if _, err := fp.SetFuturesLeverage(ctx, symbol, lev, marginMode, positionSide); err != nil {
 		return ErrorResult(fmt.Sprintf("set leverage failed: %v", err)).WithError(err)
@@ -332,6 +360,13 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(fmt.Sprintf("entry order failed: %v", err)).WithError(err)
 	}
 	entryID := orderID(entry)
+	// Report the accepted entry order to the perception order feed (the amount is a
+	// contract count; the notional is the one estimated above).
+	publishOrder(ctx, orderReport{
+		tool: NameFuturesOpenPosition, provider: providerID, account: account, symbol: symbol,
+		side: entrySide, kind: orderType, amount: amount, unit: orderfeed.UnitContracts, order: entry,
+		notionalUSD: notional, notionalKnown: true,
+	})
 
 	// Step 10: verify fill and detect partial fills
 	protectionAmount := amount
@@ -534,17 +569,28 @@ func stringArg(args map[string]any, key string) string {
 	return strings.TrimSpace(v)
 }
 
+// numberArg reads a numeric tool argument.
+//
+// M-7: NaN and Inf are normalised to 0 so the callers' "must be positive"
+// guards reject them. Returned as-is they would pass every such guard, since
+// all comparisons against NaN are false, and then flow into notional and
+// leverage arithmetic.
 func numberArg(args map[string]any, key string) float64 {
+	var f float64
 	switch v := args[key].(type) {
 	case float64:
-		return v
+		f = v
 	case int:
-		return float64(v)
+		f = float64(v)
 	case int64:
-		return float64(v)
+		f = float64(v)
 	default:
 		return 0
 	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
+	return f
 }
 
 func priceText(price *float64) string {

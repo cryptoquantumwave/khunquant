@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
 )
 
 func TestAllowStateChange_SecFetchSiteHandling(t *testing.T) {
@@ -95,58 +96,129 @@ func TestCSRFProtectedEndpoints(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// State-changing endpoints that are currently CSRF-protected.
-	// This test will grow as more endpoints are protected.
+	// Serve through CSRFMutations, which is how main.go wires the mux. Most of
+	// the routes below do not call allowStateChange themselves and are protected
+	// by this wrapper alone, so asserting against a bare mux would report them as
+	// unprotected.
+	handler := middleware.CSRFMutations(mux)
+
+	// Every mutating /api route. The middleware protects a new route whether or
+	// not it is listed here; the entry is what proves it, so add one when you add
+	// a route. Keep this in sync with:
+	//   grep -rnE 'mux\.Handle(Func)?\("(POST|PUT|PATCH|DELETE) ' web/backend/
 	protectedRoutes := []struct {
 		method   string
 		path     string
 		name     string
 		bodyType string // json, form, or empty
+		// skipSameOrigin marks handlers that perform outbound network I/O once
+		// actually reached. Rejecting cross-site requests is the security
+		// property under test here; that the middleware lets same-origin
+		// requests through is proved generically, against a sentinel handler,
+		// in web/backend/middleware/csrf_test.go.
+		skipSameOrigin bool
 	}{
 		// Config
-		{"PUT", "/api/config", "config_update", "json"},
-		{"PATCH", "/api/config", "config_patch", "json"},
-		{"POST", "/api/config/reset", "config_reset", "empty"},
+		{"PUT", "/api/config", "config_update", "json", false},
+		{"PATCH", "/api/config", "config_patch", "json", false},
+		{"POST", "/api/config/reset", "config_reset", "empty", false},
+		{"POST", "/api/config/test-command-patterns", "config_test_command_patterns", "json", false},
 
 		// Pico
-		{"POST", "/api/pico/token", "pico_regen_token", "empty"},
-		{"POST", "/api/pico/setup", "pico_setup", "empty"},
+		{"POST", "/api/pico/token", "pico_regen_token", "empty", false},
+		{"POST", "/api/pico/setup", "pico_setup", "empty", false},
 
 		// Gateway
-		{"POST", "/api/gateway/start", "gateway_start", "empty"},
-		{"POST", "/api/gateway/stop", "gateway_stop", "empty"},
-		{"POST", "/api/gateway/restart", "gateway_restart", "empty"},
-		{"POST", "/api/gateway/logs/clear", "gateway_logs_clear", "empty"},
+		{"POST", "/api/gateway/start", "gateway_start", "empty", false},
+		{"POST", "/api/gateway/stop", "gateway_stop", "empty", false},
+		{"POST", "/api/gateway/restart", "gateway_restart", "empty", false},
+		{"POST", "/api/gateway/logs/clear", "gateway_logs_clear", "empty", false},
 
 		// Models
-		{"POST", "/api/models", "models_add", "json"},
-		{"POST", "/api/models/default", "models_default", "json"},
-		{"DELETE", "/api/models/0", "models_delete", "empty"},
+		{"POST", "/api/models", "models_add", "json", false},
+		{"POST", "/api/models/default", "models_default", "json", false},
+		{"PUT", "/api/models/0", "models_update", "json", false},
+		{"DELETE", "/api/models/0", "models_delete", "empty", false},
+		{"POST", "/api/models/fetch", "models_fetch", "json", true},
+		{"DELETE", "/api/models/catalog/test-id", "models_catalog_delete", "empty", false},
+		{"POST", "/api/models/0/test", "models_test", "json", true},
+		{"POST", "/api/models/test-inline", "models_test_inline", "json", true},
 
 		// System
-		{"PUT", "/api/system/launcher-config", "launcher_config_update", "json"},
+		{"PUT", "/api/system/launcher-config", "launcher_config_update", "json", false},
+		{"PUT", "/api/system/autostart", "system_autostart", "json", false},
 
 		// Session
-		{"DELETE", "/api/sessions/test-id", "session_delete", "empty"},
+		{"DELETE", "/api/sessions/test-id", "session_delete", "empty", false},
+
+		// Dashboard auth
+		{"POST", middleware.LoginPath, "auth_login", "json", false},
+		{"POST", middleware.LogoutPath, "auth_logout", "empty", false},
 
 		// OAuth
-		{"POST", "/api/oauth/login", "oauth_login", "json"},
-		{"POST", "/api/oauth/logout", "oauth_logout", "json"},
-		{"POST", "/api/oauth/flows/test-flow/poll", "oauth_poll", "empty"},
-		{"POST", "/api/oauth/providers/openai/select-model", "oauth_select_model", "json"},
+		{"POST", "/api/oauth/login", "oauth_login", "json", false},
+		{"POST", "/api/oauth/logout", "oauth_logout", "json", false},
+		{"POST", "/api/oauth/flows/test-flow/poll", "oauth_poll", "empty", false},
+		{"POST", "/api/oauth/providers/openai/select-model", "oauth_select_model", "json", false},
 
 		// Skills
-		{"POST", "/api/skills/import", "skills_import", "json"},
-		{"DELETE", "/api/skills/test", "skills_delete", "empty"},
+		{"POST", "/api/skills/import", "skills_import", "json", false},
+		{"DELETE", "/api/skills/test", "skills_delete", "empty", false},
 
 		// Tools
-		{"PUT", "/api/tools/test/state", "tools_state", "json"},
+		{"PUT", "/api/tools/test/state", "tools_state", "json", false},
 
 		// Update
-		{"POST", "/api/update/apply", "update_apply", "json"},
+		{"POST", "/api/update/apply", "update_apply", "json", false},
+
+		// Agent config files
+		{"POST", "/api/agent/config/files", "agent_config_create", "json", false},
+		{"PUT", "/api/agent/config/files/test.md", "agent_config_save", "json", false},
+		{"DELETE", "/api/agent/config/files/test.md", "agent_config_delete", "empty", false},
+
+		// Agent memory files
+		{"POST", "/api/agent/memory/files", "agent_memory_create", "json", false},
+		{"PUT", "/api/agent/memory/files/test.md", "agent_memory_save", "json", false},
+		{"DELETE", "/api/agent/memory/files/test.md", "agent_memory_delete", "empty", false},
+
+		// Agent snapshots
+		{"DELETE", "/api/agent/snapshots/test-id", "agent_snapshot_delete", "empty", false},
+
+		// Delta-neutral plans
+		{"PATCH", "/api/agent/delta-neutral/plans/test-id/spread-targets", "dn_spread_targets", "json", false},
+		{"DELETE", "/api/agent/delta-neutral/plans/test-id", "dn_plan_delete", "empty", false},
+
+		// Cron
+		{"PATCH", "/api/cron/jobs/test-id", "cron_update", "json", false},
+		{"DELETE", "/api/cron/jobs/test-id", "cron_delete", "empty", false},
+		{"POST", "/api/cron/jobs/test-id/run", "cron_run", "empty", false},
+		{"POST", "/api/control/kill", "control_kill", "empty", true},
+
+		// Pairing
+		{"POST", "/api/pairing/approve/test-code", "pairing_approve", "empty", false},
+		{"POST", "/api/pairing/reject/test-code", "pairing_reject", "empty", false},
+
+		// Sandbox
+		{"POST", "/api/sandbox/enable", "sandbox_enable", "json", false},
+		{"PUT", "/api/sandbox/fixtures", "sandbox_fixtures", "json", false},
+		{"POST", "/api/sandbox/reload", "sandbox_reload", "empty", false},
+		{"POST", "/api/sandbox/reset-state", "sandbox_reset_state", "empty", false},
+
+		// Exchanges
+		{"POST", "/api/exchanges/webull/test-account/connect", "webull_connect", "json", true},
 	}
 
 	for _, route := range protectedRoutes {
+		// Test 0: the route actually exists. CSRFMutations answers 403 before the
+		// mux gets to route the request, so a path typo'd in this table would
+		// satisfy the cross-site assertion below while testing nothing at all.
+		t.Run(route.name+"_route_exists", func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, nil)
+			if _, pattern := mux.Handler(req); pattern == "" {
+				t.Errorf("%s %s matches no registered route", route.method, route.path)
+			}
+		})
+
 		// Test 1: Cross-site request should be rejected
 		t.Run(route.name+"_csrf_rejected", func(t *testing.T) {
 			req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
@@ -156,7 +228,7 @@ func TestCSRFProtectedEndpoints(t *testing.T) {
 			req.Header.Set("Sec-Fetch-Site", "cross-site")
 			rec := httptest.NewRecorder()
 
-			mux.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusForbidden {
 				t.Errorf("%s: cross-site request status = %d, want %d (Forbidden)",
@@ -166,6 +238,9 @@ func TestCSRFProtectedEndpoints(t *testing.T) {
 
 		// Test 2: Same-origin request should not return Forbidden
 		t.Run(route.name+"_same_origin_allowed", func(t *testing.T) {
+			if route.skipSameOrigin {
+				t.Skip("handler performs outbound network I/O; pass-through is covered in middleware/csrf_test.go")
+			}
 			req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 			if route.bodyType == "json" {
 				req.Header.Set("Content-Type", "application/json")
@@ -173,7 +248,7 @@ func TestCSRFProtectedEndpoints(t *testing.T) {
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			rec := httptest.NewRecorder()
 
-			mux.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
 			if rec.Code == http.StatusForbidden {
 				t.Errorf("%s: same-origin request got 403 Forbidden (should pass CSRF check)", route.name)

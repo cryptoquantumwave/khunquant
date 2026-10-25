@@ -1,0 +1,29 @@
+Execution review (DRY-RUN):
+  Plan:                    dry-golden (ID 1)
+  Status:                  ready
+
+Leg 1 (Futures Hedge):
+  Provider/Account:        dnfake / futures
+  Symbol:                  BTC/USDT:USDT
+  Side:                    short
+  Notional (USDT):         5000.00
+  Leverage:                3
+  Order Type:              market
+
+Leg 2 (Spot Buy):
+  Provider/Account:        dnfake / main
+  Symbol:                  BTC/USDT
+  Side:                    buy
+  Notional (USDT):         5000.00
+  Order Type:              market
+
+Estimated Costs:
+  Entry Cost (USDT):       0.00
+  Slippage Buffer:         (market orders)
+  Delta Target:             0.00 (fully hedged)
+  Liquidation Buffer:      25.00%
+
+Live Entry Spread: 0.0000% (min required: disabled)
+[CROSS-EXCHANGE WARNING] Spot and futures on different exchanges — slippage and timing risk.
+
+Set confirm=true to execute.

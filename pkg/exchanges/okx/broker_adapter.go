@@ -223,6 +223,48 @@ func (a *OKXBrokerAdapter) FetchMyTrades(_ context.Context, symbol string, since
 	return
 }
 
+// --- broker.ClientIDCapable / broker.ClientIDLookup ---
+//
+// Established from the pinned ccxt source (see the doc of broker.ClientIDCapable):
+// the unified params key "clientOrderId" is sent as "clOrdId" for spot and swap
+// orders, and fetchOrder takes it back as "clOrdId". Length and charset limits are
+// not stated in the source, so the conservative 32 letters and digits are used.
+
+// ClientOrderIDKey reports the params key and the longest client order ID for a
+// plain (market or limit) order in either market.
+func (a *OKXBrokerAdapter) ClientOrderIDKey(market string) (string, int, bool) {
+	switch market {
+	case broker.OrderMarketSpot, broker.OrderMarketFutures:
+		return "clientOrderId", 32, true
+	}
+	return "", 0, false
+}
+
+// FetchOrderByClientID fetches one order by client order ID. found is false when
+// the exchange answers OrderNotFound (okx 51603, 51400-51402). Spot and swap
+// share one client, so the market does not change the call.
+func (a *OKXBrokerAdapter) FetchOrderByClientID(_ context.Context, market, symbol, clientOrderID string) (o ccxt.Order, found bool, err error) {
+	if market != broker.OrderMarketSpot && market != broker.OrderMarketFutures {
+		return o, false, fmt.Errorf("okx: unknown market %q", market)
+	}
+	if err := a.requireAuth(); err != nil {
+		return o, false, err
+	}
+	err = catchPanic(func() error {
+		o, err = a.client.FetchOrder(clientOrderID,
+			ccxt.WithFetchOrderSymbol(symbol),
+			ccxt.WithFetchOrderParams(map[string]any{"clientOrderId": clientOrderID}))
+		return err
+	})
+	if err != nil {
+		if broker.IsOrderNotFound(err) {
+			return ccxt.Order{}, false, nil
+		}
+		return ccxt.Order{}, false, err
+	}
+	return o, true, nil
+}
+
 // --- broker.TransferProvider ---
 
 func (a *OKXBrokerAdapter) Transfer(_ context.Context, asset string, amount float64, fromAccount, toAccount string) (ccxt.TransferEntry, error) {

@@ -2,7 +2,9 @@ package broker_test
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
@@ -479,6 +481,106 @@ func TestSimulationProvider_NoBareMarketDataSupport(t *testing.T) {
 	}
 	if _, err := sim.LoadMarkets(ctx); err == nil {
 		t.Error("LoadMarkets: expected error when inner does not support market data")
+	}
+}
+
+// One provider instance serves concurrent tool calls, so the order sequence has
+// to be atomic or two simultaneous orders can share an ID. Run under -race.
+func TestSimulationProvider_ConcurrentOrderIDsUnique(t *testing.T) {
+	sim := setupSimProvider(50000)
+
+	const n = 64
+	ids := make(chan string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			order, err := sim.CreateOrder(context.Background(), "BTC/USDT", "market", "buy", 1, nil, nil)
+			if err != nil || order.Id == nil {
+				t.Errorf("CreateOrder: id=%v err=%v", order.Id, err)
+				return
+			}
+			ids <- *order.Id
+		}()
+	}
+	wg.Wait()
+	close(ids)
+
+	seen := map[string]bool{}
+	for id := range ids {
+		if !strings.HasPrefix(id, broker.PaperOrderIDPrefix) {
+			t.Errorf("simulated order ID %q is not marked %q", id, broker.PaperOrderIDPrefix)
+		}
+		if seen[id] {
+			t.Errorf("duplicate simulated order ID %q", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != n {
+		t.Errorf("got %d unique IDs, want %d", len(seen), n)
+	}
+}
+
+// Downstream code reads Average, Filled, Status and Fee from a placed order; a
+// simulated one has to populate them like a real fill, with a zero fee and the
+// price the order was valued at.
+func TestSimulationProvider_OrderHasAverageAndFee(t *testing.T) {
+	mp := NewMockProvider("binance")
+	mp.FetchTickerFn = func(symbol string) (ccxt.Ticker, error) {
+		return ccxt.Ticker{Symbol: &symbol, Ask: float64Ptr(50010), Bid: float64Ptr(49990), Last: float64Ptr(50000)}, nil
+	}
+	sim := broker.NewSimulationProvider(mp)
+	ctx := context.Background()
+
+	buy, err := sim.CreateOrder(ctx, "BTC/USDT", "market", "buy", 2, nil, nil)
+	if err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	sell, err := sim.CreateOrder(ctx, "BTC/USDT", "market", "sell", 2, nil, nil)
+	if err != nil {
+		t.Fatalf("sell: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		order ccxt.Order
+		price float64
+	}{{"buy at ask", buy, 50010}, {"sell at bid", sell, 49990}} {
+		o := tc.order
+		if o.Average == nil || *o.Average != tc.price {
+			t.Errorf("%s: Average = %v, want %v", tc.name, o.Average, tc.price)
+		}
+		if o.Price == nil || *o.Price != tc.price {
+			t.Errorf("%s: Price = %v, want %v", tc.name, o.Price, tc.price)
+		}
+		if o.Filled == nil || *o.Filled != 2 {
+			t.Errorf("%s: Filled = %v, want 2", tc.name, o.Filled)
+		}
+		if o.Remaining == nil || *o.Remaining != 0 {
+			t.Errorf("%s: Remaining = %v, want 0", tc.name, o.Remaining)
+		}
+		if o.Status == nil || *o.Status != "closed" {
+			t.Errorf("%s: Status = %v, want closed", tc.name, o.Status)
+		}
+		if o.Fee.Cost == nil || *o.Fee.Cost != 0 {
+			t.Errorf("%s: Fee.Cost = %v, want 0", tc.name, o.Fee.Cost)
+		}
+		if o.Cost == nil || *o.Cost != tc.price*2 {
+			t.Errorf("%s: Cost = %v, want %v", tc.name, o.Cost, tc.price*2)
+		}
+	}
+}
+
+// A market order with no price to value it at must be refused. The old code
+// returned a "closed" order filled at zero.
+func TestSimulationProvider_MarketOrderWithoutPriceIsRefused(t *testing.T) {
+	mp := NewMockProvider("binance")
+	mp.FetchTickerFn = func(string) (ccxt.Ticker, error) { return ccxt.Ticker{}, errors.New("no ticker") }
+	sim := broker.NewSimulationProvider(mp)
+
+	if _, err := sim.CreateOrder(context.Background(), "BTC/USDT", "market", "buy", 1, nil, nil); err == nil {
+		t.Fatal("expected an error for an unpriceable market order")
 	}
 }
 

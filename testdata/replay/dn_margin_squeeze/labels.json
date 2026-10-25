@@ -1,0 +1,23 @@
+[
+  {
+    "match": "dn_health:12:margin_danger",
+    "from": "2026-03-10T05:35:00Z",
+    "to": "2026-03-10T05:40:00Z",
+    "should_fire": true,
+    "note": "margin in danger"
+  },
+  {
+    "match": "dn_health:12:margin_critical",
+    "from": "2026-03-10T06:00:00Z",
+    "to": "2026-03-10T06:30:00Z",
+    "should_fire": true,
+    "critical": true
+  },
+  {
+    "match": "dn_health:12:liquidation_distance_low",
+    "from": "2026-03-10T06:00:00Z",
+    "to": "2026-03-10T06:30:00Z",
+    "should_fire": true,
+    "critical": true
+  }
+]

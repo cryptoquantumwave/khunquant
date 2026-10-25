@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -13,6 +12,7 @@ import (
 
 // ResizeDeltaNeutralPositionTool adjusts the size of an active delta-neutral position
 // by resizing both legs equally, maintaining delta-neutrality (equal notional on both legs).
+// On confirm it starts the journaled workflow dn.resize (pkg/deltaneutral/exits.go).
 type ResizeDeltaNeutralPositionTool struct {
 	cfg   *config.Config
 	store *deltaneutral.Store
@@ -57,6 +57,10 @@ func (t *ResizeDeltaNeutralPositionTool) Parameters() map[string]any {
 }
 
 func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Resizing runs the owner's plan, up or down: the owner's own turn only.
+	if res := refuseNonOwnerExecution(ctx, NameResizeDeltaNeutralPosition, "resize a delta-neutral position"); res != nil {
+		return res
+	}
 	planID, _ := args["plan_id"].(float64)
 	deltaPct, hasDeltaPct := args["delta_pct"].(float64)
 	deltaNotional, hasDeltaNotional := args["delta_notional_usdt"].(float64)
@@ -82,10 +86,26 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("plan status is %q, not active. Cannot resize.", plan.Status))
 	}
 
-	// --- Safety gates (same sequence as open) ---
+	// The spot leg must be a spot symbol, in either direction: the resize would trade it
+	// through the spot path.
+	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
+		return ErrorResult("spot leg: " + msg)
+	}
+
+	// Direction is known from the arguments alone (the sign of the requested change), before
+	// any network call. A resize-down only reduces exposure, so it passes the risk-adding
+	// gates (leverage switch, daily-loss limit, order-value cap); a resize-up, or an
+	// unclassifiable (NaN) request, is gated exactly like an open.
+	isDecrease := (hasDeltaNotional && deltaNotional < 0) || (hasDeltaPct && deltaPct < 0)
+	dir := broker.RiskIncrease
+	if isDecrease {
+		dir = broker.RiskReduce
+	}
+
+	// --- Safety gates (same sequence as open, risk-adding ones for increases only) ---
 
 	// Gate 1: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "resize delta-neutral position", dir); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -99,20 +119,20 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("spot leg permission denied: %v", err))
 	}
 
-	// Gate 3: daily loss limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	// Gate 3: daily loss limit — only for a resize-up. Getting smaller must stay possible
+	// after the limit trips.
+	if !isDecrease {
+		for _, key := range []string{
+			broker.AccountKey(t.cfg, plan.FuturesProvider, plan.FuturesAccount),
+			broker.AccountKey(t.cfg, plan.SpotProvider, plan.SpotAccount),
+		} {
+			if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, key); err != nil {
+				return ErrorResult(err.Error())
+			}
+		}
 	}
 
-	// Gate 4: rate limit on both providers
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
-	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
+	// The rate limit is taken after the dry-run return, right before the first order.
 
 	// Compute the delta notional (USDT), applied to BOTH legs equally
 	var deltaN float64
@@ -132,13 +152,19 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 			if err != nil || len(positions) == 0 {
 				baseNotional = plan.FuturesNotionalUSDT
 			} else {
+				sizes := &positionContractSizeResolver{fp: fp}
 				for _, p := range positions {
 					if p.Contracts != nil && *p.Contracts != 0 {
 						markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
 						if err == nil && markPrice > 0 {
-							// Live position notional
-							baseNotional = math.Abs(*p.Contracts) * markPrice
-							break
+							// Contracts is a contract COUNT: value it with the contract size, never
+							// guessing 1 — if the size is unknown the plan notional is used below.
+							if cs, ok := sizes.size(ctx, p, plan.FuturesSymbol); ok {
+								baseNotional = positionNotionalUSD(*p.Contracts, cs, markPrice)
+								if baseNotional > 0 {
+									break
+								}
+							}
 						}
 					}
 				}
@@ -152,13 +178,21 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	}
 
 	// Determine direction and guard against over-decrease
-	isDecrease := deltaN < 0
+	// (isDecrease was fixed from the arguments above, so the gates and the sizing agree.)
 	absDeltaN := math.Abs(deltaN)
 
 	if isDecrease && absDeltaN > plan.FuturesNotionalUSDT {
 		return ErrorResult(fmt.Sprintf(
 			"cannot decrease position by %.2f USDT; current notional is %.2f USDT",
 			absDeltaN, plan.FuturesNotionalUSDT))
+	}
+
+	// Gate 4: per-order value cap on the delta each leg trades — resize-up only. Before the
+	// dry-run so a preview tells the truth; a resize-down is never blocked by it.
+	if !isDecrease {
+		if err := broker.CheckRiskNotional(t.cfg, absDeltaN); err != nil {
+			return ErrorResult(fmt.Sprintf("delta-neutral resize leg: %v", err))
+		}
 	}
 
 	// Compute new notionals
@@ -197,436 +231,49 @@ func (t *ResizeDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return UserResult(review)
 	}
 
-	// --- On confirm: execute the resize (adjust both legs by |deltaN|) ---
-
-	// Create an Execution record for the resize attempt
-	now := time.Now()
-	attemptID := fmt.Sprintf("resize_%d_%d", plan.ID, now.UnixNano())
-	exec := &deltaneutral.Execution{
-		PlanID:      plan.ID,
-		AttemptID:   attemptID,
-		State:       string(deltaneutral.ExecutionStateValidating),
-		RequestedAt: now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	// --- On confirm: start dn.resize. The direction is fixed here, from the arguments
+	// alone; the workflow re-checks the plan and runs the gates of that direction. ---
+	direction := deltaneutral.DirIncrease
+	if isDecrease {
+		direction = deltaneutral.DirDecrease
 	}
-	execID, err := t.store.SaveExecution(ctx, exec)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to save execution record: %v", err))
+	var res deltaneutral.ResizeResult
+	if early := runDNWorkflow(ctx, deltaneutral.KindResize, deltaneutral.ResizeInput{
+		PlanID: plan.ID, Direction: direction, DeltaUSD: absDeltaN, Origin: ToolOrigin(ctx), Sender: ToolSender(ctx),
+	}, fmt.Sprintf("Resizing plan %d", plan.ID), "resize", &res); early != nil {
+		return early
 	}
-	exec.ID = execID
+	return resizeResult(plan, res, isDecrease)
+}
 
-	// Determine first leg (default: futures first per FirstLegType)
-	spotLessLiquid := false // Could enhance per real market data; default to false
-	firstLegType := deltaneutral.FirstLegType(spotLessLiquid)
-
-	// Transition to awaiting_approval
-	exec.State = string(deltaneutral.ExecutionStateAwaitingApproval)
-	approvedNow := time.Now()
-	exec.ApprovedAt = &approvedNow
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update execution state: %v", err))
-	}
-
-	// Transition to placing_first_leg
-	exec.State = string(deltaneutral.ExecutionStatePlacingFirstLeg)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update execution state: %v", err))
-	}
-
-	// Execute the first leg
-	var firstLegErr error
-	var firstLegFilled bool
-
-	if firstLegType == deltaneutral.LegTypeFutures {
-		firstLegFilled, firstLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
-	} else {
-		firstLegFilled, firstLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
-	}
-
-	if firstLegErr != nil {
-		// First leg failed — transition to first_leg_failed, then failed
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = firstLegErr.Error()
-		t.store.UpdateExecution(ctx, exec)
-
-		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
-
-		// Update plan status to reflect failure
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
-
-		return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position unchanged.", firstLegErr))
-	}
-
-	if !firstLegFilled {
-		// First leg did not fill — abort second leg
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = "first leg did not fill"
-		t.store.UpdateExecution(ctx, exec)
-
-		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
-
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
-		return ErrorResult("first leg did not fill. Second leg not placed. Position unchanged.")
-	}
-
-	// First leg filled — transition to first_leg_filled, then placing_second_leg
-	exec.State = string(deltaneutral.ExecutionStateFirstLegFilled)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to first_leg_filled: %v", err))
-	}
-
-	exec.State = string(deltaneutral.ExecutionStatePlacingSecondLeg)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to placing_second_leg: %v", err))
-	}
-
-	// Execute the second leg
-	var secondLegErr error
-	var secondLegFilled bool
-
-	if firstLegType == deltaneutral.LegTypeFutures {
-		// If futures was first, spot is second
-		secondLegFilled, secondLegErr = t.resizeSpotLeg(ctx, plan, exec, absDeltaN, isDecrease)
-	} else {
-		// If spot was first, futures is second
-		secondLegFilled, secondLegErr = t.resizeFuturesLeg(ctx, plan, exec, absDeltaN, isDecrease)
-	}
-
-	if secondLegErr != nil || !secondLegFilled {
-		// Second leg failed — transition to recovery_required (unhedged exposure)
-		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
-		if secondLegErr != nil {
-			exec.ErrorMsg = secondLegErr.Error()
-		} else {
-			exec.ErrorMsg = "second leg did not fill"
-		}
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to update execution: %v", err))
-		}
-
-		exec.State = string(deltaneutral.ExecutionStateRecoveryRequired)
-		exec.ErrorMsg = "second leg failed — delta broken. Run unwind_delta_neutral_position to rebalance."
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to transition to recovery_required: %v", err))
-		}
-
-		// Update plan status to recovery_required
-		t.store.UpdatePlanStatus(ctx, plan.ID, "recovery_required")
-
+// resizeResult turns the finished workflow into the tool's answer.
+func resizeResult(plan *deltaneutral.Plan, res deltaneutral.ResizeResult, isDecrease bool) *ToolResult {
+	switch res.Result {
+	case deltaneutral.ResultResized:
+		return UserResult(fmt.Sprintf(
+			"Delta-neutral position successfully resized:\n"+
+				"  Plan:                  %s (ID %d)\n"+
+				"  Attempt:               %s\n"+
+				"  Direction:             %s\n"+
+				"  Delta (USDT):          %.2f\n"+
+				"  New Notional (both):   %.2f\n"+
+				"  Status:                active\n",
+			plan.Name, plan.ID, res.AttemptID,
+			map[bool]string{true: "decrease", false: "increase"}[isDecrease],
+			res.DeltaUSD, res.NewNotional))
+	case deltaneutral.ResultRefused:
+		return refusedResult(res.Message)
+	case deltaneutral.ResultNotResized:
+		return ErrorResult(fmt.Sprintf("first leg execution failed: %s. Second leg not placed. Position unchanged; plan remains active.", res.Message))
+	case deltaneutral.ResultUnrecorded:
 		return ErrorResult(fmt.Sprintf(
-			"CRITICAL: Second leg execution failed — DELTA BROKEN. "+
-				"First leg resized but second leg failed/unfilled. "+
-				"Run unwind_delta_neutral_position immediately to close/rebalance. Error: %v",
-			secondLegErr))
+			"CRITICAL: both legs were resized on the exchange but a leg record could not be saved (%s). "+
+				"Plan set to recovery_required. Verify the positions on the exchange and close or rebalance manually "+
+				"(futures_close_position / create_order); unwind sizes only from recorded legs.", res.Message))
 	}
-
-	// Both legs filled — success. Update plan notionals.
-	exec.State = string(deltaneutral.ExecutionStateBothLegsFilled)
-	completedNow := time.Now()
-	exec.CompletedAt = &completedNow
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to finalize execution: %v", err))
-	}
-
-	// Update plan: set new equal notionals
-	plan.SpotNotionalUSDT = newNotional
-	plan.FuturesNotionalUSDT = newNotional
-	// Optionally update CapitalUSDT if tracking it
-	if isDecrease {
-		plan.CapitalUSDT -= absDeltaN
-	} else {
-		plan.CapitalUSDT += absDeltaN
-	}
-	plan.UpdatedAt = completedNow
-
-	if err := t.store.UpdatePlan(ctx, plan); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update plan: %v", err))
-	}
-
-	return UserResult(fmt.Sprintf(
-		"Delta-neutral position successfully resized:\n"+
-			"  Plan:                  %s (ID %d)\n"+
-			"  Attempt:               %s\n"+
-			"  Direction:             %s\n"+
-			"  Delta (USDT):          %.2f\n"+
-			"  New Notional (both):   %.2f\n"+
-			"  Status:                active\n",
-		plan.Name, plan.ID,
-		attemptID,
-		map[bool]string{true: "decrease", false: "increase"}[isDecrease],
-		absDeltaN,
-		newNotional))
-}
-
-// resizeFuturesLeg adjusts the futures position by the given notional amount.
-func (t *ResizeDeltaNeutralPositionTool) resizeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (bool, error) {
-	fp, err := futuresProvider(ctx, t.cfg, plan.FuturesProvider, plan.FuturesAccount)
-	if err != nil {
-		return false, fmt.Errorf("futures provider: %w", err)
-	}
-
-	// Fetch mark price and market metadata to compute the correct contract count.
-	markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
-	if err != nil {
-		return false, fmt.Errorf("fetch mark price: %w", err)
-	}
-	if markPrice <= 0 {
-		return false, fmt.Errorf("invalid mark price: %.2f", markPrice)
-	}
-
-	// Derive order side and position side from plan's position side string.
-	entrySide, positionSide, err := futuresPositionSide(plan.FuturesSide)
-	if err != nil {
-		return false, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
-	}
-
-	leverage := plan.FuturesLeverage
-	if leverage <= 0 {
-		leverage = 1
-	}
-
-	mkt, err := validateActiveSwapMarket(ctx, fp, plan.FuturesSymbol, int64(leverage))
-	if err != nil {
-		return false, fmt.Errorf("market validation: %w", err)
-	}
-	perContractSize := 1.0
-	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-		perContractSize = *mkt.ContractSize
-	}
-	minAmount := 1.0
-	if mkt.Limits.Amount.Min != nil && *mkt.Limits.Amount.Min > 0 {
-		minAmount = *mkt.Limits.Amount.Min
-	}
-	// For increases, size the futures to cover NET spot after spot taker-fee deduction
-	// (fee taken from received tokens). For decreases, no adjustment: spot sells the
-	// exact ALGO count and fee comes from USDT received, not from token quantity.
-	// TODO: fetch actual spot taker fee from the user's account tier via the exchange API
-	// instead of hardcoding 0.1%. Users on higher tiers or using fee tokens (BNB/OKX) pay less.
-	const spotTakerFee = 0.001
-	hedgeNotional := notionalDelta
-	if !isDecrease {
-		hedgeNotional = notionalDelta * (1 - spotTakerFee)
-	}
-	numContracts, err := contractsFromNotional(hedgeNotional, markPrice, perContractSize, minAmount)
-	if err != nil {
-		return false, fmt.Errorf("contract count computation: %w", err)
-	}
-	baseQty := numContracts * perContractSize
-
-	side := entrySide
-	reduceOnly := false
-
-	// If decrease: use reduce-only close (opposite side)
-	if isDecrease {
-		side = futuresCloseSide(positionSide)
-		reduceOnly = true
-	} else {
-		// If increase: set leverage before entering
-		if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, positionSide); err != nil {
-			leg := &deltaneutral.ExecutionLeg{
-				ExecutionID:           exec.ID,
-				LegType:               string(deltaneutral.LegTypeFutures),
-				Provider:              plan.FuturesProvider,
-				Account:               plan.FuturesAccount,
-				Symbol:                plan.FuturesSymbol,
-				Side:                  side,
-				OrderType:             "market",
-				RequestedAmount:       baseQty,
-				RequestedNotionalUSDT: notionalDelta,
-				RequestedPrice:        markPrice,
-				State:                 string(deltaneutral.LegStateFailed),
-				ErrorMsg:              fmt.Sprintf("set leverage: %v", err),
-				CreatedAt:             time.Now(),
-				UpdatedAt:             time.Now(),
-			}
-			t.store.SaveExecutionLeg(ctx, leg)
-			return false, fmt.Errorf("set leverage: %w", err)
-		}
-	}
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:           exec.ID,
-		LegType:               string(deltaneutral.LegTypeFutures),
-		Provider:              plan.FuturesProvider,
-		Account:               plan.FuturesAccount,
-		Symbol:                plan.FuturesSymbol,
-		Side:                  side,
-		OrderType:             "market",
-		RequestedAmount:       baseQty,
-		RequestedNotionalUSDT: notionalDelta,
-		RequestedPrice:        markPrice,
-		State:                 string(deltaneutral.LegStatePlacing),
-		CreatedAt:             time.Now(),
-		UpdatedAt:             time.Now(),
-	}
-
-	// Create the futures order — pass MarginMode so OKX sets tdMode on the order.
-	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       plan.FuturesSymbol,
-		OrderType:    "market",
-		Side:         side,
-		Amount:       numContracts,
-		PositionSide: positionSide,
-		ReduceOnly:   reduceOnly,
-		MarginMode:   plan.FuturesMarginMode,
-	})
-	if err != nil {
-		leg.State = string(deltaneutral.LegStateFailed)
-		leg.ErrorMsg = err.Error()
-		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
-	}
-
-	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
-	// create response is not discarded wholesale (Binance carries fee in the create).
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := fp.FetchFuturesOrder(ctx, oid, plan.FuturesSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	// Use actual fill data from the order; fall back to pre-fill estimates.
-	filledBase := baseQty
-	avgFill := markPrice
-	filledNotional := notionalDelta
-	if order.Filled != nil && *order.Filled > 0 {
-		filledBase = *order.Filled * perContractSize // contracts → base currency
-	}
-	if order.Average != nil && *order.Average > 0 {
-		avgFill = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	}
-
-	leg.OrderID = orderID(order)
-	leg.State = string(deltaneutral.LegStateFilled)
-	leg.FilledQuantity = filledBase
-	leg.FilledNotionalUSDT = filledNotional
-	leg.AvgFillPrice = avgFill
-
-	// Futures fees are USDT-settled on both OKX and Binance.
-	if order.Fee.Cost != nil && *order.Fee.Cost > 0 {
-		leg.FeeUSDT = -(*order.Fee.Cost) // negative = cost
-	}
-
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
-}
-
-// resizeSpotLeg adjusts the spot position by the given notional amount.
-func (t *ResizeDeltaNeutralPositionTool) resizeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, notionalDelta float64, isDecrease bool) (bool, error) {
-	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
-		return false, fmt.Errorf("spot leg: %s", msg)
-	}
-	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
-	if err != nil {
-		return false, fmt.Errorf("spot provider: %w", err)
-	}
-
-	tp, ok := sp.(broker.TradingProvider)
-	if !ok {
-		return false, fmt.Errorf("spot provider does not support order execution")
-	}
-
-	// Fetch current spot price
-	status, err := sp.GetMarketStatus(ctx, plan.SpotSymbol)
-	if err == nil && status == broker.MarketClosed {
-		return false, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
-	}
-
-	// Fetch live spot price
-	md, ok := sp.(broker.MarketDataProvider)
-	if !ok {
-		return false, fmt.Errorf("spot provider does not support market data")
-	}
-	ticker, err := md.FetchTicker(ctx, plan.SpotSymbol)
-	if err != nil {
-		return false, fmt.Errorf("fetch spot ticker: %w", err)
-	}
-	price := 0.0
-	if ticker.Last != nil {
-		price = *ticker.Last
-	}
-	if price <= 0 {
-		return false, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
-	}
-
-	// Quantity from notional and live price
-	quantity := notionalDelta / price
-
-	side := plan.SpotSide
-
-	// If decrease: use opposite side (sell)
-	if isDecrease {
-		if plan.SpotSide == "buy" {
-			side = "sell"
-		} else {
-			side = "buy"
-		}
-	}
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:           exec.ID,
-		LegType:               string(deltaneutral.LegTypeSpot),
-		Provider:              plan.SpotProvider,
-		Account:               plan.SpotAccount,
-		Symbol:                plan.SpotSymbol,
-		Side:                  side,
-		OrderType:             "market",
-		RequestedAmount:       quantity,
-		RequestedNotionalUSDT: notionalDelta,
-		RequestedPrice:        price,
-		State:                 string(deltaneutral.LegStatePlacing),
-		CreatedAt:             time.Now(),
-		UpdatedAt:             time.Now(),
-	}
-
-	// Place the spot order
-	order, err := tp.CreateOrder(ctx, plan.SpotSymbol, "market", side, quantity, nil, nil)
-	if err != nil {
-		leg.State = string(deltaneutral.LegStateFailed)
-		leg.ErrorMsg = err.Error()
-		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
-	}
-
-	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
-	// create response is not discarded wholesale (Binance carries fee in the create).
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := tp.FetchOrder(ctx, oid, plan.SpotSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	// Use actual fill data from the order; fall back to pre-fill estimates.
-	filledQty := quantity
-	avgFill := price
-	filledNotional := notionalDelta
-	if order.Filled != nil && *order.Filled > 0 {
-		filledQty = *order.Filled
-	}
-	if order.Average != nil && *order.Average > 0 {
-		avgFill = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	}
-
-	leg.OrderID = orderID(order)
-	leg.State = string(deltaneutral.LegStateFilled)
-	leg.FilledQuantity = filledQty
-	leg.FilledNotionalUSDT = filledNotional
-	leg.AvgFillPrice = avgFill
-
-	// Spot fee: side-aware (buy fee is in base currency; sell fee is in USDT).
-	if fee := spotFeeCostUSDT(order, side, avgFill); fee > 0 {
-		leg.FeeUSDT = -fee // negative = cost
-	}
-
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
+	return ErrorResult(fmt.Sprintf(
+		"CRITICAL: the resize did not complete — DELTA BROKEN: %s. Plan set to recovery_required. "+
+			"A recovery has started: it reads what is really open on the exchange and asks you to approve closing exactly "+
+			"the orphaned quantity. Either approve that proposal or run unwind_delta_neutral_position to close the whole position, "+
+			"not both: an approved proposal still closes its quantity after an unwind has.", res.Message))
 }

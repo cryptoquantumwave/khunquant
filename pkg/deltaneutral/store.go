@@ -4,13 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
 const schema = `
@@ -296,21 +298,14 @@ func NewStore(workspacePath string) (*Store, error) {
 		return nil, fmt.Errorf("deltaneutral: create dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "delta_neutral.db")
-	db, err := sql.Open("sqlite", dbPath)
+	// sqlitex.Open puts busy_timeout, foreign_keys, WAL and synchronous in the DSN, so
+	// EVERY pooled connection has them. Several handles write this file (the agent's
+	// tools, the perception source, the trigger migration, the gateway's DN sync, the
+	// web launcher); pragmas run through db.Exec configured only one connection and
+	// left no busy timeout, so a second writer failed at once with SQLITE_BUSY.
+	db, err := sqlitex.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("deltaneutral: open db: %w", err)
-	}
-
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA cache_size=-2000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("deltaneutral: %s: %w", pragma, err)
-		}
 	}
 
 	if _, err := db.Exec(schema); err != nil {
@@ -595,51 +590,144 @@ func (s *Store) ActivePlansForFuturesSymbol(ctx context.Context, provider, symbo
 	return ids, rows.Err()
 }
 
-// PlanOpenQuantities returns the net open base-currency quantities for this plan based on
-// execution history, summing across all both_legs_filled executions (which includes resizes):
-//
-//	futuresBase = SUM(futures sell legs) - SUM(futures buy legs)  → positive = net short open
-//	spotQty     = SUM(spot    buy  legs) - SUM(spot    sell legs) → positive = net long open
-//
-// Divide futuresBase by contractSize to get contracts for a close order.
-// Returns (0, 0, nil) when no filled executions exist (nothing to close).
-func (s *Store) PlanOpenQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+// Open-exposure tolerances. A fully successful unwind of a plan can leave a small
+// residual on the spot leg: spot buy legs record the GROSS filled quantity, but the
+// exchange deducts the taker fee from the received base asset, so the later sell is
+// capped at the (smaller) free balance. Treat a net below openExposureDustFraction of
+// the gross entry-side volume (or below openExposureEpsilon, for float noise) as flat.
+const (
+	openExposureEpsilon      = 1e-9
+	openExposureDustFraction = 0.01
+)
+
+// LegExposure is a plan's recorded net open exposure, derived from filled legs.
+type LegExposure struct {
+	// FuturesBase is the net futures base-currency quantity: SUM(sell) - SUM(buy)
+	// (positive = net short open). Divide by contractSize to get contracts.
+	FuturesBase float64
+	// SpotQty is the net spot quantity: SUM(buy) - SUM(sell) (positive = net long open).
+	SpotQty float64
+	// FuturesOpen / SpotOpen report whether the corresponding net is material, i.e.
+	// larger than the dust tolerance (see openExposureDustFraction).
+	FuturesOpen bool
+	SpotOpen    bool
+	// UnrecordedFills holds the error_msg of every execution whose leg row could not
+	// be saved after an order went through (see UnrecordedFillMarker). Such fills are
+	// invisible to the quantities above, so the plan must be reconciled manually.
+	UnrecordedFills []string
+}
+
+// HasExposure reports whether the plan has any open exposure, recorded or not.
+func (e LegExposure) HasExposure() bool {
+	return e.FuturesOpen || e.SpotOpen || len(e.UnrecordedFills) > 0
+}
+
+// OpenLegExposure computes the plan's net open exposure from ALL filled legs, by side,
+// regardless of the state of the execution they belong to. Unwind and resize-down legs
+// are stored as filled legs on the opposite side, so they net against the entry legs.
+func (s *Store) OpenLegExposure(ctx context.Context, planID int64) (LegExposure, error) {
+	var exp LegExposure
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT l.leg_type, l.side, COALESCE(SUM(l.filled_quantity), 0)
 		 FROM delta_neutral_execution_legs l
 		 JOIN delta_neutral_executions e ON l.execution_id = e.id
 		 WHERE e.plan_id = ?
-		   AND e.state = 'both_legs_filled'
-		   AND l.state = 'filled'
+		   AND l.state IN ('filled', 'partially_filled')
 		 GROUP BY l.leg_type, l.side`,
 		planID,
 	)
 	if err != nil {
-		return 0, 0, err
+		return exp, err
 	}
-	defer rows.Close()
+	var futuresGross, spotGross float64
 	for rows.Next() {
 		var legType, side string
 		var qty float64
 		if err := rows.Scan(&legType, &side, &qty); err != nil {
-			return 0, 0, err
+			rows.Close()
+			return LegExposure{}, err
 		}
 		switch legType {
 		case string(LegTypeFutures):
 			if side == "sell" {
-				futuresBase += qty
+				exp.FuturesBase += qty
+				futuresGross += qty
 			} else {
-				futuresBase -= qty // resize decrease subtracts
+				exp.FuturesBase -= qty // close / resize decrease subtracts
 			}
 		case string(LegTypeSpot):
 			if side == "buy" {
-				spotQty += qty
+				exp.SpotQty += qty
+				spotGross += qty
 			} else {
-				spotQty -= qty // resize decrease subtracts
+				exp.SpotQty -= qty // sell / resize decrease subtracts
 			}
 		}
 	}
-	return futuresBase, spotQty, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return LegExposure{}, err
+	}
+	rows.Close()
+
+	exp.FuturesOpen = math.Abs(exp.FuturesBase) > math.Max(openExposureEpsilon, openExposureDustFraction*futuresGross)
+	exp.SpotOpen = math.Abs(exp.SpotQty) > math.Max(openExposureEpsilon, openExposureDustFraction*spotGross)
+
+	urows, err := s.db.QueryContext(ctx,
+		`SELECT error_msg FROM delta_neutral_executions
+		 WHERE plan_id = ? AND instr(error_msg, ?) > 0
+		 ORDER BY id`,
+		planID, UnrecordedFillMarker,
+	)
+	if err != nil {
+		return LegExposure{}, err
+	}
+	defer urows.Close()
+	for urows.Next() {
+		var msg string
+		if err := urows.Scan(&msg); err != nil {
+			return LegExposure{}, err
+		}
+		exp.UnrecordedFills = append(exp.UnrecordedFills, msg)
+	}
+	if err := urows.Err(); err != nil {
+		return LegExposure{}, err
+	}
+	return exp, nil
+}
+
+// OpenLegQuantities returns the net open base-currency quantities for this plan, netted
+// over ALL filled legs by side regardless of execution state:
+//
+//	futuresBase = SUM(futures sell legs) - SUM(futures buy legs)  -> positive = net short open
+//	spotQty     = SUM(spot    buy  legs) - SUM(spot    sell legs) -> positive = net long open
+//
+// Divide futuresBase by contractSize to get contracts for a close order.
+// Returns (0, 0, nil) when no filled legs exist (nothing recorded to close).
+func (s *Store) OpenLegQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+	exp, err := s.OpenLegExposure(ctx, planID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return exp.FuturesBase, exp.SpotQty, nil
+}
+
+// PlanOpenQuantities is retained for compatibility; it is a thin wrapper over
+// OpenLegQuantities.
+func (s *Store) PlanOpenQuantities(ctx context.Context, planID int64) (futuresBase float64, spotQty float64, err error) {
+	return s.OpenLegQuantities(ctx, planID)
+}
+
+// HasOpenExposure reports whether the plan still has a material recorded open position
+// on either leg (see LegExposure for the dust tolerance), or an order that went through
+// but whose leg row was never saved (UnrecordedFillMarker). A plan with open exposure
+// must not be re-opened or deleted.
+func (s *Store) HasOpenExposure(ctx context.Context, planID int64) (bool, error) {
+	exp, err := s.OpenLegExposure(ctx, planID)
+	if err != nil {
+		return false, err
+	}
+	return exp.HasExposure(), nil
 }
 
 // DeletePlan removes a plan and cascades delete its snapshots, alerts, and executions.
@@ -1055,8 +1143,123 @@ func (s *Store) SaveExecution(ctx context.Context, exec *Execution) (int64, erro
 	return id, nil
 }
 
-// UpdateExecution updates an execution attempt.
+// inFlightStates are the execution states in which an operation on the plan is still
+// under way (or is being settled): the plan is reserved. The settled outcomes are not:
+// both_legs_filled and recovery_required leave their legs to HasOpenExposure and the
+// plan status, and unwound, failed and cancelled are terminal.
+var inFlightStates = []ExecutionState{
+	ExecutionStatePending, ExecutionStateValidating, ExecutionStateAwaitingApproval,
+	ExecutionStatePlacingFirstLeg, ExecutionStateFirstLegFailed, ExecutionStateFirstLegFilled,
+	ExecutionStatePlacingSecondLeg, ExecutionStateSecondLegFailed, ExecutionStateUnwinding,
+}
+
+// ErrPlanBusy is matched by the error ReserveExecution returns when another operation
+// holds the plan.
+var ErrPlanBusy = errors.New("deltaneutral: plan has an execution in progress")
+
+// PlanBusyError says which execution holds the plan.
+type PlanBusyError struct {
+	PlanID, ExecutionID int64
+	State               string
+}
+
+func (e *PlanBusyError) Error() string {
+	if e.ExecutionID == 0 {
+		return fmt.Sprintf("plan %d already has an execution in progress", e.PlanID)
+	}
+	return fmt.Sprintf("plan %d already has an execution in progress (execution %d, %s); wait for it to finish", e.PlanID, e.ExecutionID, e.State)
+}
+
+func (e *PlanBusyError) Is(target error) bool { return target == ErrPlanBusy }
+
+// inFlight reports whether a stored execution still holds its plan.
+func inFlight(e Execution) bool {
+	for _, st := range inFlightStates {
+		if ExecutionState(e.State) == st {
+			return time.Since(e.UpdatedAt) < busyFor
+		}
+	}
+	return false
+}
+
+// ReserveExecution inserts exec only if the plan has no other in-flight execution (a
+// state of inFlightStates touched within busyFor: an older one belongs to a workflow
+// that is gone, and must not lock the plan for good). It is ONE conditional INSERT, so
+// under SQLite's write lock two callers cannot both pass: the loser gets a
+// *PlanBusyError (ErrPlanBusy) and nothing is written. A caller whose own attempt
+// already has a row (a workflow re-run after a crash) gets that row back in exec and no
+// error: it never refuses itself. On success exec.ID is set.
+func (s *Store) ReserveExecution(ctx context.Context, exec *Execution) error {
+	var approvedAt, completedAt *string
+	if exec.ApprovedAt != nil {
+		v := exec.ApprovedAt.Format(time.RFC3339)
+		approvedAt = &v
+	}
+	if exec.CompletedAt != nil {
+		v := exec.CompletedAt.Format(time.RFC3339)
+		completedAt = &v
+	}
+	args := []any{
+		exec.PlanID, exec.AttemptID, exec.State,
+		exec.RequestedAt.Format(time.RFC3339), approvedAt, completedAt,
+		exec.ErrorMsg, exec.CreatedAt.Format(time.RFC3339), exec.UpdatedAt.Format(time.RFC3339),
+		exec.PlanID,
+	}
+	for _, st := range inFlightStates {
+		args = append(args, string(st))
+	}
+	args = append(args, time.Now().Add(-busyFor).Unix())
+	// An updated_at that cannot be parsed counts as fresh: the plan stays reserved.
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO delta_neutral_executions
+		 (plan_id, attempt_id, state, requested_at, approved_at, completed_at, error_msg, created_at, updated_at)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM delta_neutral_executions
+		   WHERE plan_id = ? AND state IN (?`+strings.Repeat(",?", len(inFlightStates)-1)+`)
+		     AND COALESCE(CAST(strftime('%s', updated_at) AS INTEGER), 9223372036854775807) > ?)`, args...)
+	if err != nil {
+		return fmt.Errorf("deltaneutral: reserve execution: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		exec.ID = id
+		return nil
+	}
+	own, err := s.ExecutionByAttempt(ctx, exec.AttemptID)
+	if err != nil {
+		return err
+	}
+	if own != nil {
+		*exec = *own
+		return nil
+	}
+	busy := &PlanBusyError{PlanID: exec.PlanID}
+	if execs, lerr := s.ListExecutions(ctx, exec.PlanID, 50, 0); lerr == nil {
+		for _, e := range execs {
+			if inFlight(e) {
+				busy.ExecutionID, busy.State = e.ID, e.State
+				break
+			}
+		}
+	}
+	return busy
+}
+
+// UpdateExecution updates an execution attempt. The state machine is enforced
+// here: the update is one conditional statement that applies only when the STORED
+// state is the requested one (a rewrite of the other columns, and the way a step
+// that ran twice repeats a transition) or may legally move to it (CanTransition).
+// Anything else is ErrIllegalTransition and nothing is written. A caller holding a
+// stale copy cannot jump the machine either: the comparison is with the row.
 func (s *Store) UpdateExecution(ctx context.Context, exec *Execution) error {
+	to := ExecutionState(exec.State)
+	if !to.Valid() {
+		return fmt.Errorf("%w: %q is not an execution state", ErrIllegalTransition, exec.State)
+	}
 	var approvedAt, completedAt *string
 	if exec.ApprovedAt != nil {
 		v := exec.ApprovedAt.Format(time.RFC3339)
@@ -1068,17 +1271,46 @@ func (s *Store) UpdateExecution(ctx context.Context, exec *Execution) error {
 	}
 
 	exec.UpdatedAt = time.Now()
-	_, err := s.db.ExecContext(ctx,
+	from := []any{exec.State}
+	for _, f := range allExecutionStates {
+		if CanTransition(f, to) {
+			from = append(from, string(f))
+		}
+	}
+	args := append([]any{exec.State, approvedAt, completedAt, exec.ErrorMsg, exec.UpdatedAt.Format(time.RFC3339), exec.ID}, from...)
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE delta_neutral_executions
 		 SET state=?, approved_at=?, completed_at=?, error_msg=?, updated_at=?
-		 WHERE id=?`,
-		exec.State, approvedAt, completedAt, exec.ErrorMsg,
-		exec.UpdatedAt.Format(time.RFC3339), exec.ID,
-	)
+		 WHERE id=? AND state IN (?`+strings.Repeat(",?", len(from)-1)+`)`, args...)
 	if err != nil {
 		return fmt.Errorf("deltaneutral: update execution %d: %w", exec.ID, err)
 	}
-	return nil
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	var stored string
+	switch err := s.db.QueryRowContext(ctx, `SELECT state FROM delta_neutral_executions WHERE id = ?`, exec.ID).Scan(&stored); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("deltaneutral: update execution %d: no such execution", exec.ID)
+	case err != nil:
+		return fmt.Errorf("deltaneutral: update execution %d: %w", exec.ID, err)
+	}
+	return fmt.Errorf("%w: execution %d is %q and cannot move to %q", ErrIllegalTransition, exec.ID, stored, exec.State)
+}
+
+// ExecutionByAttempt returns the execution with the given attempt id, or nil when
+// there is none. A workflow derives its attempt id from its own id, so a step that
+// creates the row finds it again when it runs twice.
+func (s *Store) ExecutionByAttempt(ctx context.Context, attemptID string) (*Execution, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, plan_id, attempt_id, state, requested_at, approved_at, completed_at,
+		        error_msg, created_at, updated_at
+		 FROM delta_neutral_executions WHERE attempt_id = ? ORDER BY id LIMIT 1`, attemptID)
+	exec, err := scanExecution(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return exec, err
 }
 
 // GetExecution retrieves a single execution by ID.
@@ -1207,7 +1439,7 @@ func (s *Store) SumPlanExecutionFees(ctx context.Context, planID int64) (float64
 		`SELECT COALESCE(SUM(l.fee_usdt), 0)
 		 FROM delta_neutral_execution_legs l
 		 JOIN delta_neutral_executions e ON l.execution_id = e.id
-		 WHERE e.plan_id = ? AND l.state = 'filled'`,
+		 WHERE e.plan_id = ? AND l.state IN ('filled', 'partially_filled')`,
 		planID,
 	).Scan(&total)
 	return total, err

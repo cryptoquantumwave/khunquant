@@ -118,6 +118,44 @@ func main() {
 		)
 	}
 
+	// C-6: with no dashboard password, SessionAuth issues a session to any
+	// caller that reaches the launcher over loopback. That is defensible for a
+	// single local console, but -public and trusted proxies both put non-local
+	// users on the other end: isTrustedLoopbackCaller trusts RemoteAddr, and a
+	// same-host reverse proxy or tunnel makes every remote user look like
+	// loopback. Warn rather than refuse, so existing deployments keep working.
+	if launcherCfg.DashboardPasswordHash == "" &&
+		(effectivePublic || len(launcherCfg.TrustedProxyCIDRs) > 0) {
+		reason := "trusting proxy headers from trusted_proxy_cidrs"
+		if effectivePublic {
+			reason = "listening on 0.0.0.0"
+			if len(launcherCfg.TrustedProxyCIDRs) > 0 {
+				reason = "listening on 0.0.0.0 and trusting proxy headers"
+			}
+		}
+		log.Printf(
+			"WARNING: no dashboard password is set (%s).\n"+
+				"  Any caller reaching this launcher over loopback - including remote users\n"+
+				"  arriving through a reverse proxy or tunnel - gets a session without\n"+
+				"  authenticating. Set one with: khunquant launcher set-password",
+			reason,
+		)
+	}
+
+	// D44: with trusted_proxy_cidrs set the launcher is reached through a proxy,
+	// which normally forwards the public domain as Host. HostAllowlist answers
+	// 421 to it, so say so at startup rather than leave the operator to find
+	// out from a broken page. Never auto-allowed: allowed_hosts decides which
+	// names may reach a launcher that auto-issues loopback sessions.
+	if len(launcherCfg.TrustedProxyCIDRs) > 0 && len(launcherCfg.AllowedHosts) == 0 {
+		log.Printf(
+			"WARNING: trusted_proxy_cidrs is set but allowed_hosts is empty.\n" +
+				"  The launcher refuses (421) any Host other than localhost, *.localhost or an\n" +
+				"  IP address, so requests proxied under a domain name will fail. List the\n" +
+				"  domain in allowed_hosts in launcher-config.json.",
+		)
+	}
+
 	// Ensure a persistent launcher token exists.
 	if launcherCfg.LauncherToken == "" {
 		launcherCfg.LauncherToken = generateLauncherToken()
@@ -146,33 +184,65 @@ func main() {
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
+	// One store shared by the session middleware (which validates and issues),
+	// the password middleware (which defers to an established session), and the
+	// API handler (which mints on login and revokes on logout).
+	middleware.SetSecureCookies(launcherCfg.BehindTLSProxy)
+	sessionStore := middleware.NewSessionStore(0)
+	apiHandler.SetSessionAuth(sessionStore, launcherCfg.DashboardPasswordHash)
+
+	// SessionAuth is innermost of the three: it validates an existing session
+	// cookie, and (only when no dashboard password is configured) auto-issues
+	// one for a trusted loopback caller or a valid launcher token. When a
+	// password IS configured, PasswordAuth (below) has already gated the
+	// request by the time it reaches here, so those auto-issue rules are
+	// disabled — see SessionAuth's doc comment for why.
+	// H-7: CSRF is enforced for every mutating /api route here rather than
+	// relying on each handler to remember. It sits inside the auth chain, so an
+	// unauthenticated cross-site request is still rejected as 401 by
+	// PasswordAuth before this can answer 403.
+	sessionAuthedMux := middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, launcherCfg.DashboardPasswordHash,
+		middleware.CSRFMutations(mux))
+
+	// PasswordAuth wraps SessionAuth: a request must present a valid session,
+	// correct Basic credentials, or the launcher token (or hit an exempted
+	// path) before SessionAuth's handler — and therefore the mux — ever runs.
+	// This ordering is what fixes the dashboard password bypass: previously
+	// SessionAuth ran first and could auto-issue a session to any loopback
+	// caller with no password check at all.
+	passwordProtectedMux := middleware.PasswordAuth(middleware.PasswordAuthConfig{
+		Sessions:      sessionStore,
+		PasswordHash:  launcherCfg.DashboardPasswordHash,
+		LauncherToken: launcherCfg.LauncherToken,
+	}, sessionAuthedMux)
+
+	// IP allowlist is outermost of the three: a caller outside the allowed
+	// network never reaches the password/session checks at all.
 	accessControlledMux, err := middleware.IPAllowlist(middleware.IPAllowlistConfig{
 		AllowedCIDRs:         launcherCfg.AllowedCIDRs,
 		AllowLocalhostBypass: launcherCfg.AllowLocalhostBypass,
 		TrustedProxyCIDRs:    launcherCfg.TrustedProxyCIDRs,
-	}, mux)
+	}, passwordProtectedMux)
 	if err != nil {
 		log.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
 
-	// One store shared by the session middleware (which validates and issues),
-	// the password middleware (which defers to an established session), and the
-	// API handler (which mints on login and revokes on logout).
-	sessionStore := middleware.NewSessionStore(0)
-	apiHandler.SetSessionAuth(sessionStore, launcherCfg.DashboardPasswordHash)
-
-	// Apply password auth after IP allowlist (both must pass for access).
-	passwordProtectedMux := middleware.PasswordAuth(middleware.PasswordAuthConfig{
-		Sessions:     sessionStore,
-		PasswordHash: launcherCfg.DashboardPasswordHash,
-	}, accessControlledMux)
+	// D44: HostAllowlist is the outermost check, ahead of IPAllowlist and the
+	// auth chain. A DNS-rebinding page reaches the launcher from loopback with a
+	// matching Host and Origin, so only refusing the unknown Host stops it from
+	// being auto-issued a session. SetAllowedHosts feeds the same list to the
+	// defence-in-depth check in SessionAuth.
+	allowedHosts := launcherconfig.NormalizeHosts(launcherCfg.AllowedHosts)
+	middleware.SetAllowedHosts(allowedHosts)
 
 	// Apply middleware stack
 	handler := middleware.Recoverer(
 		middleware.Logger(
-			middleware.SecurityHeaders(
-				middleware.JSONContentType(
-					middleware.SessionAuth(launcherCfg.LauncherToken, sessionStore, passwordProtectedMux),
+			middleware.HostAllowlist(allowedHosts,
+				middleware.SecurityHeaders(
+					middleware.JSONContentType(
+						accessControlledMux,
+					),
 				),
 			),
 		),
@@ -220,6 +290,9 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 	if err := srv.ListenAndServe(); err != nil {
+		// log.Fatalf exits without running defers, so release the proactive
+		// database handle explicitly.
+		_ = apiHandler.Close()
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }

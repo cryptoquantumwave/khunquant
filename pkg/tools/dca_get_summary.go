@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
@@ -47,7 +48,7 @@ func (t *GetDCASummaryTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
 
-	count, _ := t.store.CountExecutions(ctx, planID)
+	byStatus, _ := t.store.CountExecutionsByStatus(ctx, planID)
 	last, _ := t.store.LastExecution(ctx, planID)
 
 	// Fetch current price for PnL.
@@ -81,10 +82,23 @@ func (t *GetDCASummaryTool) Execute(ctx context.Context, args map[string]any) *T
 	out += fmt.Sprintf("  Schedule:        %s (%s)\n", plan.FrequencyExpr, plan.Timezone)
 	out += fmt.Sprintf("  Status:          %s\n", enabledLabel(plan.Enabled))
 	out += "\n"
-	out += fmt.Sprintf("  Executions:      %d\n", count)
-	out += fmt.Sprintf("  Total invested:  %.4f\n", plan.TotalInvested)
-	out += fmt.Sprintf("  Total acquired:  %.8f %s\n", plan.TotalQuantity, plan.Symbol)
-	out += fmt.Sprintf("  Avg cost (VWAP): %.4f\n", plan.AvgCost)
+	out += fmt.Sprintf("  Executions:      %d%s\n", byStatus["completed"], nonCompletedNote(byStatus))
+	if plan.Side == "sell" {
+		// A sell-side plan never buys, so its holding totals stay at zero;
+		// report what it actually did from its completed sell rows.
+		sold, proceeds, _ := t.store.SellTotals(ctx, planID)
+		avgSell := 0.0
+		if sold > 0 {
+			avgSell = proceeds / sold
+		}
+		out += fmt.Sprintf("  Total sold:      %.8f %s\n", sold, plan.Symbol)
+		out += fmt.Sprintf("  Total proceeds:  %.4f\n", proceeds)
+		out += fmt.Sprintf("  Avg sell price:  %.4f\n", avgSell)
+	} else {
+		out += fmt.Sprintf("  Total invested:  %.4f\n", plan.TotalInvested)
+		out += fmt.Sprintf("  Total acquired:  %.8f %s\n", plan.TotalQuantity, plan.Symbol)
+		out += fmt.Sprintf("  Avg cost (VWAP): %.4f\n", plan.AvgCost)
+	}
 
 	if last != nil {
 		out += fmt.Sprintf("  Last execution:  %s\n", last.ExecutedAt.Format("2006-01-02 15:04 UTC"))
@@ -93,12 +107,29 @@ func (t *GetDCASummaryTool) Execute(ctx context.Context, args map[string]any) *T
 	if currentPrice > 0 {
 		out += "\n"
 		out += fmt.Sprintf("  Current price:   %.4f\n", currentPrice)
-		out += fmt.Sprintf("  Current value:   %.4f\n", currentValue)
-		out += fmt.Sprintf("  Unrealized PnL:  %s%.4f (%s%.2f%%)\n",
-			pnlSign, unrealizedPnL, pnlSign, unrealizedPnLPct)
+		if plan.Side != "sell" { // a sell-side plan holds nothing to value
+			out += fmt.Sprintf("  Current value:   %.4f\n", currentValue)
+			out += fmt.Sprintf("  Unrealized PnL:  %s%.4f (%s%.2f%%)\n",
+				pnlSign, unrealizedPnL, pnlSign, unrealizedPnLPct)
+		}
 	}
 
 	return UserResult(out)
+}
+
+// nonCompletedNote renders the skipped and failed rows next to the completed
+// headline, e.g. " (3 skipped, 1 failed)"; empty when there are none.
+func nonCompletedNote(byStatus map[string]int) string {
+	var parts []string
+	for _, status := range []string{"skipped", "failed"} {
+		if n := byStatus[status]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, status))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func enabledLabel(enabled bool) string {

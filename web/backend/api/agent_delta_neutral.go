@@ -422,6 +422,22 @@ func (h *Handler) handleDeleteDeltaNeutralPlan(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// H-6: the unwind tool places real reduce-only orders and does not itself
+	// check paper trading mode, so this handler is the only thing standing
+	// between a paper-mode deployment and live orders. Refuse rather than
+	// simulate: a simulated unwind would report success while the legs stayed
+	// open, and delete_without_unwind already lets an operator remove the plan
+	// and close the legs by hand. 409 matches the sibling refusal above and
+	// keeps 403 meaning "rejected by the CSRF guard" across this API.
+	if needsUnwind && req.ForceUnwind && !req.DeleteWithoutUnwind && cfg.TradingRisk.PaperTradingMode {
+		http.Error(w,
+			"paper_trading_mode is enabled; force_unwind would place real reduce-only orders. "+
+				"Disable paper_trading_mode to unwind, or use delete_without_unwind to delete the plan "+
+				"and close the legs manually.",
+			http.StatusConflict)
+		return
+	}
+
 	unwound := false
 	if needsUnwind && req.ForceUnwind && !req.DeleteWithoutUnwind {
 		result := tools.NewUnwindDeltaNeutralPositionTool(cfg, store).Execute(r.Context(), map[string]any{

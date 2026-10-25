@@ -22,6 +22,7 @@ import { Route as AgentConfigRouteImport } from './routes/agent/config'
 import { Route as AgentCronRouteImport } from './routes/agent/cron'
 import { Route as AgentMemoryRouteImport } from './routes/agent/memory'
 import { Route as AgentPairingRouteImport } from './routes/agent/pairing'
+import { Route as AgentProactiveRouteImport } from './routes/agent/proactive'
 import { Route as AgentSkillsRouteImport } from './routes/agent/skills'
 import { Route as AgentToolsRouteImport } from './routes/agent/tools'
 import { Route as ChannelsNameRouteImport } from './routes/channels/$name'
@@ -93,6 +94,11 @@ const AgentPairingRoute = AgentPairingRouteImport.update({
   path: '/pairing',
   getParentRoute: () => AgentRoute,
 } as any)
+const AgentProactiveRoute = AgentProactiveRouteImport.update({
+  id: '/proactive',
+  path: '/proactive',
+  getParentRoute: () => AgentRoute,
+} as any)
 const AgentSkillsRoute = AgentSkillsRouteImport.update({
   id: '/skills',
   path: '/skills',
@@ -133,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
   '/agent/pairing': typeof AgentPairingRoute
+  '/agent/proactive': typeof AgentProactiveRoute
   '/agent/skills': typeof AgentSkillsRoute
   '/agent/tools': typeof AgentToolsRoute
   '/channels/$name': typeof ChannelsNameRoute
@@ -153,6 +160,7 @@ export interface FileRoutesByTo {
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
   '/agent/pairing': typeof AgentPairingRoute
+  '/agent/proactive': typeof AgentProactiveRoute
   '/agent/skills': typeof AgentSkillsRoute
   '/agent/tools': typeof AgentToolsRoute
   '/channels/$name': typeof ChannelsNameRoute
@@ -174,6 +182,7 @@ export interface FileRoutesById {
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
   '/agent/pairing': typeof AgentPairingRoute
+  '/agent/proactive': typeof AgentProactiveRoute
   '/agent/skills': typeof AgentSkillsRoute
   '/agent/tools': typeof AgentToolsRoute
   '/channels/$name': typeof ChannelsNameRoute
@@ -196,6 +205,7 @@ export interface FileRouteTypes {
     | '/agent/cron'
     | '/agent/memory'
     | '/agent/pairing'
+    | '/agent/proactive'
     | '/agent/skills'
     | '/agent/tools'
     | '/channels/$name'
@@ -216,6 +226,7 @@ export interface FileRouteTypes {
     | '/agent/cron'
     | '/agent/memory'
     | '/agent/pairing'
+    | '/agent/proactive'
     | '/agent/skills'
     | '/agent/tools'
     | '/channels/$name'
@@ -236,6 +247,7 @@ export interface FileRouteTypes {
     | '/agent/cron'
     | '/agent/memory'
     | '/agent/pairing'
+    | '/agent/proactive'
     | '/agent/skills'
     | '/agent/tools'
     | '/channels/$name'
@@ -348,6 +360,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgentPairingRouteImport
       parentRoute: typeof AgentRoute
     }
+    '/agent/proactive': {
+      id: '/agent/proactive'
+      path: '/proactive'
+      fullPath: '/agent/proactive'
+      preLoaderRoute: typeof AgentProactiveRouteImport
+      parentRoute: typeof AgentRoute
+    }
     '/agent/skills': {
       id: '/agent/skills'
       path: '/skills'
@@ -415,6 +434,7 @@ interface AgentRouteChildren {
   AgentCronRoute: typeof AgentCronRoute
   AgentMemoryRoute: typeof AgentMemoryRoute
   AgentPairingRoute: typeof AgentPairingRoute
+  AgentProactiveRoute: typeof AgentProactiveRoute
   AgentSkillsRoute: typeof AgentSkillsRoute
   AgentToolsRoute: typeof AgentToolsRoute
 }
@@ -424,6 +444,7 @@ const AgentRouteChildren: AgentRouteChildren = {
   AgentCronRoute: AgentCronRoute,
   AgentMemoryRoute: AgentMemoryRoute,
   AgentPairingRoute: AgentPairingRoute,
+  AgentProactiveRoute: AgentProactiveRoute,
   AgentSkillsRoute: AgentSkillsRoute,
   AgentToolsRoute: AgentToolsRoute,
 }

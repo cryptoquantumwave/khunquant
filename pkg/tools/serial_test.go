@@ -64,3 +64,34 @@ func TestParseSerialWritePayloadRejectsOutOfRangeByte(t *testing.T) {
 		t.Fatal("expected payload validation failure")
 	}
 }
+
+func TestValidateSerialPort(t *testing.T) {
+	for _, port := range []string{
+		"/dev/ttyUSB0", "/dev/cu.usbserial-0001", "/dev/serial/by-id/usb-FTDI_A1", "COM3", "com12", `\\.\COM10`,
+	} {
+		if err := validateSerialPort(port); err != nil {
+			t.Errorf("%q rejected: %v", port, err)
+		}
+	}
+	for _, port := range []string{
+		"/etc/passwd",
+		"/dev/../etc/passwd",
+		"/dev/ttyUSB0/../../home/me/.ssh/id_rsa",
+		"/dev//ttyUSB0",
+		"/dev/",
+		"ttyUSB0",
+		"~/.bashrc",
+		"COM3x",
+		`\\.\PhysicalDrive0`,
+	} {
+		if err := validateSerialPort(port); err == nil {
+			t.Errorf("%q accepted as a serial device", port)
+		}
+	}
+}
+
+func TestParseSerialConfigRejectsNonDevicePort(t *testing.T) {
+	if _, errResult := parseSerialConfig(map[string]any{"port": "/home/me/.bashrc"}); errResult == nil {
+		t.Fatal("a regular file was accepted as the serial port")
+	}
+}

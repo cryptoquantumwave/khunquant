@@ -2,6 +2,8 @@
 
 Investor profile for KhunQuant. Fill in the fields below so the agent can tailor portfolio insights, alerts, and execution to your personal financial situation.
 
+Structured preferences live in your profile (ask the agent to show or change your profile).
+
 ## Preferences
 
 - Communication style: (casual/formal)

@@ -102,18 +102,38 @@ func spotFeeCostUSDT(order ccxt.Order, side string, fillPrice float64) float64 {
 	return *order.Fee.Cost // sell: fee already in USDT
 }
 
-// estimateFuturesNotional returns (notional, source, error).
+// futuresContractSize returns the base-currency size of one contract for the
+// market, falling back to 1 when the exchange reports none or a non-positive value.
+func futuresContractSize(m ccxt.MarketInterface) float64 {
+	if m.ContractSize != nil && *m.ContractSize > 0 {
+		return *m.ContractSize
+	}
+	return 1.0
+}
+
+// estimateFuturesNotional returns (notional, source, error). amount is a CONTRACT
+// count, so notional = amount * contractSize * price, computed by
+// positionNotionalUSD (a non-positive contractSize is treated as 1).
 // Priority: explicit price → FetchFuturesMarkPrice → FetchFuturesFundingRate.MarkPrice.
 // source is "explicit", "mark", or "funding_mark".
-func estimateFuturesNotional(ctx context.Context, fp broker.FuturesProvider, symbol string, amount float64, price *float64) (float64, string, error) {
+func estimateFuturesNotional(ctx context.Context, fp broker.FuturesProvider, symbol string, amount, contractSize float64, price *float64) (float64, string, error) {
+	// positionNotionalUSD returns 0 for non-finite input; a zero value must not
+	// read as "under the cap", so it is an error here.
+	value := func(px float64, source string) (float64, string, error) {
+		n := positionNotionalUSD(amount, contractSize, px)
+		if n <= 0 {
+			return 0, "", fmt.Errorf("cannot value %v contracts of %s at %v: non-finite or non-positive input", amount, symbol, px)
+		}
+		return n, source, nil
+	}
 	if price != nil && *price > 0 {
-		return amount * (*price), "explicit", nil
+		return value(*price, "explicit")
 	}
 	if mark, err := fp.FetchFuturesMarkPrice(ctx, symbol); err == nil && mark > 0 {
-		return amount * mark, "mark", nil
+		return value(mark, "mark")
 	}
 	if rate, err := fp.FetchFuturesFundingRate(ctx, symbol); err == nil && rate.MarkPrice != nil && *rate.MarkPrice > 0 {
-		return amount * (*rate.MarkPrice), "funding_mark", nil
+		return value(*rate.MarkPrice, "funding_mark")
 	}
 	return 0, "", fmt.Errorf("cannot estimate notional for %s: mark price and funding rate unavailable", symbol)
 }
@@ -311,4 +331,3 @@ func marginHealthFromPosition(p ccxt.Position) (distPct, marginRatioPct float64,
 	}
 	return
 }
-

@@ -174,25 +174,25 @@ func (t *FuturesOpenPositionTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"provider":    map[string]any{"type": "string", "description": "binance or okx."},
-			"account":     map[string]any{"type": "string", "description": "Account name (empty = default)."},
-			"symbol":      map[string]any{"type": "string", "description": "Perp symbol, e.g. BTC/USDT:USDT, BTC/USDT, or BTCUSDT."},
-			"side":        map[string]any{"type": "string", "enum": []string{"long", "short"}, "description": "Position direction."},
-			"amount":      map[string]any{"type": "number", "description": "Position size in CONTRACTS (e.g. 0.01 = 1 contract on OKX BTC/USDT:USDT). Use notional_usd instead to specify a dollar value and let the tool compute contracts."},
+			"provider":     map[string]any{"type": "string", "description": "binance or okx."},
+			"account":      map[string]any{"type": "string", "description": "Account name (empty = default)."},
+			"symbol":       map[string]any{"type": "string", "description": "Perp symbol, e.g. BTC/USDT:USDT, BTC/USDT, or BTCUSDT."},
+			"side":         map[string]any{"type": "string", "enum": []string{"long", "short"}, "description": "Position direction."},
+			"amount":       map[string]any{"type": "number", "description": "Position size in CONTRACTS (e.g. 0.01 = 1 contract on OKX BTC/USDT:USDT). Use notional_usd instead to specify a dollar value and let the tool compute contracts."},
 			"notional_usd": map[string]any{"type": "number", "description": "Desired position size in USD. The tool fetches the mark price and contract size, then computes the required number of contracts automatically. Provide either amount or notional_usd, not both."},
-			"leverage":    map[string]any{"type": "integer", "description": "Initial leverage, 1-125."},
-			"margin_mode": map[string]any{"type": "string", "enum": []string{"cross", "isolated"}, "description": "Default cross."},
-			"order_type":  map[string]any{"type": "string", "enum": []string{"market", "limit"}, "description": "Default market."},
-			"price":       map[string]any{"type": "number", "description": "Required for limit entry orders."},
-			"stop_loss":   map[string]any{"type": "number", "description": "Optional stop-loss trigger price."},
-			"take_profit": map[string]any{"type": "number", "description": "Optional take-profit trigger price."},
+			"leverage":     map[string]any{"type": "integer", "description": "Initial leverage, 1-125."},
+			"margin_mode":  map[string]any{"type": "string", "enum": []string{"cross", "isolated"}, "description": "Default cross."},
+			"order_type":   map[string]any{"type": "string", "enum": []string{"market", "limit"}, "description": "Default market."},
+			"price":        map[string]any{"type": "number", "description": "Required for limit entry orders."},
+			"stop_loss":    map[string]any{"type": "number", "description": "Optional stop-loss trigger price."},
+			"take_profit":  map[string]any{"type": "number", "description": "Optional take-profit trigger price."},
 			"params": map[string]any{
 				"type": "object",
 				"description": "Extra CCXT/exchange execution params (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly. " +
 					"Margin and leverage keys are refused unless trading_risk permits them, and unrecognised keys are refused; " +
 					"use the side, leverage and margin_mode arguments rather than passing them here.",
 			},
-			"confirm":     map[string]any{"type": "boolean", "description": "Must be true to place live futures orders."},
+			"confirm": map[string]any{"type": "boolean", "description": "Must be true to place live futures orders."},
 		},
 		"required": []string{"provider", "symbol", "side", "leverage", "confirm"},
 	}
@@ -290,10 +290,7 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		if mpErr != nil || markPrice <= 0 {
 			return ErrorResult(fmt.Sprintf("cannot resolve mark price for %s to compute contract count: %v", symbol, mpErr))
 		}
-		contractSize := 1.0
-		if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-			contractSize = *mkt.ContractSize
-		}
+		contractSize := futuresContractSize(mkt)
 		minAmount := 1.0
 		if mkt.Limits.Amount.Min != nil && *mkt.Limits.Amount.Min > 0 {
 			minAmount = *mkt.Limits.Amount.Min
@@ -312,16 +309,18 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		_ = fmt.Sprintf("notional_usd %.2f → %.8g contracts (%.8g %s each, mark %.2f)", notionalUSD, amount, contractSize, baseCur, markPrice)
 	}
 
-	// Step 7: notional estimation and size check
-	notional, notionalSource, err := estimateFuturesNotional(ctx, fp, symbol, amount, price)
+	// Step 7: notional estimation and size check. amount is in contracts, so the
+	// order value is contracts x contractSize x price (not amount x price).
+	contractSize := futuresContractSize(mkt)
+	notional, notionalSource, err := estimateFuturesNotional(ctx, fp, symbol, amount, contractSize, price)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("cannot estimate order notional: %v", err))
 	}
 	if t.cfg.TradingRisk.MaxOrderValueUSD > 0 && notional > t.cfg.TradingRisk.MaxOrderValueUSD {
-		return ErrorResult(fmt.Sprintf("order notional %.2f USD (from %s price) exceeds configured max_order_value_usd %.2f", notional, notionalSource, t.cfg.TradingRisk.MaxOrderValueUSD))
+		return ErrorResult(fmt.Sprintf("order notional %.2f USD (%.8g contracts x %.8g base units per contract x %s price) exceeds configured max_order_value_usd %.2f", notional, amount, contractSize, notionalSource, t.cfg.TradingRisk.MaxOrderValueUSD))
 	}
 	if notional > positionWarnThresholdUSD {
-		return ErrorResult(fmt.Sprintf("large futures position warning: notional %.2f USD (from %s price) exceeds %.0f USD. Re-run only after explicit user confirmation.", notional, notionalSource, float64(positionWarnThresholdUSD)))
+		return ErrorResult(fmt.Sprintf("large futures position warning: notional %.2f USD (%.8g contracts x %.8g base units per contract x %s price) exceeds %.0f USD. Re-run only after explicit user confirmation.", notional, amount, contractSize, notionalSource, float64(positionWarnThresholdUSD)))
 	}
 
 	// Point of no return: refuse here if the turn is already cancelled, otherwise finish

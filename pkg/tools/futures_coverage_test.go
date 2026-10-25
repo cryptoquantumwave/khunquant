@@ -574,7 +574,7 @@ func f64Ptr(f float64) *float64 { return &f }
 func TestEstimateFuturesNotional_ExplicitPrice(t *testing.T) {
 	fp := &mockFuturesProvider{}
 	price := 50000.0
-	notional, src, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 0.1, &price)
+	notional, src, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 0.1, 1, &price)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestEstimateFuturesNotional_MarkPrice(t *testing.T) {
 			return 40000.0, nil
 		},
 	}
-	notional, src, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 0.5, nil)
+	notional, src, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 0.5, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestEstimateFuturesNotional_FundingMark(t *testing.T) {
 			return ccxt.FundingRate{MarkPrice: &markPrice}, nil
 		},
 	}
-	notional, src, err := estimateFuturesNotional(context.Background(), fp, "ETH/USDT:USDT", 1.0, nil)
+	notional, src, err := estimateFuturesNotional(context.Background(), fp, "ETH/USDT:USDT", 1.0, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestEstimateFuturesNotional_NoPriceAvailable(t *testing.T) {
 			return ccxt.FundingRate{}, errors.New("unavailable")
 		},
 	}
-	_, _, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 1.0, nil)
+	_, _, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 1.0, 1, nil)
 	if err == nil {
 		t.Error("expected error when no price source is available")
 	}

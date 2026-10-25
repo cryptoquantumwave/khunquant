@@ -175,6 +175,9 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	if planName == "" || providerID == "" || symbol == "" {
 		return ErrorResult("plan_name, provider, and symbol are required")
 	}
+	if msg := contractSymbolRefusal(symbol); msg != "" {
+		return ErrorResult(msg)
+	}
 	// M-7: NaN passes every "<= 0" guard, because comparisons against it are
 	// false. It arrives straight from JSON tool arguments.
 	if math.IsNaN(amountPerOrder) || math.IsInf(amountPerOrder, 0) || amountPerOrder <= 0 {

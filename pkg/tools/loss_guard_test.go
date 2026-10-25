@@ -40,7 +40,8 @@ func TestCreateOrder_DailyLossBlocksBuyNotSpotSell(t *testing.T) {
 }
 
 // TestCreateOrder_DailyLossBlocksContractSell: on a contract symbol a sell can
-// open a short, so it is gated like a buy.
+// open a short. The spot path refuses a contract symbol outright (before any
+// loss gate), so even with the limit tripped it never reaches a provider.
 func TestCreateOrder_DailyLossBlocksContractSell(t *testing.T) {
 	tripLossTracker(t, 100)
 	spot, fut := newDNFakes()
@@ -49,8 +50,8 @@ func TestCreateOrder_DailyLossBlocksContractSell(t *testing.T) {
 
 	for _, side := range []string{"sell", "SELL"} {
 		res := tool.Execute(context.Background(), lossGuardOrder("BTC/USDT:USDT", side))
-		if !res.IsError || !strings.Contains(res.ForLLM, "daily loss") {
-			t.Errorf("side=%q: a contract-symbol sell must be refused by a tripped limit, got: %+v", side, res)
+		if !res.IsError || !strings.Contains(res.ForLLM, "contract (futures/swap) symbol") {
+			t.Errorf("side=%q: a contract-symbol sell must be refused, got: %+v", side, res)
 		}
 	}
 	noOrders(t, spot, fut)

@@ -378,6 +378,13 @@ func (e *dnExchange) Gate(ctx context.Context, p *deltaneutral.Plan, sz deltaneu
 		}
 		return nil
 	}
+	if o.Leg != deltaneutral.LegTypeFutures {
+		// A contract symbol must never be bought through the spot path. An exit and a hedge
+		// completion return above, so getting out of a position stays possible.
+		if msg := contractSymbolRefusal(symbol); msg != "" {
+			return fmt.Errorf("spot leg: %s", msg)
+		}
+	}
 	var usd float64
 	if o.Leg == deltaneutral.LegTypeFutures {
 		if broker.IsPaperMode(e.cfg) {

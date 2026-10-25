@@ -93,6 +93,12 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		return ErrorResult(why + ".")
 	}
 
+	// The spot leg must be a spot symbol: a ":" symbol would be bought through the spot
+	// path as a perpetual. The workflow's gate refuses it as well; this answers a dry-run.
+	if msg := contractSymbolRefusal(plan.SpotSymbol); msg != "" {
+		return ErrorResult("spot leg: " + msg)
+	}
+
 	// --- Safety gates (sequence from futures.go §225-290) ---
 
 	// Gate 1: leverage opt-in

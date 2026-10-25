@@ -277,8 +277,8 @@ func TestMandateFromApprovedProposal(t *testing.T) {
 
 // Only the owner's own root conversation turn can ask for a mandate. A cron turn, a
 // chat turn from somebody else, a sub-turn and a model's background turn are refused
-// the plan altogether (F26) and get no card; a sell plan, a contract symbol and a plan
-// with an indicator trigger get none either.
+// the plan altogether (F26) and get no card; a sell plan and a plan with an indicator
+// trigger get none either, and a contract symbol never becomes a DCA plan at all.
 func TestMandate_OnlyTheOwnersOwnTurnAsks(t *testing.T) {
 	e := newMandateE2E(t, true)
 	stranger := WithToolContext(WithToolSender(WithToolOrigin(context.Background(), OriginRemote), "telegram:999"), "telegram", "999")
@@ -301,13 +301,16 @@ func TestMandate_OnlyTheOwnersOwnTurnAsks(t *testing.T) {
 	}
 	for name, extra := range map[string]map[string]any{
 		"a sell plan":       {"side": "sell"},
-		"a contract symbol": {"symbol": "BTC/USDT:USDT"},
 		"an indicator gate": {"trigger": map[string]any{"timeframe": "1d", "expression": "close > 0"}},
 	} {
 		res := e.createPlan(e.ownerCtx(), extra)
 		if !strings.Contains(res.ForLLM, "No mandate was proposed") {
 			t.Errorf("%s: %q", name, res.ForLLM)
 		}
+	}
+	// A contract symbol is refused when the plan is created, before any mandate is thought of.
+	if res := e.createPlan(e.ownerCtx(), map[string]any{"symbol": "BTC/USDT:USDT"}); !res.IsError || !strings.Contains(res.ForLLM, "contract (futures/swap) symbol") {
+		t.Errorf("a contract symbol: %q", res.ForLLM)
 	}
 	if e.tg.count() != 0 {
 		t.Fatalf("%d cards for plans a mandate does not cover", e.tg.count())

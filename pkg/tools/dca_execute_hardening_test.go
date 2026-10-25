@@ -14,9 +14,10 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
-// TestDCAExecute_LossGateContractSell: a buy and a sell of a contract symbol
-// (which can open a short) are gated by the daily loss limit; a plain spot sell
-// is not.
+// TestDCAExecute_LossGateContractSell: a plain spot sell is not stopped by the
+// daily loss limit. A buy or a sell of a contract symbol (which can open a
+// short) is refused outright by the contract-symbol guard, before the loss gate
+// and before any order is attempted, so no attempt row is written.
 func TestDCAExecute_LossGateContractSell(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.TradingRisk.DailyLossLimitUSD = 100
@@ -39,14 +40,16 @@ func TestDCAExecute_LossGateContractSell(t *testing.T) {
 
 			res := runDCA(cfg, store, planID)
 			rows := dcaRows(t, store, planID)
+			if tc.blocked {
+				if !res.IsError || mock.ordered || len(rows) != 0 || !strings.Contains(res.ForLLM, "contract (futures/swap) symbol") {
+					t.Errorf("expected a contract-symbol refusal and no order or row: %+v rows=%+v", res, rows)
+				}
+				return
+			}
 			if len(rows) != 1 {
 				t.Fatalf("expected one row, got %+v", rows)
 			}
-			if tc.blocked {
-				if !res.IsError || mock.ordered || rows[0].Status != "skipped" || !strings.Contains(rows[0].ErrorMsg, "daily loss limit") {
-					t.Errorf("expected a recorded loss-limit refusal: %+v rows=%+v", res, rows)
-				}
-			} else if res.IsError || mock.orders != 1 || rows[0].Status != "completed" {
+			if res.IsError || mock.orders != 1 || rows[0].Status != "completed" {
 				t.Errorf("expected the order to go through: %+v rows=%+v", res, rows)
 			}
 		})

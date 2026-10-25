@@ -95,7 +95,11 @@ func (p *CodexProvider) Chat(
 		)
 	}
 
-	params := buildCodexParams(messages, tools, resolvedModel, options, p.enableWebSearch)
+	webSearch := p.enableWebSearch
+	if off, _ := options[OptionNoNativeTools].(bool); off {
+		webSearch = false // a tool-less one-shot (providers.Complete) gets no provider-side search either
+	}
+	params := buildCodexParams(messages, tools, resolvedModel, options, webSearch)
 
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()

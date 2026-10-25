@@ -187,11 +187,8 @@ func TestContextBuilder_InvalidateCache(t *testing.T) {
 
 	// Verify cache is cleared
 	cb.systemPromptMutex.RLock()
-	if cb.cachedSystemPrompt != "" {
+	if len(cb.promptCache) != 0 {
 		t.Errorf("Expected cleared cache after InvalidateCache")
-	}
-	if !cb.cachedAt.IsZero() {
-		t.Errorf("Expected zero cachedAt after InvalidateCache")
 	}
 	cb.systemPromptMutex.RUnlock()
 }

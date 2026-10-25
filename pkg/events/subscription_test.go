@@ -2,6 +2,10 @@ package events
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,6 +147,144 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	waitForStat(t, func() uint64 {
 		return sub.Stats().Panicked
 	}, 1)
+}
+
+// TestConcurrentHandlerPanicRecovered exercises the Concurrent-dispatch
+// goroutine (subscription.go dispatch, Concurrent case) under the default
+// RecoverAndLog policy: the process must survive and Panicked must reach 1.
+func TestConcurrentHandlerPanicRecovered(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "concurrent-panic", Buffer: 1, Concurrency: Concurrent, PanicPolicy: RecoverAndLog},
+		func(context.Context, Event) error {
+			panic("boom-concurrent")
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: KindAgentError})
+	waitForStat(t, func() uint64 {
+		return sub.Stats().Panicked
+	}, 1)
+}
+
+// TestTimeoutHandlerPanicRecovered exercises the Timeout>0 handler goroutine
+// (subscription.go handle, Timeout>0 branch) under the default RecoverAndLog
+// policy: the process must survive and Panicked must reach 1.
+func TestTimeoutHandlerPanicRecovered(t *testing.T) {
+	t.Parallel()
+
+	bus := NewBus()
+	defer closeBus(t, bus)
+
+	sub, err := bus.Channel().Subscribe(
+		context.Background(),
+		SubscribeOptions{Name: "timeout-panic", Buffer: 1, Timeout: 50 * time.Millisecond, PanicPolicy: RecoverAndLog},
+		func(context.Context, Event) error {
+			panic("boom-timeout")
+		},
+	)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	bus.Publish(context.Background(), Event{Kind: KindAgentError})
+	waitForStat(t, func() uint64 {
+		return sub.Stats().Panicked
+	}, 1)
+}
+
+// TestConcurrentHandlerPanicCrashesProcess verifies that PanicPolicy: Crash
+// is honored by the Concurrent-dispatch goroutine (subscription.go dispatch,
+// Concurrent case): a handler panic must propagate and crash the process,
+// not be silently swallowed and logged. A panic in a background goroutine
+// can't be safely recovered from the test's own goroutine (recover only
+// works within the panicking goroutine's call stack), so this runs the
+// panicking subscription in a subprocess (the standard Go "crasher" test
+// pattern) and asserts the subprocess actually crashed.
+func TestConcurrentHandlerPanicCrashesProcess(t *testing.T) {
+	if os.Getenv("BE_CRASHER") == "1" {
+		bus := NewBus()
+		_, err := bus.Channel().Subscribe(
+			context.Background(),
+			SubscribeOptions{Name: "concurrent-crash", Buffer: 1, Concurrency: Concurrent, PanicPolicy: Crash},
+			func(context.Context, Event) error {
+				panic("boom-concurrent-crash")
+			},
+		)
+		if err != nil {
+			fmt.Printf("setup failed: %v", err)
+			os.Exit(0)
+		}
+
+		bus.Publish(context.Background(), Event{Kind: KindAgentError})
+		// Give the background dispatch goroutine time to panic and crash the
+		// process. If we reach the end of this sleep, the panic did NOT
+		// propagate — exit cleanly so the parent test can tell the difference.
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestConcurrentHandlerPanicCrashesProcess")
+	cmd.Env = append(os.Environ(), "BE_CRASHER=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the subprocess to crash under PanicPolicy: Crash, but it exited cleanly; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "panic:") {
+		t.Fatalf("expected a panic trace in the crashed subprocess output, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "boom-concurrent-crash") {
+		t.Fatalf("expected the panic message in the crashed subprocess output, got:\n%s", out)
+	}
+}
+
+// TestTimeoutHandlerPanicCrashesProcess is the Timeout>0 counterpart of
+// TestConcurrentHandlerPanicCrashesProcess: it verifies PanicPolicy: Crash
+// is honored by the Timeout>0 handler goroutine (subscription.go handle,
+// Timeout>0 branch) via the same subprocess "crasher" pattern.
+func TestTimeoutHandlerPanicCrashesProcess(t *testing.T) {
+	if os.Getenv("BE_CRASHER") == "1" {
+		bus := NewBus()
+		_, err := bus.Channel().Subscribe(
+			context.Background(),
+			SubscribeOptions{Name: "timeout-crash", Buffer: 1, Timeout: 50 * time.Millisecond, PanicPolicy: Crash},
+			func(context.Context, Event) error {
+				panic("boom-timeout-crash")
+			},
+		)
+		if err != nil {
+			fmt.Printf("setup failed: %v", err)
+			os.Exit(0)
+		}
+
+		bus.Publish(context.Background(), Event{Kind: KindAgentError})
+		// Give the timeout handler goroutine time to panic and crash the
+		// process. If we reach the end of this sleep, the panic did NOT
+		// propagate — exit cleanly so the parent test can tell the difference.
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestTimeoutHandlerPanicCrashesProcess")
+	cmd.Env = append(os.Environ(), "BE_CRASHER=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected the subprocess to crash under PanicPolicy: Crash, but it exited cleanly; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "panic:") {
+		t.Fatalf("expected a panic trace in the crashed subprocess output, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "boom-timeout-crash") {
+		t.Fatalf("expected the panic message in the crashed subprocess output, got:\n%s", out)
+	}
 }
 
 func TestLockedHandlerProcessesSequentially(t *testing.T) {

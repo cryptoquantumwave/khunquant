@@ -35,6 +35,11 @@ func (t *DeleteDCAPlanTool) Parameters() map[string]any {
 }
 
 func (t *DeleteDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Removing a plan removes its job and mandate: owner only.
+	if res := refuseNonOwnerChange(ctx, NameDeleteDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {
@@ -46,13 +51,19 @@ func (t *DeleteDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("plan not found: %v", err))
 	}
 
-	if plan.CronJobID != "" {
-		t.cronService.RemoveJob(plan.CronJobID)
-	}
-
+	_, _ = t.store.RevokePlanMandate(ctx, planID, "plan deleted")
+	_ = t.store.ClearMandatePending(ctx, planID)
 	if err := t.store.DeletePlan(ctx, planID); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to delete plan: %v", err))
 	}
+
+	// The plan is gone; so must every job that carries its name be, not only the
+	// one it recorded - a stranded job would otherwise keep ticking against a
+	// plan that no longer exists.
+	if plan.CronJobID != "" {
+		t.cronService.RemoveJob(plan.CronJobID)
+	}
+	removeDCAPlanJobs(t.cronService, planID, "")
 
 	return UserResult(fmt.Sprintf("DCA plan %d (%s) deleted. Cron job %s cancelled. All execution history removed.",
 		planID, plan.Name, plan.CronJobID))

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -483,7 +484,19 @@ func hasLocalAPIBase(raw string) bool {
 	}
 }
 
+// safeDialContextFunc matches net.Dialer.DialContext / http.Transport.DialContext,
+// and utils.NewSafeDialContext's return type — used to thread an SSRF-guarded
+// dialer into the raw-TCP (copilot) probe below.
+type safeDialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
 func probeTCPService(raw string) bool {
+	return probeTCPServiceWithDial((&net.Dialer{}).DialContext, raw)
+}
+
+// probeTCPServiceWithDial is probeTCPService with an injectable dialer, so
+// callers driven by caller-supplied input (test-inline) can pass an
+// SSRF-guarded dial function instead of the unrestricted default.
+func probeTCPServiceWithDial(dial safeDialContextFunc, raw string) bool {
 	hostPort, err := hostPortFromAPIBase(raw)
 	if err != nil {
 		return false
@@ -492,8 +505,7 @@ func probeTCPService(raw string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
 	defer cancel()
 
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
+	conn, err := dial(ctx, "tcp", hostPort)
 	if err != nil {
 		return false
 	}
@@ -502,6 +514,13 @@ func probeTCPService(raw string) bool {
 }
 
 func probeOllamaModel(apiBase, modelID string) bool {
+	return probeOllamaModelWithClient(nil, apiBase, modelID)
+}
+
+// probeOllamaModelWithClient is probeOllamaModel with an injectable HTTP
+// client. A nil client uses an unrestricted default, appropriate only when
+// apiBase comes from the operator's own saved config (see getJSONWithClient).
+func probeOllamaModelWithClient(client *http.Client, apiBase, modelID string) bool {
 	root, err := apiRootFromAPIBase(apiBase)
 	if err != nil {
 		return false
@@ -513,7 +532,7 @@ func probeOllamaModel(apiBase, modelID string) bool {
 			Model string `json:"model"`
 		} `json:"models"`
 	}
-	if err := getJSON(root+"/api/tags", &resp, ""); err != nil {
+	if err := getJSONWithClient(client, root+"/api/tags", &resp, ""); err != nil {
 		return false
 	}
 
@@ -526,6 +545,12 @@ func probeOllamaModel(apiBase, modelID string) bool {
 }
 
 func probeOpenAICompatibleModel(apiBase, modelID, apiKey string) bool {
+	return probeOpenAICompatibleModelWithClient(nil, apiBase, modelID, apiKey)
+}
+
+// probeOpenAICompatibleModelWithClient is probeOpenAICompatibleModel with an
+// injectable HTTP client — see probeOllamaModelWithClient.
+func probeOpenAICompatibleModelWithClient(client *http.Client, apiBase, modelID, apiKey string) bool {
 	if strings.TrimSpace(apiBase) == "" {
 		return false
 	}
@@ -535,7 +560,8 @@ func probeOpenAICompatibleModel(apiBase, modelID, apiKey string) bool {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := getJSON(strings.TrimRight(strings.TrimSpace(apiBase), "/")+"/models", &resp, apiKey); err != nil {
+	url := strings.TrimRight(strings.TrimSpace(apiBase), "/") + "/models"
+	if err := getJSONWithClient(client, url, &resp, apiKey); err != nil {
 		return false
 	}
 
@@ -580,7 +606,19 @@ func probeMLXLMHealth(apiBase string) bool {
 	return len(resp.Data) > 0
 }
 
+// getJSON issues an unrestricted GET. It backs the local-model probe path
+// (runLocalModelProbe), which only ever probes an apiBase already present in
+// the operator's saved config — never a value taken fresh off the current
+// request — so no SSRF guard is needed here.
 func getJSON(rawURL string, out any, apiKey string) error {
+	return getJSONWithClient(nil, rawURL, out, apiKey)
+}
+
+// getJSONWithClient is getJSON with an injectable HTTP client. Passing a nil
+// client preserves the previous unrestricted behavior; callers that probe a
+// caller-supplied (not-yet-saved) api_base — i.e. test-inline — must pass an
+// SSRF-guarded client (see (*Handler).safeUpstreamHTTPClient).
+func getJSONWithClient(client *http.Client, rawURL string, out any, apiKey string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
 	defer cancel()
 
@@ -592,7 +630,9 @@ func getJSON(rawURL string, out any, apiKey string) error {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := &http.Client{}
+	if client == nil {
+		client = &http.Client{}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -603,7 +643,10 @@ func getJSON(rawURL string, out any, apiKey string) error {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	// Cap the body read for defense in depth: this only ever decodes into a
+	// small, fixed-shape struct, but an unbounded body would still let a
+	// misbehaving endpoint force an unbounded read.
+	return json.NewDecoder(io.LimitReader(resp.Body, maxUpstreamModelListBytes)).Decode(out)
 }
 
 func apiRootFromAPIBase(raw string) (string, error) {

@@ -180,6 +180,7 @@ func (t *FuturesRiskSummaryTool) Execute(ctx context.Context, args map[string]an
 	}
 
 	var rows []posRow
+	sizes := &positionContractSizeResolver{fp: fp}
 	var totalNotional, totalUnrealPnl float64
 	var worstDist float64 = math.MaxFloat64
 	var worstMarginRatio float64
@@ -216,7 +217,10 @@ func (t *FuturesRiskSummaryTool) Execute(ctx context.Context, args map[string]an
 			row.upnl = *p.UnrealizedPnl
 		}
 		if row.mark > 0 && row.contracts != 0 {
-			totalNotional += math.Abs(row.contracts) * row.mark
+			// Contracts is a contract count: value it with the contract size (position's own,
+			// else the market's; unresolved is treated as 1 for this display-only total).
+			cs, _ := sizes.size(ctx, p, normalizeFuturesSymbol(row.sym))
+			totalNotional += positionNotionalUSD(row.contracts, cs, row.mark)
 		}
 		totalUnrealPnl += row.upnl
 		if distPct > 0 && distPct < worstDist {
@@ -310,6 +314,9 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 	}
 
 	var rows []fundingRow
+	// Contracts is a contract count; value it with the contract size (position's own,
+	// else the market's). An unresolved size is treated as 1 for this display-only estimate.
+	sizes := &positionContractSizeResolver{fp: fp}
 
 	if symbol != "" {
 		// Single symbol estimate
@@ -333,7 +340,8 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 				}
 				if p.Symbol != nil && normalizeFuturesSymbol(*p.Symbol) == symbol {
 					if p.MarkPrice != nil {
-						row.notional = math.Abs(*p.Contracts) * (*p.MarkPrice)
+						cs, _ := sizes.size(ctx, p, symbol)
+						row.notional = positionNotionalUSD(*p.Contracts, cs, *p.MarkPrice)
 					}
 					if p.Side != nil {
 						row.side = *p.Side
@@ -369,7 +377,8 @@ func (t *FuturesEstimateFundingFeeTool) Execute(ctx context.Context, args map[st
 				row.nextTime = time.UnixMilli(int64(*rate.NextFundingTimestamp)).UTC().Format(time.RFC3339)
 			}
 			if p.MarkPrice != nil {
-				row.notional = math.Abs(*p.Contracts) * (*p.MarkPrice)
+				cs, _ := sizes.size(ctx, p, sym)
+				row.notional = positionNotionalUSD(*p.Contracts, cs, *p.MarkPrice)
 			}
 			if row.notional > 0 {
 				row.estimated = row.notional * row.rate

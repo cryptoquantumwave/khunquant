@@ -69,21 +69,12 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
 func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := provider.Chat(
-			ctx,
-			[]providers.Message{{Role: "user", Content: prompt}},
-			nil, // no tools for summarization
-			model,
-			map[string]any{
-				"max_tokens":       opts.MaxTokens,
-				"temperature":      opts.Temperature,
-				"prompt_cache_key": "seahorse",
-			},
-		)
-		if err != nil {
-			return "", err
-		}
-		return resp.Content, nil
+		text, _, err := providers.Complete(ctx, provider, model, prompt, providers.CompleteOptions{
+			MaxTokens:   opts.MaxTokens,
+			Temperature: opts.Temperature,
+			CacheKey:    "seahorse",
+		})
+		return text, err
 	}
 }
 

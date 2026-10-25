@@ -40,6 +40,9 @@ type InstallResult struct {
 	IsMalwareBlocked bool
 	IsSuspicious     bool
 	Summary          string
+	// Unverified is set when the install went ahead without moderation
+	// metadata, which only happens when the operator opted into it.
+	Unverified bool
 }
 
 // SkillRegistry is the interface that all skill registries must implement.
@@ -75,6 +78,7 @@ type ClawHubConfig struct {
 	Timeout         int    // seconds, 0 = default (30s)
 	MaxZipSize      int    // bytes, 0 = default (50MB)
 	MaxResponseSize int    // bytes, 0 = default (2MB)
+	AllowUnverified bool   // install when moderation metadata is unavailable
 }
 
 // RegistryManager coordinates multiple skill registries.

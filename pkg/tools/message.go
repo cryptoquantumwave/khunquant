@@ -8,16 +8,41 @@ import (
 
 type SendCallback func(channel, chatID, content string) error
 
+// SendObserver is told about every message the tool delivered. ctx is the
+// calling turn's, so an observer can tell by ToolOrigin which kind of turn sent
+// it (a heartbeat keeps a ledger of what it sent). It runs after the send has
+// succeeded and must not block.
+type SendObserver func(ctx context.Context, channel, chatID, content string)
+
 // sentTarget records the channel+chatID that the message tool sent to.
 type sentTarget struct {
 	Channel string
 	ChatID  string
 }
 
+// maxTrackedTurns bounds how many turns' sent targets a MessageTool remembers.
+//
+// A turn's entry is normally removed by ClearTurn when the turn ends. Entries
+// are abandoned when nobody is left to clear them: an async subagent that sends
+// after its parent turn has already been cleared, or a cron turn that fails
+// before its caller reaches PublishResponseIfNeeded. The cap, with oldest-first
+// eviction, keeps those from accumulating for the life of the process. It is
+// far above the number of turns that can be live at once, so a running turn's
+// entry is not the one evicted.
+const maxTrackedTurns = 1024
+
 type MessageTool struct {
 	sendCallback SendCallback
 	mu           sync.Mutex
-	sentTargets  []sentTarget // Tracks all targets sent to in the current round
+	// observer is told of each successful send (guarded by mu).
+	observer SendObserver
+	// sentByTurn records, per turn ID, the targets this tool sent to. It is
+	// keyed by turn because one MessageTool serves every turn of an agent, and
+	// turns overlap: a heartbeat's message must not make a concurrent user turn
+	// look as if it had already replied.
+	sentByTurn map[string]map[sentTarget]struct{}
+	// turnOrder lists the keys of sentByTurn oldest-first, for eviction.
+	turnOrder []string
 }
 
 func NewMessageTool() *MessageTool {
@@ -53,37 +78,76 @@ func (t *MessageTool) Parameters() map[string]any {
 	}
 }
 
-// ResetSentInRound resets the per-round send tracker.
-// Called by the agent loop at the start of each inbound message processing round.
-func (t *MessageTool) ResetSentInRound() {
-	t.mu.Lock()
-	t.sentTargets = t.sentTargets[:0]
-	t.mu.Unlock()
-}
-
-// HasSentInRound returns true if the message tool sent a message during the current round.
-func (t *MessageTool) HasSentInRound() bool {
+// HasSentInTurn reports whether the message tool sent anything during the turn.
+func (t *MessageTool) HasSentInTurn(turnID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.sentTargets) > 0
+	return len(t.sentByTurn[turnID]) > 0
 }
 
-// HasSentTo returns true if the message tool sent to the specific channel+chatID
-// during the current round. Used by PublishResponseIfNeeded to avoid suppressing
-// the final response when the message tool only sent to a different conversation.
-func (t *MessageTool) HasSentTo(channel, chatID string) bool {
+// HasSentToInTurn reports whether the message tool sent to the specific
+// channel+chatID during the turn. It decides whether a turn's final response
+// would duplicate a message the user already received, so it matches the exact
+// conversation: a message sent elsewhere does not suppress the reply.
+func (t *MessageTool) HasSentToInTurn(turnID, channel, chatID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, st := range t.sentTargets {
-		if st.Channel == channel && st.ChatID == chatID {
-			return true
+	_, ok := t.sentByTurn[turnID][sentTarget{Channel: channel, ChatID: chatID}]
+	return ok
+}
+
+// ClearTurn forgets what was sent during the turn. Whoever owns the turn ID
+// calls it once the turn's outcome has been decided.
+func (t *MessageTool) ClearTurn(turnID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.sentByTurn[turnID]; !ok {
+		return
+	}
+	delete(t.sentByTurn, turnID)
+	for i, id := range t.turnOrder {
+		if id == turnID {
+			t.turnOrder = append(t.turnOrder[:i], t.turnOrder[i+1:]...)
+			break
 		}
 	}
-	return false
+}
+
+// recordSent notes that the turn sent to target. A send made outside any turn
+// (turnID "") is not recorded: nobody could ask about it, and nothing would
+// ever clear it.
+func (t *MessageTool) recordSent(turnID string, target sentTarget) {
+	if turnID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	targets, ok := t.sentByTurn[turnID]
+	if !ok {
+		if t.sentByTurn == nil {
+			t.sentByTurn = make(map[string]map[sentTarget]struct{})
+		}
+		for len(t.turnOrder) >= maxTrackedTurns {
+			delete(t.sentByTurn, t.turnOrder[0])
+			t.turnOrder = t.turnOrder[1:]
+		}
+		targets = make(map[sentTarget]struct{})
+		t.sentByTurn[turnID] = targets
+		t.turnOrder = append(t.turnOrder, turnID)
+	}
+	targets[target] = struct{}{}
 }
 
 func (t *MessageTool) SetSendCallback(callback SendCallback) {
 	t.sendCallback = callback
+}
+
+// SetSendObserver sets the observer told of each message this tool delivers,
+// replacing any earlier one. nil removes it.
+func (t *MessageTool) SetSendObserver(o SendObserver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.observer = o
 }
 
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -106,6 +170,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: "No target channel/chat specified", IsError: true}
 	}
 
+	if refusal := autonomousTargetRefusal(ctx, NameMessage, channel, chatID); refusal != nil {
+		return refusal
+	}
+
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}
@@ -118,9 +186,14 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
+	t.recordSent(TurnID(ctx), sentTarget{Channel: channel, ChatID: chatID})
+
 	t.mu.Lock()
-	t.sentTargets = append(t.sentTargets, sentTarget{Channel: channel, ChatID: chatID})
+	observer := t.observer
 	t.mu.Unlock()
+	if observer != nil {
+		observer(ctx, channel, chatID, content)
+	}
 
 	// Silent: user already received the message directly
 	return &ToolResult{

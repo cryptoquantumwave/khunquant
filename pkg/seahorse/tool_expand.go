@@ -22,7 +22,7 @@ func (t *ExpandTool) Name() string {
 }
 
 func (t *ExpandTool) Description() string {
-	return `Get full message content by ID.
+	return `Get full message content by ID, for messages of the current conversation only.
 
 Use when short_grep returns messages and you need complete content (not just snippet).
 
@@ -82,7 +82,13 @@ func (t *ExpandTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		}
 	}
 
-	result, err := t.engine.ExpandMessages(ctx, messageIDs)
+	// Fail closed: without a resolvable caller conversation, expand nothing.
+	convID, err := t.engine.callerConversationID(ctx)
+	if err != nil {
+		return tools.ErrorResult("Expand refused: " + err.Error())
+	}
+
+	result, err := t.engine.ExpandMessagesInConversation(ctx, convID, messageIDs)
 	if err != nil {
 		return tools.ErrorResult("Expand failed: " + err.Error())
 	}

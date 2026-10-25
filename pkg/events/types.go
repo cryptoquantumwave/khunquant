@@ -1,6 +1,10 @@
 package events
 
-import "time"
+import (
+	"time"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+)
 
 // Kind identifies a runtime event category.
 type Kind string
@@ -10,7 +14,7 @@ func (k Kind) String() string {
 	return string(k)
 }
 
-// Event is the runtime event envelope shared across PicoClaw components.
+// Event is the runtime event envelope shared across KhunQuant components.
 type Event struct {
 	ID          string         `json:"id"`
 	Kind        Kind           `json:"kind"`
@@ -21,6 +25,27 @@ type Event struct {
 	Severity    Severity       `json:"severity,omitempty"`
 	Payload     any            `json:"payload,omitempty"`
 	Attrs       map[string]any `json:"attrs,omitempty"`
+
+	// Trust is the provenance of the data the event carries. It is a pointer
+	// because the zero Trust is TrustUntrusted: a plain value with omitempty
+	// would drop an explicit "untrusted" from the wire, so "not set" and
+	// "untrusted" could not be told apart. nil is "not set" and is omitted from
+	// the JSON, which keeps events that never set it byte-for-byte unchanged;
+	// a non-nil TrustUntrusted is written as "untrusted". Read it through
+	// TrustLevel, which treats "not set" as untrusted.
+	Trust *proactive.Trust `json:"trust,omitempty"`
+}
+
+// TrustPtr returns a pointer to t, for setting Event.Trust.
+func TrustPtr(t proactive.Trust) *proactive.Trust { return &t }
+
+// TrustLevel is the event's trust for a consumer to act on. An event whose
+// publisher did not set one is treated as untrusted, never as trusted.
+func (e Event) TrustLevel() proactive.Trust {
+	if e.Trust == nil {
+		return proactive.TrustUntrusted
+	}
+	return *e.Trust
 }
 
 // Source identifies the component that emitted an event.

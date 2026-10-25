@@ -36,6 +36,13 @@ const (
 	// Limit request body to prevent memory exhaustion (DoS).
 	// LINE webhook payloads are typically a few KB; 1 MiB is generous.
 	maxWebhookBodySize = 1 << 20 // 1 MiB
+
+	// maxAPIResponseSize bounds the body read from a successful send.
+	maxAPIResponseSize = 1 << 16
+
+	// maxMessageLength is the length LINE allows a text message (the Manager
+	// splits to it).
+	maxMessageLength = 5000
 )
 
 type replyTokenEntry struct {
@@ -56,6 +63,7 @@ type LINEChannel struct {
 	botDisplayName string       // Bot's display name for text-based mention detection
 	replyTokens    sync.Map     // chatID -> replyTokenEntry
 	quoteTokens    sync.Map     // chatID -> quoteToken (string)
+	lastCard       sync.Map     // chatID -> LINE message id of the latest message sent with buttons
 	ctx            context.Context
 	cancel         context.CancelFunc
 }
@@ -67,7 +75,7 @@ func NewLINEChannel(cfg config.LINEConfig, messageBus *bus.MessageBus) (*LINECha
 	}
 
 	base := channels.NewBaseChannel("line", cfg, messageBus, cfg.AllowFrom,
-		channels.WithMaxMessageLength(5000),
+		channels.WithMaxMessageLength(maxMessageLength),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
 		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
@@ -225,11 +233,18 @@ func (c *LINEChannel) verifySignature(body []byte, signature string) bool {
 
 // LINE webhook event types
 type lineEvent struct {
-	Type       string          `json:"type"`
-	ReplyToken string          `json:"replyToken"`
-	Source     lineSource      `json:"source"`
-	Message    json.RawMessage `json:"message"`
-	Timestamp  int64           `json:"timestamp"`
+	Type           string          `json:"type"`
+	ReplyToken     string          `json:"replyToken"`
+	Source         lineSource      `json:"source"`
+	Message        json.RawMessage `json:"message"`
+	Timestamp      int64           `json:"timestamp"`
+	WebhookEventID string          `json:"webhookEventId"`
+	// Postback is set on a "postback" event: the tap of a quick-reply button.
+	Postback *linePostback `json:"postback"`
+}
+
+type linePostback struct {
+	Data string `json:"data"`
 }
 
 type lineSource struct {
@@ -260,6 +275,10 @@ type lineMentionee struct {
 }
 
 func (c *LINEChannel) processEvent(event lineEvent) {
+	if event.Type == "postback" {
+		c.processPostback(event)
+		return
+	}
 	if event.Type != "message" {
 		logger.DebugCF("line", "Ignoring non-message event", map[string]any{
 			"type": event.Type,
@@ -269,7 +288,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 
 	senderID := event.Source.UserID
 	chatID := c.resolveChatID(event.Source)
-	isGroup := event.Source.Type == "group" || event.Source.Type == "room"
+	isGroup := isGroupSource(event.Source)
 
 	var msg lineMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
@@ -381,11 +400,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 		"preview":      utils.Truncate(content, 50),
 	})
 
-	sender := bus.SenderInfo{
-		Platform:    "line",
-		PlatformID:  senderID,
-		CanonicalID: identity.BuildCanonicalID("line", senderID),
-	}
+	sender := lineSender(senderID)
 
 	if !c.IsAllowedSender(sender) {
 		return
@@ -493,11 +508,34 @@ func (c *LINEChannel) resolveChatID(source lineSource) string {
 	}
 }
 
-// Send sends a message to LINE. It first tries the Reply API (free)
-// using a cached reply token, then falls back to the Push API.
+// lineSender is the sender of a message or a tap in the one canonical form
+// ("line:<userId>") the allow-list and the control path compare.
+func lineSender(userID string) bus.SenderInfo {
+	return bus.SenderInfo{
+		Platform:    "line",
+		PlatformID:  userID,
+		CanonicalID: identity.BuildCanonicalID("line", userID),
+	}
+}
+
+// isGroupSource reports whether an event came from a group or a multi-person room.
+func isGroupSource(src lineSource) bool {
+	return src.Type == "group" || src.Type == "room"
+}
+
+// Send sends a message to LINE. See SendWithIDs.
 func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	_, err := c.SendWithIDs(ctx, msg)
+	return err
+}
+
+// SendWithIDs implements channels.IDReportingSender. It first tries the Reply
+// API (free) using a cached reply token, then falls back to the Push API, and
+// returns the ID LINE gave each message it created. The IDs are what a later
+// "snooze" or "useful" button is tied back to its alert with.
+func (c *LINEChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
-		return channels.ErrNotRunning
+		return nil, channels.ErrNotRunning
 	}
 
 	// Load and consume quote token for this chat
@@ -506,23 +544,59 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		quoteToken = qt.(string)
 	}
 
-	// Try reply token first (free, valid for ~25 seconds)
-	if entry, ok := c.replyTokens.LoadAndDelete(msg.ChatID); ok {
+	// Buttons: the text fallback of the actions stays in the body (the Manager
+	// leaves it out for a channel that renders actions), and the quick-reply
+	// buttons go on the last message. If any action cannot be encoded the message
+	// goes without buttons: all of them or none.
+	texts := []string{msg.Content}
+	var quickReply map[string]any
+	if len(msg.Actions) > 0 {
+		texts = channels.AppendActionFooter(texts, msg.Actions, maxMessageLength)
+		var qrErr error
+		if quickReply, qrErr = buildQuickReply(msg.Actions); qrErr != nil {
+			logger.WarnCF("line", "Invalid message actions, sending the message without buttons", map[string]any{
+				"intervention_id": msg.InterventionID,
+				"actions":         len(msg.Actions),
+				"error":           qrErr.Error(),
+			})
+			quickReply = nil
+		}
+	}
+	messages := buildMessages(texts, quoteToken, quickReply)
+
+	ids, err := c.deliver(ctx, msg.ChatID, messages)
+	if err != nil {
+		return nil, err
+	}
+	// Quick-reply buttons show on the newest message of the chat only, so the
+	// latest message with buttons is the card a tap came from; any other message
+	// sent after it takes the buttons away.
+	if quickReply != nil && len(ids) > 0 {
+		c.lastCard.Store(msg.ChatID, ids[len(ids)-1])
+	} else {
+		c.lastCard.Delete(msg.ChatID)
+	}
+	return ids, nil
+}
+
+// deliver sends messages to a chat: the Reply API with a cached reply token
+// first (free, valid for ~25 seconds), then the Push API.
+func (c *LINEChannel) deliver(ctx context.Context, chatID string, messages []map[string]any) ([]string, error) {
+	if entry, ok := c.replyTokens.LoadAndDelete(chatID); ok {
 		tokenEntry := entry.(replyTokenEntry)
 		if time.Since(tokenEntry.timestamp) < lineReplyTokenMaxAge {
-			if err := c.sendReply(ctx, tokenEntry.token, msg.Content, quoteToken); err == nil {
+			if ids, err := c.sendReply(ctx, tokenEntry.token, messages); err == nil {
 				logger.DebugCF("line", "Message sent via Reply API", map[string]any{
-					"chat_id": msg.ChatID,
-					"quoted":  quoteToken != "",
+					"chat_id": chatID,
 				})
-				return nil
+				return ids, nil
 			}
 			logger.DebugC("line", "Reply API failed, falling back to Push API")
 		}
 	}
 
 	// Fall back to Push API
-	return c.sendPush(ctx, msg.ChatID, msg.Content, quoteToken)
+	return c.sendPush(ctx, chatID, messages)
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -547,17 +621,18 @@ func (c *LINEChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessag
 			caption = fmt.Sprintf("[%s: %s]", part.Type, part.Filename)
 		}
 
-		if err := c.sendPush(ctx, msg.ChatID, caption, ""); err != nil {
+		if _, err := c.sendPush(ctx, msg.ChatID, []map[string]any{buildTextMessage(caption, "")}); err != nil {
 			return err
 		}
+		c.lastCard.Delete(msg.ChatID)
 	}
 
 	return nil
 }
 
 // buildTextMessage creates a text message object, optionally with quoteToken.
-func buildTextMessage(content, quoteToken string) map[string]string {
-	msg := map[string]string{
+func buildTextMessage(content, quoteToken string) map[string]any {
+	msg := map[string]any{
 		"type": "text",
 		"text": content,
 	}
@@ -567,24 +642,41 @@ func buildTextMessage(content, quoteToken string) map[string]string {
 	return msg
 }
 
-// sendReply sends a message using the LINE Reply API.
-func (c *LINEChannel) sendReply(ctx context.Context, replyToken, content, quoteToken string) error {
-	payload := map[string]any{
-		"replyToken": replyToken,
-		"messages":   []map[string]string{buildTextMessage(content, quoteToken)},
+// buildMessages makes one text message per text. The quote token belongs to the
+// first, the quick-reply buttons to the last.
+func buildMessages(texts []string, quoteToken string, quickReply map[string]any) []map[string]any {
+	messages := make([]map[string]any, 0, len(texts))
+	for i, t := range texts {
+		qt := ""
+		if i == 0 {
+			qt = quoteToken
+		}
+		messages = append(messages, buildTextMessage(t, qt))
 	}
-
-	return c.callAPI(ctx, lineReplyEndpoint, payload)
+	if quickReply != nil && len(messages) > 0 {
+		messages[len(messages)-1]["quickReply"] = quickReply
+	}
+	return messages
 }
 
-// sendPush sends a message using the LINE Push API.
-func (c *LINEChannel) sendPush(ctx context.Context, to, content, quoteToken string) error {
+// sendReply sends messages using the LINE Reply API and returns their IDs.
+func (c *LINEChannel) sendReply(ctx context.Context, replyToken string, messages []map[string]any) ([]string, error) {
 	payload := map[string]any{
-		"to":       to,
-		"messages": []map[string]string{buildTextMessage(content, quoteToken)},
+		"replyToken": replyToken,
+		"messages":   messages,
 	}
 
-	return c.callAPI(ctx, linePushEndpoint, payload)
+	return c.callAPIWithIDs(ctx, lineReplyEndpoint, payload)
+}
+
+// sendPush sends messages using the LINE Push API and returns their IDs.
+func (c *LINEChannel) sendPush(ctx context.Context, to string, messages []map[string]any) ([]string, error) {
+	payload := map[string]any{
+		"to":       to,
+		"messages": messages,
+	}
+
+	return c.callAPIWithIDs(ctx, linePushEndpoint, payload)
 }
 
 // StartTyping implements channels.TypingCapable using LINE's loading animation.
@@ -643,14 +735,22 @@ func (c *LINEChannel) sendLoading(ctx context.Context, chatID string) error {
 
 // callAPI makes an authenticated POST request to the LINE API.
 func (c *LINEChannel) callAPI(ctx context.Context, endpoint string, payload any) error {
+	_, err := c.callAPIWithIDs(ctx, endpoint, payload)
+	return err
+}
+
+// callAPIWithIDs makes an authenticated POST request to the LINE API and returns
+// the IDs of the messages it reports having sent (the reply and push endpoints
+// answer {"sentMessages":[{"id":"..."}]}).
+func (c *LINEChannel) callAPIWithIDs(ctx context.Context, endpoint string, payload any) ([]string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -658,19 +758,34 @@ func (c *LINEChannel) callAPI(ctx context.Context, endpoint string, payload any)
 
 	resp, err := c.apiClient.Do(req)
 	if err != nil {
-		return channels.ClassifyNetError(err)
+		return nil, channels.ClassifyNetError(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err))
+			return nil, channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err))
 		}
-		return channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody)))
+		return nil, channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody)))
 	}
 
-	return nil
+	var sent struct {
+		SentMessages []struct {
+			ID string `json:"id"`
+		} `json:"sentMessages"`
+	}
+	// A body that is not the expected JSON only costs the IDs: the send worked.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&sent); err != nil {
+		return nil, nil
+	}
+	var ids []string
+	for _, m := range sent.SentMessages {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
 }
 
 // downloadContent downloads media content from the LINE API.

@@ -1,0 +1,155 @@
+package tools
+
+import (
+	"context"
+	"math"
+	"strings"
+	"testing"
+	"time"
+
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
+)
+
+// TestDCAExecute_LossGateContractSell: a buy and a sell of a contract symbol
+// (which can open a short) are gated by the daily loss limit; a plain spot sell
+// is not.
+func TestDCAExecute_LossGateContractSell(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TradingRisk.DailyLossLimitUSD = 100
+
+	for _, tc := range []struct {
+		name    string
+		symbol  string
+		side    string
+		blocked bool
+	}{
+		{"spot-sell-allowed", "BTC/USDT", "sell", false},
+		{"contract-sell-blocked", "BTC/USDT:USDT", "sell", true},
+		{"contract-buy-blocked", "BTC/USDT:USDT", "buy", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+			swapLossTracker(t).RecordLoss(500)
+			store, mock, planID := newDCAGateFixture(t, "dca-lossgate-"+tc.name)
+			setDCAPlan(t, store, planID, func(p *dca.Plan) { p.Symbol = tc.symbol; p.Side = tc.side })
+
+			res := runDCA(cfg, store, planID)
+			rows := dcaRows(t, store, planID)
+			if len(rows) != 1 {
+				t.Fatalf("expected one row, got %+v", rows)
+			}
+			if tc.blocked {
+				if !res.IsError || mock.ordered || rows[0].Status != "skipped" || !strings.Contains(rows[0].ErrorMsg, "daily loss limit") {
+					t.Errorf("expected a recorded loss-limit refusal: %+v rows=%+v", res, rows)
+				}
+			} else if res.IsError || mock.orders != 1 || rows[0].Status != "completed" {
+				t.Errorf("expected the order to go through: %+v rows=%+v", res, rows)
+			}
+		})
+	}
+}
+
+// TestDCAExecute_EquityUnknownIsARefusal: with the equity guard armed and no
+// sample for the account, a risk-increasing DCA order is refused and recorded.
+func TestDCAExecute_EquityUnknownIsARefusal(t *testing.T) {
+	fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+	tr := swapLossTracker(t)
+	cfg := config.DefaultConfig()
+	cfg.TradingRisk.DailyLossLimitUSD = 100
+	store, mock, planID := newDCAGateFixture(t, "dca-equity-unknown")
+	tr.EnableEquityGuard([]string{broker.AccountKey(cfg, "dca-equity-unknown", "")}, time.Minute)
+	t.Cleanup(tr.DisableEquityGuard)
+
+	res := runDCA(cfg, store, planID)
+	rows := dcaRows(t, store, planID)
+	if !res.IsError || mock.ordered || len(rows) != 1 || rows[0].Status != "skipped" || !strings.Contains(rows[0].ErrorMsg, "equity unknown") {
+		t.Fatalf("expected a recorded equity-unknown refusal: %+v rows=%+v", res, rows)
+	}
+}
+
+func TestDCAExecute_RejectsNonFiniteInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		last   float64
+		amount float64
+		unit   string
+		want   string
+	}{
+		{"price-nan", math.NaN(), 100, "quote", "invalid price"},
+		{"price-inf", math.Inf(1), 100, "quote", "invalid price"},
+		{"price-zero", 0, 100, "quote", "invalid price"},
+		{"amount-inf-quote", 50000, math.Inf(1), "quote", "invalid order amount"},
+		{"amount-inf-base", 50000, math.Inf(1), "base", "invalid order amount"},
+		{"amount-negative", 50000, -5, "quote", "invalid order amount"},
+		{"amount-zero", 50000, 0, "base", "invalid order amount"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+			store, mock, planID := newDCAGateFixture(t, "dca-nonfinite-"+tc.name)
+			mock.last = tc.last
+			setDCAPlan(t, store, planID, func(p *dca.Plan) { p.AmountPerOrder = tc.amount; p.AmountUnit = tc.unit })
+
+			res := runDCA(config.DefaultConfig(), store, planID)
+			if !res.IsError || !strings.Contains(res.ForLLM, tc.want) || mock.ordered {
+				t.Fatalf("expected %q and no order: %+v", tc.want, res)
+			}
+			rows := dcaRows(t, store, planID)
+			if len(rows) != 1 || rows[0].Status != "failed" || math.IsNaN(rows[0].AmountQuote) || math.IsInf(rows[0].AmountQuote, 0) {
+				t.Errorf("expected one failed row with a finite amount, got %+v", rows)
+			}
+		})
+	}
+}
+
+// TestDCAExecute_NonFiniteFillValuesAreIgnored: bad numbers in the adapter's
+// order response fall back as if missing and never reach the row or the stats.
+// The fill quantity is real here (status closed, Filled 0.002), so the buy is
+// recorded; only the non-finite price and fee fall back.
+func TestDCAExecute_NonFiniteFillValuesAreIgnored(t *testing.T) {
+	fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+	store, mock, planID := newDCAGateFixture(t, "dca-nonfinite-fill")
+	id, closed, filled := "weird-fill", "closed", 0.002
+	nan, inf := math.NaN(), math.Inf(1)
+	mock.orderResp = &ccxt.Order{Id: &id, Status: &closed, Filled: &filled, Average: &nan, Price: &inf, Fee: ccxt.Fee{Cost: &inf}}
+
+	if res := runDCA(config.DefaultConfig(), store, planID); res.IsError {
+		t.Fatalf("unexpected error: %+v", res)
+	}
+	rows := dcaRows(t, store, planID)
+	if len(rows) != 1 || rows[0].Status != "completed" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	r := rows[0]
+	// Fallback: ticker price 50000, the reported 0.002 filled.
+	if math.Abs(r.FilledPrice-50000) > 1e-9 || math.Abs(r.FilledQuantity-0.002) > 1e-12 || math.Abs(r.AmountQuote-100) > 1e-9 || r.FeeQuote != 0 {
+		t.Errorf("row not on the fallback values: %+v", r)
+	}
+	assertPlanTotals(t, store, planID, 100, 0.002, 50000)
+}
+
+// A non-finite filled quantity is no evidence of a fill: with nothing else to
+// go on the order is read back, and when that shows nothing the run is recorded
+// as unknown with no stats, rather than as a buy of the requested size.
+func TestDCAExecute_NonFiniteFilledQuantity_RecordedUnknown(t *testing.T) {
+	fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+	prevSleep := dcaSleep
+	dcaSleep = func(context.Context, time.Duration) {}
+	t.Cleanup(func() { dcaSleep = prevSleep })
+	store, mock, planID := newDCAGateFixture(t, "dca-nonfinite-qty")
+	id, closed := "weird-qty", "closed"
+	nan := math.NaN()
+	mock.orderResp = &ccxt.Order{Id: &id, Status: &closed, Filled: &nan}
+
+	if res := runDCA(config.DefaultConfig(), store, planID); res.IsError {
+		t.Fatalf("unknown must not be an error result (a retry would double-buy): %+v", res)
+	}
+	rows := dcaRows(t, store, planID)
+	if len(rows) != 1 || rows[0].Status != "unknown" || rows[0].OrderID != "weird-qty" || rows[0].FilledQuantity != 0 || rows[0].AmountQuote != 0 {
+		t.Fatalf("rows = %+v; want one unknown row, nothing filled", rows)
+	}
+	assertPlanTotals(t, store, planID, 0, 0, 0)
+}

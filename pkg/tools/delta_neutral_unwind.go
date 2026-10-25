@@ -2,9 +2,7 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -12,12 +10,9 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
-// errPositionAlreadyClosed is returned by closeFuturesLeg / closeSpotLeg when no
-// live exchange position is found, meaning the positions were already closed externally.
-var errPositionAlreadyClosed = errors.New("position already closed externally")
-
-// UnwindDeltaNeutralPositionTool closes a delta-neutral position (both legs) via the
-// approval-mode state machine (T2.5), driving recovery from partial fills or manual unwind.
+// UnwindDeltaNeutralPositionTool closes a delta-neutral position (both legs). On confirm
+// it starts the journaled workflow dn.unwind (pkg/deltaneutral/exits.go): an exit, so
+// the kill flag, the daily-loss brake and the order cap never stop it.
 type UnwindDeltaNeutralPositionTool struct {
 	cfg   *config.Config
 	store *deltaneutral.Store
@@ -31,7 +26,7 @@ func (t *UnwindDeltaNeutralPositionTool) Name() string { return NameUnwindDeltaN
 
 func (t *UnwindDeltaNeutralPositionTool) Description() string {
 	return "Close a delta-neutral position (unwind both legs): reduce-only close on futures + sell on spot. " +
-		"Only for active or recovery_required plans. Requires explicit approval (confirm=true). " +
+		"Only for active or recovery_required plans (or failed plans that still hold a recorded open position). Requires explicit approval (confirm=true). " +
 		"Dry-run mode (confirm=false) shows closure summary without executing. Recovery tool for unhedged exposure."
 }
 
@@ -52,7 +47,19 @@ func (t *UnwindDeltaNeutralPositionTool) Parameters() map[string]any {
 	}
 }
 
+// Execute runs the exit. Under paper mode it still acts on the real exchange,
+// and the result says so (see markRealExit).
 func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return markRealExit(t.cfg, t.execute(ctx, args))
+}
+
+func (t *UnwindDeltaNeutralPositionTool) execute(ctx context.Context, args map[string]any) *ToolResult {
+	// An unwind only reduces exposure, but it is still the owner's plan being run: the
+	// owner's own turn only. The recovery a failed unwind starts is not this tool: it
+	// proposes to the owner, and an approved proposal is placed by the approval service.
+	if res := refuseNonOwnerExecution(ctx, NameUnwindDeltaNeutralPosition, "unwind a delta-neutral position"); res != nil {
+		return res
+	}
 	planID, _ := args["plan_id"].(float64)
 	confirm, _ := args["confirm"].(bool)
 
@@ -66,14 +73,30 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 		return ErrorResult(fmt.Sprintf("cannot load plan %d: %v", int64(planID), err))
 	}
 
-	// Only active or recovery_required plans can be unwound
+	// Only active or recovery_required plans can be unwound. A legacy "failed" plan is also
+	// accepted when it still has recorded open exposure: neither the monitor nor any other
+	// tool could otherwise close it. A failed plan with no exposure is still rejected.
 	if plan.Status != "active" && plan.Status != "recovery_required" {
-		return ErrorResult(fmt.Sprintf("plan status is %q, not active or recovery_required. Cannot unwind.", plan.Status))
+		allowed := false
+		if plan.Status == deltaneutral.PlanStatusFailed {
+			failedExp, expErr := t.store.OpenLegExposure(ctx, plan.ID)
+			if expErr != nil {
+				return ErrorResult(fmt.Sprintf("cannot load plan open exposure: %v", expErr))
+			}
+			allowed = failedExp.HasExposure()
+		}
+		if !allowed {
+			return ErrorResult(fmt.Sprintf("plan status is %q, not active or recovery_required (or failed with open exposure). Cannot unwind.", plan.Status))
+		}
 	}
 
-	// --- Safety gates (same sequence as open) ---
+	// --- Safety gates ---
+	// Unwind only ever reduces exposure, so it passes the risk-adding gates: the leverage
+	// switch is a RiskReduce no-op and the daily-loss brake is NOT consulted — a brake must
+	// never stop the user getting out of a position. Permission checks still apply, and the
+	// rate limiter is taken by the workflow, after the dry-run return.
 
-	if err := broker.CheckLeverage(t.cfg, "unwind delta-neutral position"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "unwind delta-neutral position", broker.RiskReduce); err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := broker.CheckPermission(t.cfg, plan.FuturesProvider, plan.FuturesAccount, config.ScopeTrade); err != nil {
@@ -82,31 +105,33 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 	if err := broker.CheckPermission(t.cfg, plan.SpotProvider, plan.SpotAccount, config.ScopeTrade); err != nil {
 		return ErrorResult(fmt.Sprintf("spot leg permission denied: %v", err))
 	}
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
-	}
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
-	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
 
-	// --- Load recorded open quantities from execution history ---
-	// These are the amounts THIS plan opened, used as the close amounts so that
-	// multiple active plans on the same symbol each close only their own share.
-	recordedFuturesBase, recordedSpotQty, err := t.store.PlanOpenQuantities(ctx, plan.ID)
+	// --- Load recorded open exposure from execution history ---
+	// These are the amounts THIS plan opened (net of anything already closed), used as the
+	// close amounts so that multiple active plans on the same symbol each close only their
+	// own share. Unwind NEVER falls back to a whole-account balance or position: a leg
+	// with no recorded exposure is left alone.
+	exposure, err := t.store.OpenLegExposure(ctx, plan.ID)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("cannot load plan open quantities: %v", err))
 	}
+	recordedFuturesBase := deltaneutral.MaterialNet(exposure.FuturesOpen, exposure.FuturesBase)
+	recordedSpotQty := deltaneutral.MaterialNet(exposure.SpotOpen, exposure.SpotQty)
+	refusal := deltaneutral.UnwindRefusal(plan, exposure, recordedFuturesBase, recordedSpotQty)
 
 	// --- Dry-run gate ---
 	if !confirm {
 		review := formatUnwindReview(plan, recordedFuturesBase, recordedSpotQty)
-		review += "\n\nSet confirm=true to execute closure."
+		if refusal != "" {
+			review += "\n\n⚠ " + refusal + "\n\nconfirm=true will be REFUSED for this plan."
+		} else {
+			review += "\n\nSet confirm=true to execute closure."
+		}
 		return UserResult(review)
+	}
+
+	if refusal != "" {
+		return ErrorResult(refusal)
 	}
 
 	// --- Conflict warning: other active plans share the same futures symbol ---
@@ -122,337 +147,67 @@ func (t *UnwindDeltaNeutralPositionTool) Execute(ctx context.Context, args map[s
 			recordedFuturesBase, recordedSpotQty)
 	}
 
-	// --- Execute the unwind (close both legs) ---
-
-	now := time.Now()
-	exec := &deltaneutral.Execution{
-		PlanID:      plan.ID,
-		AttemptID:   fmt.Sprintf("unwind_%d_%d", plan.ID, now.UnixNano()),
-		State:       string(deltaneutral.ExecutionStateUnwinding),
-		RequestedAt: now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	// --- Start dn.unwind: the validation, both rate-limit tokens, the legs and the
+	// bookkeeping all happen in the workflow, which re-checks the plan itself. ---
+	var res deltaneutral.UnwindResult
+	if early := runDNWorkflow(ctx, deltaneutral.KindUnwind, deltaneutral.UnwindInput{
+		PlanID: plan.ID, Origin: ToolOrigin(ctx), Sender: ToolSender(ctx),
+	}, fmt.Sprintf("Unwinding plan %d", plan.ID), "unwind", &res); early != nil {
+		return early
 	}
-	execID, err := t.store.SaveExecution(ctx, exec)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to save unwind execution record: %v", err))
-	}
-	exec.ID = execID
-
-	// Close futures leg (reduce-only, using recorded contract count)
-	futuresErr := t.closeFuturesLeg(ctx, plan, exec, recordedFuturesBase)
-	if futuresErr != nil && !errors.Is(futuresErr, errPositionAlreadyClosed) {
-		return ErrorResult(fmt.Sprintf(
-			"CRITICAL: Futures leg closure failed — UNHEDGED EXPOSURE. "+
-				"Spot leg may still be open. Error: %v. "+
-				"Manual intervention required.",
-			futuresErr))
-	}
-
-	// Close spot leg (sell recorded quantity)
-	spotErr := t.closeSpotLeg(ctx, plan, exec, recordedSpotQty)
-	if spotErr != nil && !errors.Is(spotErr, errPositionAlreadyClosed) {
-		return ErrorResult(fmt.Sprintf(
-			"CRITICAL: Spot leg closure failed — UNHEDGED EXPOSURE. "+
-				"Futures leg closed but spot leg may still be open. Error: %v. "+
-				"Manual intervention required.",
-			spotErr))
-	}
-
-	// Summarise what happened with each leg
-	externallyClosedNote := ""
-	if errors.Is(futuresErr, errPositionAlreadyClosed) && errors.Is(spotErr, errPositionAlreadyClosed) {
-		externallyClosedNote = "\n  (all positions were already closed externally — DB record updated)"
-	} else if errors.Is(futuresErr, errPositionAlreadyClosed) {
-		externallyClosedNote = "\n  (futures position was already closed externally)"
-	} else if errors.Is(spotErr, errPositionAlreadyClosed) {
-		externallyClosedNote = "\n  (spot position was already closed externally)"
-	}
-
-	exec.State = string(deltaneutral.ExecutionStateUnwound)
-	completedNow := time.Now()
-	exec.CompletedAt = &completedNow
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to finalize unwind execution: %v", err))
-	}
-
-	plan.ClosedAt = &completedNow
-	plan.Status = "closed"
-	if err := t.store.UpdatePlan(ctx, plan); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update plan status: %v", err))
-	}
-
-	return UserResult(fmt.Sprintf(
-		"Delta-neutral position successfully closed:\n"+
-			"  Plan:       %s (ID %d)\n"+
-			"  Status:     closed\n"+
-			"  Closed At:  %s\n%s%s",
-		plan.Name, plan.ID, completedNow.Format(time.RFC3339),
-		externallyClosedNote, conflictNote))
+	return t.unwindResult(ctx, plan, res, conflictNote)
 }
 
-// closeFuturesLeg closes the futures hedge position (reduce-only).
-// recordedFuturesBase is the net base-currency quantity this plan opened (from execution history).
-// It is converted to contracts via the market's contractSize for the close order, so only
-// this plan's share of a combined exchange position is closed.
-func (t *UnwindDeltaNeutralPositionTool) closeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, recordedFuturesBase float64) error {
-	fp, err := futuresProvider(ctx, t.cfg, plan.FuturesProvider, plan.FuturesAccount)
-	if err != nil {
-		return fmt.Errorf("futures provider: %w", err)
-	}
-
-	// Resolve contract size first — needed to convert recordedFuturesBase → contracts.
-	perContractSize := 1.0
-	if mkt, mktErr := validateActiveSwapMarket(ctx, fp, plan.FuturesSymbol, 0); mktErr == nil {
-		if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-			perContractSize = *mkt.ContractSize
+// unwindResult turns the finished workflow into the tool's answer.
+func (t *UnwindDeltaNeutralPositionTool) unwindResult(ctx context.Context, plan *deltaneutral.Plan, res deltaneutral.UnwindResult, conflictNote string) *ToolResult {
+	switch res.Result {
+	case deltaneutral.ResultClosed:
+		closedAt := time.Now()
+		if p, err := t.store.GetPlan(ctx, plan.ID); err == nil && p.ClosedAt != nil {
+			closedAt = *p.ClosedAt
 		}
-	}
-
-	// Compute the number of contracts to close from the recorded base quantity.
-	// This is the amount THIS plan opened, regardless of other plans' positions.
-	var closeContracts float64
-	if recordedFuturesBase > 0 {
-		closeContracts = recordedFuturesBase / perContractSize
-	}
-
-	// Fetch live position to get positionSide and marginMode for the OKX order params.
-	// These must come from the live position, not the plan record, to correctly handle
-	// one-way-mode accounts (where posSide must be "" / "net", not "short").
-	positions, err := fp.FetchFuturesPositions(ctx, []string{plan.FuturesSymbol})
-	if err != nil {
-		return fmt.Errorf("fetch positions: %w", err)
-	}
-
-	var positionSide, positionMarginMode string
-	var liveContracts float64
-	for _, p := range positions {
-		if p.Contracts == nil || *p.Contracts == 0 {
-			continue
+		external := ""
+		if res.FuturesGone {
+			external = "\n  (futures position was already closed externally)"
 		}
-		sym := ""
-		if p.Symbol != nil {
-			sym = normalizeFuturesSymbol(*p.Symbol)
+		recovery := ""
+		if res.Message != "" { // what became of the plan's recovery proposals
+			recovery = "\n" + res.Message
 		}
-		if sym != normalizeFuturesSymbol(plan.FuturesSymbol) {
-			continue
-		}
-		liveContracts = *p.Contracts
-		if liveContracts < 0 {
-			liveContracts = -liveContracts
-		}
-		if p.Side != nil {
-			positionSide = *p.Side
-		}
-		if p.MarginMode != nil {
-			positionMarginMode = *p.MarginMode
-		}
-		break
+		return UserResult(fmt.Sprintf(
+			"Delta-neutral position successfully closed:\n"+
+				"  Plan:       %s (ID %d)\n"+
+				"  Status:     closed\n"+
+				"  Closed At:  %s\n%s%s%s",
+			plan.Name, plan.ID, closedAt.Format(time.RFC3339), external, conflictNote, recovery))
+	case deltaneutral.ResultRefused:
+		return refusedResult(res.Message)
+	case deltaneutral.ResultNothingClosed:
+		return ErrorResult(fmt.Sprintf(
+			"CRITICAL: the unwind could not close the position. "+
+				"Nothing was closed; the unwind execution is marked failed and the plan status is unchanged. "+
+				"%s. Manual intervention required.", res.Message))
+	case deltaneutral.ResultUnrecorded:
+		return ErrorResult(fmt.Sprintf(
+			"CRITICAL: the close order(s) were filled on the exchange but a leg record could not be saved (%s). "+
+				"Plan set to recovery_required. Verify the positions on the exchange; further automatic unwinds "+
+				"are refused until this is reconciled.", res.Message))
 	}
-
-	// No live position at all → already closed externally.
-	if liveContracts == 0 {
-		return errPositionAlreadyClosed
-	}
-
-	// If we have no recorded history, fall back to the full live position (single-plan case).
-	if closeContracts <= 0 {
-		closeContracts = liveContracts
-	}
-
-	// Never close more than what exists on the exchange (guards against stale recorded data).
-	if closeContracts > liveContracts {
-		closeContracts = liveContracts
-	}
-
-	if positionSide == "net" {
-		positionSide = ""
-	}
-	closeSide := futuresCloseSide(positionSide)
-
-	if positionMarginMode == "" {
-		positionMarginMode = plan.FuturesMarginMode
-	}
-
-	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       plan.FuturesSymbol,
-		OrderType:    "market",
-		Side:         closeSide,
-		Amount:       closeContracts,
-		PositionSide: positionSide,
-		ReduceOnly:   true,
-		MarginMode:   positionMarginMode,
-	})
-	if err != nil {
-		return fmt.Errorf("close order failed: %w", err)
-	}
-
-	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
-	// create response is not discarded wholesale (Binance carries fee in the create).
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := fp.FetchFuturesOrder(ctx, oid, plan.FuturesSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	baseQty := closeContracts * perContractSize
-	var avgFillPrice, filledNotional float64
-	if order.Average != nil && *order.Average > 0 {
-		avgFillPrice = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	} else if avgFillPrice > 0 {
-		filledNotional = baseQty * avgFillPrice
-	}
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:        exec.ID,
-		LegType:            string(deltaneutral.LegTypeFutures),
-		Provider:           plan.FuturesProvider,
-		Account:            plan.FuturesAccount,
-		Symbol:             plan.FuturesSymbol,
-		Side:               closeSide,
-		OrderType:          "market",
-		RequestedAmount:    baseQty,
-		OrderID:            orderID(order),
-		State:              string(deltaneutral.LegStateFilled),
-		FilledQuantity:     baseQty,
-		AvgFillPrice:       avgFillPrice,
-		FilledNotionalUSDT: filledNotional,
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
-	}
-
-	// Record fee from the fetched order
-	if order.Fee.Cost != nil && *order.Fee.Cost > 0 {
-		leg.FeeUSDT = -(*order.Fee.Cost) // negate so fees are negative (cost)
-	}
-
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err
-}
-
-// closeSpotLeg closes the spot position (sell).
-// recordedSpotQty is the net spot tokens this plan holds (from execution history).
-// Using the recorded quantity (instead of full free balance) ensures only this plan's
-// share is sold when multiple plans hold the same asset.
-func (t *UnwindDeltaNeutralPositionTool) closeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, recordedSpotQty float64) error {
-	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
-	if err != nil {
-		return fmt.Errorf("spot provider: %w", err)
-	}
-
-	tp, ok := sp.(broker.TradingProvider)
-	if !ok {
-		return fmt.Errorf("spot provider does not support order execution")
-	}
-
-	pp, ok := sp.(broker.PortfolioProvider)
-	if !ok {
-		return fmt.Errorf("spot provider does not support balance fetch")
-	}
-
-	var baseCur string
-	parts := strings.SplitN(plan.SpotSymbol, "/", 2)
-	if len(parts) >= 1 {
-		baseCur = parts[0]
-	}
-	if baseCur == "" {
-		return fmt.Errorf("cannot parse base currency from symbol %s", plan.SpotSymbol)
-	}
-
-	// Fetch live balance to determine the free amount available.
-	balances, err := pp.GetBalances(ctx)
-	if err != nil {
-		return fmt.Errorf("fetch balances: %w", err)
-	}
-
-	var freeBalance float64
-	for _, b := range balances {
-		if b.Asset == baseCur {
-			freeBalance = b.Free
-			break
-		}
-	}
-
-	if freeBalance <= 0 {
-		return errPositionAlreadyClosed
-	}
-
-	// Use the recorded quantity for this plan; cap at free balance so we never
-	// oversell (guards against rounding or stale recorded data).
-	sellAmount := recordedSpotQty
-	if sellAmount <= 0 {
-		// No execution history → fall back to full free balance (single-plan case).
-		sellAmount = freeBalance
-	}
-	if sellAmount > freeBalance {
-		sellAmount = freeBalance
-	}
-
-	sellSide := "sell"
-	if plan.SpotSide == "sell" {
-		sellSide = "buy"
-	}
-
-	order, err := tp.CreateOrder(ctx, plan.SpotSymbol, "market", sellSide, sellAmount, nil, nil)
-	if err != nil {
-		return fmt.Errorf("sell order failed: %w", err)
-	}
-
-	// Fetch order to get actual fill data and fees. Use mergeOrderFillData so the
-	// create response is not discarded wholesale (Binance carries fee in the create).
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := tp.FetchOrder(ctx, oid, plan.SpotSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	var avgFillPrice, filledNotional float64
-	if order.Average != nil && *order.Average > 0 {
-		avgFillPrice = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	} else if avgFillPrice > 0 {
-		filledNotional = sellAmount * avgFillPrice
-	}
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:        exec.ID,
-		LegType:            string(deltaneutral.LegTypeSpot),
-		Provider:           plan.SpotProvider,
-		Account:            plan.SpotAccount,
-		Symbol:             plan.SpotSymbol,
-		Side:               sellSide,
-		OrderType:          "market",
-		RequestedAmount:    sellAmount,
-		OrderID:            orderID(order),
-		State:              string(deltaneutral.LegStateFilled),
-		FilledQuantity:     sellAmount,
-		AvgFillPrice:       avgFillPrice,
-		FilledNotionalUSDT: filledNotional,
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
-	}
-
-	// Spot fee: side-aware (buy fee is in base currency; sell fee is in USDT).
-	if fee := spotFeeCostUSDT(order, sellSide, avgFillPrice); fee > 0 {
-		leg.FeeUSDT = -fee // negative = cost
-	}
-
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err
+	return ErrorResult(fmt.Sprintf(
+		"CRITICAL: the unwind did not complete and a position may be UNHEDGED: %s. "+
+			"Plan set to recovery_required. A recovery has started: it reads what is really open on the exchange "+
+			"and asks you to approve closing exactly the orphaned quantity. Nothing more is closed without your approval. "+
+			"Either approve that proposal or run unwind_delta_neutral_position again once the cause is fixed, not both: "+
+			"an approved proposal still closes its quantity after an unwind has.", res.Message))
 }
 
 // formatUnwindReview formats the unwind review for dry-run output.
 func formatUnwindReview(plan *deltaneutral.Plan, recordedFuturesBase, recordedSpotQty float64) string {
-	futuresAmtStr := "(no execution history)"
+	futuresAmtStr := "(no recorded exposure — leg will not be touched)"
 	if recordedFuturesBase > 0 {
 		futuresAmtStr = fmt.Sprintf("%.4g base (recorded)", recordedFuturesBase)
 	}
-	spotAmtStr := "(no execution history)"
+	spotAmtStr := "(no recorded exposure — leg will not be touched)"
 	if recordedSpotQty > 0 {
 		spotAmtStr = fmt.Sprintf("%.4g tokens (recorded)", recordedSpotQty)
 	}

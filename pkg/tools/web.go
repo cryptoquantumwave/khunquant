@@ -582,6 +582,10 @@ type GLMSearchProvider struct {
 }
 
 func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int, rangeCode string) (string, error) {
+	if p.apiKey == "" {
+		return "", errors.New("no API key provided")
+	}
+
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
@@ -1327,48 +1331,13 @@ func isObviousPrivateHost(host string) bool {
 // isPrivateOrRestrictedIP returns true for IPs that should never be reached via web_fetch:
 // RFC 1918, loopback, link-local (incl. cloud metadata 169.254.x.x), carrier-grade NAT,
 // IPv6 unique-local (fc00::/7), 6to4 (2002::/16), and Teredo (2001:0000::/32).
+//
+// The classification itself lives in pkg/utils (utils.IsPrivateOrRestrictedIP) so it can
+// be shared with other SSRF-guarded outbound clients (see web/backend/api's model-fetch
+// and test-inline endpoints); this stays as a thin, package-local wrapper so existing
+// callers and tests in this package are unaffected.
 func isPrivateOrRestrictedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-
-	if ip4 := ip.To4(); ip4 != nil {
-		// IPv4 private, loopback, link-local, and carrier-grade NAT ranges.
-		if ip4[0] == 10 ||
-			ip4[0] == 127 ||
-			ip4[0] == 0 ||
-			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
-			(ip4[0] == 192 && ip4[1] == 168) ||
-			(ip4[0] == 169 && ip4[1] == 254) ||
-			(ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127) {
-			return true
-		}
-		return false
-	}
-
-	if len(ip) == net.IPv6len {
-		// IPv6 unique local addresses (fc00::/7)
-		if (ip[0] & 0xfe) == 0xfc {
-			return true
-		}
-		// 6to4 addresses (2002::/16): check the embedded IPv4 at bytes [2:6].
-		if ip[0] == 0x20 && ip[1] == 0x02 {
-			embedded := net.IPv4(ip[2], ip[3], ip[4], ip[5])
-			return isPrivateOrRestrictedIP(embedded)
-		}
-		// Teredo (2001:0000::/32): client IPv4 is at bytes [12:16], XOR-inverted.
-		if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3] == 0x00 {
-			client := net.IPv4(ip[12]^0xff, ip[13]^0xff, ip[14]^0xff, ip[15]^0xff)
-			return isPrivateOrRestrictedIP(client)
-		}
-	}
-
-	return false
+	return utils.IsPrivateOrRestrictedIP(ip)
 }
 
 // honestUserAgent returns the self-identifying User-Agent used when retrying a

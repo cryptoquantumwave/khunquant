@@ -924,7 +924,7 @@ Agent:
 5. Sets default risk policy (25% min liquidation, 3% max delta drift, 5 min monitor).
 6. Shows full plan summary, asks for confirmation.
 7. User confirms → Plan stored, cron monitor registered as "dn:1:ETH Funding Carry".
-8. Suggests: "Plan created. When you're ready, ask me to open the position."
+8. Suggests: "Plan created. When you're ready, I'll prepare it (`prepare_delta_neutral_plan`) and then open the position." A plan opens only when it is `ready`: a draft, or a failed plan being retried, must be prepared first.
 ```
 
 ## Sample Execution Review (Before Opening)

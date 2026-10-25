@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -253,60 +255,185 @@ func TestMessageTool_Parameters(t *testing.T) {
 	}
 }
 
-func TestMessageTool_ResetSentInRound(t *testing.T) {
+// newSendingMessageTool returns a MessageTool whose sends always succeed.
+func newSendingMessageTool() *MessageTool {
 	mt := NewMessageTool()
-	if mt.HasSentInRound() {
-		t.Error("new MessageTool should have HasSentInRound=false")
+	mt.SetSendCallback(func(_, _, _ string) error { return nil })
+	return mt
+}
+
+// sendInTurn runs the message tool as the agent loop would for a turn: the
+// turn ID travels in the context, the target as channel/chat.
+func sendInTurn(t *testing.T, mt *MessageTool, turnID, channel, chatID string) {
+	t.Helper()
+	ctx := WithToolContext(WithTurnID(context.Background(), turnID), channel, chatID)
+	if res := mt.Execute(ctx, map[string]any{"content": "hi"}); res.IsError {
+		t.Fatalf("message send in turn %q failed: %s", turnID, res.ForLLM)
+	}
+}
+
+func TestMessageTool_HasSentInTurn_Empty(t *testing.T) {
+	mt := NewMessageTool()
+	if mt.HasSentInTurn("turn-1") {
+		t.Error("new MessageTool should have HasSentInTurn=false")
+	}
+	if mt.HasSentToInTurn("turn-1", "chan", "chat") {
+		t.Error("HasSentToInTurn on empty tool should be false")
+	}
+	mt.ClearTurn("turn-1") // clearing a turn that never sent must not panic
+}
+
+func TestMessageTool_SentStateIsPerTurn(t *testing.T) {
+	mt := newSendingMessageTool()
+
+	sendInTurn(t, mt, "turn-a", "telegram", "42")
+
+	if !mt.HasSentInTurn("turn-a") {
+		t.Error("turn-a sent a message; HasSentInTurn should be true")
+	}
+	if !mt.HasSentToInTurn("turn-a", "telegram", "42") {
+		t.Error("HasSentToInTurn should match the exact channel+chatID of the sending turn")
 	}
 
-	// Simulate a send by directly adding to sentTargets
+	// The whole point: another turn, running at the same time on the same tool
+	// instance, sent nothing - and must not be told that it did.
+	if mt.HasSentInTurn("turn-b") {
+		t.Error("turn-b sent nothing; turn-a's message leaked into it")
+	}
+	if mt.HasSentToInTurn("turn-b", "telegram", "42") {
+		t.Error("turn-b did not send to telegram:42; turn-a's message leaked into it")
+	}
+}
+
+func TestMessageTool_HasSentToInTurn_NoMatch(t *testing.T) {
+	mt := newSendingMessageTool()
+	sendInTurn(t, mt, "turn-a", "telegram", "42")
+
+	if mt.HasSentToInTurn("turn-a", "telegram", "99") {
+		t.Error("HasSentToInTurn should not match different chatID")
+	}
+	if mt.HasSentToInTurn("turn-a", "discord", "42") {
+		t.Error("HasSentToInTurn should not match different channel")
+	}
+}
+
+func TestMessageTool_ClearTurn_OnlyClearsThatTurn(t *testing.T) {
+	mt := newSendingMessageTool()
+	sendInTurn(t, mt, "turn-a", "telegram", "42")
+	sendInTurn(t, mt, "turn-b", "telegram", "42")
+
+	mt.ClearTurn("turn-a")
+
+	if mt.HasSentInTurn("turn-a") {
+		t.Error("turn-a should be forgotten after ClearTurn")
+	}
+	if !mt.HasSentToInTurn("turn-b", "telegram", "42") {
+		t.Error("clearing turn-a wiped turn-b's state")
+	}
+
+	mt.ClearTurn("turn-b")
 	mt.mu.Lock()
-	mt.sentTargets = append(mt.sentTargets, sentTarget{Channel: "test", ChatID: "123"})
-	mt.mu.Unlock()
-
-	if !mt.HasSentInRound() {
-		t.Error("HasSentInRound should be true after adding a target")
-	}
-
-	mt.ResetSentInRound()
-	if mt.HasSentInRound() {
-		t.Error("HasSentInRound should be false after reset")
+	defer mt.mu.Unlock()
+	if len(mt.sentByTurn) != 0 || len(mt.turnOrder) != 0 {
+		t.Errorf("after clearing every turn: %d entries, %d order slots; want 0, 0",
+			len(mt.sentByTurn), len(mt.turnOrder))
 	}
 }
 
-func TestMessageTool_HasSentInRound_Empty(t *testing.T) {
-	mt := NewMessageTool()
-	if mt.HasSentInRound() {
-		t.Error("new MessageTool should have HasSentInRound=false")
+// A send outside any turn has nobody to ask about it and nothing to clear it,
+// so it must not be remembered at all.
+func TestMessageTool_SendWithoutTurnIsNotRecorded(t *testing.T) {
+	mt := newSendingMessageTool()
+	ctx := WithToolContext(context.Background(), "telegram", "42")
+	if res := mt.Execute(ctx, map[string]any{"content": "hi"}); res.IsError {
+		t.Fatalf("send failed: %s", res.ForLLM)
 	}
-}
-
-func TestMessageTool_HasSentTo_Empty(t *testing.T) {
-	mt := NewMessageTool()
-	if mt.HasSentTo("chan", "chat") {
-		t.Error("HasSentTo on empty tool should be false")
+	if mt.HasSentInTurn("") || mt.HasSentToInTurn("", "telegram", "42") {
+		t.Error("a send with no turn ID was recorded")
 	}
-}
-
-func TestMessageTool_HasSentTo_Match(t *testing.T) {
-	mt := NewMessageTool()
 	mt.mu.Lock()
-	mt.sentTargets = append(mt.sentTargets, sentTarget{Channel: "telegram", ChatID: "42"})
-	mt.mu.Unlock()
-	if !mt.HasSentTo("telegram", "42") {
-		t.Error("HasSentTo should match exact channel+chatID")
+	defer mt.mu.Unlock()
+	if len(mt.sentByTurn) != 0 {
+		t.Errorf("a send with no turn ID left %d entries behind", len(mt.sentByTurn))
 	}
 }
 
-func TestMessageTool_HasSentTo_NoMatch(t *testing.T) {
+// A failed send reached nobody, so it must not suppress the turn's reply.
+func TestMessageTool_FailedSendIsNotRecorded(t *testing.T) {
 	mt := NewMessageTool()
+	mt.SetSendCallback(func(_, _, _ string) error { return errors.New("network down") })
+
+	ctx := WithToolContext(WithTurnID(context.Background(), "turn-a"), "telegram", "42")
+	if res := mt.Execute(ctx, map[string]any{"content": "hi"}); !res.IsError {
+		t.Fatal("expected the send to fail")
+	}
+	if mt.HasSentInTurn("turn-a") {
+		t.Error("a failed send was recorded as sent")
+	}
+}
+
+// Turns whose state is never cleared (an async subagent sending after its
+// parent finished, a cron turn that failed before its caller could clear) must
+// not accumulate without bound.
+func TestMessageTool_AbandonedTurnsAreEvictedOldestFirst(t *testing.T) {
+	mt := newSendingMessageTool()
+
+	const extra = 10
+	for i := 0; i < maxTrackedTurns+extra; i++ {
+		sendInTurn(t, mt, fmt.Sprintf("turn-%d", i), "telegram", "42")
+	}
+
 	mt.mu.Lock()
-	mt.sentTargets = append(mt.sentTargets, sentTarget{Channel: "telegram", ChatID: "42"})
+	entries, order := len(mt.sentByTurn), len(mt.turnOrder)
 	mt.mu.Unlock()
-	if mt.HasSentTo("telegram", "99") {
-		t.Error("HasSentTo should not match different chatID")
+	if entries != maxTrackedTurns || order != maxTrackedTurns {
+		t.Fatalf("tracked %d entries / %d order slots, want both capped at %d", entries, order, maxTrackedTurns)
 	}
-	if mt.HasSentTo("discord", "42") {
-		t.Error("HasSentTo should not match different channel")
+
+	// The oldest went first; the newest are all still there.
+	for i := 0; i < extra; i++ {
+		if mt.HasSentInTurn(fmt.Sprintf("turn-%d", i)) {
+			t.Errorf("turn-%d is among the oldest and should have been evicted", i)
+		}
 	}
+	for i := extra; i < maxTrackedTurns+extra; i++ {
+		if !mt.HasSentInTurn(fmt.Sprintf("turn-%d", i)) {
+			t.Fatalf("turn-%d should still be tracked", i)
+		}
+	}
+
+	// Sending again in a turn that is already tracked evicts nothing.
+	sendInTurn(t, mt, fmt.Sprintf("turn-%d", extra), "discord", "7")
+	if !mt.HasSentInTurn(fmt.Sprintf("turn-%d", extra+1)) {
+		t.Error("a second send in a tracked turn evicted another turn")
+	}
+}
+
+// One MessageTool serves every turn of an agent. Concurrent turns sending,
+// asking and clearing must not race (run with -race).
+func TestMessageTool_ConcurrentTurns(t *testing.T) {
+	mt := newSendingMessageTool()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			turnID := fmt.Sprintf("turn-%d", i)
+			chat := fmt.Sprintf("chat-%d", i)
+			ctx := WithToolContext(WithTurnID(context.Background(), turnID), "telegram", chat)
+			for j := 0; j < 50; j++ {
+				if res := mt.Execute(ctx, map[string]any{"content": "hi"}); res.IsError {
+					t.Errorf("%s: send failed: %s", turnID, res.ForLLM)
+					return
+				}
+				if !mt.HasSentToInTurn(turnID, "telegram", chat) {
+					t.Errorf("%s: own send not visible", turnID)
+					return
+				}
+				mt.ClearTurn(turnID)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

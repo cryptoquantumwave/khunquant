@@ -1,0 +1,14 @@
+{
+  "events": 288,
+  "candidates": 1,
+  "dispositions": {
+    "notify": 1
+  },
+  "would_send": 1,
+  "llm_wakes": 0,
+  "precision": 1,
+  "recall": 1,
+  "critical_recall": 1,
+  "latency_max_seconds": 2760,
+  "latency_tolerance_seconds": 1
+}

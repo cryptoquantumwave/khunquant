@@ -11,6 +11,9 @@ type Request struct {
 	Channel  string
 	ChatID   string
 	SenderID string
+	// PeerKind is the routing peer kind the channel attached to the message:
+	// "direct", "group", "channel", or "" when the channel does not say.
+	PeerKind string
 	Text     string
 	Reply    func(text string) error
 }

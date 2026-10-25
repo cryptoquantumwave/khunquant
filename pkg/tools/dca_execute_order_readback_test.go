@@ -109,7 +109,9 @@ func dcaReadBackFixture(t *testing.T, fake *dcaFakeProvider) (*ExecuteDCAOrderTo
 	}
 	tool := NewExecuteDCAOrderTool(config.DefaultConfig(), store)
 	sleeps := new(int)
-	tool.sleep = func(context.Context, time.Duration) { *sleeps++ }
+	prevSleep := dcaSleep
+	dcaSleep = func(context.Context, time.Duration) { *sleeps++ }
+	t.Cleanup(func() { dcaSleep = prevSleep })
 	return tool, store, planID, sleeps
 }
 

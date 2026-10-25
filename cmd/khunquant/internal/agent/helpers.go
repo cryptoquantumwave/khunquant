@@ -16,6 +16,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
 func agentCmd(message, sessionKey, model string, debug bool) error {
@@ -50,6 +51,13 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 	msgBus := bus.NewMessageBus()
 	defer msgBus.Close()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	// The profile tools open the shared proactive database through
+	// sqlitex.Shared; this process owns it, so release it on the way out. It is
+	// deferred before agentLoop.Close so that it runs after the loop has stopped.
+	defer func() { _ = sqlitex.CloseShared() }()
+	// The workflow engine for an interrupted delta-neutral open is deferred AFTER the
+	// line above, so it stops (bounded) before the shared database it uses is closed.
+	defer startDNEngine(cfg)()
 	defer agentLoop.Close()
 
 	// Print agent startup info (only for interactive mode)

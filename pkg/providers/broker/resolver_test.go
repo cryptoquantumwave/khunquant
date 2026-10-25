@@ -93,12 +93,18 @@ func TestResolveOrPassthrough_WithoutProviderID_Found(t *testing.T) {
 }
 
 func TestDefaultResolver_CatchAll_Register(t *testing.T) {
+	// On its own resolver, not DefaultResolver: a catch-all cannot be
+	// unregistered, so registering one on the package-level resolver makes
+	// every later Resolve succeed - which is what made the two
+	// ErrSymbolNotFound tests above fail on a second run in the same binary.
+	resolver := broker.NewTestResolver()
+
 	// Register with no symbols → catch-all entry.
 	const prov = "test_catchall_prov"
-	broker.DefaultResolver.Register(prov)
+	resolver.Register(prov)
 
 	// An unregistered symbol falls through to the first catch-all.
-	gotProv, gotSym, err := broker.DefaultResolver.Resolve("SOMECOIN_UNIQUE_CATCHALL/USDT")
+	gotProv, gotSym, err := resolver.Resolve("SOMECOIN_UNIQUE_CATCHALL/USDT")
 	if err != nil {
 		t.Fatalf("expected catch-all fallback, got error: %v", err)
 	}

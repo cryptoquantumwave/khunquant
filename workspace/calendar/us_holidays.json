@@ -1,0 +1,29 @@
+{
+  "market": "us",
+  "source": "https://www.nyse.com/trade/hours-calendars (NYSE Holidays & Trading Hours; all NYSE markets observe these US holidays)",
+  "retrieved": "2026-10-12",
+  "years": [2026, 2027],
+  "note": "Full-day NYSE closures only; early-close days (the day after Thanksgiving, Dec 24 2026) are trading days here because half days are out of scope. Refresh this file yearly. A date in a year not listed under years is treated as a normal trading day and logged once as a WARN.",
+  "holidays": [
+    "2026-01-01",
+    "2026-01-19",
+    "2026-02-16",
+    "2026-04-03",
+    "2026-05-25",
+    "2026-06-19",
+    "2026-07-03",
+    "2026-09-07",
+    "2026-11-26",
+    "2026-12-25",
+    "2027-01-01",
+    "2027-01-18",
+    "2027-02-15",
+    "2027-03-26",
+    "2027-05-31",
+    "2027-06-18",
+    "2027-07-05",
+    "2027-09-06",
+    "2027-11-25",
+    "2027-12-24"
+  ]
+}

@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -241,13 +242,23 @@ func getEvent(logger zerolog.Logger, level LogLevel) *zerolog.Event {
 }
 
 func logMessage(level LogLevel, component string, message string, fields map[string]any) {
-	if level < currentLevel {
+	// SetLevel, SetAdditionalWriter and Enable/DisableFileLogging replace these
+	// package variables under mu while any goroutine may be logging (the
+	// gateway toggles the additional writer on a config reload). Read them once,
+	// under the read lock, and log from the copies. A call that started before a
+	// setter returned may still write to the sink it replaced; it never reads a
+	// half-written one.
+	mu.RLock()
+	lvl, consoleLogger, fileSink := currentLevel, logger, fileLogger
+	mu.RUnlock()
+
+	if level < lvl {
 		return
 	}
 
 	callerFile, callerLine, callerFunc := getCallerInfo()
 
-	event := getEvent(logger, level)
+	event := getEvent(consoleLogger, level)
 
 	// Build combined field with component and caller
 	if component != "" {
@@ -256,12 +267,14 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 		event.Str("caller", fmt.Sprintf("<none> %s:%d (%s)", callerFile, callerLine, callerFunc))
 	}
 
+	message = Redact(message)
+
 	appendFields(event, fields)
 	event.Msg(message)
 
 	// Also log to file if enabled
-	if fileLogger.GetLevel() != zerolog.NoLevel {
-		fileEvent := getEvent(fileLogger, level)
+	if fileSink.GetLevel() != zerolog.NoLevel {
+		fileEvent := getEvent(fileSink, level)
 
 		if component != "" {
 			fileEvent.Str("component", component)
@@ -276,12 +289,20 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	}
 }
 
+// appendFields writes fields with registered secrets redacted.
+//
+// H-9: the console writer redacts in formatFieldValue, but the file logger is
+// plain JSON with no formatter, so it wrote field values - error strings, tool
+// arguments - exactly as given. Redacting here covers both sinks.
 func appendFields(event *zerolog.Event, fields map[string]any) {
 	for k, v := range fields {
 		// Type switch to avoid double JSON serialization of strings
 		switch val := v.(type) {
 		case string:
-			event.Str(k, val)
+			event.Str(k, Redact(val))
+		case error:
+			// json.Marshal renders most errors as "{}", which logged nothing.
+			event.Str(k, Redact(val.Error()))
 		case int:
 			event.Int(k, val)
 		case int64:
@@ -291,7 +312,19 @@ func appendFields(event *zerolog.Event, fields map[string]any) {
 		case bool:
 			event.Bool(k, val)
 		default:
-			event.Interface(k, v) // Fallback for struct, slice and maps
+			// Fallback for struct, slice and maps: serialise, redact, and keep
+			// it as JSON when the result still is.
+			raw, err := json.Marshal(v)
+			if err != nil {
+				event.Interface(k, v)
+				continue
+			}
+			redacted := Redact(string(raw))
+			if json.Valid([]byte(redacted)) {
+				event.RawJSON(k, []byte(redacted))
+			} else {
+				event.Str(k, redacted)
+			}
 		}
 	}
 }

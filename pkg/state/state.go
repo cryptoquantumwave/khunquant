@@ -23,6 +23,12 @@ type State struct {
 
 	// Timestamp is the last time this state was updated
 	Timestamp time.Time `json:"timestamp"`
+
+	// LastHeartbeatAt is when the most recent heartbeat run started. The
+	// heartbeat service uses it to keep its schedule across restarts and config
+	// reloads. A state.json written before this field existed loads with the zero
+	// time, which the service reads as "never ran".
+	LastHeartbeatAt time.Time `json:"last_heartbeat_at,omitzero"`
 }
 
 // Manager manages persistent state with atomic saves.
@@ -127,6 +133,28 @@ func (sm *Manager) GetTimestamp() time.Time {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.state.Timestamp
+}
+
+// GetLastHeartbeatAt returns when the last heartbeat run started, or the zero
+// time when none is recorded.
+func (sm *Manager) GetLastHeartbeatAt() time.Time {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.state.LastHeartbeatAt
+}
+
+// SetLastHeartbeatAt records when a heartbeat run started and saves the state
+// atomically. It leaves Timestamp alone: that field says when the last channel
+// was recorded, and a heartbeat is not user activity.
+func (sm *Manager) SetLastHeartbeatAt(t time.Time) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	sm.state.LastHeartbeatAt = t
+	if err := sm.saveAtomic(); err != nil {
+		return fmt.Errorf("failed to save state atomically: %w", err)
+	}
+	return nil
 }
 
 // saveAtomic performs an atomic save using temp file + rename.

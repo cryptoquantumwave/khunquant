@@ -12,6 +12,23 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
+type exitErr struct{ code int }
+
+func (e exitErr) Error() string { return "boom" }
+func (e exitErr) ExitCode() int { return e.code }
+
+func TestExitStatus(t *testing.T) {
+	assert.Equal(t, 1, exitStatus(fmt.Errorf("plain")))
+	assert.Equal(t, 3, exitStatus(exitErr{3}))
+	assert.Equal(t, 4, exitStatus(fmt.Errorf("wrapped: %w", exitErr{4})))
+}
+
+func TestIsReplay(t *testing.T) {
+	assert.True(t, isReplay([]string{"khunquant", "replay", "--events", "x"}))
+	assert.False(t, isReplay([]string{"khunquant"}))
+	assert.False(t, isReplay([]string{"khunquant", "status", "replay"}))
+}
+
 func TestNewKhunquantCommand(t *testing.T) {
 	cmd := NewKhunquantCommand()
 
@@ -39,12 +56,18 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"clean",
 		"cron",
 		"gateway",
+		"heartbeat",
+		"launcher",
 		"migrate",
 		"model",
 		"onboard",
+		"replay",
+		"owner",
+		"risk",
 		"skills",
 		"start",
 		"status",
+		"trigger",
 		"uninstall",
 		"update",
 		"version",

@@ -35,7 +35,7 @@ func (t *DelegateTool) SetSelfAgentID(id string) {
 }
 
 func (t *DelegateTool) Name() string {
-	return "delegate"
+	return NameDelegate
 }
 
 func (t *DelegateTool) Description() string {

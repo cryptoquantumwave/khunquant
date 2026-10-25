@@ -64,10 +64,35 @@ func (s *SessionStore) Create() (string, error) {
 	return id, nil
 }
 
+// sessionIDLen is the length of an ID from Create: 32 random bytes, hex.
+const sessionIDLen = 64
+
+// validSessionIDShape reports whether id could have come from Create.
+//
+// M-13: Valid compares the cookie against every live session in constant time,
+// so its cost scales with the cookie's length. Rejecting anything that is not
+// 64 hex characters first keeps an oversized or malformed cookie from buying
+// that work, and keeps arbitrary bytes out of the comparison altogether.
+func validSessionIDShape(id string) bool {
+	if len(id) != sessionIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// TTL is how long a session stays valid; the cookie's lifetime matches it.
+func (s *SessionStore) TTL() time.Duration { return s.ttl }
+
 // Valid reports whether id names a live session, and is constant-time in the
 // comparison so a caller cannot probe for a valid prefix by timing.
 func (s *SessionStore) Valid(id string) bool {
-	if id == "" {
+	if !validSessionIDShape(id) {
 		return false
 	}
 	s.mu.RLock()

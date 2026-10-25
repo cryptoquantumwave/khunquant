@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 func TestExpandToolByMessageIDs(t *testing.T) {
@@ -18,7 +20,7 @@ func TestExpandToolByMessageIDs(t *testing.T) {
 	re := &RetrievalEngine{store: s}
 	tool := NewExpandTool(re)
 
-	result := tool.Execute(ctx, map[string]any{
+	result := tool.Execute(tools.WithToolSessionKey(ctx, "test:expand-tool"), map[string]any{
 		"message_ids": []any{fmt.Sprintf("%d", msg1.ID), fmt.Sprintf("%d", msg2.ID)},
 	})
 
@@ -75,7 +77,7 @@ func TestExpandToolWithParts(t *testing.T) {
 	re := &RetrievalEngine{store: s}
 	tool := NewExpandTool(re)
 
-	result := tool.Execute(ctx, map[string]any{
+	result := tool.Execute(tools.WithToolSessionKey(ctx, "test:expand-parts"), map[string]any{
 		"message_ids": []any{fmt.Sprintf("%d", msg.ID)},
 	})
 

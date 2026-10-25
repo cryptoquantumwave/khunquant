@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/tokenizer"
 )
@@ -16,6 +18,21 @@ import (
 //
 // Returns nil when the agent or session is unavailable.
 func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUsage {
+	return computeContextUsageFor(context.Background(), agent, sessionKey, BuildOptions{Mode: PromptFull})
+}
+
+// computeContextUsageFor is computeContextUsage for a running turn: the tool
+// definitions it counts are the ones that turn is shown (see
+// ToolRegistry.ToProviderDefsFor), so an autonomous turn's usage does not
+// include tools it cannot see. The system prompt it counts is the one the turn
+// is built with (promptOpts): a light turn is not charged for skill bodies it
+// never sends.
+func computeContextUsageFor(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+	promptOpts BuildOptions,
+) *bus.ContextUsage {
 	if agent == nil || agent.Sessions == nil {
 		return nil
 	}
@@ -31,22 +48,19 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 		historyTokens += tokenizer.EstimateMessageTokens(m)
 	}
 
-	// System message tokens: uses EstimateSystemTokens which mirrors
+	// System message tokens: uses EstimateSystemTokensFor which mirrors
 	// the full system message composition in BuildMessages (static prompt,
 	// dynamic context, active skills, summary with wrapping prefix).
 	systemTokens := 0
 	if agent.ContextBuilder != nil {
 		summary := agent.Sessions.GetSummary(sessionKey)
-		// Pass nil for active skills: skills are only injected when the user
-		// explicitly activates them via /use, which is rare. Using nil matches
-		// the common case and avoids over-counting all installed skills.
-		systemTokens = agent.ContextBuilder.EstimateSystemTokens(summary, nil)
+		systemTokens = agent.ContextBuilder.EstimateSystemTokensFor(promptOpts, summary)
 	}
 
 	// Tool definition tokens
 	toolTokens := 0
 	if agent.Tools != nil {
-		toolTokens = tokenizer.EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
+		toolTokens = tokenizer.EstimateToolDefsTokens(agent.Tools.ToProviderDefsFor(ctx))
 	}
 
 	// Used = history + system (includes summary) + tools

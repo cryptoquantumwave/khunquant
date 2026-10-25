@@ -42,8 +42,9 @@ func ParseLastDuration(s string) (time.Duration, error) {
 // GrepInput controls search across summaries and messages.
 type GrepInput struct {
 	Pattern          string     `json:"pattern"`
-	Scope            string     `json:"scope,omitempty"` // "both" (default), "summary", or "message"
-	Role             string     `json:"role,omitempty"`  // "user", "assistant", or "" (all)
+	Scope            string     `json:"scope,omitempty"`          // "both" (default), "summary", or "message"
+	Role             string     `json:"role,omitempty"`           // "user", "assistant", or "" (all)
+	ConversationID   int64      `json:"conversationId,omitempty"` // restrict to this conversation (unless AllConversations)
 	AllConversations bool       `json:"allConversations,omitempty"`
 	Since            *time.Time `json:"since,omitempty"`
 	Before           *time.Time `json:"before,omitempty"`
@@ -120,6 +121,7 @@ func (r *RetrievalEngine) Grep(ctx context.Context, input GrepInput) (*GrepResul
 		Pattern:          input.Pattern,
 		Mode:             mode,
 		Role:             input.Role,
+		ConversationID:   input.ConversationID,
 		AllConversations: input.AllConversations,
 		Since:            since,
 		Before:           input.Before,
@@ -187,7 +189,7 @@ func (r *RetrievalEngine) Grep(ctx context.Context, input GrepInput) (*GrepResul
 
 	// Add hint if no results
 	if len(result.Summaries) == 0 && len(result.Messages) == 0 {
-		result.Hint = "No matches. Try: %keyword% for fuzzy search, or all_conversations: true"
+		result.Hint = "No matches. Try: %keyword% for fuzzy search"
 	}
 
 	return result, nil
@@ -203,6 +205,31 @@ func (r *RetrievalEngine) ExpandMessages(ctx context.Context, messageIDs []int64
 		msg, err := r.store.GetMessageByID(ctx, msgID)
 		if err != nil {
 			continue
+		}
+		result.Messages = append(result.Messages, *msg)
+		result.TokenCount += msg.TokenCount
+	}
+
+	return result, nil
+}
+
+// ExpandMessagesInConversation is ExpandMessages restricted to one
+// conversation. If any requested ID belongs to a different conversation the
+// whole call is refused and no message content is returned.
+func (r *RetrievalEngine) ExpandMessagesInConversation(
+	ctx context.Context, conversationID int64, messageIDs []int64,
+) (*ExpandMessagesResult, error) {
+	result := &ExpandMessagesResult{
+		Messages: make([]Message, 0, len(messageIDs)),
+	}
+
+	for _, msgID := range messageIDs {
+		msg, err := r.store.GetMessageByID(ctx, msgID)
+		if err != nil {
+			continue
+		}
+		if msg.ConversationID != conversationID {
+			return nil, fmt.Errorf("message %d does not belong to this conversation", msgID)
 		}
 		result.Messages = append(result.Messages, *msg)
 		result.TokenCount += msg.TokenCount

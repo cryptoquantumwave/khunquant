@@ -163,7 +163,7 @@ func TestTeamsWebhookChannel_BuildAdaptiveCard(t *testing.T) {
 		ChatID:  "alerts",
 	}
 
-	card, err := ch.buildAdaptiveCard(msg, target)
+	card, err := ch.buildAdaptiveCard(msg, target, false)
 	if err != nil {
 		t.Fatalf("buildAdaptiveCard failed: %v", err)
 	}

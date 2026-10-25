@@ -4,11 +4,75 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
+	"github.com/cryptoquantumwave/khunquant/pkg/seahorse"
 )
+
+// seahorseRecordingProvider captures the request providerToCompleteFn sends.
+type seahorseRecordingProvider struct {
+	messages []providers.Message
+	tools    []providers.ToolDefinition
+	model    string
+	options  map[string]any
+}
+
+func (r *seahorseRecordingProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	r.messages, r.tools, r.model, r.options = messages, tools, model, options
+	return &providers.LLMResponse{Content: "summary"}, nil
+}
+
+func (r *seahorseRecordingProvider) GetDefaultModel() string { return "default" }
+
+// TestProviderToCompleteFn_RequestUnchanged pins the exact request the seahorse
+// summarizer sends, so routing it through providers.Complete stays a pure refactor.
+func TestProviderToCompleteFn_RequestUnchanged(t *testing.T) {
+	rec := &seahorseRecordingProvider{}
+	fn := providerToCompleteFn(rec, "summary-model")
+
+	got, err := fn(context.Background(), "summarize this", seahorse.CompleteOptions{
+		Model: "ignored-today", MaxTokens: 1234, Temperature: 0.3,
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if got != "summary" {
+		t.Errorf("text = %q, want summary", got)
+	}
+
+	wantMsgs := []providers.Message{{Role: "user", Content: "summarize this"}}
+	if !reflect.DeepEqual(rec.messages, wantMsgs) {
+		t.Errorf("messages = %#v, want %#v", rec.messages, wantMsgs)
+	}
+	if len(rec.tools) != 0 {
+		t.Errorf("tools = %#v, want none", rec.tools)
+	}
+	if rec.model != "summary-model" {
+		t.Errorf("model = %q, want summary-model", rec.model)
+	}
+	wantOpts := map[string]any{"max_tokens": 1234, "temperature": 0.3, "prompt_cache_key": "seahorse"}
+	if !reflect.DeepEqual(rec.options, wantOpts) {
+		t.Errorf("options = %#v, want %#v", rec.options, wantOpts)
+	}
+
+	// The temperature=0 retry call still sends temperature explicitly.
+	if _, err := fn(context.Background(), "p", seahorse.CompleteOptions{MaxTokens: 10}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	wantOpts = map[string]any{"max_tokens": 10, "temperature": float64(0), "prompt_cache_key": "seahorse"}
+	if !reflect.DeepEqual(rec.options, wantOpts) {
+		t.Errorf("options = %#v, want %#v", rec.options, wantOpts)
+	}
+}
 
 // TestSeahorseContextManager_EmergencyCompactShrinksSessions verifies the fix
 // for the bug where seahorse's emergency Compact only touched its own SQLite

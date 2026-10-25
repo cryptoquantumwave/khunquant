@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,13 +23,16 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/cognition"
 	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/routing"
 	"github.com/cryptoquantumwave/khunquant/pkg/skills"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
@@ -46,16 +51,30 @@ type AgentLoop struct {
 	fallback         *providers.FallbackChain
 	channelManager   *channels.Manager
 	mediaStore       media.MediaStore
+	intentCompiler   atomic.Pointer[intentCompilerBox]
 	transcriber      voice.Transcriber
 	cmdRegistry      *commands.Registry
 	mcp              mcpRuntime
 	steering         *steeringQueue
-	activeTurnStates sync.Map     // key: sessionKey (string), value: *turnState
+	activeTurnStates turnRegistry // Root turns running or waiting for their session lock, by turn ID
+	sessionLocks     sessionLocks // One holder per session key; see sessionlock.go
 	subTurnCounter   atomic.Int64 // Counter for generating unique SubTurn IDs
 	mu               sync.RWMutex
 	// Track active requests for safe provider cleanup
 	activeRequests sync.WaitGroup
 	debugTap       *debugtap.Store // nil when dev-mcp is disabled; set via SetDebugTap
+
+	// eventSink is where sub-turn lifecycle events go; nil means nowhere. It is
+	// per loop, never package state. See eventsink.go and SetEventBus.
+	eventSink atomic.Pointer[sinkHolder]
+
+	// background is the section background turns carry (see background_sections.go).
+	// It is created with the loop and handed to the context builder of every agent
+	// whenever a registry is installed, so a reload keeps it.
+	background *backgroundSections
+
+	// sched is the cognition scheduler, nil without cognition (see cognition.go).
+	sched atomic.Pointer[schedulerHolder]
 }
 
 // processOptions configures how a message is processed
@@ -67,8 +86,10 @@ type processOptions struct {
 	ReplyToMessageID        string              // Current inbound reply target message ID
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
+	WebAuthenticated        bool                // The message came over a pico connection authenticated with the pico token (never set for a sub-turn or follow-up)
 	UserMessage             string              // User message content (may include prefix)
-	ForcedSkills            []string            // Skills explicitly requested for this message
+	ForcedSkills            []string            // Skills to carry in full in a light prompt (PromptFull already has them all)
+	PromptMode              PromptMode          // PromptFull (default: user turns), PromptLight (background turns) or PromptProactive
 	SystemPromptOverride    string              // Override the default system prompt (Used by SubTurns)
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -80,6 +101,58 @@ type processOptions struct {
 	NoHistory               bool                // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                // If true, skip the steering poll at loop start (used by Continue)
 	SkipAddUserMessage      bool                // If true, skip adding UserMessage to session history
+
+	// The fields below are set by RunProactiveTurn only; their zero values are
+	// the behaviour of every other turn.
+
+	// ExtraTools are registered for this turn only, on a clone of the agent's
+	// registry. Every registry use of the turn goes through the clone.
+	ExtraTools []tools.Tool
+	// ToolFilter, when set, limits the turn's registry clone to the tools it
+	// returns true for, applied before ExtraTools are added. A tool it rejects
+	// is absent from the turn, not just from its definitions: calling it by
+	// name is "tool not found". It narrows only; the turn's origin policy is
+	// checked as for any turn. nil means every tool of the agent.
+	ToolFilter func(name string) bool
+	// OfferLoadSkill is BuildOptions.OfferLoadSkill for a PromptProactive turn.
+	OfferLoadSkill bool
+	// NoBackgroundSections is BuildOptions.NoBackgroundSections.
+	NoBackgroundSections bool
+	// ModelOverride pins the model tier for every iteration of the turn,
+	// instead of letting the router score the message.
+	ModelOverride modelOverride
+	// NoOutbound makes the turn publish nothing: no tool output, media,
+	// reasoning, interim text, retry notice or async-task result reaches the
+	// bus, whatever a tool returns, and the turn does not record its channel as
+	// the last active one. The turn's caller decides what, if anything, is said.
+	NoOutbound bool
+	// Report, when set, receives the provider usage and the model of the turn.
+	Report *turnReport
+	// UsageSink, when set, is called once as the turn finishes (also when it
+	// fails) with the provider usage summed over every LLM call of the turn and
+	// of the sub-turns that ran inside it. A sub-turn that outlives the turn is
+	// not counted. nil = nothing is collected.
+	UsageSink func(providers.UsageInfo)
+}
+
+// modelOverride selects the model tier of a turn.
+type modelOverride int
+
+const (
+	modelRouted  modelOverride = iota // default: the router decides (user turns)
+	modelPrimary                      // the agent's normal model, whatever the router would say
+	modelLight                        // the light model when the agent has one, else the normal model
+)
+
+// promptBuildOptions is the system prompt selection for a turn. Every
+// BuildMessages call of the turn, the context-usage estimate and the budget
+// check must use the same value, or an estimate based on one prompt would be
+// compared against a request built with another.
+func (o processOptions) promptBuildOptions() BuildOptions {
+	return BuildOptions{
+		Mode: o.PromptMode, ForcedSkills: o.ForcedSkills, OfferLoadSkill: o.OfferLoadSkill,
+		NoBackgroundSections: o.NoBackgroundSections,
+	}
 }
 
 type continuationTarget struct {
@@ -118,6 +191,16 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Workspace)
 	}
 
+	// C-4: give the daily loss limit somewhere to survive a restart. Every mode
+	// that runs trading tools (agent, gateway, cron, launcher) builds an
+	// AgentLoop, so wiring it here covers all of them; left unset, the limit
+	// silently resets to zero on every restart.
+	if defaultAgent != nil && defaultAgent.Workspace != "" {
+		broker.GlobalLossTracker.SetStorePath(broker.LossStatePath(defaultAgent.Workspace))
+	}
+
+	armToolPolicy(cfg, msgBus)
+
 	al := &AgentLoop{
 		bus:         msgBus,
 		cfg:         cfg,
@@ -126,6 +209,7 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(SteeringOneAtATime),
+		background:  &backgroundSections{},
 	}
 
 	// Register shared tools to all agents (needs al for SubTurnSpawner)
@@ -171,12 +255,31 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 ) {
+	al.attachBackgroundSections(registry)
+
 	allowReadPaths := buildAllowReadPatterns(cfg)
+
+	// The profile tools share one store (the user has one profile) and are
+	// built once here, so they reach both the CLI agent and the gateway and are
+	// rebuilt with the new config on every reload. See profile_wiring.go.
+	profileStore := openProfileStore(cfg)
+	profile := profileTools(cfg, profileStore)
+	// The intent tools share that store and exist only while the intent ledger is
+	// on (proactive.enabled and proactive.intents.enabled); a reload builds them
+	// afresh, so switching it on or off takes effect without a restart.
+	profile = append(profile, intentTools(cfg, profileStore, al.intentCompilerRoute)...)
+	// propose_order exists only while approvals are on (proactive.enabled and
+	// proactive.approvals.enabled); a reload builds it afresh.
+	profile = append(profile, proposalTools(cfg)...)
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok {
 			continue
+		}
+
+		for _, pt := range profile {
+			agent.Tools.Register(pt)
 		}
 
 		if cfg.Tools.IsToolEnabled("web") {
@@ -283,6 +386,14 @@ func registerSharedTools(
 			}
 		}
 
+		// load_skill reads an installed skill through the loader the system
+		// prompt lists skills from. It does not need the skill registries, so
+		// it is not gated on the "skills" master switch: a light prompt names
+		// skills the model can only read through this tool.
+		if cfg.Tools.IsToolEnabled("load_skill") && agent.ContextBuilder != nil {
+			agent.Tools.Register(tools.NewLoadSkillTool(agent.ContextBuilder.SkillsLoader()))
+		}
+
 		// Spawn and spawn_status tools share a SubagentManager.
 		// Construct it when either tool is enabled (both require subagent).
 		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
@@ -303,7 +414,7 @@ func registerSharedTools(
 				})
 
 				// Set SubTurnSpawner for direct sub-turn execution
-				spawner := NewSubTurnSpawner(al)
+				spawner := NewSubTurnSpawner(al, currentAgentID)
 				spawnTool.SetSpawner(spawner)
 
 				agent.Tools.Register(spawnTool)
@@ -348,58 +459,125 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// Process message
-			// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
-			// Currently disabled because files are deleted before the LLM can access their content.
-			// defer func() {
-			// 	if al.mediaStore != nil && msg.MediaScope != "" {
-			// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
-			// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
-			// 				"scope": msg.MediaScope,
-			// 				"error": releaseErr.Error(),
-			// 			})
-			// 		}
-			// 	}
-			// }()
-
-			response, err := al.processMessage(ctx, msg)
-			if err != nil {
-				response = providers.FriendlyError(err)
+			// With cognition on, the message becomes a job (its route and session
+			// are resolved first) and Run goes on reading; otherwise it is handled
+			// right here, as it always was.
+			if !al.dispatchInbound(ctx, msg) {
+				al.handleInbound(ctx, msg)
 			}
+		}
+	}
+}
 
-			if response != "" {
-				// Check if the message tool already sent a response during this round.
-				// If so, skip publishing to avoid duplicate messages to the user.
-				// Use default agent's tools to check (message tool is shared).
-				alreadySent := false
-				defaultAgent := al.GetRegistry().GetDefaultAgent()
-				if defaultAgent != nil {
-					if tool, ok := defaultAgent.Tools.Get("message"); ok {
-						if mt, ok := tool.(*tools.MessageTool); ok {
-							alreadySent = mt.HasSentInRound()
-						}
-					}
-				}
+// handleInbound runs one inbound message to its reply: the turn, then the
+// publish of what it answered unless the message tool already did. It returns
+// the turn's error (the reply to it has been published). Run calls it for each
+// message, or the scheduler does from a job.
+func (al *AgentLoop) handleInbound(ctx context.Context, msg bus.InboundMessage) error {
+	// Process message
+	// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
+	// Currently disabled because files are deleted before the LLM can access their content.
+	// defer func() {
+	// 	if al.mediaStore != nil && msg.MediaScope != "" {
+	// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
+	// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
+	// 				"scope": msg.MediaScope,
+	// 				"error": releaseErr.Error(),
+	// 			})
+	// 		}
+	// 	}
+	// }()
 
-				if !alreadySent {
-					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: response,
-					})
-					logger.InfoCF("agent", "Published outbound response",
-						map[string]any{
-							"channel":     msg.Channel,
-							"chat_id":     msg.ChatID,
-							"content_len": len(response),
-						})
-				} else {
-					logger.DebugCF(
-						"agent",
-						"Skipped outbound (message tool already sent)",
-						map[string]any{"channel": msg.Channel},
-					)
-				}
+	// Name the turn before it starts, so that afterwards we can ask what
+	// the message tool did during this turn and no other. Heartbeat
+	// and cron turns run concurrently with this one on the same tool
+	// instances; without a turn of its own to ask about, a message a
+	// heartbeat sends would make this turn's reply look already sent.
+	turnID := tools.NewTurnID()
+	response, err := al.processMessage(tools.WithTurnID(ctx, turnID), msg)
+	procErr := err
+	if err != nil {
+		response = providers.FriendlyError(err)
+	}
+
+	if response != "" {
+		// Check if the message tool already sent to this chat during
+		// this turn. If so, skip publishing to avoid duplicate
+		// messages to the user.
+		alreadySent := al.messageSentInTurn(turnID, msg.Channel, msg.ChatID)
+
+		if !alreadySent {
+			al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+				Channel: msg.Channel,
+				ChatID:  msg.ChatID,
+				Content: response,
+			})
+			logger.InfoCF("agent", "Published outbound response",
+				map[string]any{
+					"channel":     msg.Channel,
+					"chat_id":     msg.ChatID,
+					"content_len": len(response),
+				})
+		} else {
+			logger.DebugCF(
+				"agent",
+				"Skipped outbound (message tool already sent)",
+				map[string]any{"channel": msg.Channel},
+			)
+		}
+	}
+
+	// This loop named the turn, so it clears the turn's state.
+	al.clearTurnMessageState(turnID)
+	return procErr
+}
+
+// messageSentInTurn reports whether the message tool sent to channel+chatID
+// during the turn.
+//
+// Every agent has its own MessageTool, and the one that sent need not belong
+// to the agent the message was routed to: a delegated sub-turn runs with the
+// target agent's tools while sharing the parent's turn ID. Turn IDs are unique
+// across agents, so asking all of them is exact, and saves resolving the route
+// a second time.
+func (al *AgentLoop) messageSentInTurn(turnID, channel, chatID string) bool {
+	if turnID == "" {
+		return false
+	}
+	sent := false
+	al.forEachMessageTool(func(mt *tools.MessageTool) {
+		if mt.HasSentToInTurn(turnID, channel, chatID) {
+			sent = true
+		}
+	})
+	return sent
+}
+
+// clearTurnMessageState drops what the message tools remember about the turn.
+// It is called by whoever created the turn ID, once the turn's outcome has
+// been decided.
+func (al *AgentLoop) clearTurnMessageState(turnID string) {
+	if turnID == "" {
+		return
+	}
+	al.forEachMessageTool(func(mt *tools.MessageTool) {
+		mt.ClearTurn(turnID)
+	})
+}
+
+func (al *AgentLoop) forEachMessageTool(fn func(*tools.MessageTool)) {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok {
+			continue
+		}
+		if tool, ok := agent.Tools.Get(tools.NameMessage); ok {
+			if mt, ok := tool.(*tools.MessageTool); ok {
+				fn(mt)
 			}
 		}
 	}
@@ -409,6 +587,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 // active scope into the steering queue. Messages from other scopes are requeued
 // so they can be processed normally after the active turn. It drains all
 // immediately available messages, blocking for the first one until ctx is done.
+//
+// DEAD CODE: nothing calls this. It is kept, unwired, for the scheduler work
+// that will route inbound messages while a turn is running. Do not wire it up
+// as it stands: it competes with Run for the inbound channel, and a message it
+// requeues goes to the back of the queue, behind anything that arrived since.
 func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) {
 	blocking := true
 	for {
@@ -479,20 +662,24 @@ func (al *AgentLoop) Stop() {
 	al.running.Store(false)
 }
 
+// PublishResponseIfNeeded publishes a turn's final response unless the message
+// tool already sent to the same chat during that turn.
+//
+// "That turn" is the turn ID carried in ctx. The caller runs the turn first
+// and calls this afterwards, so it must have put the ID in ctx itself, before
+// the turn (tools.WithTurnID): an ID the agent loop mints on its own is cleared
+// when the turn returns, and with no ID there is nothing to ask about and the
+// response is always published. Because the caller owns the ID, this is also
+// where the turn's message state is released - nothing asks about it again.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	turnID := tools.TurnID(ctx)
+	defer al.clearTurnMessageState(turnID)
+
 	if response == "" {
 		return
 	}
 
-	alreadySentToSameChat := false
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent != nil {
-		if tool, ok := defaultAgent.Tools.Get("message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
-				alreadySentToSameChat = mt.HasSentTo(channel, chatID)
-			}
-		}
-	}
+	alreadySentToSameChat := al.messageSentInTurn(turnID, channel, chatID)
 
 	if alreadySentToSameChat {
 		logger.DebugCF(
@@ -617,6 +804,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
+
+	// Re-arm policy before the swap. Either order leaves a brief window in
+	// which old tools meet new policy or vice versa; this order means turning
+	// paper mode on starts refusing unsimulated tools no later than the new
+	// tools start simulating.
+	armToolPolicy(cfg, al.bus)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
@@ -817,6 +1010,15 @@ func inferMediaType(filename, contentType string) string {
 	return "file"
 }
 
+// State returns the loop's persistent state manager (last channel and chat).
+// Services that need to read "where did the user last talk to us" must share
+// this instance rather than build their own: a Manager reads the file only when
+// it is constructed, so a private copy goes stale. It is safe for concurrent
+// use. It is nil when the registry has no default agent.
+func (al *AgentLoop) State() *state.Manager {
+	return al.state
+}
+
 // RecordLastChannel records the last active channel for this workspace.
 // This uses the atomic state save mechanism to prevent data loss on crash.
 func (al *AgentLoop) RecordLastChannel(channel string) error {
@@ -867,6 +1069,15 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		NoHistory:  noHistory,
 	}
 
+	var box turnBox[string]
+	spec := al.directSpec(msg, tools.ToolOrigin(ctx) == tools.OriginCron)
+	if err, scheduled := al.submitTurn(ctx, spec, func(jctx context.Context) error {
+		resp, err := al.processMessage(jctx, msg)
+		box.put(resp, err)
+		return err
+	}); scheduled {
+		return box.outcome(err)
+	}
 	return al.processMessage(ctx, msg)
 }
 
@@ -880,17 +1091,38 @@ func (al *AgentLoop) ProcessHeartbeat(
 	if agent == nil {
 		return "", fmt.Errorf("no default agent for heartbeat")
 	}
-	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:           "heartbeat",
-		Channel:              channel,
-		ChatID:               chatID,
-		UserMessage:          content,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true, // Don't load session history for heartbeat
-	})
+	// A heartbeat is the assistant waking itself up: tag it before the turn
+	// starts. WithToolOrigin is set-once, so the channel-based tag runAgentLoop
+	// applies afterwards (the heartbeat borrows the user's last active channel,
+	// which would otherwise make it "remote") changes nothing.
+	ctx = tools.WithToolOrigin(ctx, tools.OriginHeartbeat)
+	run := func(ctx context.Context) (string, error) {
+		return al.runAgentLoop(ctx, agent, processOptions{
+			SessionKey:           "heartbeat",
+			Channel:              channel,
+			ChatID:               chatID,
+			UserMessage:          content,
+			DefaultResponse:      defaultResponse,
+			EnableSummary:        false,
+			SendResponse:         false,
+			SuppressToolFeedback: true,
+			NoHistory:            true, // Don't load session history for heartbeat
+		})
+	}
+	// With cognition on the tick is background model spend: a job at legacy
+	// priority, counted against the budget. Over budget the tick is skipped.
+	var box turnBox[string]
+	if err, scheduled := al.submitTurn(ctx, turnSpec{
+		Kind: proactive.TurnHeartbeatLegacy, Priority: cognition.PriLegacy, Session: "heartbeat",
+		Budgeted: true, Deadline: legacyTurnDeadline,
+	}, func(jctx context.Context) error {
+		resp, err := run(jctx)
+		box.put(resp, err)
+		return err
+	}); scheduled {
+		return box.outcome(err)
+	}
+	return run(ctx)
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
@@ -931,13 +1163,6 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return "", routeErr
 	}
 
-	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
-	if tool, ok := agent.Tools.Get("message"); ok {
-		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
-			resetter.ResetSentInRound()
-		}
-	}
-
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
 	scopeKey := resolveScopeKey(route, msg.SessionKey)
 	sessionKey := scopeKey
@@ -960,6 +1185,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ReplyToMessageID:        inboundMetadata(msg, metadataKeyReplyToMessage),
 		SenderID:                msg.SenderID,
 		SenderDisplayName:       msg.Sender.DisplayName,
+		WebAuthenticated:        msg.Channel == config.WebChannel && msg.Sender.WebAuthenticated,
 		UserMessage:             msg.Content,
 		Media:                   msg.Media,
 		DefaultResponse:         defaultResponse,
@@ -1005,6 +1231,170 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 		return msgSessionKey
 	}
 	return route.SessionKey
+}
+
+// deliverAsyncToolResult turns the result of a tool that finished in the
+// background (spawn) into something the user sees. It is the only path by which
+// such a result is delivered.
+//
+//   - a failure is reported straight to the origin chat;
+//   - a result with no content publishes nothing (it is logged);
+//   - otherwise the result re-enters the loop as an inbound system message,
+//     which processSystemMessage turns into a follow-up turn.
+//
+// A result whose origin is internal (cli, ...) has nowhere to go: it is logged
+// at WARN rather than dropped without a trace.
+//
+// turnCtx is the context of the turn that started the task. Only its origin and
+// automation scope are read, and only to hand them to the follow-up turn: a
+// result whose task was started by an autonomous turn must come back as an
+// autonomous turn, or the bus would launder the origin and the follow-up would
+// run as a remote one with every tool.
+func (al *AgentLoop) deliverAsyncToolResult(
+	turnCtx context.Context,
+	opts processOptions,
+	tc providers.ToolCall,
+	result *tools.ToolResult,
+) {
+	label := asyncTaskLabel(tc)
+	internal := constants.IsInternalChannel(opts.Channel)
+
+	// A turn that delivers nothing also does not announce what a background
+	// task it started produced: not to the user, and not as a follow-up turn.
+	if opts.NoOutbound {
+		logger.WarnCF("agent", "Background task finished in a turn that delivers nothing; result dropped",
+			map[string]any{"task": label, "tool": tc.Name, "channel": opts.Channel})
+		return
+	}
+
+	// Send ForUser content directly to the user (immediate feedback),
+	// mirroring the synchronous tool execution path.
+	if !result.Silent && result.ForUser != "" {
+		outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer outCancel()
+		_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
+			Channel: opts.Channel,
+			ChatID:  opts.ChatID,
+			Content: result.ForUser,
+		})
+	}
+
+	// A failure: the task could not run, or ended in error (an explicit cancel
+	// included - the user is told the task did not finish).
+	if result.Err != nil {
+		friendly := providers.FriendlyError(result.Err)
+		if internal {
+			logger.WarnCF("agent", "Background task failed; origin is internal, nothing sent to a user",
+				map[string]any{
+					"task": label, "tool": tc.Name, "channel": opts.Channel,
+					"outcome": "failed", "error": friendly,
+				})
+			return
+		}
+		outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer outCancel()
+		_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
+			Channel: opts.Channel,
+			ChatID:  opts.ChatID,
+			Content: fmt.Sprintf("⚠️ Background task '%s' failed: %s", label, friendly),
+		})
+		return
+	}
+
+	// Determine content for the agent loop (ForLLM or error).
+	content := result.ContentForLLM()
+	if content == "" {
+		logger.WarnCF("subturn", "subturn completed with no output",
+			map[string]any{"task": label, "tool": tc.Name, "channel": opts.Channel})
+		return
+	}
+	if internal {
+		logger.WarnCF("agent", "Background task finished; origin is internal, nothing sent to a user",
+			map[string]any{
+				"task": label, "tool": tc.Name, "channel": opts.Channel,
+				"outcome": "completed", "content_len": len(content),
+			})
+		return
+	}
+
+	logger.InfoCF("agent", "Async tool completed, publishing result",
+		map[string]any{
+			"tool":        tc.Name,
+			"content_len": len(content),
+			"channel":     opts.Channel,
+		})
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pubCancel()
+	_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
+		Channel:  "system",
+		SenderID: fmt.Sprintf("async:%s", tc.Name),
+		ChatID:   fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID),
+		Content:  content,
+		Metadata: autonomousTurnMetadata(turnCtx),
+	})
+}
+
+// Metadata keys that carry an autonomous turn's tag across the bus. They are
+// read only from a message on the "system" channel (see
+// autonomousTagFromSystemMessage), which no channel adapter can publish on.
+const (
+	metadataKeyTurnOrigin     = "khunquant_turn_origin"
+	metadataKeyAutomationJob  = "khunquant_automation_job"
+	metadataKeyAutomationPlan = "khunquant_automation_dca_plan"
+)
+
+// autonomousTurnMetadata returns the metadata that lets the follow-up of an
+// async task keep the autonomous origin (and job scope) of the turn that
+// started it, or nil when that turn was started by a person.
+func autonomousTurnMetadata(turnCtx context.Context) map[string]string {
+	origin := tools.ToolOrigin(turnCtx)
+	if !tools.IsAutonomousOrigin(origin) {
+		return nil
+	}
+	md := map[string]string{metadataKeyTurnOrigin: origin}
+	if scope, ok := tools.AutomationScopeFrom(turnCtx); ok {
+		md[metadataKeyAutomationJob] = scope.JobName
+		if scope.DCAPlanID != 0 {
+			md[metadataKeyAutomationPlan] = strconv.FormatInt(scope.DCAPlanID, 10)
+		}
+	}
+	return md
+}
+
+// autonomousTagFromSystemMessage re-applies the origin and job scope a system
+// message carries to ctx, before runAgentLoop's channel-based tagging runs. Only
+// an autonomous origin is honoured: the field exists to keep a turn restricted,
+// never to grant anything, so a missing, empty or unrecognised value changes
+// nothing. It is a no-op for any channel but "system".
+func autonomousTagFromSystemMessage(ctx context.Context, msg bus.InboundMessage) context.Context {
+	if msg.Channel != "system" {
+		return ctx
+	}
+	origin := inboundMetadata(msg, metadataKeyTurnOrigin)
+	if !tools.IsAutonomousOrigin(origin) {
+		return ctx
+	}
+	ctx = tools.WithToolOrigin(ctx, origin)
+	if job := inboundMetadata(msg, metadataKeyAutomationJob); job != "" {
+		scope := tools.AutomationScope{JobName: job}
+		if plan, err := strconv.ParseInt(inboundMetadata(msg, metadataKeyAutomationPlan), 10, 64); err == nil {
+			scope.DCAPlanID = plan
+		}
+		ctx = tools.WithAutomationScope(ctx, scope)
+	}
+	return ctx
+}
+
+// asyncTaskLabel names a background task for the user: the label the model
+// gave it, else the start of its task, else the tool's name.
+func asyncTaskLabel(tc providers.ToolCall) string {
+	for _, key := range []string{"label", "task"} {
+		if v, _ := tc.Arguments[key].(string); strings.TrimSpace(v) != "" {
+			return utils.Truncate(strings.TrimSpace(v), 60)
+		}
+	}
+	return tc.Name
 }
 
 func (al *AgentLoop) processSystemMessage(
@@ -1061,6 +1451,10 @@ func (al *AgentLoop) processSystemMessage(
 	// Use the origin session for context
 	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
 
+	// A result that came from a task an autonomous turn started keeps that
+	// turn's origin; this must precede runAgentLoop, whose tag is set-once.
+	ctx = autonomousTagFromSystemMessage(ctx, msg)
+
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:      sessionKey,
 		Channel:         originChannel,
@@ -1078,6 +1472,23 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	ctx, reportDone := reportUsage(ctx, opts.UsageSink)
+	defer reportDone()
+
+	// A turn with tools of its own runs on a per-turn copy of the agent whose
+	// registry is a clone with those tools added. The shared registry never
+	// sees them, and every agent.Tools use below - definitions, execution, the
+	// TTL tick, the context estimate - reaches the clone without a parameter
+	// having to be threaded through.
+	if len(opts.ExtraTools) > 0 || opts.ToolFilter != nil {
+		turnAgent := *agent
+		turnAgent.Tools = agent.Tools.CloneFiltered(opts.ToolFilter)
+		for _, tool := range opts.ExtraTools {
+			turnAgent.Tools.Register(tool)
+		}
+		agent = &turnAgent
+	}
+
 	// Check if we're already inside a SubTurn (context already has a turnState).
 	// If so, reuse it instead of creating a new root turnState.
 	// This prevents turnState hierarchy corruption when SubTurns recursively call runAgentLoop.
@@ -1091,26 +1502,103 @@ func (al *AgentLoop) runAgentLoop(
 		isRootTurn = false
 	} else {
 		// This is a top-level turn — initialize a new root TurnState
+		isRootTurn = true
+
+		// 1. Identity. A caller that needs to ask about this turn after it has
+		// returned (Run, the cron tool) put the ID in ctx and owns the per-turn
+		// state kept under it; otherwise the turn is ours to name and to clear.
+		turnID := tools.TurnID(ctx)
+		ownsTurnID := turnID == ""
+		if ownsTurnID {
+			turnID = tools.NewTurnID()
+			ctx = tools.WithTurnID(ctx, turnID)
+		}
+
+		// 2. Cancellation. Every root turn gets a context of its own, so that
+		// it can be stopped (CancelTurnsForSession, CancelAllTurns, HardAbort)
+		// without cancelling whatever its caller's context also governs.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+
 		rootTS = &turnState{
-			ctx:                  ctx,
-			turnID:               opts.SessionKey, // Associate this turn graph with the current session key
-			depth:                0,
-			session:              agent.Sessions,
-			initialHistoryLength: len(agent.Sessions.GetHistory("")), // Snapshot for rollback on hard abort
-			pendingResults:       make(chan *tools.ToolResult, 16),
-			concurrencySem:       make(chan struct{}, maxConcurrentSubTurns), // maxConcurrentSubTurns
+			cancelFunc:     cancel,
+			turnID:         turnID,
+			sessionKey:     opts.SessionKey,
+			depth:          0,
+			session:        agent.Sessions,
+			pendingResults: make(chan *tools.ToolResult, 16),
+			concurrencySem: make(chan struct{}, maxConcurrentSubTurns), // maxConcurrentSubTurns
 		}
 		ctx = withTurnState(ctx, rootTS)
 		ctx = WithAgentLoop(ctx, al) // Inject AgentLoop for tool access
-		isRootTurn = true
+		// Tag the turn's origin so tool policy can tell a person typing a command
+		// from a message arriving over a chat channel. WithToolOrigin is set-once,
+		// so a cron job - which tags at its own call site, before the loop is
+		// entered - keeps its "cron" tag here rather than being relabelled.
+		ctx = tools.WithToolOrigin(ctx, tools.OriginForChannel(opts.Channel))
+		// The sender is what an operator approval is bound to: only the person
+		// who made a request can approve it.
+		ctx = tools.WithToolSender(ctx, opts.SenderID)
+		if opts.WebAuthenticated {
+			ctx = tools.WithWebAuth(ctx)
+		}
 
-		// Register this root turn state so HardAbort can find it
-		al.activeTurnStates.Store(opts.SessionKey, rootTS)
-		defer al.activeTurnStates.Delete(opts.SessionKey)
+		rootTS.ctx = ctx
+
+		// 3. Registration, before waiting for the lock: a turn that is still
+		// queued behind another must be as cancellable as one that is running.
+		al.activeTurnStates.register(rootTS)
+
+		// 4. One root turn per session at a time, for the whole turn.
+		//
+		// Until inbound messages are dispatched concurrently, Run handles them
+		// one after another on a single goroutine. So while Run waits here for a
+		// session that a heartbeat or cron turn holds, every user queued behind
+		// that message waits too - including users of other sessions. The wait
+		// ends when the holder finishes or this turn is cancelled.
+		//
+		// A context that already holds this session's lock passes straight
+		// through (see sessionLocks.lock), so a turn started from inside
+		// WithSessionLockContext does not deadlock on its own caller.
+		lockedCtx, unlock, lockErr := al.sessionLocks.lock(ctx, opts.SessionKey)
+		if lockErr != nil {
+			al.activeTurnStates.unregister(rootTS)
+			rootTS.Finish(false)
+			cancel()
+			if ownsTurnID {
+				al.clearTurnMessageState(turnID)
+			}
+			return "", fmt.Errorf("turn cancelled while waiting for session %q: %w", opts.SessionKey, lockErr)
+		}
+		ctx = lockedCtx
+
+		// 5. Whatever way the turn ends.
+		defer func() {
+			// Finish is idempotent; this covers the returns that never reach
+			// the Finish below (an LLM error, a cancellation), so that anything
+			// waiting on Finished() is released and children learn the parent
+			// is gone.
+			rootTS.Finish(false)
+			// A hard abort rolled the session back while this turn could still
+			// write to it. exit does it again now that the turn has stopped,
+			// still under the session lock, so that nothing it added survives -
+			// and marks the turn as done with its session, so that an abort
+			// arriving later cannot roll back into the next turn's messages.
+			rootTS.exit()
+			al.activeTurnStates.unregister(rootTS)
+			unlock()
+			// Releases the context. This is not a hard abort: it does not walk
+			// the turn tree, so async sub-turns - whose contexts are their own -
+			// keep running, as a graceful finish intends.
+			cancel()
+			if ownsTurnID {
+				al.clearTurnMessageState(turnID)
+			}
+		}()
 	}
 
 	// 0. Record last channel for heartbeat notifications (skip internal channels and cli)
-	if opts.Channel != "" && opts.ChatID != "" {
+	if opts.Channel != "" && opts.ChatID != "" && !opts.NoOutbound {
 		if !constants.IsInternalChannel(opts.Channel) {
 			channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 			if err := al.RecordLastChannel(channelKey); err != nil {
@@ -1130,13 +1618,25 @@ func (al *AgentLoop) runAgentLoop(
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
 	}
-	messages := agent.ContextBuilder.BuildMessages(
+	if isRootTurn {
+		// Snapshot for rollback on hard abort: the length of this turn's own
+		// session, taken under the session lock - nothing else writes to the
+		// session until the turn unlocks. The history just loaded is reused
+		// when there is one; loading a session parses its whole file.
+		if opts.NoHistory {
+			rootTS.snapshotHistory()
+		} else {
+			rootTS.setHistorySnapshot(len(history))
+		}
+	}
+	messages := agent.ContextBuilder.BuildMessagesWithOptions(
 		history,
 		summary,
 		opts.UserMessage,
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.promptBuildOptions(),
 	)
 
 	// Resolve media:// refs: images→base64 data URLs, non-images→local paths in content
@@ -1147,7 +1647,7 @@ func (al *AgentLoop) runAgentLoop(
 	// 1.5. Proactive context budget check: compress before LLM call
 	// rather than waiting for a 400 context-length error.
 	if !opts.NoHistory {
-		toolDefs := agent.Tools.ToProviderDefs()
+		toolDefs := agent.Tools.ToProviderDefsFor(tools.WithToolContext(ctx, opts.Channel, opts.ChatID))
 		if isOverContextBudget(agent.ContextWindow, messages, toolDefs, agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": opts.SessionKey})
@@ -1158,9 +1658,10 @@ func (al *AgentLoop) runAgentLoop(
 			})
 			newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 			newSummary := agent.Sessions.GetSummary(opts.SessionKey)
-			messages = agent.ContextBuilder.BuildMessages(
+			messages = agent.ContextBuilder.BuildMessagesWithOptions(
 				newHistory, newSummary, opts.UserMessage,
 				opts.Media, opts.Channel, opts.ChatID,
+				opts.promptBuildOptions(),
 			)
 			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 		}
@@ -1200,7 +1701,9 @@ func (al *AgentLoop) runAgentLoop(
 	// IMPORTANT: Before finishing the turn, do a final poll for any pending SubTurn results.
 	// This ensures we don't lose results that arrived after the last iteration poll.
 	if isRootTurn {
-		finalResults := al.dequeuePendingSubTurnResults(opts.SessionKey)
+		// Drained from this turn's own state, not looked up by session key:
+		// a session can have other turns registered, waiting for the lock.
+		finalResults := rootTS.drainPendingResults()
 		if len(finalResults) > 0 {
 			// Inject late-arriving results into the final response
 			for _, result := range finalResults {
@@ -1248,7 +1751,7 @@ func (al *AgentLoop) runAgentLoop(
 			Channel:      opts.Channel,
 			ChatID:       opts.ChatID,
 			Content:      finalContent,
-			ContextUsage: computeContextUsage(agent, opts.SessionKey),
+			ContextUsage: computeContextUsageFor(ctx, agent, opts.SessionKey, opts.promptBuildOptions()),
 		})
 	}
 
@@ -1381,7 +1884,7 @@ func (al *AgentLoop) runLLMIteration(
 	// selectCandidates evaluates routing once and the decision is sticky for
 	// all tool-follow-up iterations within the same turn so that a multi-step
 	// tool chain doesn't switch models mid-way through.
-	activeCandidates, activeModel, usedLight := al.selectCandidates(agent, opts.UserMessage, messages)
+	activeCandidates, activeModel, usedLight := al.selectTurnCandidates(agent, opts, messages)
 	activeProvider := agent.Provider
 	if usedLight && agent.LightProvider != nil {
 		activeProvider = agent.LightProvider
@@ -1441,7 +1944,11 @@ func (al *AgentLoop) runLLMIteration(
 			})
 
 		// Build tool definitions
-		providerToolDefs := agent.Tools.ToProviderDefs()
+		// Definitions are filtered by the same predicate that gates execution, so
+		// an autonomous turn is never shown a tool it would be refused.
+		// The channel is part of "is this the owner in a conversation", which
+		// propose_order's definition depends on; ExecuteWithContext adds it the same way.
+		providerToolDefs := agent.Tools.ToProviderDefsFor(tools.WithToolContext(ctx, opts.Channel, opts.ChatID))
 
 		// Log LLM request details
 		logger.DebugCF("agent", "LLM request",
@@ -1484,6 +1991,10 @@ func (al *AgentLoop) runLLMIteration(
 			}
 		}
 
+		// The model that answered: the candidate the fallback chain settled on,
+		// else the active one.
+		calledModel := activeModel
+
 		callLLM := func() (*providers.LLMResponse, error) {
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
@@ -1519,6 +2030,9 @@ func (al *AgentLoop) runLLMIteration(
 						})
 					}
 					return nil, fbErr
+				}
+				if fbResult.Model != "" {
+					calledModel = fbResult.Model
 				}
 				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 					logger.InfoCF(
@@ -1599,6 +2113,13 @@ func (al *AgentLoop) runLLMIteration(
 				strings.Contains(errMsg, "prompt is too long") ||
 				strings.Contains(errMsg, "request too large"))
 
+			// A turn whose own context is done (its deadline passed, or it was
+			// cancelled) cannot be helped by trying again, and the backoff below
+			// is not interruptible.
+			if ctx.Err() != nil {
+				break
+			}
+
 			if isTimeoutError && retry < maxRetries {
 				backoff := time.Duration(retry+1) * 5 * time.Second
 				logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
@@ -1620,7 +2141,7 @@ func (al *AgentLoop) runLLMIteration(
 					},
 				)
 
-				if retry == 0 && !constants.IsInternalChannel(opts.Channel) {
+				if retry == 0 && !constants.IsInternalChannel(opts.Channel) && !opts.NoOutbound {
 					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 						Channel: opts.Channel,
 						ChatID:  opts.ChatID,
@@ -1635,9 +2156,10 @@ func (al *AgentLoop) runLLMIteration(
 				})
 				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
-				messages = agent.ContextBuilder.BuildMessages(
+				messages = agent.ContextBuilder.BuildMessagesWithOptions(
 					newHistory, newSummary, "",
 					nil, opts.Channel, opts.ChatID,
+					opts.promptBuildOptions(),
 				)
 				continue
 			}
@@ -1671,6 +2193,11 @@ func (al *AgentLoop) runLLMIteration(
 			return "", iteration, false, fmt.Errorf("LLM call failed after retries: %w", classified)
 		}
 
+		if opts.Report != nil {
+			opts.Report.add(response.Usage, calledModel)
+		}
+		addTurnUsage(ctx, response.Usage)
+
 		// Save finishReason to turnState for SubTurn truncation detection
 		if ts := turnStateFromContext(ctx); ts != nil {
 			ts.SetLastFinishReason(response.FinishReason)
@@ -1680,18 +2207,26 @@ func (al *AgentLoop) runLLMIteration(
 		if reasoningContent == "" {
 			reasoningContent = response.ReasoningContent
 		}
-		go al.handleReasoning(
-			ctx,
-			reasoningContent,
-			opts.Channel,
-			al.targetReasoningChannelID(opts.Channel),
-		)
-		// For the pico channel, also publish the reasoning as a "thought" message
-		// so the web UI can render it in a collapsible box.  This is best-effort
-		// and independent of the per-channel reasoning-channel-ID path above
-		// (which no-ops for pico because targetReasoningChannelID is empty).
-		if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
-			go al.publishPicoReasoning(ctx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+		// The two reasoning publishers below run detached and can still be
+		// publishing when the turn returns - for the final response they
+		// usually are. The turn's context is cancelled on return, so they get
+		// one without that cancellation, or the last reasoning of every turn
+		// would be dropped. Each bounds itself with its own short timeout.
+		detachedCtx := context.WithoutCancel(ctx)
+		if !opts.NoOutbound {
+			go al.handleReasoning(
+				detachedCtx,
+				reasoningContent,
+				opts.Channel,
+				al.targetReasoningChannelID(opts.Channel),
+			)
+			// For the pico channel, also publish the reasoning as a "thought" message
+			// so the web UI can render it in a collapsible box.  This is best-effort
+			// and independent of the per-channel reasoning-channel-ID path above
+			// (which no-ops for pico because targetReasoningChannelID is empty).
+			if opts.Channel == "pico" && strings.TrimSpace(reasoningContent) != "" {
+				go al.publishPicoReasoning(detachedCtx, reasoningContent, opts.ChatID, opts.SessionKey, activeModel)
+			}
 		}
 
 		logger.DebugCF("agent", "LLM response",
@@ -1705,7 +2240,8 @@ func (al *AgentLoop) runLLMIteration(
 				"channel":        opts.Channel,
 			})
 
-		if al.bus != nil && opts.Channel == "pico" && len(response.ToolCalls) > 0 && opts.AllowInterimPicoPublish {
+		if al.bus != nil && opts.Channel == "pico" && len(response.ToolCalls) > 0 && opts.AllowInterimPicoPublish &&
+			!opts.NoOutbound {
 			if strings.TrimSpace(response.Content) != "" {
 				outCtx, outCancel := context.WithTimeout(ctx, 3*time.Second)
 				err := al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
@@ -1818,6 +2354,12 @@ func (al *AgentLoop) runLLMIteration(
 		// Save assistant message with tool calls to session
 		agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
 
+		// The calls of one response run concurrently. A proactive turn's trust is
+		// lowered by any tool that reads outside text, so the whole batch is noted
+		// BEFORE any call of it runs: otherwise a propose_order beside a web_search
+		// would pass or fail by goroutine scheduling.
+		tools.NoteToolCalls(ctx, toolNames...)
+
 		// Execute tool calls in parallel
 		type indexedAgentResult struct {
 			result *tools.ToolResult
@@ -1835,7 +2377,9 @@ func (al *AgentLoop) runLLMIteration(
 				defer wg.Done()
 
 				argsJSON, _ := json.Marshal(tc.Arguments)
-				argsPreview := utils.Truncate(string(argsJSON), 200)
+				// Redact before truncating: a secret cut at the boundary would
+				// otherwise leave its prefix in the log.
+				argsPreview := utils.Truncate(logger.Redact(string(argsJSON)), 200)
 				logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 					map[string]any{
 						"agent_id":  agent.ID,
@@ -1848,43 +2392,14 @@ func (al *AgentLoop) runLLMIteration(
 				// as an inbound system message so processSystemMessage routes it
 				// back to the user via the normal agent loop.
 				asyncCallback := func(_ context.Context, result *tools.ToolResult) {
-					// Send ForUser content directly to the user (immediate feedback),
-					// mirroring the synchronous tool execution path.
-					if !result.Silent && result.ForUser != "" {
-						outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer outCancel()
-						_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-							Channel: opts.Channel,
-							ChatID:  opts.ChatID,
-							Content: result.ForUser,
-						})
-					}
-
-					// Determine content for the agent loop (ForLLM or error).
-					content := result.ContentForLLM()
-					if content == "" {
-						return
-					}
-
-					logger.InfoCF("agent", "Async tool completed, publishing result",
-						map[string]any{
-							"tool":        tc.Name,
-							"content_len": len(content),
-							"channel":     opts.Channel,
-						})
-
-					pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer pubCancel()
-					_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
-						Channel:  "system",
-						SenderID: fmt.Sprintf("async:%s", tc.Name),
-						ChatID:   fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID),
-						Content:  content,
-					})
+					al.deliverAsyncToolResult(ctx, opts, tc, result)
 				}
 
+				// Session-scoped tools (seahorse short_grep/short_expand) read the
+				// caller's session from ctx and fail closed without it.
+				toolCtx := tools.WithToolSessionKey(ctx, opts.SessionKey)
 				toolResult := agent.Tools.ExecuteWithContext(
-					ctx,
+					toolCtx,
 					tc.Name,
 					tc.Arguments,
 					opts.Channel,
@@ -1900,12 +2415,14 @@ func (al *AgentLoop) runLLMIteration(
 
 		// Process results in original order (send to user, save to session)
 		for _, r := range agentResults {
-			if !r.result.ResponseHandled {
+			// A turn that delivers nothing cannot have had its request satisfied
+			// by a tool's delivery, whatever the tool claims.
+			if !r.result.ResponseHandled || opts.NoOutbound {
 				allResponsesHandled = false
 			}
 
 			// Send ForUser content to user immediately if not Silent
-			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse {
+			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse && !opts.NoOutbound {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: opts.Channel,
 					ChatID:  opts.ChatID,
@@ -1920,7 +2437,7 @@ func (al *AgentLoop) runLLMIteration(
 
 			// If tool returned media refs, publish them as outbound media only when the
 			// tool explicitly marked the user-visible delivery as already handled.
-			if len(r.result.Media) > 0 {
+			if len(r.result.Media) > 0 && !opts.NoOutbound {
 				outboundMedia := al.buildOutboundMediaMessage(opts.Channel, opts.ChatID, r.result.Media)
 				if r.result.ResponseHandled {
 					if al.channelManager != nil {
@@ -2040,6 +2557,29 @@ func (al *AgentLoop) selectCandidates(
 	return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel()), true
 }
 
+// selectTurnCandidates is selectCandidates for a turn that may pin its model
+// tier. Turns that do not (ModelOverride unset) are routed exactly as before.
+func (al *AgentLoop) selectTurnCandidates(
+	agent *AgentInstance,
+	opts processOptions,
+	history []providers.Message,
+) (candidates []providers.FallbackCandidate, model string, usedLight bool) {
+	switch opts.ModelOverride {
+	case modelLight:
+		if len(agent.LightCandidates) > 0 && agent.LightProvider != nil {
+			fallback := agent.Model
+			if agent.Router != nil {
+				fallback = agent.Router.LightModel()
+			}
+			return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, fallback), true
+		}
+		fallthrough
+	case modelPrimary:
+		return agent.Candidates, resolvedCandidateModel(agent.Candidates, agent.Model), false
+	}
+	return al.selectCandidates(agent, opts.UserMessage, history)
+}
+
 // GetStartupInfo returns information about loaded tools and skills for logging.
 func (al *AgentLoop) GetStartupInfo() map[string]any {
 	info := make(map[string]any)
@@ -2150,6 +2690,7 @@ func (al *AgentLoop) handleCommand(
 		Channel:  msg.Channel,
 		ChatID:   msg.ChatID,
 		SenderID: msg.SenderID,
+		PeerKind: msg.Peer.Kind,
 		Text:     msg.Content,
 		Reply: func(text string) error {
 			commandReply = text
@@ -2171,6 +2712,55 @@ func (al *AgentLoop) handleCommand(
 	}
 }
 
+// armToolPolicy hands the running configuration to the tool policy check.
+//
+// C-2: wired from NewAgentLoop for the same reason as the loss tracker - every
+// mode that runs trading tools builds an AgentLoop - and because
+// ExecuteWithContext is a method on ToolRegistry with no config of its own.
+//
+// It must ALSO run on every config reload. ReloadProviderAndConfig rebuilds the
+// tools from the new config, so a tool that implements paper mode itself picks
+// up a change at once; the policy's copy would not. Turning paper_trading_mode
+// on from the dashboard would then leave create_order simulating while the
+// backstop - still holding the old value - let futures_open_position place
+// live orders.
+//
+// Both production callers of NewAgentLoop are separate process modes (the CLI
+// agent and the gateway), one loop each, so the process-global notifier is
+// never shared between two buses.
+func armToolPolicy(cfg *config.Config, msgBus *bus.MessageBus) {
+	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
+	// Who the owner is and whether approvals are on, for propose_order's turn check.
+	tools.SetProposalConfig(cfg)
+	if ignored := tools.SetRequiredApprovals(cfg.Tools.ApprovalRequiredTools()); len(ignored) > 0 {
+		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
+			map[string]any{"tools": ignored})
+	}
+	tools.SetApprovalNotifier(approvalNotifier(msgBus))
+}
+
+// approvalNotifier delivers approval codes to the operator. Chat channels get an
+// outbound message. The CLI has no outbound consumer - only the channel manager
+// drains the bus - so the code is written to the terminal's stderr instead.
+func approvalNotifier(msgBus *bus.MessageBus) tools.ApprovalNotifier {
+	return func(ctx context.Context, channel, chatID, text string) error {
+		if channel == "cli" {
+			_, err := fmt.Fprintln(os.Stderr, "\n"+text)
+			return err
+		}
+		if msgBus == nil {
+			return fmt.Errorf("no message bus to reach channel %q", channel)
+		}
+		pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+			Channel: channel,
+			ChatID:  chatID,
+			Content: text,
+		})
+	}
+}
+
 func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOptions) *commands.Runtime {
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
@@ -2178,6 +2768,8 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		Config:          cfg,
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
+		ApproveToolCall: tools.Approvals().Approve,
+		DenyToolCall:    tools.Approvals().Deny,
 		GetEnabledChannels: func() []string {
 			if al.channelManager == nil {
 				return nil
@@ -2246,7 +2838,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage := computeContextUsage(agent, opts.SessionKey)
+			usage := computeContextUsageFor(context.Background(), agent, opts.SessionKey, opts.promptBuildOptions())
 			if usage == nil {
 				return nil
 			}

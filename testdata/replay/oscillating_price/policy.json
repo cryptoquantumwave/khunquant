@@ -1,0 +1,15 @@
+{
+  "specs": [
+    {
+      "id": "btc-60k",
+      "kind": "price_cross",
+      "params": {
+        "provider": "okx",
+        "symbol": "BTC/USDT",
+        "direction": "above",
+        "threshold": 60000,
+        "recurring": true
+      }
+    }
+  ]
+}

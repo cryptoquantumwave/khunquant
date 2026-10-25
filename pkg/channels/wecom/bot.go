@@ -82,7 +82,7 @@ type WeComBotReplyMessage struct {
 
 // NewWeComBotChannel creates a new WeCom Bot channel instance
 func NewWeComBotChannel(cfg config.WeComConfig, messageBus *bus.MessageBus) (*WeComBotChannel, error) {
-	if cfg.Token.String() == "" || cfg.WebhookURL == "" {
+	if cfg.Token.String() == "" || cfg.WebhookURL.String() == "" {
 		return nil, fmt.Errorf("wecom token and webhook_url are required")
 	}
 
@@ -253,13 +253,20 @@ func (c *WeComBotChannel) handleMessageCallback(ctx context.Context, w http.Resp
 		return
 	}
 
-	// Read request body
-	body, err := io.ReadAll(r.Body)
+	// Read request body, bounded. The signature is verified further down, so an
+	// unauthenticated caller reaches this read and could otherwise exhaust
+	// memory by streaming an endless payload. Mirrors aibot.go's handler.
+	const maxBodySize = 4 << 20 // 4 MB
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
+	if len(body) > maxBodySize {
+		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	// Parse XML to get encrypted message
 	var encryptedMsg struct {
@@ -440,7 +447,7 @@ func (c *WeComBotChannel) sendWebhookReply(ctx context.Context, userID, content 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.config.WebhookURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.config.WebhookURL.String(), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

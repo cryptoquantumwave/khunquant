@@ -38,10 +38,11 @@ func TestOpenDeltaNeutralPosition_Coverage(t *testing.T) {
 		t.Fatal("expected error for unknown plan")
 	}
 
-	// Draft plan, dry-run (confirm=false) -> execution review, no orders placed.
+	// Draft plan -> refused, even as a dry-run: only a ready plan opens.
 	draftID := seedDNPlan(t, store, "open-draft", "draft")
-	if res := tool.Execute(context.Background(), map[string]any{"plan_id": float64(draftID)}); res.IsError {
-		t.Fatalf("draft plan dry-run should be allowed: %v", res.ForLLM)
+	if res := tool.Execute(context.Background(), map[string]any{"plan_id": float64(draftID)}); !res.IsError ||
+		!strings.Contains(res.ForLLM, "prepare_delta_neutral_plan") {
+		t.Fatalf("draft plan must be refused with a pointer to prepare: %+v", res)
 	}
 
 	// Ready plan, dry-run (confirm=false) → execution review, no orders placed.

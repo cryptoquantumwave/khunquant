@@ -227,11 +227,12 @@ func buildRequestBody(
 
 			// Add tool_use blocks
 			for _, tc := range msg.ToolCalls {
-				// Skip tool calls with empty names and no Function fallback to avoid API errors
-				name, input, ok := resolveToolCall(tc)
-				if !ok {
-					continue
-				}
+				// Never drop a tool_use block: a paired tool_result message for the
+				// same tc.ID is emitted independently, and the Anthropic API rejects
+				// a tool_result with no corresponding tool_use (400 "unexpected
+				// tool_result block(s)"). resolveToolCall substitutes a placeholder
+				// name when both Name and Function.Name are empty, so pairing holds.
+				name, input := resolveToolCall(tc)
 
 				toolUse := map[string]any{
 					"type":  "tool_use",
@@ -267,6 +268,15 @@ func buildRequestBody(
 				"content": []map[string]any{toolResultBlock},
 			})
 		}
+	}
+
+	// The Messages API wants the conversation to open with a user turn; see the
+	// same step in the SDK-based Anthropic adapter.
+	if opensWithAssistantText(messages) {
+		apiMessages = append([]any{map[string]any{
+			"role":    "user",
+			"content": protocoltypes.ConversationStartPlaceholder,
+		}}, apiMessages...)
 	}
 
 	result["messages"] = apiMessages
@@ -407,16 +417,24 @@ func asFloat(v any) (float64, bool) {
 	}
 }
 
+// unknownToolPlaceholder is substituted for tool_use blocks whose name can't
+// be recovered, so the block is never dropped and its paired tool_result
+// (matched by ID) doesn't become orphaned. The Anthropic API accepts any
+// non-empty name in conversation history.
+const unknownToolPlaceholder = "unknown_tool"
+
+
 // resolveToolCall resolves a ToolCall's name and arguments, using Function
-// as a fallback for fields that don't serialize (json:"-").
-// Returns (name, args, ok). ok is false when both Name and Function.Name are empty.
-func resolveToolCall(tc ToolCall) (string, map[string]any, bool) {
+// as a fallback for fields that don't serialize (json:"-"). If both Name and
+// Function.Name are empty (or whitespace), name is set to
+// unknownToolPlaceholder so the tool_use block is still emitted.
+func resolveToolCall(tc ToolCall) (string, map[string]any) {
 	name := tc.Name
 	if name == "" && tc.Function != nil {
 		name = tc.Function.Name
 	}
 	if strings.TrimSpace(name) == "" {
-		return "", nil, false
+		name = unknownToolPlaceholder
 	}
 
 	args := tc.Arguments
@@ -429,7 +447,7 @@ func resolveToolCall(tc ToolCall) (string, map[string]any, bool) {
 		args = map[string]any{}
 	}
 
-	return name, args, true
+	return name, args
 }
 
 // Anthropic API response structures
@@ -455,4 +473,17 @@ type contentBlock struct {
 type usageInfo struct {
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+}
+
+// opensWithAssistantText reports whether the first non-system message is a
+// plain-text assistant message. An assistant turn that carries tool calls is
+// deliberately left alone: it is a malformed history, not a proactive message.
+func opensWithAssistantText(messages []Message) bool {
+	for _, m := range messages {
+		if m.Role == "system" {
+			continue
+		}
+		return m.Role == "assistant" && len(m.ToolCalls) == 0
+	}
+	return false
 }

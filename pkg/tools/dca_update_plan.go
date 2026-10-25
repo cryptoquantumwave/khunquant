@@ -29,14 +29,17 @@ func (t *UpdateDCAPlanTool) Description() string {
 		"end_date, side (buy/sell), amount_per_order, amount_unit, trigger (replace the whole sub-object), " +
 		"guardrails (max_executions_per_period / period), and notification routing. " +
 		"When trigger is supplied the expression is compiled at update time — typos cause an immediate error. " +
-		"When schedule.cron changes the cron job is recreated automatically."
+		"When schedule.cron changes the cron job is recreated automatically. " +
+		"With mandates on, changing the amount, side or schedule asks the owner (in their own conversation) to approve a new mandate; " +
+		"revoke_mandate=true (owner only) withdraws the plan's mandate and puts it back on its scheduled job."
 }
 
 func (t *UpdateDCAPlanTool) Parameters() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"plan_id": map[string]any{"type": "integer", "description": "ID of the plan to update."},
+			"revoke_mandate": map[string]any{"type": "boolean", "description": "Owner only. Revoke the plan's mandate; the plan returns to its scheduled job."},
 			"name":    map[string]any{"type": "string", "description": "Rename the plan. Also updates the cron job label."},
 			"enabled": map[string]any{"type": "boolean", "description": "Enable or disable the plan."},
 			"schedule": map[string]any{
@@ -112,9 +115,18 @@ func (t *UpdateDCAPlanTool) Parameters() map[string]any {
 		},
 		"required": []string{"plan_id"},
 	}
+	for k, v := range mandateParameters {
+		params["properties"].(map[string]any)[k] = v
+	}
+	return params
 }
 
 func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Every edit is the owner's (revoke_mandate keeps its own check below).
+	if res := refuseNonOwnerChange(ctx, NameUpdateDCAPlan, "DCA plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {
@@ -127,15 +139,32 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	changed := false
+	mandateRelevant := false // amount, side or schedule: what a mandate was approved for
+	if revoke, _ := args["revoke_mandate"].(bool); revoke {
+		return t.revokeMandate(ctx, plan)
+	}
+	ask, askErr := mandateAskFrom(armedConfig.Load(), args)
+	if askErr != "" {
+		return ErrorResult(askErr)
+	}
+	if ask.requested { // a mandate asked for on its own is a change worth saving
+		changed, mandateRelevant = true, true
+	}
+
+	// Everything below up to the "no changes" check only validates arguments and
+	// edits the in-memory plan. The scheduler is not touched until the plan is
+	// valid, and then in an order that never leaves the stored plan pointing at a
+	// job that is gone (see the swap after the check).
+	enabledArg, hasEnabledArg := args["enabled"].(bool)
+	newSchedule := ""
 
 	if v, ok := args["name"].(string); ok && v != "" {
 		plan.Name = v
 		changed = true
 	}
 
-	if v, ok := args["enabled"].(bool); ok {
-		plan.Enabled = v
-		t.cronService.EnableJob(plan.CronJobID, v)
+	if hasEnabledArg {
+		plan.Enabled = enabledArg
 		changed = true
 	}
 
@@ -153,24 +182,8 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 			if !gx.IsValid(newExpr) {
 				return ErrorResult(fmt.Sprintf("invalid cron expression %q", newExpr))
 			}
-			t.cronService.RemoveJob(plan.CronJobID)
-			cronMsg := fmt.Sprintf("[DCA-AUTO] Execute plan: %s plan_id=%d", plan.Name, plan.ID)
-			job, err := t.cronService.AddJob(
-				fmt.Sprintf("dca:%d:%s", plan.ID, plan.Name),
-				cron.CronSchedule{Kind: "cron", Expr: newExpr, TZ: plan.Timezone},
-				cronMsg,
-				false,
-				plan.NotifyChannel,
-				plan.NotifyChatID,
-			)
-			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to recreate cron job: %v", err))
-			}
-			job.Payload.NoHistory = true
-			t.cronService.UpdateJob(job)
-			plan.FrequencyExpr = newExpr
-			plan.CronJobID = job.ID
-			changed = true
+			newSchedule = newExpr
+			changed, mandateRelevant = true, true
 		}
 	}
 
@@ -195,12 +208,12 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 			return ErrorResult("side must be 'buy' or 'sell'")
 		}
 		plan.Side = v
-		changed = true
+		changed, mandateRelevant = true, true
 	}
 
 	if v, ok := args["amount_per_order"].(float64); ok && v > 0 {
 		plan.AmountPerOrder = v
-		changed = true
+		changed, mandateRelevant = true, true
 	}
 
 	if v, ok := args["amount_unit"].(string); ok && v != "" {
@@ -212,7 +225,7 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 			return ErrorResult("Stock brokers are ordered in share units — use amount_unit='base'")
 		}
 		plan.AmountUnit = v
-		changed = true
+		changed, mandateRelevant = true, true
 	}
 
 	// Settrade requires whole-number shares; Webull supports fractional shares.
@@ -273,8 +286,58 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	plan.UpdatedAt = time.Now().UTC()
+
+	// A new schedule means a new cron job. The gateway runs a "dca:" job only if
+	// its ID is the one the plan records, so the swap must never leave the stored
+	// plan pointing at a job that no longer exists: add the new job first, record
+	// it, and only then remove the old one. If recording fails the new job goes
+	// and the old job and the stored plan are exactly as they were.
+	oldJobID := plan.CronJobID
+	var newJob *cron.CronJob
+	if newSchedule != "" {
+		cronMsg := fmt.Sprintf("[DCA-AUTO] Execute plan: %s plan_id=%d", plan.Name, plan.ID)
+		job, err := t.cronService.AddJob(
+			fmt.Sprintf("dca:%d:%s", plan.ID, plan.Name),
+			cron.CronSchedule{Kind: "cron", Expr: newSchedule, TZ: plan.Timezone},
+			cronMsg,
+			false,
+			plan.NotifyChannel,
+			plan.NotifyChatID,
+		)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to recreate cron job: %v", err))
+		}
+		job.Payload.NoHistory = true
+		if err := t.cronService.UpdateJob(job); err != nil {
+			t.cronService.RemoveJob(job.ID)
+			return ErrorResult(fmt.Sprintf("failed to configure the new cron job: %v", err))
+		}
+		newJob = job
+		plan.FrequencyExpr = newSchedule
+		plan.CronJobID = job.ID
+	}
+
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {
+		if newJob != nil {
+			t.cronService.RemoveJob(newJob.ID)
+		}
 		return ErrorResult(fmt.Sprintf("failed to update plan: %v", err))
+	}
+
+	// The plan is stored; from here on nothing returns an error. The old job goes
+	// now that the plan points at the new one.
+	if newJob != nil && oldJobID != "" && oldJobID != newJob.ID {
+		t.cronService.RemoveJob(oldJobID)
+	}
+	if newJob != nil {
+		// Whatever else still carries this plan's job name is stranded: a job the
+		// plan stopped pointing at long ago keeps ticking and is refused by the
+		// gateway, and a re-link is what is supposed to clean that up.
+		removeDCAPlanJobs(t.cronService, plan.ID, newJob.ID)
+	}
+	if hasEnabledArg || newJob != nil {
+		// A new job starts enabled; carry the plan's state onto it.
+		t.cronService.EnableJob(plan.CronJobID, plan.Enabled)
 	}
 
 	// Sync cron job name and message to reflect any plan renames.
@@ -299,5 +362,29 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 	if plan.Trigger != nil {
 		out += fmt.Sprintf(", trigger=%s @ %s", plan.Trigger.Expression, plan.Trigger.Timeframe)
 	}
+	if mandateRelevant {
+		out += proposeMandateFor(ctx, armedConfig.Load(), t.store, plan, ask)
+	}
 	return UserResult(out + "\n")
+}
+
+// revokeMandate withdraws the plan's mandate. Only the owner's own root turn may; the
+// plan goes back to awaiting a mandate and the next sync switches its scheduled job on.
+func (t *UpdateDCAPlanTool) revokeMandate(ctx context.Context, plan *dca.Plan) *ToolResult {
+	cfg := armedConfig.Load()
+	if cfg == nil {
+		return ErrorResult("revoke_mandate is not available")
+	}
+	if _, v := checkOwnerTurn(ctx, cfg, true); v != ownerYes {
+		return ErrorResult("revoke_mandate is available only in the owner's own conversation")
+	}
+	n, err := t.store.RevokePlanMandate(ctx, plan.ID, "revoked by the owner")
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to revoke the mandate: %v", err))
+	}
+	_ = t.store.ClearMandatePending(ctx, plan.ID)
+	if n == 0 {
+		return UserResult(fmt.Sprintf("Plan %d (%s) has no active mandate.", plan.ID, plan.Name))
+	}
+	return UserResult(fmt.Sprintf("Mandate of plan %d (%s) revoked. The plan is awaiting a mandate and runs on its scheduled job again.", plan.ID, plan.Name))
 }

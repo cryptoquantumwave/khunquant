@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -146,5 +147,17 @@ func TestEstimateFuturesNotional_AppliesContractSize(t *testing.T) {
 	// contractSize <= 0 behaves as 1.
 	if n, _, _ := estimateFuturesNotional(context.Background(), fp, "X", 2, 0, &price); n != 2*price {
 		t.Errorf("notional with contractSize 0 = %v, want %v", n, 2*price)
+	}
+}
+
+// A non-finite size must not value as zero ("under the cap"): it is an error.
+func TestEstimateFuturesNotional_NonFiniteIsError(t *testing.T) {
+	price := 100.0
+	fp := &mockFuturesProvider{}
+	if _, _, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 1, math.Inf(1), &price); err == nil {
+		t.Error("expected an error for an infinite contract size")
+	}
+	if _, _, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", math.NaN(), 1, &price); err == nil {
+		t.Error("expected an error for a NaN amount")
 	}
 }

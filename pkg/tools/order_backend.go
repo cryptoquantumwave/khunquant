@@ -168,10 +168,7 @@ func (b *ApprovalOrderBackend) contractsFor(ctx context.Context, spec orderSpec,
 	if err != nil || !positiveFinite(mark) {
 		return 0, fmt.Errorf("cannot resolve the mark price of %s to compute a contract count: %v", spec.symbol, err)
 	}
-	contractSize, minAmount := 1.0, 1.0
-	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-		contractSize = *mkt.ContractSize
-	}
+	contractSize, minAmount := futuresContractSize(mkt), 1.0
 	if mkt.Limits.Amount.Min != nil && *mkt.Limits.Amount.Min > 0 {
 		minAmount = *mkt.Limits.Amount.Min
 	}
@@ -332,10 +329,7 @@ func (b *ApprovalOrderBackend) gateFutures(ctx context.Context, spec orderSpec) 
 	if err != nil || !positiveFinite(mark) {
 		return evaluation{}, gateErr("risk", fmt.Errorf("cannot resolve the mark price of %s: %v", spec.symbol, err))
 	}
-	contractSize := 1.0
-	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-		contractSize = *mkt.ContractSize
-	}
+	contractSize := futuresContractSize(mkt)
 	usdValue := positionNotionalUSD(spec.amount, contractSize, mark)
 	if !positiveFinite(usdValue) {
 		return evaluation{}, gateErr("risk", errors.New("the order's USD value is unknown"))

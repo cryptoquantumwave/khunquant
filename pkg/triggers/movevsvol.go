@@ -415,8 +415,15 @@ func (t *moveVsVol) candidate(h heldAsset, hit moveHit, price, weight float64, p
 		ev["sigma_window_pct"] = hit.sigmaW * 100
 		ev["sigma_multiple"] = math.Abs(hit.ret) / hit.sigmaW
 	}
+	// A protective Critical is keyed by its own rank, not the capped tier: a tier-3
+	// Warning on the same move must not share its key, or muting the Warning (an
+	// exact mute of its key) would silence the Critical that follows.
+	keyTier := hit.tier
+	if protective {
+		keyTier = moveProtectiveRank
+	}
 	c := proactive.Candidate{
-		DedupKey: MoveKey(asset, hit.window, hit.tier),
+		DedupKey: MoveKey(asset, hit.window, keyTier),
 		Subject:  asset, Title: title, Detail: detail, Evidence: ev, Trust: trust,
 		Salience: clamp01(weight * float64(hit.tier) / 3), DedupWindow: moveWindow, At: at,
 	}

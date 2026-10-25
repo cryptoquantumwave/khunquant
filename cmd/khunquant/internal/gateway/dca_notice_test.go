@@ -116,7 +116,7 @@ func TestStalePlanLink_IsReportedAndTheRemedyWorks(t *testing.T) {
 	}
 
 	// The remedy, with the plan's current schedule.
-	res := tools.NewUpdateDCAPlanTool(store, cronService).Execute(context.Background(), map[string]any{
+	res := tools.NewUpdateDCAPlanTool(store, cronService).Execute(ownerCtx(), map[string]any{
 		"plan_id": float64(planID), "schedule": map[string]any{"cron": "0 9 * * 1"},
 	})
 	if res.IsError {

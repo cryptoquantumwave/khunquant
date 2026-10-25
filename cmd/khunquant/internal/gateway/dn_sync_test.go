@@ -64,7 +64,7 @@ func dnSpecs(t *testing.T, f *assemblyFixture) []triggers.Spec {
 
 func runDNTool(t *testing.T, f *assemblyFixture, name string, args map[string]any) {
 	t.Helper()
-	res := alertTool(t, f, name).Execute(tools.WithToolContext(context.Background(), "telegram", "1001"), args)
+	res := alertTool(t, f, name).Execute(ownerCtx(), args)
 	if res.IsError {
 		t.Fatalf("%s: %+v", name, res)
 	}

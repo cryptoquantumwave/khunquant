@@ -1,0 +1,12 @@
+{
+  "specs": [
+    {
+      "id": "dn12",
+      "kind": "dn_health",
+      "params": {
+        "plan_id": 12,
+        "symbol": "BTC/USDT:USDT"
+      }
+    }
+  ]
+}

@@ -46,6 +46,11 @@ func (t *DeleteDeltaNeutralPlanTool) Parameters() map[string]any {
 }
 
 func (t *DeleteDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Removing a plan removes its history and monitor job: owner only.
+	if res := refuseNonOwnerChange(ctx, NameDeleteDeltaNeutralPlan, "delta-neutral plans"); res != nil {
+		return res
+	}
+
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {

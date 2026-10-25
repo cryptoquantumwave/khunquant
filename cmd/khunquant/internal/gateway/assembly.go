@@ -438,6 +438,13 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// the same rule propose_order is: approvals stay unavailable.
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
+	s.Control.attachManage(d, s.Perception)
+
+	// The owner's responses to proactive messages, recorded only with proactive.learning
+	// on. After the control path (taps and replies reach it) and the outbox (whose
+	// messages carry the buttons), and after approvals (whose decisions it links).
+	s.Feedback = buildFeedback(d, s.NotifyService, s.Attention, s.Perception)
+	s.Control.attachFeedback(s.Feedback)
 
 	// Heartbeat. After attention: a governed heartbeat delivers through the
 	// outbox, so the outbox must exist (or its absence be known) before the first
@@ -562,7 +569,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
 		withCognitionStats(s.Cognition.stats), withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
-	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
+	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken, cfg)
+	registerManageAPI(mux, s.Control, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -609,6 +617,8 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 	// on the channels until they have stopped (below): taking it off earlier would
 	// hand a late /approve or /stop to the agent instead.
 	s.Control.detach()
+	s.Feedback.stop() // the buttons go before the outbox does; nothing is recorded after this
+	s.Feedback = nil
 	s.Policy.stop() // before the approval side closes the mandate store it reads
 	s.Policy = nil
 

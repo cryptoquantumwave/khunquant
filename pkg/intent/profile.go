@@ -113,6 +113,12 @@ type Profile struct {
 	AssetsToAvoid            []string           `json:"assets_to_avoid"`             // upper-case symbols
 	NotificationBudgetPerDay int                `json:"notification_budget_per_day"` // default 3, 0 allowed
 	DigestTime               string             `json:"digest_time"`                 // "08:00" local
+	// Autonomy is the owner's tighten-only autonomy dial: per tier (T1, T2, T3) one of
+	// default, ask, notify, off. A missing tier is default, and a stored "default" is
+	// dropped on Normalize, so the map holds only what restricts. It is NOT a patch
+	// field: update_profile and the launcher's profile PUT cannot set it, and PutProfile
+	// keeps whatever is stored. Only SetAutonomy writes it. See autonomy.go.
+	Autonomy map[string]string `json:"autonomy,omitempty"`
 }
 
 // DefaultProfile returns the profile of an owner who has said nothing.
@@ -212,6 +218,9 @@ func (p Profile) Normalize() (Profile, error) {
 	if p.NotificationBudgetPerDay < 0 || p.NotificationBudgetPerDay > MaxBudgetPerDay {
 		return Profile{}, fmt.Errorf("notification_budget_per_day %d must be between 0 and %d",
 			p.NotificationBudgetPerDay, MaxBudgetPerDay)
+	}
+	if p.Autonomy, err = NormalizeAutonomy(p.Autonomy); err != nil {
+		return Profile{}, err
 	}
 	return p, nil
 }

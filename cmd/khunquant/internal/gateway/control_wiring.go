@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -39,6 +40,9 @@ type controlRuntime struct {
 	// and cleared by detach. The gateway route reads it at request time, because the
 	// route is registered before the services are built.
 	stop atomic.Pointer[control.Kill]
+	// manage is what the launcher's management routes act on (manage_api.go), set by
+	// attachManage and withdrawn by detach.
+	manage atomic.Pointer[manageDeps]
 }
 
 // stopper is the /stop sequence, or nil while none is attached. Safe on nil.
@@ -198,6 +202,16 @@ func (rt *controlRuntime) attach(d assemblyDeps, ns *notify.Service, at *attenti
 	rt.disp.SetDeps(deps)
 }
 
+// attachFeedback gives the dispatcher the response recorder, when there is one.
+func (rt *controlRuntime) attachFeedback(f *feedbackRuntime) {
+	if rt == nil || f == nil || f.svc == nil {
+		return
+	}
+	deps := rt.disp.Deps()
+	deps.Feedback = f.svc
+	rt.disp.SetDeps(deps)
+}
+
 // detach takes the approval, notify and attention services away from the
 // dispatcher. stopServices calls it before it stops them, so that an /approve
 // arriving during shutdown is answered "not available" rather than approving an
@@ -209,8 +223,9 @@ func (rt *controlRuntime) detach() {
 		return
 	}
 	deps := rt.disp.Deps()
-	deps.Approvals, deps.Sent, deps.Attention, deps.Stop = nil, nil, nil, nil
+	deps.Approvals, deps.Sent, deps.Attention, deps.Stop, deps.Feedback = nil, nil, nil, nil, nil
 	rt.stop.Store(nil)
+	rt.manage.Store(nil)
 	rt.disp.SetDeps(deps)
 }
 
@@ -219,15 +234,19 @@ func (rt *controlRuntime) detach() {
 // change). Like the other management routes they accept loopback callers carrying
 // the management token and refuse requests a browser could have made. Unlike the
 // token middleware, which lets everything through when the configured token is
-// empty, they refuse every request while no token is configured.
-func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string) {
-	h := controlKillHandler(kill, stop, token)
+// empty, they refuse every request while no token is configured. Clearing (DELETE)
+// additionally needs cfg.WebOwnerActive() when an owner is configured, as POST
+// /api/proactive/resume does (see mayClearKill; with no owner configured it is open,
+// or nothing could clear a flag Stop set): engaging the brake is never gated, letting
+// the assistant act again is.
+func registerControlAPI(mux handleMux, kill control.KillSwitch, stop func() control.Stopper, token string, cfg *config.Config) {
+	h := controlKillHandler(kill, stop, token, cfg)
 	guarded := loopbackOnly(bearerTokenMiddleware(token, noBrowser(h)))
 	mux.Handle("POST /api/control/kill", guarded)
 	mux.Handle("DELETE /api/control/kill", guarded)
 }
 
-func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, token string) http.Handler {
+func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, token string, cfg *config.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if token == "" {
@@ -259,6 +278,10 @@ func controlKillHandler(kill control.KillSwitch, stop func() control.Stopper, to
 			}
 			changed, err = kill.Engage(r.Context(), "api", "gateway route")
 		case http.MethodDelete:
+			if !mayClearKill(cfg) { // nil-safe: no configuration may not clear
+				refuseNotWebOwner(w, cfg)
+				return
+			}
 			changed, err = kill.Clear(r.Context(), "api")
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)

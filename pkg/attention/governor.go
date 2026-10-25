@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -129,6 +130,10 @@ type Governor struct {
 	pendingDigestKeep time.Duration
 	shadowRetention   time.Duration
 
+	// learning is the learning configuration, nil while learning is off. See learning.go.
+	learning       atomic.Pointer[Learning]
+	acceptanceWarn sync.Once
+
 	mu              sync.Mutex
 	lastPrune       time.Time
 	lastProfileWarn time.Time
@@ -176,6 +181,7 @@ type profileFacts struct {
 	budget     int
 	dayStartMs int64
 	dayEndMs   int64
+	bucket     int // HourBucket of now in the owner's zone
 }
 
 // loadProfile fetches the profile and reduces it to profileFacts. A failing
@@ -192,6 +198,7 @@ func (g *Governor) loadProfile(ctx context.Context, now time.Time) profileFacts 
 		budget:     max(prof.NotificationBudgetPerDay, 0),
 		dayStartMs: start.UnixMilli(),
 		dayEndMs:   end.UnixMilli(),
+		bucket:     HourBucket(nl),
 	}
 }
 
@@ -300,7 +307,18 @@ func (g *Governor) Decide(ctx context.Context, c proactive.Candidate) (Decision,
 		}
 		d.Previous = prev
 	}
+	var lr learnRow
+	var lrn *Learning
+	if live {
+		// Learning reads the posterior through tx. Off, it adds nothing to a decision.
+		if lrn = g.learning.Load(); lrn != nil {
+			g.learnFacts(ctx, tx, lrn, c, now, pf.bucket, &f)
+		}
+	}
 	d.Disposition, d.Reason = evaluate(c, f)
+	if lrn != nil {
+		lr = learnRecord(lrn, c, f, d)
+	}
 	if d.Reason == ReasonShadow {
 		// Coalesce: the same situation was already logged at this severity or
 		// higher within the hour. Return that decision and write nothing.
@@ -313,7 +331,7 @@ func (g *Governor) Decide(ctx context.Context, c proactive.Candidate) (Decision,
 			return d, nil
 		}
 	}
-	if err := insertDecision(ctx, tx, d); err != nil {
+	if err := insertDecision(ctx, tx, d, lr); err != nil {
 		return Decision{}, err
 	}
 	if err := tx.Commit(); err != nil {

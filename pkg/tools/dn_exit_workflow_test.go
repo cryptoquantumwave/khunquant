@@ -902,11 +902,13 @@ func TestExitTools_RefuseWithoutAnEngineAndReportInProgress(t *testing.T) {
 		"unwind": {"plan_id": float64(id), "confirm": true},
 		"resize": {"plan_id": float64(id), "delta_notional_usdt": -100.0, "confirm": true},
 	}
+	// The owner's own turn: newDNRig below arms an owner, and running a plan is theirs.
+	ownerTurn := remoteTurn(proposeOwner, "telegram")
 	run := func(name string) *ToolResult {
 		if name == "unwind" {
-			return unwind.Execute(context.Background(), args[name])
+			return unwind.Execute(ownerTurn, args[name])
 		}
-		return resize.Execute(context.Background(), args[name])
+		return resize.Execute(ownerTurn, args[name])
 	}
 
 	SetDNWorkflows(nil)

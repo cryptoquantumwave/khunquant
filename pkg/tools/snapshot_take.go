@@ -55,6 +55,16 @@ func (t *TakeSnapshotTool) Parameters() map[string]any {
 }
 
 func (t *TakeSnapshotTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// While an owner is configured, a person's turn writes a snapshot only as the owner's own
+	// root turn. An autonomous turn (the legacy heartbeat, a scheduled job) has no sender to
+	// check and is bounded by the class ceiling instead: it still reaches this tool where that
+	// ceiling lets it (see proactiveTurnMayCall), and a proactive kind the ceiling denies never
+	// gets here.
+	if !IsAutonomousOrigin(ToolOrigin(ctx)) {
+		if res := refuseNonOwnerChange(ctx, NameTakeSnapshot, "snapshots"); res != nil {
+			return res
+		}
+	}
 	opts := snapshot.CollectOptions{}
 	if v, ok := args["source"].(string); ok {
 		opts.Source = strings.TrimSpace(v)

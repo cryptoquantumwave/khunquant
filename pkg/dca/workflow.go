@@ -178,6 +178,11 @@ type Deps struct {
 	Tag func(ctx context.Context, origin, sender string) context.Context
 	// Tell sends the owner a templated message; nil sends none.
 	Tell func(ctx context.Context, n Notice)
+	// OwnerDial is the owner's tighten-only autonomy setting for tier T2, mandated buys:
+	// "default" (or ""), "ask", "notify" or "off". It is read on every run, whatever
+	// proactive.policy.mode is, because a mandated run is this workflow and not a tool
+	// call the policy engine sees. A read error is treated as "off". Nil means none.
+	OwnerDial func(ctx context.Context) (string, error)
 }
 
 // Definitions returns the journal definition of dca.execute.
@@ -190,6 +195,22 @@ func (d *Deps) clock() journal.Clock {
 		return journal.RealClock{}
 	}
 	return d.Clock
+}
+
+// ownerDial is the owner's setting for T2; "" and unknown words are read as default
+// only when no dial is wired, an unknown stored word is "off".
+func (d *Deps) ownerDial(ctx context.Context) (string, error) {
+	if d.OwnerDial == nil {
+		return "default", nil
+	}
+	s, err := d.OwnerDial(ctx)
+	switch s {
+	case "", "default":
+		return "default", err
+	case "ask", "notify", "off":
+		return s, err
+	}
+	return "off", err
 }
 
 func (d *Deps) killed() bool { return d.Killed != nil && d.Killed() }
@@ -226,6 +247,8 @@ const (
 	BoundExpired   = "expired"
 	BoundPriceMove = "price_move"
 	BoundUnproven  = "unproven"
+	// BoundOwnerDial: the owner set mandated buys to "ask": every run is a question.
+	BoundOwnerDial = "owner_dial"
 )
 
 type checkOut struct {
@@ -235,6 +258,8 @@ type checkOut struct {
 	Bound  string `json:"bound,omitempty"`
 	Quiet  bool   `json:"quiet,omitempty"` // a refusal the owner is not told about
 	Kill   bool   `json:"kill,omitempty"`
+	// Dial is the owner's setting (notify or off) that skipped the run.
+	Dial string `json:"dial,omitempty"`
 	// Detail: the numbers behind a bound (used, cap, move).
 	Detail  string  `json:"detail,omitempty"`
 	Quote   Quote   `json:"quote"`
@@ -270,6 +295,8 @@ const (
 	resultPending  = "pending"  // an order exists and is not done (resting, or partly filled)
 	resultRefused  = "refused"
 	resultAsked    = "asked"
+	// resultSkipped: the owner's autonomy setting stopped the buy; a "skipped" row says why.
+	resultSkipped = "skipped"
 )
 
 type recordOut struct {
@@ -307,6 +334,9 @@ func (d *Deps) runExecute(c *journal.Ctx, raw json.RawMessage) error {
 	}
 	switch chk.Verdict {
 	case verdictRefuse:
+		if chk.Dial != "" {
+			return d.record(c, in, chk, placeOut{}, recordOut{Result: resultSkipped, Reason: chk.Reason})
+		}
 		return d.receipt(c, in, chk, recordOut{Result: resultRefused, Reason: chk.Reason})
 	case verdictAsk:
 		return d.ask(c, in, chk)
@@ -484,6 +514,15 @@ func (d *Deps) checkMandate(c *journal.Ctx, in ExecInput) func(context.Context, 
 		if !m.Matches(plan) {
 			return refuse("the plan was edited after its mandate was approved (symbol, side, provider or account): a new mandate is needed")
 		}
+		// The owner's dial for mandated buys (tighten-only). notify and off stop the run
+		// here and say so; ask is applied below, once the run is valued for its question.
+		dial, derr := d.ownerDial(ctx)
+		if derr != nil {
+			return checkOut{Verdict: verdictRefuse, Dial: "off", Reason: "the owner's autonomy setting for mandated buys could not be read, so the buy was skipped"}, nil
+		}
+		if dial == "notify" || dial == "off" {
+			return checkOut{Verdict: verdictRefuse, Dial: dial, Reason: "the owner's autonomy setting for mandated buys is " + dial + ", so the buy was skipped"}, nil
+		}
 		q, qerr := d.Exchange.Quote(ctx, plan)
 		if qerr != nil {
 			return refuse("the run cannot be valued in USD, so no cap can be checked: " + qerr.Error())
@@ -494,10 +533,20 @@ func (d *Deps) checkMandate(c *journal.Ctx, in ExecInput) func(context.Context, 
 		ask := func(bound, reason, detail string, used float64) (any, error) {
 			return checkOut{Verdict: verdictAsk, Bound: bound, Reason: reason, Detail: detail, Quote: q, Used: used}, nil
 		}
+		// An unproven earlier run comes first, even under the dial: that order may already
+		// have bought, so the card must say so rather than only naming the owner's setting.
 		if reason, err := d.Store.Unproven(ctx, plan.ID); err != nil {
 			return nil, err
 		} else if reason != "" {
-			return ask(BoundUnproven, "an earlier run could not be proven: "+reason, "", 0)
+			why, detail := "an earlier run could not be proven: "+reason, ""
+			if dial == "ask" {
+				why += " (the owner's autonomy setting also asks about every mandated buy)"
+				detail = "owner autonomy setting: ask"
+			}
+			return ask(BoundUnproven, why, detail, 0)
+		}
+		if dial == "ask" {
+			return ask(BoundOwnerDial, "the owner's autonomy setting asks about every mandated buy", "", 0)
 		}
 		if m.Status != MandateActive || !m.ExpiresAt.After(now) {
 			return ask(BoundExpired, "the mandate expired on "+m.ExpiresAt.Format("2006-01-02"), "", 0)
@@ -773,6 +822,8 @@ func (d *Deps) writeRecord(ctx context.Context, c *journal.Ctx, in ExecInput, ch
 		if err := d.Store.MarkUnproven(ctx, plan.ID, c.WorkflowID(), res.Reason, now); err != nil {
 			return res, err
 		}
+	case resultSkipped:
+		exec.Status, exec.ErrorMsg = "skipped", res.Reason
 	case resultPending:
 		// The order id is kept so the owner (and any later reconcile) can find it. The
 		// full requested USD value is recorded as usage: until the order is proven it
@@ -819,6 +870,21 @@ func (d *Deps) sendReceipt(ctx context.Context, in ExecInput, chk checkOut, res 
 	n := d.notice(name, symbol, chk, res)
 	if res.Result == resultRefused && (chk.Quiet) {
 		return
+	}
+	if res.Result == resultSkipped {
+		// Once a day per plan, in the plan's own day (the mute notice's cadence).
+		loc := time.UTC
+		if err == nil {
+			if l, lerr := time.LoadLocation(plan.Timezone); lerr == nil {
+				loc = l
+			}
+		}
+		day := d.clock().Now().In(loc).Format("2006-01-02")
+		first, err := d.Store.FirstToday(ctx, "dial:"+name, day)
+		if err != nil || !first {
+			return
+		}
+		n = DialSkipNotice(d.thai(), in.PlanID, symbol, res.Reason, day)
 	}
 	if chk.Kill {
 		first, err := d.Store.FirstToday(ctx, "kill", d.clock().Now().UTC().Format("2006-01-02"))

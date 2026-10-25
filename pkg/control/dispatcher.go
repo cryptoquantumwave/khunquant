@@ -75,6 +75,9 @@ type Deps struct {
 	Approvals Approver
 	Sent      SentLookup
 	Attention Attention
+	// Feedback records the owner's responses to proactive messages (pkg/feedback). It is
+	// nil while proactive.learning is off, and then nothing is recorded.
+	Feedback Feedback
 }
 
 // Dispatcher is the control path: it recognises the inputs that act on the system

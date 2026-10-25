@@ -129,6 +129,14 @@ type Publisher interface {
 	PublishNonBlocking(evt events.Event) events.PublishResult
 }
 
+// Recorder is told of every event the pipeline takes, with the engine clock at that
+// moment, before any stage sees it. It runs on the pipeline goroutine, so it must
+// only hand the event over (the recorder in pkg/replay queues it for a writer of its
+// own); a panic in it costs the recording of that event and nothing else.
+type Recorder interface {
+	Record(ev events.Event, at time.Time)
+}
+
 // Options configures New. Every field is optional: a nil stage is a no-op.
 type Options struct {
 	WorldModel WorldModel
@@ -140,6 +148,9 @@ type Options struct {
 	// publishes nothing.
 	Bus   Publisher
 	Clock Clock
+
+	// Recorder, when set, is told of every event taken (see Recorder).
+	Recorder Recorder
 
 	// Housekeepers are called every second after the four stages, on the pipeline
 	// goroutine, like a stage that implements Housekeeper. They are for work that
@@ -192,6 +203,7 @@ type Engine struct {
 	clk  Clock
 
 	extraHousekeepers []Housekeeper
+	rec               Recorder
 
 	in     *inbox
 	c       *counters
@@ -221,7 +233,7 @@ func New(o Options) *Engine {
 	c := &counters{}
 	return &Engine{
 		wm: o.WorldModel, ev: o.Evaluator, at: o.Attention, disp: o.Dispatcher,
-		bus: o.Bus, clk: o.Clock, extraHousekeepers: o.Housekeepers,
+		bus: o.Bus, clk: o.Clock, extraHousekeepers: o.Housekeepers, rec: o.Recorder,
 		in:newInbox(o.InboxSize, o.MaxSubjects, c), c: c,
 		warned: map[string]time.Time{},
 	}
@@ -357,10 +369,26 @@ func (e *Engine) Settle(ctx context.Context) error {
 	}
 }
 
+// Step runs one event through the stages on the caller's goroutine, exactly as Run
+// does for an event taken from the inbox, and returns when attention has recorded its
+// decisions and the dispatcher has taken them. It is how the replay harness drives the
+// pipeline with no goroutine and no timer of its own; it does not run housekeeping. It
+// returns an error, and does nothing, once Run has been called on this engine.
+func (e *Engine) Step(ctx context.Context, ev events.Event) error {
+	if e.running.Load() {
+		return errors.New("engine: Step while Run is running")
+	}
+	e.process(ctx, ev)
+	return nil
+}
+
 // process runs one event through the stages. It never returns an error and never
 // panics: a failing stage costs this event only.
 func (e *Engine) process(ctx context.Context, ev events.Event) {
 	defer e.c.processed.Add(1) // counted when done, so a reader that sees N sees N finished events
+	if e.rec != nil {
+		e.stage("recorder", func() { e.rec.Record(ev, e.clk.Now()) })
+	}
 	e.publish(ev)
 
 	var diff Diff

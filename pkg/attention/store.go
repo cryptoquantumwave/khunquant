@@ -100,6 +100,22 @@ CREATE TABLE attention_meta (
 		// row as a prefix mute of the same text.
 		SQL: `ALTER TABLE attention_mutes ADD COLUMN exact INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		Component: Component,
+		Version:   4,
+		// Learning (learning.go). All five are NULL, or 0 for holdout, on a row made
+		// while learning is off and on every row from before. propensity is the
+		// probability the stored disposition had under the live policy; holdout is 1 for
+		// a Notice held back by the holdout; shadow_disposition is the candidate
+		// policy's verdict, stored and never acted on; learned_disposition and
+		// learned_reason are what learning would have decided when adapt is off and it
+		// would have decided differently.
+		SQL: `ALTER TABLE attention_decisions ADD COLUMN propensity REAL;
+ALTER TABLE attention_decisions ADD COLUMN holdout INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attention_decisions ADD COLUMN shadow_disposition TEXT;
+ALTER TABLE attention_decisions ADD COLUMN learned_disposition TEXT;
+ALTER TABLE attention_decisions ADD COLUMN learned_reason TEXT;`,
+	},
 }
 
 // dispositionsSent are the dispositions that put a message in front of the owner
@@ -162,8 +178,10 @@ func deleteExpiredMutes(ctx context.Context, tx *sql.Tx, nowMs int64) error {
 // isMuted reports whether an active mute applies to c. Prefixes are compared
 // literally (substr, not LIKE) so a key containing % or _ cannot widen a mute.
 // A protective Critical candidate is only muted by a prefix that equals its full
-// DedupKey or full TriggerID. An exact mute (a snooze) matches the candidate's
-// DedupKey and nothing longer; it is by definition the full key.
+// DedupKey or full TriggerID. An exact mute (a snooze, or the [Mute] button) matches
+// the candidate's DedupKey and nothing longer; it is by definition the full key. A
+// protective Critical is silenced by an exact mute only when that mute names its own
+// key or trigger id, so a mute taken from a different alert can never reach it.
 func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64) (bool, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT key, exact FROM attention_mutes
@@ -175,7 +193,7 @@ func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64
 		return false, fmt.Errorf("attention: read mutes: %w", err)
 	}
 	var keys []string
-	exactHit := false
+	exactHit, exactOwn := false, false
 	for rows.Next() {
 		var k string
 		var exact int
@@ -185,6 +203,8 @@ func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64
 		}
 		if exact == 1 {
 			exactHit = true
+			// An exact row is stored as "="+key.
+			exactOwn = exactOwn || k == "="+c.DedupKey || (c.TriggerID != "" && k == "="+c.TriggerID)
 			continue
 		}
 		keys = append(keys, k)
@@ -195,7 +215,7 @@ func isMuted(ctx context.Context, tx *sql.Tx, c proactive.Candidate, nowMs int64
 	if err := rows.Err(); err != nil {
 		return false, fmt.Errorf("attention: read mutes: %w", err)
 	}
-	if exactHit {
+	if exactHit && (exactOwn || !isProtectiveCritical(c)) {
 		return true, nil
 	}
 	if len(keys) == 0 {
@@ -376,7 +396,7 @@ func inhibitorKey(ctx context.Context, tx *sql.Tx, rule InhibitRule, base string
 
 // ---- writes ----------------------------------------------------------------
 
-func insertDecision(ctx context.Context, tx *sql.Tx, d Decision) error {
+func insertDecision(ctx context.Context, tx *sql.Tx, d Decision, lr learnRow) error {
 	shadow := 0
 	if d.Reason == ReasonShadow {
 		shadow = 1
@@ -387,11 +407,13 @@ func insertDecision(ctx context.Context, tx *sql.Tx, d Decision) error {
 	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO attention_decisions
-		   (id, at_ms, dedup_key, trigger_id, severity, disposition, reason, shadow, candidate_json, base_asset)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   (id, at_ms, dedup_key, trigger_id, severity, disposition, reason, shadow, candidate_json, base_asset,
+		    propensity, holdout, shadow_disposition, learned_disposition, learned_reason)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.At.UnixMilli(), d.Candidate.DedupKey, d.Candidate.TriggerID,
 		int(d.Candidate.Severity), string(d.Disposition), d.Reason, shadow,
-		encodeCandidate(d.Candidate), base)
+		encodeCandidate(d.Candidate), base,
+		lr.propensity, lr.holdout, lr.shadow, lr.learned, lr.learnedReason)
 	if err != nil {
 		return fmt.Errorf("attention: record decision: %w", err)
 	}

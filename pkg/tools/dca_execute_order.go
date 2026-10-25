@@ -174,6 +174,15 @@ func saveDCAExecution(ctx context.Context, store *dca.Store, exec *dca.Execution
 }
 
 func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// While an owner is configured, running a plan on demand is the owner's alone. The one
+	// other route in is the plan's own scheduled job: a cron turn tagged with a "dca:" job
+	// scope, which only the gateway's cron handler sets and which dcaScopeRefusal below
+	// then pins to that job's own plan. The mandate workflow does not come through here.
+	if !(ToolOrigin(ctx) == OriginCron && isDCAJobScope(ctx)) {
+		if res := refuseNonOwnerExecution(ctx, NameExecuteDCAOrder, "run a DCA plan"); res != nil {
+			return res
+		}
+	}
 	planIDf, _ := args["plan_id"].(float64)
 	planID := int64(planIDf)
 	if planID <= 0 {

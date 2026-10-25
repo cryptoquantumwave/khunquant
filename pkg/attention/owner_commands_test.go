@@ -130,6 +130,25 @@ func TestMuteExact(t *testing.T) {
 		expect(t, e.decide(cand("dn:12:liq", critical, protective)), proactive.DispDrop, ReasonMuted)
 	})
 
+	t.Run("muting a routine move warning never silences the protective critical on that move", func(t *testing.T) {
+		e := newEnv(t)
+		const (
+			warnKey = "move_vs_vol:BTC:1h:tier3"
+			critKey = "move_vs_vol:BTC:1h:tier4"
+		)
+		// The [Mute] button sets an exact mute on each key of the Warning's message.
+		if err := e.g.MuteExact(ctx, warnKey, e.clock.Now().Add(30*24*time.Hour), "muted by the owner"); err != nil {
+			t.Fatal(err)
+		}
+		expect(t, e.decide(cand(warnKey, warning)), proactive.DispDrop, ReasonMuted)
+		expect(t, e.decide(cand(critKey, critical, protective, withTrigger("move_vs_vol:pf"))), proactive.DispNotify, ReasonProtective)
+		// The owner muting the protective alert itself is still honoured.
+		if err := e.g.MuteExact(ctx, critKey, e.clock.Now().Add(30*24*time.Hour), "muted by the owner"); err != nil {
+			t.Fatal(err)
+		}
+		expect(t, e.decide(cand(critKey, critical, protective, withTrigger("move_vs_vol:pf"))), proactive.DispDrop, ReasonMuted)
+	})
+
 	t.Run("validation", func(t *testing.T) {
 		e := newEnv(t)
 		if err := e.g.MuteExact(ctx, "  ", e.clock.Now().Add(time.Hour), ""); err == nil {

@@ -49,8 +49,9 @@ func TestOpenTool_InProgressWhenTheWorkflowOutlastsTheWait(t *testing.T) {
 	t.Cleanup(func() { dnOpenWait = old })
 
 	start := time.Now()
+	// newDNRig armed an owner; opening is theirs, so it is their turn that opens.
 	res := NewOpenDeltaNeutralPositionTool(leverageOnCfg(), store).
-		Execute(context.Background(), map[string]any{"plan_id": float64(id), "confirm": true})
+		Execute(remoteTurn(proposeOwner, "telegram"), map[string]any{"plan_id": float64(id), "confirm": true})
 	if res.IsError || !strings.Contains(res.ForUser, "in progress (workflow wf_") || !strings.Contains(res.ForUser, "you will get a message") {
 		t.Fatalf("got %+v", res)
 	}

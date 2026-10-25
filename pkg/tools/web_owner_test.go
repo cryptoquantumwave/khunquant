@@ -123,10 +123,10 @@ func TestWebRoute_ReachesEveryConsumer(t *testing.T) {
 	if _, actor := turnIdentity(webTurn(false)); actor != policy.ActorOther {
 		t.Errorf("an unauthenticated connection has actor %v", actor)
 	}
-	if memoryOwnerOnly(ctx) {
+	if ownerOnlyApplies(ctx) {
 		t.Error("the memory file would refuse the web owner")
 	}
-	if !memoryOwnerOnly(webTurn(false)) {
+	if !ownerOnlyApplies(webTurn(false)) {
 		t.Error("the memory file would admit an unauthenticated connection")
 	}
 }

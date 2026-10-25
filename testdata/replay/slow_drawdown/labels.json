@@ -1,0 +1,16 @@
+[
+  {
+    "match": "drawdown:portfolio:peak",
+    "from": "2026-03-12T09:00:00Z",
+    "to": "2026-03-12T17:00:00Z",
+    "should_fire": true,
+    "note": "the 30-day peak line, crossed at 52h 45m"
+  },
+  {
+    "match": "drawdown:portfolio:day",
+    "from": "2026-03-10T05:00:00Z",
+    "to": "2026-03-13T05:00:00Z",
+    "should_fire": false,
+    "note": "no single day is down 5%"
+  }
+]

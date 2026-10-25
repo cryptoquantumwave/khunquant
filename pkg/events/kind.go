@@ -170,6 +170,17 @@ const (
 	// call (shadow mode: the call itself is decided by the existing checks). It carries
 	// ids, names, the mode and the tier only: never a call's arguments or amounts.
 	KindPolicyDecision Kind = "policy.decision"
+	// KindFeedbackRecorded is emitted when a response of the owner to a proactive message
+	// is recorded (pkg/feedback). It carries ids and the kind only, never the value.
+	KindFeedbackRecorded Kind = "feedback.recorded"
+	// KindFeedbackPosterior is emitted when an owner response changes an acceptance
+	// posterior (pkg/feedback). It carries the trigger kind, the hour bucket and the mean
+	// rounded to two decimals, nothing else.
+	KindFeedbackPosterior Kind = "feedback.posterior"
+	// KindFeedbackHindsight is emitted when the daily hindsight job stores a horizon for
+	// an intervention (pkg/feedback). It carries the intervention id, the horizon
+	// ("1h", "24h", "7d") and whether a price change was found, and no price.
+	KindFeedbackHindsight Kind = "feedback.hindsight"
 )
 
 var knownKinds = []Kind{
@@ -246,6 +257,9 @@ var knownKinds = []Kind{
 	KindJournalWorkflow,
 	KindControlCommand,
 	KindPolicyDecision,
+	KindFeedbackRecorded,
+	KindFeedbackPosterior,
+	KindFeedbackHindsight,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

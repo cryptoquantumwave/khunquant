@@ -107,3 +107,20 @@ func MutedSkipNotice(thai bool, planID int64, symbol string, slot time.Time, zon
 	}
 	return Notice{Severity: "notice", DedupKey: key, Title: fmt.Sprintf("DCA plan %d: buy skipped because of a mute", planID), Body: body}
 }
+
+// DialSkipNotice tells the owner that their autonomy setting for mandated buys (notify
+// or off) stopped a plan's buy. It is a template over ids, a symbol, a fixed reason and
+// a day: no model text. It is sent at most once a day per plan.
+func DialSkipNotice(thai bool, planID int64, symbol, reason, day string) Notice {
+	key := "dca-dial-skip:" + strconv.FormatInt(planID, 10) + ":" + day
+	if thai {
+		return Notice{Severity: "notice", DedupKey: key,
+			Title: fmt.Sprintf("แผน DCA %d: ข้ามการซื้อตามที่คุณตั้งค่าความเป็นอิสระไว้", planID),
+			Body: fmt.Sprintf("รอบซื้อของแผน DCA %d (%s) ถูกข้าม ยังไม่มีการซื้อเกิดขึ้น เพราะคุณตั้งค่าการซื้อตามวงเงิน (mandate) ให้ไม่ซื้อเอง (%s) "+
+				"แจ้งเตือนนี้ส่งวันละครั้งต่อแผน", planID, symbol, reason)}
+	}
+	return Notice{Severity: "notice", DedupKey: key,
+		Title: fmt.Sprintf("DCA plan %d: buy skipped by your autonomy setting", planID),
+		Body: fmt.Sprintf("The buy of DCA plan %d (%s) was skipped and nothing was bought: %s. "+
+			"You set mandated buys not to run on their own. This notice is sent once a day per plan.", planID, symbol, reason)}
+}

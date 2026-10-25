@@ -17,7 +17,9 @@
 //	  pending approval card       message is a pending card
 //	/snooze [1h|4h|1d]            as a reply to an alert: mute exactly its dedup keys (default 1h)
 //	/mute TRIGGER, /unmute        mute or unmute a trigger kind or id (30 days)
-//	/useful, /notuseful           as a reply to an alert: logged (no feedback store yet)
+//	/useful, /notuseful           as a reply to an alert: recorded in pkg/feedback with
+//	                                proactive.learning on, else only logged
+//	[Mute] button                 mutes exactly the dedup keys of the alert it is on (30 days)
 //	/whoami                       the IDs proactive.owner needs; any allow-listed sender
 //	/stop, /resume                /stop: the kill flag and everything in "/stop" below;
 //	                                /resume clears the flag and restores nothing
@@ -55,6 +57,17 @@
 // from memory and re-reads the table at most every DefaultRefresh, so a second
 // process sees a change within that bound. It fails closed: while the table cannot
 // be read it answers true.
+//
+// # Feedback
+//
+// With Deps.Feedback set (proactive.learning on) the owner's responses to a proactive
+// message are recorded in pkg/feedback: the buttons and the typed /useful, /notuseful,
+// /snooze and /mute (inside their handlers, after the owner check), a thumbs reaction
+// (ObserveReaction) and a reply that is not a command (ObserveReply, which the channel
+// calls beside publishing the message to the agent, and which classifies the text and
+// drops it). All of them go through the same owner rule as the commands (standing), so
+// the authenticated web chat counts and records with source "web:...", and nobody else's
+// response is recorded. Nothing here changes what a command does or what the agent gets.
 //
 // # /stop
 //

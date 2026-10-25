@@ -127,6 +127,7 @@ type wireProfile struct {
 	AssetsToAvoid            []string           `json:"assets_to_avoid,omitempty"`
 	NotificationBudgetPerDay *int               `json:"notification_budget_per_day,omitempty"`
 	DigestTime               string             `json:"digest_time,omitempty"`
+	Autonomy                 map[string]string  `json:"autonomy,omitempty"`
 }
 
 func toWire(p Profile) wireProfile {
@@ -142,6 +143,7 @@ func toWire(p Profile) wireProfile {
 		AssetsToAvoid:            p.AssetsToAvoid,
 		NotificationBudgetPerDay: &b,
 		DigestTime:               p.DigestTime,
+		Autonomy:                 p.Autonomy,
 	}
 }
 
@@ -156,6 +158,17 @@ func (w wireProfile) profile() Profile {
 		AllocationTargets: w.AllocationTargets,
 		AssetsToAvoid:     w.AssetsToAvoid,
 		DigestTime:        w.DigestTime,
+	}
+	// A stored dial that does not validate (a hand-edited row) reads as the
+	// strictest setting for every tier, never as default: an unreadable restriction
+	// must not become no restriction.
+	if a, err := NormalizeAutonomy(w.Autonomy); err != nil {
+		p.Autonomy = map[string]string{}
+		for _, t := range AutonomyTiers {
+			p.Autonomy[t] = AutonomyOff
+		}
+	} else {
+		p.Autonomy = a
 	}
 	p.NotificationBudgetPerDay = DefaultBudgetPerDay
 	if w.NotificationBudgetPerDay != nil {
@@ -262,29 +275,32 @@ func (s *Store) queryVersions(ctx context.Context, limit int) ([]ProfileVersion,
 // by with the given trust, and returns the new version number. p is taken as a
 // complete profile (see the package comment on zero versus unset). Versions
 // beyond MaxProfileVersions are pruned oldest-first in the same transaction.
+//
+// p.Autonomy is IGNORED: the stored version's dial is carried over, read in the same
+// transaction as the insert. So a writer that read the profile earlier (the model's
+// update_profile, the launcher's profile PUT) can never revert the owner's dial by
+// writing back the value it read. SetAutonomy is the only way to change it.
 func (s *Store) PutProfile(ctx context.Context, p Profile, by string, trust proactive.Trust) (int64, error) {
-	by, js, err := prepare(p, by, trust)
-	if err != nil {
+	if _, _, err := prepare(p, by, trust); err != nil {
 		return 0, err
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("intent: store profile: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO profile_versions (profile_json, updated_at_ms, updated_by, trust) VALUES (?, ?, ?, ?)`,
-		js, time.Now().UnixMilli(), by, int(trust))
+	cur, err := latestProfileTx(ctx, tx)
 	if err != nil {
-		return 0, fmt.Errorf("intent: store profile: %w", err)
+		return 0, err
 	}
-	version, err := res.LastInsertId()
+	p.Autonomy = cur.Autonomy
+	by, js, err := prepare(p, by, trust)
 	if err != nil {
-		return 0, fmt.Errorf("intent: store profile: %w", err)
+		return 0, err
 	}
-	if err := pruneVersions(ctx, tx); err != nil {
+	version, err := insertVersion(ctx, tx, js, by, trust)
+	if err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

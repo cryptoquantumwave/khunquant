@@ -87,6 +87,11 @@ func (t *WebullReconnectTool) ExecuteAsync(ctx context.Context, args map[string]
 }
 
 func (t *WebullReconnectTool) execute(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+	// Starting a login pushes an approval request to the owner's phone: owner only.
+	if res := refuseNonOwnerChange(ctx, NameWebullReconnect, "account sessions"); res != nil {
+		return res
+	}
+
 	exchangeName := "webull"
 	if v, ok := args["exchange"].(string); ok && v != "" {
 		exchangeName = v

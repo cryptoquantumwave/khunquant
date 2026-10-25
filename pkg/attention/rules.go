@@ -19,9 +19,14 @@ const (
 	ReasonProtective   = "protective"
 	ReasonQuietHours   = "quiet_hours"
 	ReasonInfoToDigest = "info_to_digest"
-	ReasonBudget       = "budget"
-	ReasonComposeLLM   = "compose_llm"
-	ReasonTemplate     = "template"
+	// ReasonLowAcceptance and ReasonHoldout mark a Notice that learning moved from a
+	// message to the digest (see learning.go). They exist only with
+	// proactive.learning.adapt on.
+	ReasonLowAcceptance = "low_acceptance"
+	ReasonHoldout       = "holdout"
+	ReasonBudget        = "budget"
+	ReasonComposeLLM    = "compose_llm"
+	ReasonTemplate      = "template"
 	// ReasonOwnerAlertQuiet marks a candidate the owner asked for (an alert they
 	// set) that is delivered outside their active hours, where any other candidate
 	// would be held for the digest. It replaces compose_llm / template on that
@@ -175,6 +180,22 @@ type facts struct {
 	// JoinsPending: the candidate would be taken into a message that is already
 	// pending and still open, so it adds no message to SendsToday.
 	JoinsPending bool
+
+	// The learning facts. Adapt is false unless proactive.learning.adapt is on, and
+	// while it is false rules 7b and 7c cannot match whatever the other fields hold:
+	// a zero facts changes nothing.
+	Adapt bool
+	// Mean is the owner's acceptance posterior mean for this candidate's trigger kind
+	// and hour bucket (0.5, the prior, when nothing is known) and Responses how many
+	// responses it rests on.
+	Mean      float64
+	Responses int
+	// LowThreshold is the mean below which a Notice goes to the digest.
+	LowThreshold float64
+	// HoldoutRate and HoldoutDraw: a Notice is held out when the draw, uniform in
+	// [0, 1) and made by the store, is below the rate.
+	HoldoutRate float64
+	HoldoutDraw float64
 }
 
 // evaluate is the rule table. Rules are evaluated in order and the first match
@@ -191,6 +212,10 @@ type facts struct {
 //	6   now outside Profile.ActiveHours, and not c.OwnerRequested
 //	                                                           digest             quiet_hours
 //	7   c.Severity == Info                                     digest             info_to_digest
+//	7b  adapt, c is learnable (below), no budget hit, the posterior has >= MinEvidence
+//	    responses and its mean < the low-acceptance threshold  digest             low_acceptance
+//	7c  adapt, c is learnable, no budget hit, and the holdout draw < HoldoutRate
+//	                                                           digest             holdout
 //	8   Severity < Critical and sends today >= budget          digest             budget
 //	    (Warning: budget+1; Critical is never budgeted; a candidate that joins
 //	    a still-open pending message adds none and is not held back)
@@ -203,6 +228,15 @@ type facts struct {
 // when it is quiet hours. Rules 1 to 5, 7 and 8 apply to it unchanged, so it can
 // still be muted, dropped as a repeat, inhibited, only logged in shadow, held for
 // the digest as Info, or held for the digest over the daily budget.
+//
+// Rules 7b and 7c are the only place learning changes a disposition, and they can
+// only move a learnable candidate (see learnable: a Notice that is neither protective
+// nor the owner's own alert) from a message to the digest. Rules 0 to 7 and 8 to 10 are
+// untouched, so a Warning, a Critical, a protective candidate, an owner's alert and
+// anything already dropped, logged or held for the digest is decided as it is without
+// learning. Both rules also stand aside when rule 8 would hold the candidate, so that
+// the budget keeps its reason and a holdout is only ever drawn against a message that
+// would have gone out.
 //
 // Notes on the table:
 //
@@ -282,7 +316,11 @@ func evaluate(c proactive.Candidate, f facts) (proactive.Disposition, string) {
 		return proactive.DispDigest, ReasonQuietHours
 	case c.Severity == proactive.SeverityInfo:
 		return proactive.DispDigest, ReasonInfoToDigest
-	case c.Severity < proactive.SeverityCritical && f.SendsToday >= f.limitFor(c.Severity) && !f.JoinsPending:
+	case f.lowAcceptance(c):
+		return proactive.DispDigest, ReasonLowAcceptance
+	case f.heldOut(c):
+		return proactive.DispDigest, ReasonHoldout
+	case f.overBudget(c):
 		return proactive.DispDigest, ReasonBudget
 	case c.Compose == proactive.ComposeLLM:
 		return proactive.DispEscalate, deliverReason(c, f, ReasonComposeLLM)
@@ -307,6 +345,30 @@ func (f facts) limitFor(s proactive.Severity) int {
 		return f.Budget + 1
 	}
 	return f.Budget
+}
+
+// overBudget is the condition of rule 8.
+func (f facts) overBudget(c proactive.Candidate) bool {
+	return c.Severity < proactive.SeverityCritical && f.SendsToday >= f.limitFor(c.Severity) && !f.JoinsPending
+}
+
+// learnable reports whether learning may change c at all: a Notice that is not
+// protective and not an alert the owner set. Nothing else is ever demoted or held out.
+func learnable(c proactive.Candidate) bool {
+	return c.Severity == proactive.SeverityNotice && !c.Protective && !c.OwnerRequested
+}
+
+// learns: rules 7b and 7c apply to c on these facts.
+func (f facts) learns(c proactive.Candidate) bool {
+	return f.Adapt && learnable(c) && !f.overBudget(c)
+}
+
+func (f facts) lowAcceptance(c proactive.Candidate) bool {
+	return f.learns(c) && f.Responses >= MinEvidence && f.Mean < f.LowThreshold
+}
+
+func (f facts) heldOut(c proactive.Candidate) bool {
+	return f.learns(c) && f.HoldoutRate > 0 && f.HoldoutDraw < f.HoldoutRate
 }
 
 func isProtectiveCritical(c proactive.Candidate) bool {

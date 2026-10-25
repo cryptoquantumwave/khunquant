@@ -10,6 +10,7 @@ import (
 	ccxt "github.com/ccxt/ccxt/go/v4"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -232,4 +233,80 @@ func TestUpdateDCAPlan_ContractPlanCanBeDisabled(t *testing.T) {
 	if got.Enabled {
 		t.Error("expected plan to be disabled")
 	}
+}
+
+// seedContractSpotDNPlan seeds a delta-neutral plan whose SPOT leg names a
+// contract symbol (as a plan saved before the create guard could), on the dnfake
+// providers.
+func seedContractSpotDNPlan(t *testing.T, store *deltaneutral.Store, name, status string) int64 {
+	t.Helper()
+	id := seedDNFakePlan(t, store, name, status)
+	p, err := store.GetPlan(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get seeded plan: %v", err)
+	}
+	p.SpotSymbol = "BTC/USDT:USDT"
+	if err := store.UpdatePlan(context.Background(), p); err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+	return id
+}
+
+func TestOpenDeltaNeutral_RefusesContractSpotSymbol(t *testing.T) {
+	store := setupTempDeltaNeutralStore(t)
+	defer store.Close()
+	spot, fut := newDNFakes()
+	installDNFakes(t, spot, fut)
+	id := seedContractSpotDNPlan(t, store, "open-contract-spot", "ready")
+	tool := NewOpenDeltaNeutralPositionTool(leverageOnCfg(), store)
+
+	for _, confirm := range []bool{false, true} {
+		res := tool.Execute(context.Background(), map[string]any{"plan_id": float64(id), "confirm": confirm})
+		assertContractRefusal(t, res, "BTC/USDT:USDT")
+	}
+	noOrders(t, spot, fut)
+	if got := planStatusOf(t, store, id); got != "ready" {
+		t.Errorf("a refused open moved the plan to %q", got)
+	}
+}
+
+func TestResizeDeltaNeutral_RefusesContractSpotSymbol(t *testing.T) {
+	for name, delta := range map[string]float64{"increase": 1000, "decrease": -1000} {
+		t.Run(name, func(t *testing.T) {
+			store := setupTempDeltaNeutralStore(t)
+			defer store.Close()
+			spot, fut := newDNFakes()
+			installDNFakes(t, spot, fut)
+			id := seedContractSpotDNPlan(t, store, "resize-contract-spot-"+name, "active")
+
+			res := NewResizeDeltaNeutralPositionTool(leverageOnCfg(), store).Execute(context.Background(),
+				map[string]any{"plan_id": float64(id), "delta_notional_usdt": delta, "confirm": true})
+			assertContractRefusal(t, res, "BTC/USDT:USDT")
+			noOrders(t, spot, fut)
+		})
+	}
+}
+
+// The workflow's gate refuses an order that adds risk on a contract spot leg, but
+// never an exit or a hedge completion: getting out of a position stays possible.
+func TestDNExchangeGate_ContractSpotLeg(t *testing.T) {
+	spot, fut := newDNFakes()
+	installDNFakes(t, spot, fut)
+	ex := NewDNExchange(leverageOnCfg(), nil)
+	plan := &deltaneutral.Plan{SpotProvider: "dnfake", SpotSymbol: "BTC/USDT:USDT", SpotSide: "buy"}
+	sz := deltaneutral.Sizing{}
+
+	err := ex.Gate(context.Background(), plan, sz, deltaneutral.LegOrder{Leg: deltaneutral.LegTypeSpot, Side: "buy", Amount: 1})
+	if err == nil || !strings.Contains(err.Error(), "contract (futures/swap) symbol") {
+		t.Fatalf("an opening spot leg on a contract symbol was not refused: %v", err)
+	}
+	for name, lo := range map[string]deltaneutral.LegOrder{
+		"exit":  {Leg: deltaneutral.LegTypeSpot, Side: "sell", Amount: 1, Exit: true},
+		"hedge": {Leg: deltaneutral.LegTypeSpot, Side: "buy", Amount: 1, Hedge: true},
+	} {
+		if err := ex.Gate(context.Background(), plan, sz, lo); err != nil {
+			t.Errorf("%s must not be refused by the contract-symbol guard: %v", name, err)
+		}
+	}
+	noOrders(t, spot, fut)
 }

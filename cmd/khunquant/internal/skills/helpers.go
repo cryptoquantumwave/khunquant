@@ -106,6 +106,9 @@ func skillsInstallFromRegistry(cfg *config.Config, registryName, slug string) er
 		return fmt.Errorf("\u2717 Skill '%s' is flagged as malicious and cannot be installed.\n", slug)
 	}
 
+	if result.Unverified {
+		fmt.Printf("\u26a0\ufe0f  Warning: skill '%s' was installed without moderation checks (allow_unverified).\n", slug)
+	}
 	if result.IsSuspicious {
 		fmt.Printf("\u26a0\ufe0f  Warning: skill '%s' is flagged as suspicious.\n", slug)
 	}

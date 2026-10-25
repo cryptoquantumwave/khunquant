@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -42,6 +43,10 @@ var (
 	reInlineCode = regexp.MustCompile("`([^`]+)`")
 	reRawURL     = regexp.MustCompile(`https?://[^\s<]+`)
 )
+
+// maxMessageLength is the length the Manager splits messages to; the Bot API's
+// own limit (4096) is checked after HTML conversion in SendWithIDs.
+const maxMessageLength = 4000
 
 type TelegramChannel struct {
 	*channels.BaseChannel
@@ -94,7 +99,7 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		telegramCfg,
 		bus,
 		telegramCfg.AllowFrom,
-		channels.WithMaxMessageLength(4000),
+		channels.WithMaxMessageLength(maxMessageLength),
 		channels.WithGroupTrigger(telegramCfg.GroupTrigger),
 		channels.WithReasoningChannelID(telegramCfg.ReasoningChannelID),
 	)
@@ -127,6 +132,20 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
 
+	// A tap on an inline button is a control input, never a message: it goes to
+	// the control router and no further (see callback.go).
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+		return c.handleCallbackQuery(ctx, &query)
+	}, th.AnyCallbackQuery())
+
+	// With learning on, a thumbs reaction is the owner's verdict on a message (see
+	// reaction.go). Without it the bot does not ask for these updates at all.
+	if c.learningOn() {
+		bh.HandleMessageReaction(func(ctx *th.Context, r telego.MessageReactionUpdated) error {
+			return c.handleReaction(ctx, &r)
+		}, th.AnyMessageReaction())
+	}
+
 	c.SetRunning(true)
 	logger.InfoCF("telegram", "Telegram bot connected", map[string]any{
 		"username": c.bot.Username(),
@@ -146,6 +165,26 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 
 	return nil
 }
+
+// allowedUpdates is the list of update types the bot asks Telegram for. It is
+// explicit because Telegram otherwise keeps the previous setting, and a bot that
+// has never set one receives every type: the handlers registered in Start cover
+// exactly these two (a message, and a tap on an inline button), so asking for
+// more would only deliver updates that are dropped; with proactive learning on, a
+// reaction to a message is the third (reaction.go). A fresh slice each call, as
+// telego keeps the one it is given.
+func allowedUpdates(learning bool) []string {
+	u := []string{telego.MessageUpdates, telego.CallbackQueryUpdates}
+	if learning {
+		u = append(u, telego.MessageReactionUpdates)
+	}
+	return u
+}
+
+// SupportsActions implements channels.ActionRenderer: bus.Action buttons are
+// shown as an inline keyboard. The text fallback of the actions stays in the
+// message body (see SendWithIDs).
+func (c *TelegramChannel) SupportsActions() bool { return true }
 
 // runPollingWithBackoff starts long polling and forwards updates to proxyUpdates.
 // On connection failure it retries with exponential backoff starting at 8s, capped at 30 minutes.
@@ -167,7 +206,8 @@ func (c *TelegramChannel) runPollingWithBackoff(ctx context.Context, proxyUpdate
 		// retryTimeout=0 disables telego's built-in fixed retry so the channel
 		// closes immediately on error, giving us full control over backoff.
 		updates, err := c.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
-			Timeout: 30,
+			Timeout:        30,
+			AllowedUpdates: allowedUpdates(c.learningOn()),
 		}, telego.WithLongPollingRetryTimeout(0))
 
 		if err != nil {
@@ -231,28 +271,68 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Send implements channels.Channel. It delegates to SendWithIDs so there is a
+// single send path.
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	_, err := c.SendWithIDs(ctx, msg)
+	return err
+}
+
+// SendWithIDs implements channels.IDReportingSender. It returns the Bot API
+// message ID (as a decimal string) of every message it created, in send order:
+// one per chunk, more than one when HTML expansion forces a re-split. If a
+// later chunk fails, the IDs of the earlier ones are still returned.
+func (c *TelegramChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
-		return channels.ErrNotRunning
+		return nil, channels.ErrNotRunning
 	}
 
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
-		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
+		return nil, fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
 	}
 
 	if msg.Content == "" {
-		return nil
+		return nil, nil
 	}
 
 	// The Manager already splits messages to ≤4000 chars (WithMaxMessageLength),
 	// so msg.Content is guaranteed to be within that limit. We still need to
 	// check if HTML expansion pushes it beyond Telegram's 4096-char API limit.
 	replyToID := msg.ReplyToMessageID
+	silent := msg.DisableNotification
+	var ids []string
+
+	// Buttons: the text fallback of the actions stays in the body (the Manager
+	// leaves it out for a channel that renders actions, and a client that cannot
+	// show an inline keyboard still has the commands), and the keyboard goes on the
+	// last message only. If any action cannot be encoded the message goes without a
+	// keyboard: all of them or none.
 	queue := []string{msg.Content}
+	var markup *telego.InlineKeyboardMarkup
+	if len(msg.Actions) > 0 {
+		queue = channels.AppendActionFooter(queue, msg.Actions, maxMessageLength)
+		var kbErr error
+		if markup, kbErr = buildKeyboard(msg.Actions); kbErr != nil {
+			logger.WarnCF("telegram", "Invalid message actions, sending the message without buttons", map[string]any{
+				"intervention_id": msg.InterventionID,
+				"actions":         len(msg.Actions),
+				"error":           kbErr.Error(),
+			})
+			markup = nil
+		}
+	}
+
 	for len(queue) > 0 {
 		chunk := queue[0]
 		queue = queue[1:]
+		// Only the message that ends up last carries the keyboard, including when
+		// HTML expansion splits a chunk further (those parts are pushed back on
+		// the queue and come through here again).
+		var kb *telego.InlineKeyboardMarkup
+		if len(queue) == 0 {
+			kb = markup
+		}
 
 		htmlContent := markdownToTelegramHTML(chunk)
 
@@ -267,8 +347,12 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 			}
 
 			if smallerLen <= 0 {
-				if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
-					return err
+				id, err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID, silent, kb)
+				if err != nil {
+					return ids, err
+				}
+				if id != "" {
+					ids = append(ids, id)
 				}
 				replyToID = ""
 				continue
@@ -298,24 +382,35 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 			continue
 		}
 
-		if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
-			return err
+		id, err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID, silent, kb)
+		if err != nil {
+			return ids, err
+		}
+		if id != "" {
+			ids = append(ids, id)
 		}
 		// Only the first chunk should be a reply; subsequent chunks are normal messages.
 		replyToID = ""
 	}
 
-	return nil
+	return ids, nil
 }
 
 // sendHTMLChunk sends a single HTML message, falling back to the original
 // markdown as plain text on parse failure so users never see raw HTML tags.
+// It returns the ID of the message that was actually created (the plain-text
+// fallback when the HTML attempt was rejected), as a decimal string.
 func (c *TelegramChannel) sendHTMLChunk(
-	ctx context.Context, chatID int64, threadID int, htmlContent, mdFallback string, replyToID string,
-) error {
+	ctx context.Context, chatID int64, threadID int, htmlContent, mdFallback string, replyToID string, silent bool,
+	markup *telego.InlineKeyboardMarkup,
+) (string, error) {
 	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
 	tgMsg.ParseMode = telego.ModeHTML
 	tgMsg.MessageThreadID = threadID
+	tgMsg.DisableNotification = silent
+	if markup != nil {
+		tgMsg.ReplyMarkup = markup
+	}
 
 	if replyToID != "" {
 		if mid, parseErr := strconv.Atoi(replyToID); parseErr == nil {
@@ -325,17 +420,30 @@ func (c *TelegramChannel) sendHTMLChunk(
 		}
 	}
 
-	if _, err := c.bot.SendMessage(ctx, tgMsg); err != nil {
+	sent, err := c.bot.SendMessage(ctx, tgMsg)
+	if err != nil {
 		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]any{
 			"error": err.Error(),
 		})
 		tgMsg.Text = mdFallback
 		tgMsg.ParseMode = ""
-		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-			return fmt.Errorf("telegram send: %w", channels.ErrTemporary)
+		if sent, err = c.bot.SendMessage(ctx, tgMsg); err != nil && markup != nil {
+			// If the keyboard is what the API refused, the message still goes out:
+			// its text carries the commands.
+			logger.ErrorCF("telegram", "Send with buttons failed, retrying without them", map[string]any{
+				"error": err.Error(),
+			})
+			tgMsg.ReplyMarkup = nil
+			sent, err = c.bot.SendMessage(ctx, tgMsg)
+		}
+		if err != nil {
+			return "", fmt.Errorf("telegram send: %w", channels.ErrTemporary)
 		}
 	}
-	return nil
+	if sent == nil {
+		return "", nil
+	}
+	return strconv.Itoa(sent.MessageID), nil
 }
 
 // maxTypingDuration limits how long the typing indicator can run.
@@ -568,14 +676,8 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		return fmt.Errorf("message sender (user) is nil")
 	}
 
-	platformID := fmt.Sprintf("%d", user.ID)
-	sender := bus.SenderInfo{
-		Platform:    "telegram",
-		PlatformID:  platformID,
-		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
-		Username:    user.Username,
-		DisplayName: user.FirstName,
-	}
+	sender := telegramSender(user)
+	platformID := sender.PlatformID
 
 	// /pair command is handled before any allowlist check so both unknown and
 	// approved users can run it in private chats.
@@ -587,20 +689,8 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	// check allowlist to avoid downloading attachments for rejected users.
 	// When pairing is enabled for private chats, use a strict check where an empty
 	// allow_from list means "no one approved yet" (deny-all), not "allow everyone".
-	isPairingDM := message.Chat.Type == "private" && c.config.Channels.Telegram.PairingEnabled
-	allowed := false
-	if isPairingDM {
-		// Strict allowlist: empty = deny all. Read from live config so we use
-		// the latest allow_from without requiring a code restart for the check.
-		for _, id := range c.config.Channels.Telegram.AllowFrom {
-			if identity.MatchAllowed(sender, id) {
-				allowed = true
-				break
-			}
-		}
-	} else {
-		allowed = c.IsAllowedSender(sender)
-	}
+	// (checkAllowList is shared with the callback path, see callback.go.)
+	allowed, isPairingDM := c.checkAllowList(message.Chat.Type, sender)
 
 	if !allowed {
 		if isPairingDM {
@@ -708,6 +798,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		}
 	}
 
+	// What the sender typed, before the quoted message goes in front of it: the
+	// control path needs it to tell "yes" typed as a reply from a long message.
+	ownText := content
+
 	// Prepend the quoted message before the empty check: a bare "yes" replying
 	// to something is meaningful, and would otherwise be dropped here as empty.
 	if message.ReplyToMessage != nil {
@@ -725,7 +819,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			// Quoted media leads: it is the thing being referred to.
 			mediaPaths = append(quotedMedia, mediaPaths...)
 		}
-		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage, message.Quote)
 	}
 
 	if content == "" && len(mediaPaths) == 0 {
@@ -747,17 +841,28 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			return nil
 		}
 		content = cleaned
+		if message.ReplyToMessage != nil {
+			// The same trimming for the sender's own words; if it leaves nothing
+			// to answer, there is no text for the control path.
+			if isMentioned {
+				ownText = c.stripBotMention(ownText)
+			}
+			if ok, own := c.ShouldRespondInGroup(isMentioned, ownText); ok {
+				ownText = own
+			} else {
+				ownText = ""
+			}
+		}
 	}
 
 	// For forum topics, embed the thread ID as "chatID/threadID" so replies
 	// route to the correct topic and each topic gets its own session.
 	// Only forum groups (IsForum) are handled; regular group reply threads
 	// must share one session per group.
-	compositeChatID := fmt.Sprintf("%d", chatID)
+	// (chatIDWithThread is shared with the callback path, so a tap on a button
+	// in a topic comes back with the same id.)
 	threadID := message.MessageThreadID
-	if message.Chat.IsForum && threadID != 0 {
-		compositeChatID = fmt.Sprintf("%d/%d", chatID, threadID)
-	}
+	compositeChatID := chatIDWithThread(message.Chat, threadID)
 
 	logger.DebugCF("telegram", "Received message", map[string]any{
 		"sender_id": sender.CanonicalID,
@@ -785,6 +890,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 
 	if message.ReplyToMessage != nil {
 		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
+		// Hints for the control path; HandleMessage removes them before publishing.
+		metadata[channels.MetaOwnText] = ownText
+	}
+	if message.ForwardOrigin != nil {
+		metadata[channels.MetaForwarded] = "true"
 	}
 
 	// Set parent_peer metadata for per-topic agent binding.
@@ -1226,18 +1336,124 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 // context, and any audio it carried is attached so the agent can hear what is
 // being referred to rather than only being told it exists.
 
-func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message) string {
-	quoted := strings.TrimSpace(telegramQuotedContent(reply))
+func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message, quote *telego.TextQuote) string {
+	quoted := strings.TrimSpace(sanitizeQuotedBody(telegramQuotedContent(reply, quote)))
 	if quoted == "" {
 		return content
 	}
 
-	author := telegramQuotedAuthor(reply)
+	author := sanitizeQuotedAuthor(telegramQuotedAuthor(reply))
 	role := c.telegramQuotedRole(reply)
-	if strings.TrimSpace(content) == "" {
-		return fmt.Sprintf("[quoted %s message from %s]: %s", role, author, quoted)
+	label := fmt.Sprintf("[quoted %s message from %s]", role, author)
+	if !c.telegramQuotedSenderAllowed(reply) {
+		// The replying (allowed) user chose to reference this message, so it is
+		// not dropped -- but the agent must be told the attribution is
+		// untrusted, since it did not come from a permitted sender.
+		label = fmt.Sprintf("[quoted %s message from %s (not an allowed sender)]", role, author)
 	}
-	return fmt.Sprintf("[quoted %s message from %s]: %s\n\n%s", role, author, quoted, content)
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("%s: %s", label, quoted)
+	}
+	return fmt.Sprintf("%s: %s\n\n%s", label, quoted, content)
+}
+
+// telegramQuotedSenderAllowed reports whether the sender of a quoted message
+// would itself be permitted to send messages to this channel, using the same
+// AllowFrom logic applied to inbound senders.
+func (c *TelegramChannel) telegramQuotedSenderAllowed(message *telego.Message) bool {
+	if message == nil {
+		return true
+	}
+	if message.From == nil {
+		// No identifiable user: a channel post (SenderChat) or an anonymous
+		// group admin. This is the *least* verifiable sender class, so it is
+		// flagged rather than rendered with the same trusted-looking plain
+		// label a known, permitted user gets.
+		return message.SenderChat == nil
+	}
+	if c == nil || c.BaseChannel == nil {
+		return true
+	}
+
+	platformID := fmt.Sprintf("%d", message.From.ID)
+	sender := bus.SenderInfo{
+		Platform:    "telegram",
+		PlatformID:  platformID,
+		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
+		Username:    message.From.Username,
+		DisplayName: message.From.FirstName,
+	}
+	return c.IsAllowedSender(sender)
+}
+
+// maxQuotedAuthorRunes caps the sanitised author label. This is display
+// context for the agent, not a place for an attacker-controlled first name to
+// smuggle an arbitrarily long payload.
+const maxQuotedAuthorRunes = 64
+
+// maxQuotedBodyRunes caps the sanitised quoted body. Documented cap: quoted
+// content beyond this length is truncated with quotedBodyTruncationMarker.
+const maxQuotedBodyRunes = 2000
+
+const quotedBodyTruncationMarker = "…"
+
+// quotedAuthorStructural strips characters that could forge a second
+// "[quoted ... from ...]:" attribution boundary inside the author field.
+var quotedAuthorStructural = regexp.MustCompile(`[\[\]:]`)
+
+// sanitizeQuotedAuthor strips characters that could forge a fake "[quoted ...]"
+// boundary or inject control characters, collapses whitespace (including
+// Unicode line/paragraph separators, not just ASCII space), and caps length.
+// Uses unicode.IsControl/IsSpace rather than an ASCII byte-range regex so C1
+// controls (e.g. U+0085 NEL) and Unicode space separators are also caught.
+func sanitizeQuotedAuthor(author string) string {
+	cleaned := quotedAuthorStructural.ReplaceAllString(author, "")
+
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range cleaned {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			if !prevSpace {
+				b.WriteRune(' ')
+			}
+			prevSpace = true
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	cleaned = strings.TrimSpace(b.String())
+	if cleaned == "" {
+		return "unknown"
+	}
+
+	runes := []rune(cleaned)
+	if len(runes) > maxQuotedAuthorRunes {
+		cleaned = string(runes[:maxQuotedAuthorRunes])
+	}
+	return cleaned
+}
+
+// sanitizeQuotedBody strips control characters (keeping newline/tab, which
+// are normal message formatting) and caps the body at maxQuotedBodyRunes.
+// Uses unicode.IsControl rather than an ASCII byte-range regex so C1 controls
+// (e.g. U+0085 NEL) are also stripped, not just the C0 block.
+func sanitizeQuotedBody(body string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, body)
+
+	runes := []rune(cleaned)
+	if len(runes) > maxQuotedBodyRunes {
+		cleaned = string(runes[:maxQuotedBodyRunes]) + quotedBodyTruncationMarker
+	}
+	return cleaned
 }
 
 func (c *TelegramChannel) telegramQuotedRole(message *telego.Message) string {
@@ -1291,17 +1507,30 @@ func telegramQuotedAuthor(message *telego.Message) string {
 	return "unknown"
 }
 
-func telegramQuotedContent(message *telego.Message) string {
+// telegramQuotedContent builds the quoted body for a reply. When the replying
+// message carries a Quote (the user's highlighted excerpt of the original,
+// telego's Message.Quote), that excerpt is used in place of the full message
+// text/caption -- it is what the user actually pointed at. Any media on the
+// original message is still noted, since a partial text excerpt does not
+// mean the attached photo/voice/etc. stopped being relevant.
+func telegramQuotedContent(message *telego.Message, quote *telego.TextQuote) string {
 	if message == nil {
 		return ""
 	}
 
 	var parts []string
-	if text := strings.TrimSpace(message.Text); text != "" {
-		parts = append(parts, text)
+	if quote != nil {
+		if text := strings.TrimSpace(quote.Text); text != "" {
+			parts = append(parts, text)
+		}
 	}
-	if caption := strings.TrimSpace(message.Caption); caption != "" {
-		parts = append(parts, caption)
+	if len(parts) == 0 {
+		if text := strings.TrimSpace(message.Text); text != "" {
+			parts = append(parts, text)
+		}
+		if caption := strings.TrimSpace(message.Caption); caption != "" {
+			parts = append(parts, caption)
+		}
 	}
 	switch {
 	case len(message.Photo) > 0:

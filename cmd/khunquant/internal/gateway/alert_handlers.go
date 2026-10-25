@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -12,36 +14,109 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/ta"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
-// alertPricePayload mirrors tools.priceAlertPayload (unexported there).
-type alertPricePayload struct {
-	ProviderID string  `json:"provider"`
-	Account    string  `json:"account"`
-	Symbol     string  `json:"symbol"`
-	Condition  string  `json:"condition"` // "above" | "below"
-	Threshold  float64 `json:"threshold"`
-	AlertMsg   string  `json:"alert_msg"`
-	Recurring  bool    `json:"recurring"`
+const (
+	// alertPublishTimeout bounds every outbound publish made by an alert handler.
+	// Cron runs due jobs serially, so an unbounded publish on a full bus buffer
+	// would stall every other job.
+	alertPublishTimeout = 5 * time.Second
+
+	// alertBrokenNoticeThreshold is the number of consecutive data errors after
+	// which the user is told, exactly once per error streak, that the alert is
+	// not working.
+	alertBrokenNoticeThreshold = 3
+)
+
+// alertNow is the clock used for recurring-alert cooldowns. Tests replace it.
+var alertNow = time.Now
+
+// updateAlertPayload re-reads the job right before writing, decodes its payload
+// into T, applies fn, and replaces only Payload.Message. Re-reading (rather than
+// writing back the handler's copy) avoids clobbering a concurrent edit.
+func updateAlertPayload[T any](cs *cron.CronService, jobID string, fn func(*T)) (T, error) {
+	var p T
+	fresh := cs.GetJob(jobID)
+	if fresh == nil {
+		return p, fmt.Errorf("alert job %s no longer exists", jobID)
+	}
+	if err := json.Unmarshal([]byte(fresh.Payload.Message), &p); err != nil {
+		return p, fmt.Errorf("decode alert payload: %w", err)
+	}
+	fn(&p)
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return p, fmt.Errorf("encode alert payload: %w", err)
+	}
+	fresh.Payload.Message = string(raw)
+	if err := cs.UpdateJob(fresh); err != nil {
+		return p, fmt.Errorf("update alert job: %w", err)
+	}
+	return p, nil
 }
 
-// alertIndicatorPayload mirrors tools.indicatorAlertPayload (unexported there).
-type alertIndicatorPayload struct {
-	ProviderID string  `json:"provider"`
-	Account    string  `json:"account"`
-	Symbol     string  `json:"symbol"`
-	Timeframe  string  `json:"timeframe"`
-	Indicator  string  `json:"indicator"` // RSI | MACD | SMA | EMA (legacy SMA20/EMA9 accepted)
-	Period     int     `json:"period"`    // lookback period; 0 = use default
-	Condition  string  `json:"condition"` // "above" | "below"
-	Threshold  float64 `json:"threshold"`
-	AlertMsg   string  `json:"alert_msg"`
-	Recurring  bool    `json:"recurring"`
+// deliverAlertMessage publishes content to the job's channel/chat with a bounded
+// timeout. A nil return means the message was enqueued on the bus. It returns an
+// error when the job has no routing or the publish fails.
+func deliverAlertMessage(ctx context.Context, msgBus *bus.MessageBus, job *cron.CronJob, content string) error {
+	channel := job.Payload.Channel
+	chatID := job.Payload.To
+	if channel == "" || chatID == "" {
+		return fmt.Errorf("no delivery channel/chat_id stored on the job (channel=%q chat_id=%q)", channel, chatID)
+	}
+	pubCtx, cancel := context.WithTimeout(ctx, alertPublishTimeout)
+	defer cancel()
+	return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Content: content,
+	})
+}
+
+// alertDataFailure records one data error for an alert and, when the streak
+// reaches alertBrokenNoticeThreshold exactly, tells the user once. bump persists
+// the incremented counter and returns the new count. The returned error wraps
+// cause so cron records LastStatus="error".
+func alertDataFailure(
+	ctx context.Context,
+	kind string,
+	job *cron.CronJob,
+	msgBus *bus.MessageBus,
+	providerID, symbol string,
+	cause error,
+	bump func() (int, error),
+) error {
+	count, err := bump()
+	if err != nil {
+		logger.WarnCF("alert", "Failed to persist alert error counter", map[string]any{
+			"job_id": job.ID, "error": err.Error(),
+		})
+	} else if count == alertBrokenNoticeThreshold {
+		notice := fmt.Sprintf("Alert '%s' cannot fetch %s from %s: %s. It will keep retrying.",
+			job.Name, symbol, providerID, cause)
+		if derr := deliverAlertMessage(ctx, msgBus, job, notice); derr != nil {
+			logger.WarnCF("alert", "Failed to deliver broken-alert notice", map[string]any{
+				"job_id": job.ID, "error": derr.Error(),
+			})
+		}
+	}
+	return fmt.Errorf("%s: %w", kind, cause)
+}
+
+// alertInCooldown reports whether a recurring alert fired too recently to fire again.
+func alertInCooldown(recurring bool, lastFiredMS int64, cooldownMinutes int, now time.Time) bool {
+	if !recurring || lastFiredMS <= 0 {
+		return false
+	}
+	cooldown := time.Duration(tools.EffectiveAlertCooldownMinutes(cooldownMinutes)) * time.Minute
+	return now.UnixMilli()-lastFiredMS < cooldown.Milliseconds()
 }
 
 // handlePriceAlertJob executes a price alert cron job directly in code,
-// bypassing the LLM. It fetches the live ticker, evaluates the condition,
-// sends a notification via the message bus, and removes non-recurring jobs.
+// bypassing the LLM. It fetches the live ticker, evaluates the condition and
+// sends a notification via the message bus. A one-shot job is removed only after
+// the notification was enqueued; a recurring job is rate-limited by its cooldown.
 func handlePriceAlertJob(
 	ctx context.Context,
 	job *cron.CronJob,
@@ -49,41 +124,61 @@ func handlePriceAlertJob(
 	cronService *cron.CronService,
 	msgBus *bus.MessageBus,
 ) (string, error) {
-	var payload alertPricePayload
+	const kind = "price alert"
+
+	var payload tools.PriceAlertPayload
 	if err := json.Unmarshal([]byte(job.Payload.Message), &payload); err != nil {
-		return "", fmt.Errorf("price alert: decode payload: %w", err)
+		return "", fmt.Errorf("%s: decode payload: %w", kind, err)
+	}
+
+	fail := func(cause error) (string, error) {
+		return "", alertDataFailure(ctx, kind, job, msgBus, payload.ProviderID, payload.Symbol, cause, func() (int, error) {
+			p, err := updateAlertPayload(cronService, job.ID, func(p *tools.PriceAlertPayload) { p.ConsecutiveErrors++ })
+			return p.ConsecutiveErrors, err
+		})
+	}
+
+	if !tools.ValidAlertCondition(payload.Condition) {
+		return fail(fmt.Errorf("invalid condition %q in stored alert (allowed: above, below)", payload.Condition))
 	}
 
 	p, err := broker.CreateProviderForAccount(payload.ProviderID, payload.Account, cfg)
 	if err != nil {
-		return "", fmt.Errorf("price alert: create provider %q: %w", payload.ProviderID, err)
+		return fail(fmt.Errorf("create provider %q: %w", payload.ProviderID, err))
 	}
 
 	md, ok := p.(broker.MarketDataProvider)
 	if !ok {
-		return "", fmt.Errorf("price alert: provider %q does not support market data", payload.ProviderID)
+		return fail(fmt.Errorf("provider %q does not support market data", payload.ProviderID))
 	}
 
 	ticker, err := md.FetchTicker(ctx, payload.Symbol)
 	if err != nil {
-		return "", fmt.Errorf("price alert: FetchTicker %s: %w", payload.Symbol, err)
+		return fail(fmt.Errorf("FetchTicker %s: %w", payload.Symbol, err))
+	}
+	if ticker.Last == nil {
+		return fail(errors.New("no price available"))
 	}
 
-	if ticker.Last == nil {
-		return "no price available", nil
-	}
+	// The data was fetched and the alert is evaluable: the error streak is over.
+	resetAlertErrors(cronService, job.ID, payload.ConsecutiveErrors, func(p *tools.PriceAlertPayload) { p.ConsecutiveErrors = 0 })
 
 	price := *ticker.Last
 	triggered := false
 	switch payload.Condition {
-	case "above":
+	case tools.AlertConditionAbove:
 		triggered = price > payload.Threshold
-	case "below":
+	case tools.AlertConditionBelow:
 		triggered = price < payload.Threshold
 	}
 
 	if !triggered {
 		return "condition not met", nil
+	}
+
+	now := alertNow()
+	if alertInCooldown(payload.Recurring, payload.LastFiredMS, payload.CooldownMinutes, now) {
+		return "condition met; in cooldown", nil
 	}
 
 	// Build notification text.
@@ -100,36 +195,45 @@ func handlePriceAlertJob(
 		)
 	}
 
-	// Send via bus if we have routing info.
-	channel := job.Payload.Channel
-	chatID := job.Payload.To
-	if channel != "" && chatID != "" {
-		if err := msgBus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: notification,
-		}); err != nil {
-			logger.ErrorCF("alert", "Failed to deliver price alert", map[string]any{
-				"job_id": job.ID, "error": err.Error(),
-			})
-		}
-	} else {
-		logger.WarnCF("alert", "Price alert fired but no channel/chatID stored in job", map[string]any{
-			"job_id": job.ID, "symbol": payload.Symbol,
+	if err := deliverAlertMessage(ctx, msgBus, job, notification); err != nil {
+		// Keep the job (one-shot or recurring) so the next tick retries.
+		logger.ErrorCF("alert", "Failed to deliver price alert; job kept for retry", map[string]any{
+			"job_id": job.ID, "error": err.Error(),
 		})
+		return "", fmt.Errorf("%s: deliver notification: %w", kind, err)
 	}
 
-	// Remove one-shot job.
+	legacyAlertFired.Add(1) // delivered: counted for the shadow period's daily comparison
 	if !payload.Recurring {
 		cronService.RemoveJob(job.ID)
+		return "alert fired", nil
 	}
 
+	if _, err := updateAlertPayload(cronService, job.ID, func(p *tools.PriceAlertPayload) {
+		p.LastFiredMS = now.UnixMilli()
+	}); err != nil {
+		return "", fmt.Errorf("%s: alert delivered but cooldown state not saved: %w", kind, err)
+	}
 	return "alert fired", nil
+}
+
+// resetAlertErrors clears a non-zero error streak. current is the count the
+// handler observed at the start of the tick; a zero count needs no write.
+func resetAlertErrors[T any](cs *cron.CronService, jobID string, current int, fn func(*T)) {
+	if current == 0 {
+		return
+	}
+	if _, err := updateAlertPayload(cs, jobID, fn); err != nil {
+		logger.WarnCF("alert", "Failed to reset alert error counter", map[string]any{
+			"job_id": jobID, "error": err.Error(),
+		})
+	}
 }
 
 // handleIndicatorAlertJob executes an indicator alert cron job directly in code.
 // It fetches OHLCV data, computes the indicator, evaluates the condition,
-// and notifies the user without going through the LLM.
+// and notifies the user without going through the LLM. Delivery, one-shot
+// removal, cooldown and broken-alert handling match handlePriceAlertJob.
 func handleIndicatorAlertJob(
 	ctx context.Context,
 	job *cron.CronJob,
@@ -137,24 +241,22 @@ func handleIndicatorAlertJob(
 	cronService *cron.CronService,
 	msgBus *bus.MessageBus,
 ) (string, error) {
-	var payload alertIndicatorPayload
+	const kind = "indicator alert"
+
+	var payload tools.IndicatorAlertPayload
 	if err := json.Unmarshal([]byte(job.Payload.Message), &payload); err != nil {
-		return "", fmt.Errorf("indicator alert: decode payload: %w", err)
+		return "", fmt.Errorf("%s: decode payload: %w", kind, err)
 	}
 
-	p, err := broker.CreateProviderForAccount(payload.ProviderID, payload.Account, cfg)
-	if err != nil {
-		return "", fmt.Errorf("indicator alert: create provider %q: %w", payload.ProviderID, err)
+	fail := func(cause error) (string, error) {
+		return "", alertDataFailure(ctx, kind, job, msgBus, payload.ProviderID, payload.Symbol, cause, func() (int, error) {
+			p, err := updateAlertPayload(cronService, job.ID, func(p *tools.IndicatorAlertPayload) { p.ConsecutiveErrors++ })
+			return p.ConsecutiveErrors, err
+		})
 	}
 
-	md, ok := p.(broker.MarketDataProvider)
-	if !ok {
-		return "", fmt.Errorf("indicator alert: provider %q does not support market data", payload.ProviderID)
-	}
-
-	timeframe := payload.Timeframe
-	if timeframe == "" {
-		timeframe = "1h"
+	if !tools.ValidAlertCondition(payload.Condition) {
+		return fail(fmt.Errorf("invalid condition %q in stored alert (allowed: above, below)", payload.Condition))
 	}
 
 	// Normalize indicator family and period, including legacy "SMA20"/"EMA9" strings.
@@ -166,6 +268,9 @@ func handleIndicatorAlertJob(
 	case "EMA9":
 		ind, period = "EMA", 9
 	}
+	if !tools.ValidAlertIndicatorFamily(ind) {
+		return fail(fmt.Errorf("unknown indicator %q in stored alert (allowed: RSI, MACD, SMA, EMA)", payload.Indicator))
+	}
 	if period <= 0 {
 		switch ind {
 		case "RSI":
@@ -173,6 +278,24 @@ func handleIndicatorAlertJob(
 		case "SMA", "EMA":
 			period = 20
 		}
+	}
+	if ind != "MACD" && period < 2 {
+		return fail(fmt.Errorf("invalid period %d for %s in stored alert (must be >= 2)", period, ind))
+	}
+
+	p, err := broker.CreateProviderForAccount(payload.ProviderID, payload.Account, cfg)
+	if err != nil {
+		return fail(fmt.Errorf("create provider %q: %w", payload.ProviderID, err))
+	}
+
+	md, ok := p.(broker.MarketDataProvider)
+	if !ok {
+		return fail(fmt.Errorf("provider %q does not support market data", payload.ProviderID))
+	}
+
+	timeframe := payload.Timeframe
+	if timeframe == "" {
+		timeframe = "1h"
 	}
 
 	// Request enough bars for a reliable computation: period*3, at least 100, at most 500.
@@ -186,12 +309,13 @@ func handleIndicatorAlertJob(
 
 	candles, err := md.FetchOHLCV(ctx, payload.Symbol, timeframe, nil, limit)
 	if err != nil {
-		return "", fmt.Errorf("indicator alert: FetchOHLCV: %w", err)
+		return fail(fmt.Errorf("FetchOHLCV %s: %w", payload.Symbol, err))
 	}
 	required := period + 1
 	if len(candles) < required {
-		return fmt.Sprintf("not enough data: have %d bars, need >= %d for %s(%d) — exchange history may be too shallow for this period/timeframe",
-			len(candles), required, ind, period), nil
+		return fail(fmt.Errorf(
+			"not enough data: have %d bars, need >= %d for %s(%d) — exchange history may be too shallow for this period/timeframe",
+			len(candles), required, ind, period))
 	}
 
 	closes := make([]float64, len(candles))
@@ -229,19 +353,27 @@ func handleIndicatorAlertJob(
 	}
 
 	if !hasValue {
-		return "insufficient data for indicator", nil
+		return fail(fmt.Errorf("insufficient data to compute %s", ind))
 	}
+
+	// The indicator was computed: the error streak is over.
+	resetAlertErrors(cronService, job.ID, payload.ConsecutiveErrors, func(p *tools.IndicatorAlertPayload) { p.ConsecutiveErrors = 0 })
 
 	triggered := false
 	switch payload.Condition {
-	case "above":
+	case tools.AlertConditionAbove:
 		triggered = value > payload.Threshold
-	case "below":
+	case tools.AlertConditionBelow:
 		triggered = value < payload.Threshold
 	}
 
 	if !triggered {
 		return "condition not met", nil
+	}
+
+	now := alertNow()
+	if alertInCooldown(payload.Recurring, payload.LastFiredMS, payload.CooldownMinutes, now) {
+		return "condition met; in cooldown", nil
 	}
 
 	indLabel := ind
@@ -263,27 +395,24 @@ func handleIndicatorAlertJob(
 		)
 	}
 
-	channel := job.Payload.Channel
-	chatID := job.Payload.To
-	if channel != "" && chatID != "" {
-		if err := msgBus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: notification,
-		}); err != nil {
-			logger.ErrorCF("alert", "Failed to deliver indicator alert", map[string]any{
-				"job_id": job.ID, "error": err.Error(),
-			})
-		}
-	} else {
-		logger.WarnCF("alert", "Indicator alert fired but no channel/chatID stored in job", map[string]any{
-			"job_id": job.ID, "symbol": payload.Symbol,
+	if err := deliverAlertMessage(ctx, msgBus, job, notification); err != nil {
+		// Keep the job (one-shot or recurring) so the next tick retries.
+		logger.ErrorCF("alert", "Failed to deliver indicator alert; job kept for retry", map[string]any{
+			"job_id": job.ID, "error": err.Error(),
 		})
+		return "", fmt.Errorf("%s: deliver notification: %w", kind, err)
 	}
 
+	legacyAlertFired.Add(1) // delivered: counted for the shadow period's daily comparison
 	if !payload.Recurring {
 		cronService.RemoveJob(job.ID)
+		return "alert fired", nil
 	}
 
+	if _, err := updateAlertPayload(cronService, job.ID, func(p *tools.IndicatorAlertPayload) {
+		p.LastFiredMS = now.UnixMilli()
+	}); err != nil {
+		return "", fmt.Errorf("%s: alert delivered but cooldown state not saved: %w", kind, err)
+	}
 	return "alert fired", nil
 }

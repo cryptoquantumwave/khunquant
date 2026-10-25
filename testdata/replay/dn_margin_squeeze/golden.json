@@ -1,0 +1,16 @@
+{
+  "events": 19,
+  "candidates": 19,
+  "dispositions": {
+    "drop": 14,
+    "escalate": 1,
+    "notify": 4
+  },
+  "would_send": 5,
+  "llm_wakes": 1,
+  "precision": 1,
+  "recall": 1,
+  "critical_recall": 1,
+  "latency_max_seconds": 60,
+  "latency_tolerance_seconds": 1
+}

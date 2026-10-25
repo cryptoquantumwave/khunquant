@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
@@ -17,7 +18,7 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 	hs.stopChan = make(chan struct{}) // Enable for testing
 
 	asyncCalled := false
@@ -86,7 +87,7 @@ func TestExecuteHeartbeat_ResultLogging(t *testing.T) {
 			}
 			defer os.RemoveAll(tmpDir)
 
-			hs := NewHeartbeatService(tmpDir, 30, true)
+			hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 			hs.stopChan = make(chan struct{}) // Enable for testing
 
 			hs.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
@@ -115,7 +116,7 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 1, true)
+	hs := NewHeartbeatService(tmpDir, 1, true, state.NewManager(tmpDir))
 
 	err = hs.Start()
 	if err != nil {
@@ -134,7 +135,7 @@ func TestHeartbeatService_Disabled(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 1, false)
+	hs := NewHeartbeatService(tmpDir, 1, false, state.NewManager(tmpDir))
 
 	if hs.enabled != false {
 		t.Error("Expected service to be disabled")
@@ -151,7 +152,7 @@ func TestExecuteHeartbeat_NilResult(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 	hs.stopChan = make(chan struct{}) // Enable for testing
 
 	hs.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
@@ -173,7 +174,7 @@ func TestLogPath(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Write a log entry
 	hs.logf("INFO", "Test log entry")
@@ -193,7 +194,7 @@ func TestHeartbeatFilePath(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Trigger default template creation
 	hs.buildPrompt()
@@ -212,7 +213,7 @@ func TestBuildPrompt_DefaultTemplateStaysIdle(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 	hs.createDefaultHeartbeatTemplate()
 
 	if prompt := hs.buildPrompt(); prompt != "" {
@@ -227,7 +228,7 @@ func TestBuildPrompt_UserTasksAfterMarkerProducePrompt(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 	hs.createDefaultHeartbeatTemplate()
 
 	path := filepath.Join(tmpDir, "HEARTBEAT.md")
@@ -257,7 +258,7 @@ func TestHeartbeatService_SetBus(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Initially no bus set
 	if hs.bus != nil {
@@ -278,7 +279,7 @@ func TestHeartbeatService_IsRunning(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Not running initially
 	if hs.IsRunning() {
@@ -317,25 +318,25 @@ func TestParseLastChannel_Valid(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	tests := []struct {
-		name       string
-		input      string
+		name         string
+		input        string
 		wantPlatform string
-		wantUserID string
+		wantUserID   string
 	}{
 		{
-			name:       "telegram channel",
-			input:      "telegram:123456",
+			name:         "telegram channel",
+			input:        "telegram:123456",
 			wantPlatform: "telegram",
-			wantUserID: "123456",
+			wantUserID:   "123456",
 		},
 		{
-			name:       "discord channel",
-			input:      "discord:user_id_789",
+			name:         "discord channel",
+			input:        "discord:user_id_789",
 			wantPlatform: "discord",
-			wantUserID: "user_id_789",
+			wantUserID:   "user_id_789",
 		},
 	}
 
@@ -360,7 +361,7 @@ func TestParseLastChannel_Invalid(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	tests := []struct {
 		name  string
@@ -402,7 +403,7 @@ func TestParseLastChannel_InternalChannel(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Test known internal channel (cli, system, subagent)
 	platform, userID := hs.parseLastChannel("cli:test")
@@ -419,7 +420,7 @@ func TestParseLastChannel_MultipleColons(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// Multiple colons should be handled - everything after first colon is userID
 	platform, userID := hs.parseLastChannel("telegram:123:456")
@@ -439,7 +440,7 @@ func TestSendResponse_NoBus(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// No bus set, should handle gracefully
 	hs.sendResponse("test message")
@@ -459,7 +460,7 @@ func TestSendResponse_NoLastChannel(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := NewHeartbeatService(tmpDir, 30, true, state.NewManager(tmpDir))
 
 	// No last channel recorded, should handle gracefully
 	hs.sendResponse("test message")
@@ -472,7 +473,7 @@ func TestSendResponse_NoLastChannel(t *testing.T) {
 }
 
 func TestNewHeartbeatService_BelowMinInterval(t *testing.T) {
-	hs := NewHeartbeatService(t.TempDir(), 0, true)
+	hs := NewHeartbeatService(t.TempDir(), 0, true, nil)
 	if hs.interval != time.Duration(defaultIntervalMinutes)*time.Minute {
 		t.Errorf("zero intervalMinutes should use default, got %v", hs.interval)
 	}
@@ -480,7 +481,7 @@ func TestNewHeartbeatService_BelowMinInterval(t *testing.T) {
 
 func TestNewHeartbeatService_ZeroInterval(t *testing.T) {
 	// intervalMinutes < minIntervalMinutes AND != 0 should clamp to min
-	hs := NewHeartbeatService(t.TempDir(), -5, true)
+	hs := NewHeartbeatService(t.TempDir(), -5, true, nil)
 	// -5 < minIntervalMinutes (1) and != 0: implementation clamps via the first condition
 	// Then zero-check does NOT fire. Let's just ensure no panic and interval is set.
 	if hs == nil {
@@ -490,7 +491,7 @@ func TestNewHeartbeatService_ZeroInterval(t *testing.T) {
 
 func TestNewHeartbeatService_BelowMin_Clamps(t *testing.T) {
 	// value in (0, minIntervalMinutes) should be clamped to minIntervalMinutes
-	hs := NewHeartbeatService(t.TempDir(), 0, false)
+	hs := NewHeartbeatService(t.TempDir(), 0, false, nil)
 	want := time.Duration(defaultIntervalMinutes) * time.Minute
 	if hs.interval != want {
 		t.Errorf("interval = %v, want %v", hs.interval, want)

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -323,5 +324,50 @@ func TestSetPriceAlert_CancelSuccess(t *testing.T) {
 		if j.ID == alertID {
 			t.Fatal("alert was not removed after cancel")
 		}
+	}
+}
+
+func TestSetPriceAlert_CooldownStoredAndValidated(t *testing.T) {
+	cronSvc := newTestCronServiceForAlerts(t)
+	tool := NewSetPriceAlertTool(config.DefaultConfig(), cronSvc)
+	ctx := WithToolContext(context.Background(), "test", "chat-1")
+	args := func(cooldown float64) map[string]any {
+		return map[string]any{
+			"action": "create", "provider": "binance", "symbol": "BTC/USDT",
+			"condition": "above", "threshold": 50000.0, "recurring": true,
+			"cooldown_minutes": cooldown,
+		}
+	}
+
+	if res := tool.Execute(ctx, args(-5)); !res.IsError {
+		t.Fatal("negative cooldown_minutes must be rejected")
+	}
+	if res := tool.Execute(ctx, args(90)); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	jobs := cronSvc.ListJobs(true)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	var p PriceAlertPayload
+	if err := json.Unmarshal([]byte(jobs[0].Payload.Message), &p); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if p.CooldownMinutes != 90 || !p.Recurring {
+		t.Fatalf("unexpected payload: %+v", p)
+	}
+}
+
+func TestPriceAlertPayload_LegacyJSONDecodes(t *testing.T) {
+	legacy := `{"provider":"binance","account":"","symbol":"BTC/USDT","condition":"above","threshold":100,"alert_msg":"hi","recurring":true}`
+	var p PriceAlertPayload
+	if err := json.Unmarshal([]byte(legacy), &p); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if p.ProviderID != "binance" || p.Threshold != 100 || p.AlertMsg != "hi" || !p.Recurring {
+		t.Fatalf("legacy fields not decoded: %+v", p)
+	}
+	if p.CooldownMinutes != 0 || EffectiveAlertCooldownMinutes(p.CooldownMinutes) != DefaultAlertCooldownMinutes {
+		t.Fatalf("absent cooldown must default to %d", DefaultAlertCooldownMinutes)
 	}
 }

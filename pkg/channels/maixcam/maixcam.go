@@ -2,11 +2,16 @@ package maixcam
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
@@ -25,8 +30,28 @@ type MaixCamChannel struct {
 	clientsMux sync.RWMutex
 }
 
+// H-12: the channel listened on 0.0.0.0 with no authentication. Anyone on the
+// network could connect, inject text into an agent turn via class_name, and -
+// because Send broadcasts to every connected client - read every reply the
+// agent sent on this channel. A device must now authenticate first when a
+// token is configured, and a token is required to listen beyond loopback.
+
+const (
+	// maxMaixCamMessageBytes caps one JSON message. Detection events are a
+	// few hundred bytes; without a cap a client could stream one unbounded
+	// object into memory.
+	maxMaixCamMessageBytes = 64 << 10
+	// authTimeout bounds how long an unauthenticated connection may idle.
+	authTimeout = 10 * time.Second
+	// maxClassNameLen bounds the detector label copied into agent input.
+	maxClassNameLen = 64
+)
+
+var errMessageTooLarge = errors.New("maixcam message exceeds size limit")
+
 type MaixCamMessage struct {
 	Type      string         `json:"type"`
+	Token     string         `json:"token,omitempty"`
 	Tips      string         `json:"tips"`
 	Timestamp float64        `json:"timestamp"`
 	Data      map[string]any `json:"data"`
@@ -51,9 +76,14 @@ func NewMaixCamChannel(cfg config.MaixCamConfig, bus *bus.MessageBus) (*MaixCamC
 func (c *MaixCamChannel) Start(ctx context.Context) error {
 	logger.InfoC("maixcam", "Starting MaixCam channel server")
 
+	if c.config.Token == "" && !isLoopbackHost(c.config.Host) {
+		return fmt.Errorf("maixcam: refusing to listen on %q without channels.maixcam.token; "+
+			"set a token (and send it from the device) or bind to 127.0.0.1", c.config.Host)
+	}
+
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
+	addr := net.JoinHostPort(c.config.Host, fmt.Sprintf("%d", c.config.Port))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		c.cancel()
@@ -96,10 +126,6 @@ func (c *MaixCamChannel) acceptConnections() {
 				"remote_addr": conn.RemoteAddr().String(),
 			})
 
-			c.clientsMux.Lock()
-			c.clients[conn] = true
-			c.clientsMux.Unlock()
-
 			go c.handleConnection(conn)
 		}
 	}
@@ -116,7 +142,18 @@ func (c *MaixCamChannel) handleConnection(conn net.Conn) {
 		logger.DebugC("maixcam", "Connection closed")
 	}()
 
-	decoder := json.NewDecoder(conn)
+	limited := &capReader{r: conn, max: maxMaixCamMessageBytes}
+	decoder := json.NewDecoder(limited)
+
+	if !c.authenticate(conn, decoder, limited) {
+		return
+	}
+
+	// Registered only once authenticated: Send broadcasts to every client
+	// in this map, so an unauthenticated one would receive agent replies.
+	c.clientsMux.Lock()
+	c.clients[conn] = true
+	c.clientsMux.Unlock()
 
 	for {
 		select {
@@ -133,9 +170,83 @@ func (c *MaixCamChannel) handleConnection(conn net.Conn) {
 				return
 			}
 
+			limited.reset()
 			c.processMessage(msg, conn)
 		}
 	}
+}
+
+// authenticate reads the first message and checks the token. With no token
+// configured (which Start permits only on loopback) every connection is
+// accepted and its first message is processed normally.
+func (c *MaixCamChannel) authenticate(conn net.Conn, decoder *json.Decoder, limited *capReader) bool {
+	if c.config.Token == "" {
+		return true
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(authTimeout))
+	var msg MaixCamMessage
+	err := decoder.Decode(&msg)
+	_ = conn.SetReadDeadline(time.Time{})
+	limited.reset()
+
+	if err != nil || msg.Type != "auth" ||
+		subtle.ConstantTimeCompare([]byte(msg.Token), []byte(c.config.Token)) != 1 {
+		logger.WarnCF("maixcam", "Rejected unauthenticated MaixCam connection",
+			map[string]any{"remote_addr": conn.RemoteAddr().String()})
+		return false
+	}
+	return true
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// capReader fails once more than max bytes are read between resets. The
+// decoder buffers ahead, so the count can include the start of the next
+// message; that only makes the cap slightly stricter.
+type capReader struct {
+	r   io.Reader
+	n   int
+	max int
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.n >= c.max {
+		return 0, errMessageTooLarge
+	}
+	if room := c.max - c.n; len(p) > room {
+		p = p[:room]
+	}
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+func (c *capReader) reset() { c.n = 0 }
+
+// sanitizeClassName makes a detector label safe to place in agent input: the
+// device is a network peer, so its label is untrusted text.
+func sanitizeClassName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' || r == '-' || r == '_' || r == '.' {
+			return r
+		}
+		return -1
+	}, s)
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > maxClassNameLen {
+		s = string(runes[:maxClassNameLen])
+	}
+	if s == "" {
+		return "person"
+	}
+	return s
 }
 
 func (c *MaixCamChannel) processMessage(msg MaixCamMessage, conn net.Conn) {
@@ -162,10 +273,8 @@ func (c *MaixCamChannel) handlePersonDetection(msg MaixCamMessage) {
 	senderID := "maixcam"
 	chatID := "default"
 
-	classInfo, ok := msg.Data["class_name"].(string)
-	if !ok {
-		classInfo = "person"
-	}
+	rawClass, _ := msg.Data["class_name"].(string)
+	classInfo := sanitizeClassName(rawClass)
 
 	score, _ := msg.Data["score"].(float64)
 	x, _ := msg.Data["x"].(float64)

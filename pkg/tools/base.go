@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/constants"
+)
 
 // Tool is the interface that all tools must implement.
 type Tool interface {
@@ -23,7 +27,104 @@ type toolCtxKey struct{ name string }
 var (
 	ctxKeyChannel = &toolCtxKey{"channel"}
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
+	ctxKeyOrigin  = &toolCtxKey{"origin"}
+	ctxKeySender  = &toolCtxKey{"sender"}
+	ctxKeyWebAuth = &toolCtxKey{"webAuth"}
 )
+
+// Tool call origins. A turn is tagged where it starts, and the tag travels with
+// the context into ExecuteWithContext, so a policy can distinguish a person
+// typing a command from a scheduled job running unattended.
+const (
+	// OriginInternal is a local console or CLI turn.
+	OriginInternal = "internal"
+	// OriginRemote is a turn driven by a message from a chat channel.
+	OriginRemote = "remote"
+	// OriginCron is a scheduled job: no human is present to answer a prompt.
+	OriginCron = "cron"
+	// OriginHeartbeat is a periodic wake-up the assistant starts by itself: no
+	// human is present either, and the prompt is a file the assistant can edit.
+	OriginHeartbeat = "heartbeat"
+	// OriginProactive is a turn started by the proactive pipeline to decide what
+	// to tell the owner (agent.RunProactiveTurn). It is autonomous, and the most
+	// restricted origin there is: it reads, and declares a decision through
+	// respond_proactive. See proactiveTurnMayCall in policy.go.
+	OriginProactive = "proactive"
+)
+
+// IsAutonomousOrigin reports whether a turn with this origin was started by the
+// assistant's own machinery rather than by a person. Autonomous turns run under
+// the class ceiling in classification.go.
+func IsAutonomousOrigin(origin string) bool {
+	return origin == OriginCron || origin == OriginHeartbeat || origin == OriginProactive
+}
+
+// WithToolOrigin returns a child context tagged with the origin of the turn.
+//
+// It is deliberately set-once: the first tag wins and later calls are no-ops.
+// Cron tags at its own call site, which is outside the agent loop, and the loop
+// then tags every turn by channel. Were this unconditional, the loop's tag
+// would overwrite "cron" with "internal" and the scheduled-job gate would never
+// fire. Enforcing that here rather than asking each call site to check first
+// means a new call site cannot reintroduce the bug. It also gives sub-turns
+// spawned from a cron turn the correct answer: they stay cron.
+func WithToolOrigin(ctx context.Context, origin string) context.Context {
+	if origin == "" || ToolOrigin(ctx) != "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyOrigin, origin)
+}
+
+// ToolOrigin extracts the turn's origin from ctx, or "" if untagged.
+func ToolOrigin(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyOrigin).(string)
+	return v
+}
+
+// OriginForChannel maps the channel a turn arrived on to its origin.
+//
+// constants.IsInternalChannel covers cli, system and subagent. A subagent turn
+// is the agent's own work rather than a stranger's message, so it counts as
+// internal - and a subagent spawned from a cron turn keeps "cron" regardless,
+// because WithToolOrigin is set-once. An empty channel means no channel was
+// attached at all (a direct local invocation), which is likewise internal.
+func OriginForChannel(channel string) string {
+	if channel == "" || constants.IsInternalChannel(channel) {
+		return OriginInternal
+	}
+	return OriginRemote
+}
+
+// WithToolSender tags the turn with the sender who started it, so an operator
+// approval can be bound to the person who made the request. Set-once for the
+// same reason as WithToolOrigin: a sub-turn must not relabel its requester.
+func WithToolSender(ctx context.Context, senderID string) context.Context {
+	if senderID == "" || ToolSender(ctx) != "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeySender, senderID)
+}
+
+// ToolSender extracts the turn's sender from ctx, or "" if untagged.
+func ToolSender(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeySender).(string)
+	return v
+}
+
+// WithWebAuth marks the turn as one whose message arrived on a pico connection
+// authenticated with the pico token (bus.SenderInfo.WebAuthenticated). Only the
+// agent loop's root-turn tagging calls it, and no sub-turn or follow-up copies it,
+// so a delegated task never inherits it. It is a fact, not a grant: checkOwnerTurn
+// still needs the owner and the launcher's authentication.
+func WithWebAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyWebAuth, true)
+}
+
+// webAuthenticated reports whether ctx carries WithWebAuth.
+func webAuthenticated(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeyWebAuth).(bool)
+	return v
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {

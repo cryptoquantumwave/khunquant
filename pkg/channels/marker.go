@@ -15,9 +15,18 @@ import (
 // and send each part as a separate message.
 const MessageSplitMarker = "<|[SPLIT]|>"
 
+// MaxMarkerSegments caps how many outbound messages a single SplitByMarker call
+// can produce. A model that emits far more markers than intended (runaway
+// generation, a repeated-marker loop) must not turn into hundreds of
+// sequential sends. Segments beyond the cap are merged into the last one,
+// joined with "\n\n", rather than dropped.
+const MaxMarkerSegments = 10
+
 // SplitByMarker splits a message by the MessageSplitMarker and returns the parts.
 // Empty parts (including from consecutive markers) are filtered out.
 // If no marker is found, returns a single-element slice containing the original content.
+// The result never exceeds MaxMarkerSegments; any remainder is merged into the
+// final segment.
 func SplitByMarker(content string) []string {
 	if content == "" {
 		return nil
@@ -32,6 +41,10 @@ func SplitByMarker(content string) []string {
 	}
 	if len(result) == 0 {
 		return []string{content}
+	}
+	if len(result) > MaxMarkerSegments {
+		remainder := strings.Join(result[MaxMarkerSegments-1:], "\n\n")
+		result = append(result[:MaxMarkerSegments-1], remainder)
 	}
 	return result
 }

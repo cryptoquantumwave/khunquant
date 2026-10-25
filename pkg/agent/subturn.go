@@ -119,33 +119,26 @@ type SubTurnConfig struct {
 	// truncated while preserving system messages and recent context.
 	MaxContextRunes int
 
-	// Can be extended with temperature, topP, etc.
+	// AgentID names the agent the child is built from: its tools, provider
+	// and context builder. Empty means the default agent, which is only right
+	// for callers with no agent of their own (the package-level SpawnSubTurn).
+	AgentID string
+
+	// Temperature overrides the sampling temperature of the child. Zero means
+	// "not set": the child uses the temperature of the agent it is built from.
+	Temperature float64
+
+	// NoPendingDelivery stops an Async result from also being queued on the
+	// parent's pendingResults (and so from being appended to the parent's final
+	// response). It is for callers that deliver the result themselves, such as
+	// the spawn tool's callback: delivering it twice would tell the user twice.
+	// It does not change the session-lock rule for Async children.
+	NoPendingDelivery bool
+
+	// Can be extended with topP, etc.
 }
 
-// ====================== Sub-turn Events (Aligned with EventBus) ======================
-type SubTurnSpawnEvent struct {
-	ParentID string
-	ChildID  string
-	Config   SubTurnConfig
-}
-
-type SubTurnEndEvent struct {
-	ChildID string
-	Result  *tools.ToolResult
-	Err     error
-}
-
-type SubTurnResultDeliveredEvent struct {
-	ParentID string
-	ChildID  string
-	Result   *tools.ToolResult
-}
-
-type SubTurnOrphanResultEvent struct {
-	ParentID string
-	ChildID  string
-	Result   *tools.ToolResult
-}
+// Sub-turn events (SubTurnSpawnEvent and the others) are defined in eventsink.go.
 
 // ====================== Context Keys ======================
 type agentLoopKeyType struct{}
@@ -175,6 +168,10 @@ func (al *AgentLoop) generateSubTurnID() string {
 // This allows tools to spawn sub-turns without circular dependency.
 type AgentLoopSpawner struct {
 	al *AgentLoop
+	// agentID is the agent whose spawn/subagent/delegate tools own this
+	// spawner. A child is built from it - never from the default agent, which
+	// would hand a restricted agent's subagent the default agent's tools.
+	agentID string
 }
 
 // SpawnSubTurn implements tools.SubTurnSpawner interface.
@@ -184,9 +181,28 @@ func (s *AgentLoopSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnCo
 		return nil, errors.New("parent turnState not found in context - cannot spawn sub-turn outside of a turn")
 	}
 
+	// The child runs as the delegation target when there is one (M-6),
+	// otherwise as the agent that spawned it.
+	baseID := s.agentID
+	if cfg.TargetAgentID != "" {
+		baseID = cfg.TargetAgentID
+	}
+	model := cfg.Model
+	if baseID != "" {
+		base, ok := s.al.GetRegistry().GetAgent(baseID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", baseID)
+		}
+		// delegate names an agent, not a model: use the agent's own.
+		if model == "" {
+			model = base.Model
+		}
+	}
+
 	// Convert tools.SubTurnConfig to agent.SubTurnConfig
 	agentCfg := SubTurnConfig{
-		Model:           cfg.Model,
+		AgentID:         baseID,
+		Model:           model,
 		Tools:           cfg.Tools,
 		SystemPrompt:    cfg.SystemPrompt,
 		MaxTokens:       cfg.MaxTokens,
@@ -194,14 +210,17 @@ func (s *AgentLoopSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnCo
 		Critical:        cfg.Critical,
 		Timeout:         cfg.Timeout,
 		MaxContextRunes: cfg.MaxContextRunes,
+		Temperature:     cfg.Temperature,
+
+		NoPendingDelivery: cfg.NoPendingDelivery,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
 }
 
-// NewSubTurnSpawner creates a SubTurnSpawner for the given AgentLoop.
-func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner {
-	return &AgentLoopSpawner{al: al}
+// NewSubTurnSpawner creates a SubTurnSpawner for the tools of agent agentID.
+func NewSubTurnSpawner(al *AgentLoop, agentID string) *AgentLoopSpawner {
+	return &AgentLoopSpawner{al: al, agentID: agentID}
 }
 
 // SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
@@ -238,6 +257,11 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 					<-parentTS.concurrencySem
 				}
 			}()
+		case <-parentTS.Aborted():
+			// The parent was hard-aborted while this spawn waited for a slot.
+			// An async spawn runs on a context that outlives its parent's
+			// normal return (see SpawnTool), so ctx does not report this.
+			return nil, context.Canceled
 		case <-timeoutCtx.Done():
 			// Check parent context first - if it was cancelled, propagate that error
 			if ctx.Err() != nil {
@@ -275,6 +299,12 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// The child has its own timeout for self-protection.
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// Under a scheduled job a synchronous child runs inside it: when the job's
+	// deadline or a /stop cancels its context, the child stops too, instead of
+	// holding the worker until its own timeout. Without a scheduler nothing changes.
+	if !cfg.Async && inScheduledJob(ctx) {
+		defer context.AfterFunc(ctx, cancel)()
+	}
 
 	childID := al.generateSubTurnID()
 	childTS := newTurnState(childCtx, childID, parentTS)
@@ -285,22 +315,73 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// childCtx starts from Background, so the policy tags on the spawning
+	// turn do not carry over by themselves - and a child is never a root turn,
+	// so runAgentLoop will not tag it either. Untagged fails closed, which
+	// would refuse every financial tool a person's subagent calls; worse in
+	// spirit, a cron job's subagent would stop being "cron". Carry both.
+	childCtx = tools.WithToolOrigin(childCtx, tools.ToolOrigin(ctx))
+	childCtx = tools.WithToolSender(childCtx, tools.ToolSender(ctx))
+	// Say it is a sub-turn too: with the origin and sender above it looks like the
+	// turn that spawned it, and what a model wrote for it is not that turn's person.
+	childCtx = tools.WithSubTurn(childCtx)
+	// The job scope too: a child must not lose the ceiling's job-bound exception
+	// nor be able to claim one its parent did not have.
+	if scope, ok := tools.AutomationScopeFrom(ctx); ok {
+		childCtx = tools.WithAutomationScope(childCtx, scope)
+	}
+	// The turn ID has to be carried for the same reason. A child shares its
+	// parent's: a message the subagent sends to the user's chat is a message
+	// sent in the parent's turn, and must suppress the parent's duplicate
+	// final reply exactly as if the parent had sent it.
+	childCtx = tools.WithTurnID(childCtx, tools.TurnID(ctx))
+	// The child's LLM calls count towards the turn that spawned it.
+	childCtx = carryUsageAgg(childCtx, ctx)
+	// A synchronous child runs while its caller - a tool call inside the
+	// parent turn - is blocked on it, so it is still working under the parent's
+	// session lock and may re-enter it; without the marker it would deadlock
+	// against its own parent. An async child gets no such claim: it can
+	// outlive the parent turn, and with it the lock.
+	if !cfg.Async {
+		childCtx = inheritHeldSessionLocks(childCtx, ctx)
+	}
 
-	// 5. Establish parent-child relationship (thread-safe)
-	parentTS.mu.Lock()
-	parentTS.childTurnIDs = append(parentTS.childTurnIDs, childID)
-	parentTS.mu.Unlock()
+	// 5. Establish parent-child relationship (thread-safe). The child is
+	// registered with its parent so a hard abort can reach it - its context is
+	// independent of the parent's, so nothing else would. A parent that has
+	// already been hard-aborted takes no new children: the abort walked the
+	// tree before this one existed.
+	if !parentTS.addChild(childTS) {
+		return nil, context.Canceled
+	}
+	defer parentTS.removeChild(childTS)
+	// Also listed loop-wide. An async child outlives its root turn, and a root
+	// that has returned is no longer registered - without this a cancel issued
+	// after the parent finished could not find the child at all.
+	al.activeTurnStates.addSubTurn(childTS)
+	defer al.activeTurnStates.removeSubTurn(childTS)
 
-	// 6. Emit Spawn event
-	MockEventBus.Emit(SubTurnSpawnEvent{
-		ParentID: parentTS.turnID,
-		ChildID:  childID,
-		Config:   cfg,
+	// 6. Emit Spawn event. The sink is read once so this sub-turn's events all
+	// go to the same place even if the loop's sink is replaced meanwhile. The
+	// event carries identifiers and settings, never the prompt.
+	sink := al.subTurnSink()
+	startedAt := time.Now()
+	sink.emit(SubTurnSpawnEvent{
+		ParentID:  parentTS.turnID,
+		ChildID:   childID,
+		AgentID:   cfg.AgentID,
+		Model:     cfg.Model,
+		Async:     cfg.Async,
+		Critical:  cfg.Critical,
+		ToolCount: len(cfg.Tools),
+		Timeout:   timeout,
 	})
 
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
+		panicked := false
 		if r := recover(); r != nil {
+			panicked = true
 			err = fmt.Errorf("subturn panicked: %v", r)
 			result = nil
 			logger.ErrorCF("subturn", "SubTurn panicked", map[string]any{
@@ -311,15 +392,22 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 		}
 
 		// Result Delivery Strategy (Async vs Sync)
-		if cfg.Async {
-			deliverSubTurnResult(parentTS, childID, result)
+		if cfg.Async && !cfg.NoPendingDelivery {
+			deliverSubTurnResult(sink, parentTS, childID, result)
 		}
 
-		MockEventBus.Emit(SubTurnEndEvent{
-			ChildID: childID,
-			Result:  result,
-			Err:     err,
-		})
+		end := SubTurnEndEvent{
+			ParentID: parentTS.turnID,
+			ChildID:  childID,
+			Status:   subTurnStatus(err, panicked),
+			Duration: time.Since(startedAt),
+		}
+		if result != nil {
+			end.HasResult = true
+			end.ResultIsErr = result.IsError
+			end.ResultBytes = len(result.ForLLM)
+		}
+		sink.emit(end)
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
@@ -348,7 +436,10 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 // Event emissions:
 //   - SubTurnResultDeliveredEvent: successful delivery to channel
 //   - SubTurnOrphanResultEvent: delivery failed (parent finished or channel full)
-func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.ToolResult) {
+func deliverSubTurnResult(sink eventSink, parentTS *turnState, childID string, result *tools.ToolResult) {
+	if sink == nil {
+		sink = noopSink{}
+	}
 	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
 	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
 	defer func() {
@@ -360,10 +451,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 				"recover":   r,
 			})
 			if result != nil {
-				MockEventBus.Emit(SubTurnOrphanResultEvent{
+				sink.emit(SubTurnOrphanResultEvent{
 					ParentID: parentTS.turnID,
 					ChildID:  childID,
-					Result:   result,
 				})
 			}
 		}
@@ -376,10 +466,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	// If parent turn has already finished, treat this as an orphan result
 	if isFinished || resultChan == nil {
 		if result != nil {
-			MockEventBus.Emit(SubTurnOrphanResultEvent{
+			sink.emit(SubTurnOrphanResultEvent{
 				ParentID: parentTS.turnID,
 				ChildID:  childID,
-				Result:   result,
 			})
 		}
 		return
@@ -392,10 +481,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	select {
 	case resultChan <- result:
 		// Successfully delivered
-		MockEventBus.Emit(SubTurnResultDeliveredEvent{
+		sink.emit(SubTurnResultDeliveredEvent{
 			ParentID: parentTS.turnID,
 			ChildID:  childID,
-			Result:   result,
 		})
 	case <-parentTS.Finished():
 		// Parent finished while we were waiting to deliver.
@@ -405,13 +493,22 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 			"child_id":  childID,
 		})
 		if result != nil {
-			MockEventBus.Emit(SubTurnOrphanResultEvent{
+			sink.emit(SubTurnOrphanResultEvent{
 				ParentID: parentTS.turnID,
 				ChildID:  childID,
-				Result:   result,
 			})
 		}
 	}
+}
+
+// isSubTurnSpawningTool reports whether the named tool starts sub-turns. A child
+// is never given one.
+func isSubTurnSpawningTool(name string) bool {
+	switch name {
+	case tools.NameSpawn, tools.NameDelegate, "subagent":
+		return true
+	}
+	return false
 }
 
 // runTurn builds a temporary AgentInstance from SubTurnConfig and delegates to
@@ -448,6 +545,13 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 	// It reuses the parent loop's provider and config, but gets its own
 	// ephemeral session store and tool registry.
 	parentAgent := al.GetRegistry().GetDefaultAgent()
+	if cfg.AgentID != "" {
+		a, ok := al.GetRegistry().GetAgent(cfg.AgentID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", cfg.AgentID)
+		}
+		parentAgent = a
+	}
 
 	// Determine which tools to use: explicit config or inherit from parent
 	toolRegistry := tools.NewToolRegistry()
@@ -456,7 +560,20 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 		toolsToRegister = parentAgent.Tools.GetAll()
 	}
 	for _, t := range toolsToRegister {
+		// A child cannot start children of its own, whichever way its tools
+		// were chosen: depth stays at 1.
+		if isSubTurnSpawningTool(t.Name()) {
+			continue
+		}
 		toolRegistry.Register(t)
+	}
+	// A child gets the light prompt: skills are listed by name and read through
+	// load_skill. Keep that tool in the child whichever way its tools were
+	// chosen, or the index would name skills the child cannot open.
+	if _, ok := toolRegistry.Get(tools.NameLoadSkill); !ok {
+		if t, ok := parentAgent.Tools.Get(tools.NameLoadSkill); ok {
+			toolRegistry.Register(t)
+		}
 	}
 
 	childAgent := &AgentInstance{
@@ -477,6 +594,9 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 	}
 	if childAgent.MaxTokens == 0 {
 		childAgent.MaxTokens = parentAgent.MaxTokens
+	}
+	if cfg.Temperature != 0 {
+		childAgent.Temperature = cfg.Temperature
 	}
 
 	// Resolve MaxContextRunes configuration
@@ -539,6 +659,9 @@ func runTurn(ctx context.Context, al *AgentLoop, ts *turnState, cfg SubTurnConfi
 			EnableSummary:      false,
 			SendResponse:       false,
 			SkipAddUserMessage: promptAlreadyAdded,
+			// Background work: the light prompt is a fraction of the full
+			// one, and a child that needs a skill loads it by name.
+			PromptMode: PromptLight,
 		})
 
 		// Mark the prompt as added so subsequent truncation retries

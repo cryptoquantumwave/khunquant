@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
@@ -54,8 +55,10 @@ func (t *TransferFundsTool) Execute(ctx context.Context, args map[string]any) *T
 	if providerID == "" || asset == "" || fromAccount == "" || toAccount == "" {
 		return ErrorResult("provider, asset, from_account, and to_account are required")
 	}
-	if amount <= 0 {
-		return ErrorResult("amount must be positive")
+	// M-7: NaN passes every "<= 0" guard, because comparisons against it are
+	// false. It arrives straight from JSON tool arguments.
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 {
+		return ErrorResult("amount must be a positive, finite number")
 	}
 
 	if err := broker.CheckPermission(t.cfg, providerID, account, config.ScopeTransfer); err != nil {

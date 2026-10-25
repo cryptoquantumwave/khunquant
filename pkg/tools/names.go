@@ -15,8 +15,10 @@ const (
 	NameSendFile        = "send_file"
 	NameFindSkills      = "find_skills"
 	NameInstallSkill    = "install_skill"
+	NameLoadSkill       = "load_skill"
 	NameSpawn           = "spawn"
 	NameDelegate        = "delegate"
+	NameSubagent        = "subagent"
 	NameGetAssetsList   = "get_assets_list"
 	NameGetTotalValue   = "get_total_value"
 	NameListPortfolios  = "list_portfolios"
@@ -89,6 +91,29 @@ const (
 	NameGetPnLSummary = "get_pnl_summary"
 	NameGetPnLDetail  = "get_pnl_detail"
 
+	// User profile (typed preferences: time zone, active hours, budget, ...)
+	NameGetProfile    = "get_profile"
+	NameUpdateProfile = "update_profile"
+
+	// Intents: what the owner wants the assistant to keep doing (pkg/intent).
+	NameCreateIntent = "create_intent"
+	NameListIntents  = "list_intents"
+	NameUpdateIntent = "update_intent"
+
+	// Order proposals (pkg/approval): the model suggests, the owner decides.
+	NameProposeOrder = "propose_order"
+
+	// Memory: the owner's conversation saves a fact at once; any other turn only
+	// suggests it, and the owner confirms it in the next digest.
+	NameRemember = "remember"
+
+	// Proactive turns. respond_proactive is registered per turn on a clone of
+	// the agent's registry and never globally, so it has no catalog entry.
+	NameRespondProactive = "respond_proactive"
+	// The nightly reflection's one output tool (pkg/reflection), registered per turn
+	// like respond_proactive and open to the reflection turn only.
+	NameProposeReflection = "propose_reflection"
+
 	// DCA — Dollar Cost Averaging (Track E)
 	NameCreateDCAPlan   = "create_dca_plan"
 	NameListDCAPlans    = "list_dca_plans"
@@ -139,6 +164,8 @@ const (
 	CatDCA           = "dca"
 	CatPnL           = "pnl"
 	CatDeltaNeutral  = "delta_neutral"
+	CatProfile       = "profile"
+	CatIntents       = "intents"
 	CatOptions       = "options"
 )
 
@@ -158,6 +185,7 @@ const (
 	DescSendFile                  = "Send an outbound file or media attachment to the active chat."
 	DescFindSkills                = "Search external skill registries for installable skills."
 	DescInstallSkill              = "Install a skill into the current workspace from a registry."
+	DescLoadSkill                 = "Load the full instructions of an installed skill by name."
 	DescSpawn                     = "Launch a background subagent for long-running or delegated work."
 	DescGetAssetsList             = "Retrieve asset balances from a configured cryptocurrency exchange."
 	DescGetTotalValue             = "Estimate the total portfolio value in a quote currency by fetching all wallet balances and looking up live prices."
@@ -207,7 +235,7 @@ const (
 	DescGetDeltaNeutralHistory        = "Get paginated monitor snapshots and alerts for a delta-neutral plan."
 	DescGetDeltaNeutralSpread         = "Fetch live entry/exit spread and annualized funding APR (3d/7d/14d/30d windows) for a given spot + futures symbol pair. Entry spread = (futures - spot)/spot * 100. Useful for monitoring spread dynamics and funding rate trends before building or entering a delta-neutral plan."
 	DescGetDeltaNeutralEarn           = "Fetch flexible-savings (earn) APY for a spot asset: the current best rate plus trailing 3M/6M/12M averages and min/max from the exchange's earn rate history. Use to gauge the earn leg of a delta-neutral position. OKX rates are public; Binance Simple Earn needs credentials."
-	DescPrepareDeltaNeutralPlan       = "Validate a draft delta-neutral plan and promote it to 'ready' status. Runs sanity checks (capital, leverage policy, symbol format, cross-exchange warning) without placing any orders. Safe to call multiple times; idempotent on already-ready plans."
+	DescPrepareDeltaNeutralPlan       = "Validate a draft (or failed) delta-neutral plan and promote it to 'ready' status, which open_delta_neutral_position requires. Runs sanity checks (capital, leverage policy, symbol format, cross-exchange warning) without placing any orders. Safe to call multiple times; idempotent on already-ready plans."
 	DescOpenDeltaNeutralPosition      = "Open a delta-neutral position (approval-mode two-leg execution: futures hedge + spot buy). HIGHEST-RISK: requires leverage opt-in, permission, daily-loss, rate-limit gates. Dry-run (confirm=false) shows review; confirm=true executes."
 	DescUnwindDeltaNeutralPosition    = "Close a delta-neutral position (unwind both legs: reduce-only futures close + spot sell). Recovery tool for unhedged exposure or manual closure. Approval-mode: confirm=true required."
 	DescResizeDeltaNeutralPosition    = "Adjust an active delta-neutral position by resizing both legs equally (approval-mode). Maintains delta-neutrality (equal notional on both legs). Partial fill → recovery_required. Dry-run (confirm=false) shows review; confirm=true executes."
@@ -217,6 +245,18 @@ const (
 	// Earn tool descriptions
 	DescEarnOverview       = "View all flexible earn products available on an exchange and current earn positions held. Lists APY, minimum subscription amounts, and auto-subscription status. Provider may be 'binance', 'okx', or empty/'all' to query all supported exchanges. Positions require API keys; products may be public."
 	DescManageEarnPosition = "Subscribe to, redeem from, or configure auto-subscription on a flexible earn product. Actions: 'subscribe' (invest amount with optional auto-renewal), 'redeem' (withdraw amount or all), 'set_auto_subscribe' (enable/disable auto-renewal). Approval-mode: confirm=false shows dry-run review, confirm=true executes the transaction."
+
+	// User profile tool descriptions
+	DescGetProfile    = "Show the owner's structured profile: time zone, active hours, language, risk tolerance, allocation targets, assets to avoid, daily notification budget and digest time, with its version and who last changed it."
+	DescUpdateProfile = "Change the owner's structured profile: only the fields given change, and fields listed in reset return to their default. Owner only; never available to scheduled or background turns."
+
+	// Intent ledger tool descriptions
+	DescCreateIntent = "Record something the owner wants you to keep doing or keep in view: a goal, a standing order, a watch, a reminder or a preference. " +
+		"Set user_requested to true ONLY when the owner, in this conversation, asked for exactly this; the intent is then active. " +
+		"Anything else (your own idea, something you read, a scheduled or background turn) is stored as a suggestion that does nothing until the owner confirms it. " +
+		"The answer states what was stored and whether it is active: repeat it to the owner as it is."
+	DescListIntents  = "List the owner's intents (goals, standing orders, watches, reminders, preferences) with their status, source and expiry. By default only open ones (suggested, active, paused)."
+	DescUpdateIntent = "Pause, resume, cancel or confirm an intent by id. Confirm turns a suggestion into an active intent. Owner only, in a conversation; never available to scheduled or background turns."
 
 	// Options tool descriptions (single-leg only)
 	DescOptionQuote       = "Fetch market data for options contracts including price, greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. Requires underlying symbol, expiry date (yyyy-MM-dd), strike price, and option type (CALL/PUT)."

@@ -1,0 +1,9 @@
+[
+  {
+    "match": "data_stale",
+    "from": "2026-03-10T05:30:00Z",
+    "to": "2026-03-10T07:00:00Z",
+    "should_fire": true,
+    "note": "no snapshot since 05:30, three periods of quiet"
+  }
+]

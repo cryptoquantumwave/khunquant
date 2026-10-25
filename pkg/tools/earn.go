@@ -269,6 +269,14 @@ func (t *ManageEarnPositionTool) Execute(ctx context.Context, args map[string]an
 		// Only needs asset; auto_subscribe flag provided.
 	}
 
+	// Every action here moves or reconfigures funds, so the account must hold
+	// trade permission. Checked before the provider is resolved and before the
+	// dry-run, so a restricted or unresolvable account is refused consistently
+	// and no network call is made on its behalf.
+	if err := broker.CheckPermission(t.cfg, provider, account, config.ScopeTrade); err != nil {
+		return ErrorResult(err.Error())
+	}
+
 	// Resolve provider.
 	ep, err := earnProvider(ctx, t.cfg, provider, account)
 	if err != nil {

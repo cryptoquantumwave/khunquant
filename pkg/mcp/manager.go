@@ -17,6 +17,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
@@ -359,43 +360,9 @@ func connectServer(
 		// Create command with context
 		cmd := exec.CommandContext(ctx, expandHomeCommandPath(cfg.Command), cfg.Args...)
 
-		// Build environment variables with proper override semantics
-		// Use a map to ensure config variables override file variables
-		envMap := make(map[string]string)
-
-		// Start with parent process environment
-		for _, e := range cmd.Environ() {
-			if idx := strings.Index(e, "="); idx > 0 {
-				envMap[e[:idx]] = e[idx+1:]
-			}
-		}
-
-		// Load environment variables from file if specified
-		if cfg.EnvFile != "" {
-			envVars, err := loadEnvFile(cfg.EnvFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
-			}
-			for k, v := range envVars {
-				envMap[k] = v
-			}
-			logger.DebugCF("mcp", "Loaded environment variables from file",
-				map[string]any{
-					"server":    name,
-					"envFile":   cfg.EnvFile,
-					"var_count": len(envVars),
-				})
-		}
-
-		// Environment variables from config override those from file
-		for k, v := range cfg.Env {
-			envMap[k] = v
-		}
-
-		// Convert map to slice
-		env := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		env, err := buildServerEnv(name, cfg)
+		if err != nil {
+			return nil, err
 		}
 		cmd.Env = env
 
@@ -673,4 +640,67 @@ func (m *Manager) GetAllTools() map[string][]*mcp.Tool {
 		}
 	}
 	return result
+}
+
+// buildServerEnv assembles a stdio MCP server's environment. Precedence, lowest
+// first: the inherited base, then env_file, then env.
+//
+// M-5: the base used to be this process's entire environment - every LLM and
+// exchange API key - handed to a server that is usually third-party code
+// fetched by npx or uvx. It is now the same allowlist exec children get, plus
+// the names the operator lists in inherit_env. Variables a server needs can
+// also be given explicitly in env or env_file, which were never filtered.
+// inherit_all_env restores the old behaviour and is logged as a warning.
+func buildServerEnv(name string, cfg config.MCPServerConfig) ([]string, error) {
+	envMap := make(map[string]string)
+
+	var base []string
+	if cfg.InheritAllEnv {
+		logger.WarnCF("mcp", "MCP server inherits the full environment, including any API keys",
+			map[string]any{"server": name})
+		base = os.Environ()
+	} else {
+		var withheld []string
+		base, withheld = utils.FilterEnviron(cfg.InheritEnv)
+		if len(withheld) > 0 {
+			logger.InfoCF("mcp", "Starting MCP server with a scrubbed environment; "+
+				"list any variable it needs in inherit_env or env",
+				map[string]any{"server": name, "withheld_count": len(withheld)})
+			logger.DebugCF("mcp", "Environment variables withheld from MCP server",
+				map[string]any{"server": name, "names": withheld})
+		}
+	}
+	for _, e := range base {
+		if k, v, ok := strings.Cut(e, "="); ok && k != "" {
+			envMap[k] = v
+		}
+	}
+
+	// Load environment variables from file if specified
+	if cfg.EnvFile != "" {
+		envVars, err := loadEnvFile(cfg.EnvFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
+		}
+		for k, v := range envVars {
+			envMap[k] = v
+		}
+		logger.DebugCF("mcp", "Loaded environment variables from file",
+			map[string]any{
+				"server":    name,
+				"envFile":   cfg.EnvFile,
+				"var_count": len(envVars),
+			})
+	}
+
+	// Environment variables from config override those from file
+	for k, v := range cfg.Env {
+		envMap[k] = v
+	}
+
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	return env, nil
 }

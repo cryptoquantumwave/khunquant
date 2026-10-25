@@ -103,6 +103,84 @@ const (
 	KindMCPToolCallStart Kind = "mcp.tool.call.start"
 	// KindMCPToolCallEnd is emitted when an MCP tool call ends.
 	KindMCPToolCallEnd Kind = "mcp.tool.call.end"
+
+	// Perception: observations of the outside world. Published by sources
+	// (MR-202 onward); nothing publishes them yet.
+
+	// KindPerceptionMarketTick is emitted for a market price tick.
+	KindPerceptionMarketTick Kind = "perception.market.tick"
+	// KindPerceptionMarketCandleClosed is emitted when a market candle closes.
+	KindPerceptionMarketCandleClosed Kind = "perception.market.candle_closed"
+	// KindPerceptionPortfolioSnapshot is emitted for a portfolio snapshot.
+	KindPerceptionPortfolioSnapshot Kind = "perception.portfolio.snapshot"
+	// KindPerceptionFuturesPositions is emitted for a futures positions sample.
+	KindPerceptionFuturesPositions Kind = "perception.futures.positions"
+	// KindPerceptionOrderFilled is emitted when an order fills.
+	KindPerceptionOrderFilled Kind = "perception.order.filled"
+	// KindPerceptionOrderPlaced is emitted when an order is placed.
+	KindPerceptionOrderPlaced Kind = "perception.order.placed"
+	// KindPerceptionPlanHealth is emitted for a plan health observation.
+	KindPerceptionPlanHealth Kind = "perception.plan.health"
+	// KindPerceptionPlanDCADue is emitted when a DCA plan order is due.
+	KindPerceptionPlanDCADue Kind = "perception.plan.dca_due"
+	// KindPerceptionClockSession is emitted at a market session boundary.
+	KindPerceptionClockSession Kind = "perception.clock.session"
+	// KindPerceptionClockDayStart is emitted at the start of a day.
+	KindPerceptionClockDayStart Kind = "perception.clock.day_start"
+	// KindPerceptionClockTimer is emitted when a timer scheduled on the clock source
+	// comes due (a reminder).
+	KindPerceptionClockTimer Kind = "perception.clock.timer"
+	// KindPerceptionExternalTrigger is emitted for a trigger from outside the process.
+	KindPerceptionExternalTrigger Kind = "perception.external.trigger"
+	// KindPerceptionDevice is emitted for a device observation.
+	KindPerceptionDevice Kind = "perception.device"
+	// KindPerceptionNewsItem is emitted for a news item.
+	KindPerceptionNewsItem Kind = "perception.news.item"
+	// KindPerceptionSourceHealth is emitted when a perception source's health changes.
+	KindPerceptionSourceHealth Kind = "perception.source.health"
+
+	// Proactive pipeline: what was derived from perception and what became of it.
+
+	// KindWorldModelDiff is emitted when the world model changes.
+	KindWorldModelDiff Kind = "worldmodel.diff"
+	// KindTriggerCandidate is emitted when a trigger proposes a candidate.
+	KindTriggerCandidate Kind = "trigger.candidate"
+	// KindAttentionDecision is emitted when the attention governor decides on a candidate.
+	KindAttentionDecision Kind = "attention.decision"
+	// KindNotifyDelivered is emitted when an owner notification is delivered.
+	KindNotifyDelivered Kind = "notify.delivered"
+
+	// Approvals, journal and control.
+
+	// KindApprovalCreated is emitted when an approval proposal is created.
+	KindApprovalCreated Kind = "approval.created"
+	// KindApprovalDecided is emitted when an approval proposal is decided.
+	KindApprovalDecided Kind = "approval.decided"
+	// KindApprovalExpired is emitted when an approval proposal expires.
+	KindApprovalExpired Kind = "approval.expired"
+	// KindJournalStep is emitted when a workflow journal step starts, finishes, fails
+	// or is scheduled to retry. It carries ids, names and numbers only.
+	KindJournalStep Kind = "journal.step"
+	// KindJournalWorkflow is emitted when a workflow is started and when it reaches
+	// a terminal status (succeeded, failed or cancelled). Ids, names and numbers only.
+	KindJournalWorkflow Kind = "journal.workflow"
+	// KindControlCommand is emitted when a control command is received.
+	KindControlCommand Kind = "control.command"
+	// KindPolicyDecision is emitted when the policy engine records a verdict for a tool
+	// call (shadow mode: the call itself is decided by the existing checks). It carries
+	// ids, names, the mode and the tier only: never a call's arguments or amounts.
+	KindPolicyDecision Kind = "policy.decision"
+	// KindFeedbackRecorded is emitted when a response of the owner to a proactive message
+	// is recorded (pkg/feedback). It carries ids and the kind only, never the value.
+	KindFeedbackRecorded Kind = "feedback.recorded"
+	// KindFeedbackPosterior is emitted when an owner response changes an acceptance
+	// posterior (pkg/feedback). It carries the trigger kind, the hour bucket and the mean
+	// rounded to two decimals, nothing else.
+	KindFeedbackPosterior Kind = "feedback.posterior"
+	// KindFeedbackHindsight is emitted when the daily hindsight job stores a horizon for
+	// an intervention (pkg/feedback). It carries the intervention id, the horizon
+	// ("1h", "24h", "7d") and whether a price change was found, and no price.
+	KindFeedbackHindsight Kind = "feedback.hindsight"
 )
 
 var knownKinds = []Kind{
@@ -152,6 +230,36 @@ var knownKinds = []Kind{
 	KindMCPToolDiscovered,
 	KindMCPToolCallStart,
 	KindMCPToolCallEnd,
+
+	KindPerceptionMarketTick,
+	KindPerceptionMarketCandleClosed,
+	KindPerceptionPortfolioSnapshot,
+	KindPerceptionFuturesPositions,
+	KindPerceptionOrderFilled,
+	KindPerceptionOrderPlaced,
+	KindPerceptionPlanHealth,
+	KindPerceptionPlanDCADue,
+	KindPerceptionClockSession,
+	KindPerceptionClockDayStart,
+	KindPerceptionClockTimer,
+	KindPerceptionExternalTrigger,
+	KindPerceptionDevice,
+	KindPerceptionNewsItem,
+	KindPerceptionSourceHealth,
+	KindWorldModelDiff,
+	KindTriggerCandidate,
+	KindAttentionDecision,
+	KindNotifyDelivered,
+	KindApprovalCreated,
+	KindApprovalDecided,
+	KindApprovalExpired,
+	KindJournalStep,
+	KindJournalWorkflow,
+	KindControlCommand,
+	KindPolicyDecision,
+	KindFeedbackRecorded,
+	KindFeedbackPosterior,
+	KindFeedbackHindsight,
 }
 
 // KnownKinds returns the runtime event kinds declared by this package.

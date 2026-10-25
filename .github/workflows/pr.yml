@@ -3,6 +3,16 @@ name: PR
 on:
   pull_request: { }
 
+# Least privilege: every job below only checks out the repo and runs local
+# tooling (lint, tests, govulncheck, frontend build, a non-pushing Docker
+# build). None of them call back to the GitHub API to write checks, comments,
+# packages, or refs, so a single read-only default covers them all. If a job
+# ever needs more (e.g. golangci-lint-action's `only-new-issues` mode reading
+# the PR diff, or a job that pushes), grant that scope on the job itself
+# rather than raising this default.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Linter

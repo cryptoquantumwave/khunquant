@@ -672,7 +672,7 @@ func TestUpdateExecution(t *testing.T) {
 	exec := &Execution{
 		PlanID:      planID,
 		AttemptID:   "attempt-456",
-		State:       "pending",
+		State:       "placing_second_leg",
 		RequestedAt: time.Now(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),

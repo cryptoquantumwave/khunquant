@@ -141,6 +141,10 @@ func (h *Handler) handleListCatalogs(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/models/catalog/{id}
 func (h *Handler) handleDeleteCatalog(w http.ResponseWriter, r *http.Request) {
+	if !allowStateChange(w, r) {
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "id is required", http.StatusBadRequest)

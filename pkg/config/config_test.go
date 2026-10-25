@@ -474,7 +474,7 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 	cfg := &ToolsConfig{}
 	toolNames := []string{
 		"web", "cron", "exec", "skills", "media_cleanup",
-		"append_file", "edit_file", "find_skills", "i2c", "install_skill",
+		"append_file", "edit_file", "find_skills", "i2c", "install_skill", "load_skill",
 		"list_dir", "message", "read_file", "spawn", "spi",
 		"subagent", "web_fetch", "send_file", "write_file", "mcp",
 		"get_assets_list", "get_total_value", "list_portfolios",
@@ -492,7 +492,8 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 		"set_price_alert", "set_indicator_alert", "transfer_funds",
 		"config_encrypt_keys", "create_dca_plan", "list_dca_plans",
 		"update_dca_plan", "delete_dca_plan", "execute_dca_order",
-		"get_dca_history", "get_dca_summary", "get_pnl_summary", "get_pnl_detail",
+		"get_dca_history", "get_dca_summary", "get_pnl_summary", "get_pnl_detail", "get_profile", "update_profile",
+		"create_intent", "list_intents", "update_intent",
 	}
 	for _, name := range toolNames {
 		// with zero-value config all named tools should return false (not enabled)
@@ -503,6 +504,21 @@ func TestIsToolEnabled_KnownTools(t *testing.T) {
 	}
 }
 
+// TestIsToolEnabled_UnknownTool pins default-allow, which is deliberate but
+// sharp-edged: a tool registered without a matching arm below runs
+// unconditionally, and no setting an operator can write will disable it. All
+// five option tools shipped that way - including option_create_order, which
+// places real orders, while create_order and futures_open_position are
+// disabled by default under a stated "opt-in for live trading" policy.
+//
+// The default stays because four registered read-only tools still have no arm
+// (funding_rate_history, webull_reconnect, get_delta_neutral_spread,
+// get_delta_neutral_earn) and flipping it would switch them off silently.
+// Nothing depends on default-allow otherwise: MCP, skills and tool-search tools
+// are registered directly and never consult this switch.
+//
+// TestCatalogToolsHaveEnableArms in web/backend/api is the guard that catches a
+// catalogued tool with no arm.
 func TestIsToolEnabled_UnknownTool(t *testing.T) {
 	cfg := &ToolsConfig{}
 	if !cfg.IsToolEnabled("nonexistent_tool_xyz") {
@@ -861,5 +877,48 @@ func TestAgentConfig_MCPServersRoundTrip(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// tools.policies must stay sparse. SaveConfig writes every field, so a default
+// that serialised as "policies": {} - or worse, a seeded table - would be
+// frozen into every operator's config.json.
+func TestToolPoliciesOmittedWhenEmpty(t *testing.T) {
+	raw, err := json.Marshal(DefaultConfig().Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"policies"`) {
+		t.Fatalf("default tools config serialises a policies key: %s", raw)
+	}
+
+	var tc ToolsConfig
+	if err := json.Unmarshal([]byte(`{"policies":{"create_order":{"require_approval":true},"transfer_funds":{}}}`), &tc); err != nil {
+		t.Fatal(err)
+	}
+	got := tc.ApprovalRequiredTools()
+	if len(got) != 1 || got[0] != "create_order" {
+		t.Fatalf("ApprovalRequiredTools = %v, want [create_order]", got)
+	}
+}
+
+// A fresh config does not auto-join Matrix rooms; an existing config that
+// saved join_on_invite: true keeps it, because LoadConfig unmarshals over the
+// defaults.
+func TestMatrixJoinOnInviteDefaultsOffButSavedValueWins(t *testing.T) {
+	if DefaultConfig().Channels.Matrix.JoinOnInvite {
+		t.Fatal("join_on_invite defaults to true")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"channels":{"matrix":{"join_on_invite":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Channels.Matrix.JoinOnInvite {
+		t.Fatal("an existing config's saved join_on_invite: true was overridden by the new default")
 	}
 }

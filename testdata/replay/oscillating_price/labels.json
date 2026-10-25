@@ -1,0 +1,23 @@
+[
+  {
+    "match": "price_cross",
+    "from": "2026-03-10T05:10:00Z",
+    "to": "2026-03-10T05:15:00Z",
+    "should_fire": true,
+    "note": "the first crossing"
+  },
+  {
+    "match": "price_cross",
+    "from": "2026-03-10T05:16:00Z",
+    "to": "2026-03-10T07:04:00Z",
+    "should_fire": false,
+    "note": "oscillation inside the band"
+  },
+  {
+    "match": "price_cross",
+    "from": "2026-03-10T07:40:00Z",
+    "to": "2026-03-10T07:50:00Z",
+    "should_fire": true,
+    "note": "back above after a real retreat and the cooldown"
+  }
+]

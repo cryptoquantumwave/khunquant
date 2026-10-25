@@ -1058,6 +1058,76 @@ func TestPathTraversalVariants(t *testing.T) {
 	}
 }
 
+// TestPathTraversal_StandaloneDotDotToken is T1-3: the original traversal
+// regex required ".." to be immediately followed by a path separator, so
+// "cd .." (nothing after it) and "cd .. && cat x" (followed by a space, not
+// a separator) slipped through with restrictToWorkspace on. This verifies
+// the fix catches the standalone-token form while leaving ordinary commands
+// containing ".." alone.
+func TestPathTraversal_StandaloneDotDotToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	tool, err := NewExecTool(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+	ctx := context.Background()
+
+	blocked := []string{
+		"cd ..",
+		"cd .. && cat x",
+		"cat ../x",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+			if !result.IsError || !strings.Contains(result.ForLLM, "path traversal") {
+				t.Errorf("expected %q to be blocked as path traversal, got: %s", cmd, result.ForLLM)
+			}
+		})
+	}
+
+	allowed := []string{
+		"ls -la",
+		"echo a..b",
+		"go build ./...",
+	}
+	for _, cmd := range allowed {
+		t.Run(cmd, func(t *testing.T) {
+			result := tool.Execute(ctx, map[string]any{"action": "run", "command": cmd})
+			if result.IsError && strings.Contains(result.ForLLM, "path traversal") {
+				t.Errorf("expected %q not to be blocked as path traversal, got: %s", cmd, result.ForLLM)
+			}
+		})
+	}
+}
+
+// TestGuardCommand_DenyPatternSpliceBypasses is T1-4: four ways a deny
+// pattern can be defeated by splicing a denied token in two without changing
+// what the shell actually runs, plus "find ... -delete" as a delete path
+// that never calls rm at all. All five must be blocked once denyPatterns are
+// normalized before matching.
+func TestGuardCommand_DenyPatternSpliceBypasses(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), false)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	cases := []string{
+		"rm \\\n-rf /",       // backslash-newline line continuation
+		"r\"\"m -rf /",       // empty double-quote splice
+		"r''m -rf /",         // empty single-quote splice
+		"rm${IFS}-rf${IFS}/", // ${IFS} standing in for a space
+		"find . -delete",     // deletes without ever calling rm
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			if got := tool.guardCommand(cmd, tool.workingDir); got == "" {
+				t.Errorf("expected %q to be blocked by a deny pattern", cmd)
+			}
+		})
+	}
+}
+
 // TestShellTool_RelativePathWithSlashAllowed verifies that local relative paths
 // under the workspace are not mistaken for absolute paths by the safety guard.
 func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {

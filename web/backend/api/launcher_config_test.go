@@ -67,7 +67,7 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/system/launcher-config",
-		strings.NewReader(`{"port":18080,"public":true,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":false,"trusted_proxy_cidrs":["10.0.0.0/8"]}`),
+		strings.NewReader(`{"port":18080,"public":true,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":false}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -90,9 +90,6 @@ func TestPutLauncherConfigPersists(t *testing.T) {
 	if cfg.AllowLocalhostBypass {
 		t.Fatalf("saved config allow_localhost_bypass = true, want false")
 	}
-	if len(cfg.TrustedProxyCIDRs) != 1 || cfg.TrustedProxyCIDRs[0] != "10.0.0.0/8" {
-		t.Fatalf("saved config trusted_proxy_cidrs = %v, want [10.0.0.0/8]", cfg.TrustedProxyCIDRs)
-	}
 }
 
 func TestPutLauncherConfigUsesDirectAccessFields(t *testing.T) {
@@ -106,7 +103,7 @@ func TestPutLauncherConfigUsesDirectAccessFields(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/system/launcher-config",
-		strings.NewReader(`{"port":18080,"public":false,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":true,"trusted_proxy_cidrs":["10.0.0.0/8"]}`),
+		strings.NewReader(`{"port":18080,"public":false,"allowed_cidrs":["192.168.1.0/24"],"allow_localhost_bypass":true}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -123,9 +120,6 @@ func TestPutLauncherConfigUsesDirectAccessFields(t *testing.T) {
 	}
 	if !cfg.AllowLocalhostBypass {
 		t.Fatal("saved config allow_localhost_bypass = false, want true")
-	}
-	if len(cfg.TrustedProxyCIDRs) != 1 || cfg.TrustedProxyCIDRs[0] != "10.0.0.0/8" {
-		t.Fatalf("saved config trusted_proxy_cidrs = %v, want [10.0.0.0/8]", cfg.TrustedProxyCIDRs)
 	}
 }
 
@@ -212,5 +206,65 @@ func TestPutLauncherConfigRejectsInvalidCIDR(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// putTrustedProxyCase saves a launcher config trusting 10.0.0.0/8, sends body,
+// and returns the status and the trusted proxies saved afterwards.
+func putTrustedProxyCase(t *testing.T, body string) (int, []string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	path := launcherconfig.PathForAppConfig(configPath)
+	if err := launcherconfig.Save(path, launcherconfig.Config{
+		Port: 18800, TrustedProxyCIDRs: []string{"10.0.0.0/8"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	NewHandler(configPath).RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/system/launcher-config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+
+	cfg, err := launcherconfig.Load(path, launcherconfig.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec.Code, cfg.TrustedProxyCIDRs
+}
+
+// M-15: a dashboard session cannot widen whose X-Forwarded-For is believed.
+func TestPutLauncherConfigRefusesTrustedProxyChange(t *testing.T) {
+	code, saved := putTrustedProxyCase(t,
+		`{"port":18800,"allowed_cidrs":[],"trusted_proxy_cidrs":["0.0.0.0/1","128.0.0.0/1"]}`)
+	if code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", code)
+	}
+	if len(saved) != 1 || saved[0] != "10.0.0.0/8" {
+		t.Fatalf("trusted proxies changed to %v", saved)
+	}
+}
+
+// The dashboard never sends the field; saving must not wipe the file's value,
+// which the handler used to overwrite with nil.
+func TestPutLauncherConfigKeepsTrustedProxiesWhenOmitted(t *testing.T) {
+	code, saved := putTrustedProxyCase(t, `{"port":18801,"allowed_cidrs":[]}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(saved) != 1 || saved[0] != "10.0.0.0/8" {
+		t.Fatalf("trusted proxies = %v after a save that omitted them", saved)
+	}
+}
+
+// Echoing the current value back (a client that round-trips the GET) is fine.
+func TestPutLauncherConfigAcceptsUnchangedTrustedProxies(t *testing.T) {
+	code, _ := putTrustedProxyCase(t,
+		`{"port":18801,"allowed_cidrs":[],"trusted_proxy_cidrs":[" 10.0.0.0/8 "]}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
 	}
 }

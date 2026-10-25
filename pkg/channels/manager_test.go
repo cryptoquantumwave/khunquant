@@ -656,7 +656,7 @@ func TestPreSend_PlaceholderEditSuccess(t *testing.T) {
 	m.RecordPlaceholder("test", "123", "456")
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	edited := m.preSend(context.Background(), "test", msg, ch)
+	edited, _ := m.preSend(context.Background(), "test", msg, ch)
 
 	if !edited {
 		t.Fatal("expected preSend to return true (placeholder edited)")
@@ -686,7 +686,7 @@ func TestPreSend_PlaceholderEditFails_FallsThrough(t *testing.T) {
 	m.RecordPlaceholder("test", "123", "456")
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	edited := m.preSend(context.Background(), "test", msg, ch)
+	edited, _ := m.preSend(context.Background(), "test", msg, ch)
 
 	if edited {
 		t.Fatal("expected preSend to return false when edit fails")
@@ -745,7 +745,7 @@ func TestPreSend_TypingStopCalled(t *testing.T) {
 	})
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	m.preSend(context.Background(), "test", msg, ch)
+	_, _ = m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop func to be called")
@@ -762,7 +762,7 @@ func TestPreSend_NoRegisteredState(t *testing.T) {
 	}
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	edited := m.preSend(context.Background(), "test", msg, ch)
+	edited, _ := m.preSend(context.Background(), "test", msg, ch)
 
 	if edited {
 		t.Fatal("expected preSend to return false with no registered state")
@@ -792,7 +792,7 @@ func TestPreSend_TypingAndPlaceholder(t *testing.T) {
 	m.RecordPlaceholder("test", "123", "456")
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	edited := m.preSend(context.Background(), "test", msg, ch)
+	edited, _ := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop to be called")
@@ -856,7 +856,7 @@ func TestRecordTypingStop_ReplacesExistingStop(t *testing.T) {
 	}
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	m.preSend(context.Background(), "test", msg, &mockChannel{})
+	_, _ = m.preSend(context.Background(), "test", msg, &mockChannel{})
 
 	if newStopCalls != 1 {
 		t.Fatalf("expected replacement typing stop to be called by preSend, got %d", newStopCalls)
@@ -1053,7 +1053,7 @@ func TestPreSendStillWorksWithWrappedTypes(t *testing.T) {
 	m.RecordPlaceholder("test", "chat1", "ph_id")
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "response"}
-	edited := m.preSend(context.Background(), "test", msg, ch)
+	edited, _ := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop to be called via wrapped type")
@@ -2001,7 +2001,7 @@ func TestPreSend_AllOperations(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "updated"}
 
 	// preSend should handle all three: typing, reaction, and placeholder
-	edited := m.preSend(ctx, "test", msg, ch)
+	edited, _ := m.preSend(ctx, "test", msg, ch)
 
 	if !edited {
 		t.Fatal("expected preSend to return true (placeholder was edited)")
@@ -2047,7 +2047,7 @@ func TestPreSend_NoPlaceholder(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "hello"}
 
 	// preSend with no placeholder should return false
-	edited := m.preSend(ctx, "test", msg, ch)
+	edited, _ := m.preSend(ctx, "test", msg, ch)
 	if edited {
 		t.Fatal("expected preSend to return false (no placeholder)")
 	}

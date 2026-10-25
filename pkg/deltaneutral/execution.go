@@ -20,6 +20,12 @@ const (
 	ExecutionStateCancelled        ExecutionState = "cancelled"
 )
 
+// UnrecordedFillMarker prefixes the execution error_msg trace that is written when an
+// exchange order went through but its leg row could not be persisted. The fill is then
+// invisible to Store.OpenLegExposure, so any plan carrying this marker is treated as
+// having open exposure and must be reconciled manually on the exchange.
+const UnrecordedFillMarker = "UNRECORDED_FILL"
+
 // LegState represents the state of a single execution leg (futures or spot).
 type LegState string
 
@@ -68,7 +74,7 @@ func AllowedTransitions(from ExecutionState) []ExecutionState {
 	case ExecutionStateRecoveryRequired:
 		return []ExecutionState{ExecutionStateUnwinding, ExecutionStateFailed}
 	case ExecutionStateUnwinding:
-		return []ExecutionState{ExecutionStateUnwound, ExecutionStateFailed}
+		return []ExecutionState{ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateRecoveryRequired}
 	case ExecutionStateUnwound, ExecutionStateFailed, ExecutionStateCancelled:
 		// Terminal states - no outgoing transitions
 		return []ExecutionState{}

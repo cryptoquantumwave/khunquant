@@ -33,7 +33,7 @@ func TestTelegramQuotedContent_DescribesWhatWasQuoted(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := telegramQuotedContent(tc.msg)
+			got := telegramQuotedContent(tc.msg, nil)
 			if len(tc.want) == 0 {
 				if got != "" {
 					t.Errorf("got %q, want empty", got)
@@ -103,7 +103,7 @@ func TestPrependTelegramQuotedReply(t *testing.T) {
 	}
 
 	t.Run("prepends labelled context", func(t *testing.T) {
-		got := c.prependTelegramQuotedReply("yes", quoted)
+		got := c.prependTelegramQuotedReply("yes", quoted, nil)
 		for _, want := range []string{"quoted", "alice", "should we deploy?", "yes"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("got %q, want it to contain %q", got, want)
@@ -117,14 +117,14 @@ func TestPrependTelegramQuotedReply(t *testing.T) {
 	})
 
 	t.Run("reply with no text still carries the quote", func(t *testing.T) {
-		got := c.prependTelegramQuotedReply("", quoted)
+		got := c.prependTelegramQuotedReply("", quoted, nil)
 		if !strings.Contains(got, "should we deploy?") {
 			t.Errorf("got %q, want the quoted text", got)
 		}
 	})
 
 	t.Run("empty quote leaves content untouched", func(t *testing.T) {
-		if got := c.prependTelegramQuotedReply("hello", &telego.Message{}); got != "hello" {
+		if got := c.prependTelegramQuotedReply("hello", &telego.Message{}, nil); got != "hello" {
 			t.Errorf("got %q, want %q", got, "hello")
 		}
 	})

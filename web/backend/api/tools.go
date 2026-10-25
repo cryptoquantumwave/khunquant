@@ -372,6 +372,38 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   tools.NameFuturesEmergencyFlatten,
 	},
 
+	// Options (Track B3)
+	{
+		Name:        tools.NameOptionQuote,
+		Description: tools.DescOptionQuote,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionQuote,
+	},
+	{
+		Name:        tools.NameOptionCreateOrder,
+		Description: tools.DescOptionCreateOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionCreateOrder,
+	},
+	{
+		Name:        tools.NameOptionCancelOrder,
+		Description: tools.DescOptionCancelOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionCancelOrder,
+	},
+	{
+		Name:        tools.NameOptionGetOrder,
+		Description: tools.DescOptionGetOrder,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionGetOrder,
+	},
+	{
+		Name:        tools.NameOptionOpenOrders,
+		Description: tools.DescOptionOpenOrders,
+		Category:    tools.CatOptions,
+		ConfigKey:   tools.NameOptionOpenOrders,
+	},
+
 	// Alert and transfer tools (Track D)
 	{
 		Name:        tools.NameSetPriceAlert,

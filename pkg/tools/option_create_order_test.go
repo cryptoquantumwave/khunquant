@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
@@ -72,91 +73,60 @@ func (m *mockOptionTradingProvider) FetchOpenOptionOrders(ctx context.Context) (
 	return nil, nil
 }
 
+// registerOptionValidationStub registers a live (non-paper) option provider under
+// a unique ID, so the validation tests below fail for the reason they assert
+// rather than for lack of a provider. Validation runs before the provider is
+// built, so a refusal must name the validation rule, never the provider.
+func registerOptionValidationStub(t *testing.T) string {
+	t.Helper()
+	const id = "opt-validation-stub"
+	broker.RegisterFactory(id, func(*config.Config) (broker.Provider, error) {
+		return optionCreateOrderFullStub{balances: []broker.Balance{{Asset: "USD", Free: 1000}}}, nil
+	})
+	t.Cleanup(func() {
+		broker.RegisterFactory(id, func(*config.Config) (broker.Provider, error) {
+			return nil, fmt.Errorf("broker: provider %s not registered", id)
+		})
+	})
+	return id
+}
+
 func TestOptionCreateOrderRejectMarket(t *testing.T) {
-	cfg := &config.Config{
-		Exchanges: config.ExchangesConfig{
-			Webull: config.WebullExchangeConfig{
-				Enabled: true,
-				Accounts: []config.WebullExchangeAccount{
-					{
-						ExchangeAccount: config.ExchangeAccount{
-							APIKey: *config.NewSecureString("key"),
-							Secret: *config.NewSecureString("secret"),
-						},
-						AccountID: "ACC123",
-					},
-				},
-			},
-		},
-		TradingRisk: config.TradingRiskConfig{
-			PaperTradingMode: true, // Use paper trading to avoid needing a real provider
-		},
-	}
+	provider := registerOptionValidationStub(t)
+	tool := NewOptionCreateOrderTool(&config.Config{})
 
-	tool := NewOptionCreateOrderTool(cfg)
-
-	args := map[string]any{
-		"provider":    "webull",
-		"underlying":  "AAPL",
-		"expiry":      "2026-08-21",
-		"strike":      320.0,
-		"option_type": "CALL",
-		"side":        "buy",
-		"quantity":    1.0,
-		"type":        "market", // Should be rejected
-		"confirm":     false,
-	}
+	args := liveOptionOrderArgs(provider, false)
+	args["type"] = "market" // Should be rejected
+	delete(args, "limit_price")
 
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
-		t.Errorf("expected error for market order type, got none")
+		t.Fatalf("expected error for market order type, got none")
+	}
+	if !strings.Contains(result.ForLLM, "not supported for options") {
+		t.Errorf("expected the order-type rule to be the reason, got: %s", result.ForLLM)
 	}
 }
 
 func TestOptionCreateOrderRejectGTCOnSell(t *testing.T) {
-	cfg := &config.Config{
-		Exchanges: config.ExchangesConfig{
-			Webull: config.WebullExchangeConfig{
-				Enabled: true,
-				Accounts: []config.WebullExchangeAccount{
-					{
-						ExchangeAccount: config.ExchangeAccount{
-							APIKey: *config.NewSecureString("key"),
-							Secret: *config.NewSecureString("secret"),
-						},
-						AccountID: "ACC123",
-					},
-				},
-			},
-		},
-		TradingRisk: config.TradingRiskConfig{
-			PaperTradingMode: true,
-		},
-	}
+	provider := registerOptionValidationStub(t)
+	tool := NewOptionCreateOrderTool(&config.Config{})
 
-	tool := NewOptionCreateOrderTool(cfg)
-
-	args := map[string]any{
-		"provider":      "webull",
-		"underlying":    "AAPL",
-		"expiry":        "2026-08-21",
-		"strike":        320.0,
-		"option_type":   "CALL",
-		"side":          "sell",
-		"quantity":      1.0,
-		"type":          "limit",
-		"limit_price":   1.50,
-		"time_in_force": "GTC", // Should be rejected on SELL
-		"confirm":       false,
-	}
+	args := liveOptionOrderArgs(provider, false)
+	args["side"] = "sell"
+	args["time_in_force"] = "GTC" // Should be rejected on SELL
 
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
-		t.Errorf("expected error for GTC on SELL, got none")
+		t.Fatalf("expected error for GTC on SELL, got none")
+	}
+	if !strings.Contains(result.ForLLM, "GTC") {
+		t.Errorf("expected the GTC rule to be the reason, got: %s", result.ForLLM)
 	}
 }
 
 func TestOptionCreateOrderValidation(t *testing.T) {
+	provider := registerOptionValidationStub(t)
 	tests := []struct {
 		name     string
 		args     map[string]any
@@ -182,7 +152,7 @@ func TestOptionCreateOrderValidation(t *testing.T) {
 		{
 			name: "invalid option type",
 			args: map[string]any{
-				"provider":      "webull",
+				"provider":      provider,
 				"underlying":    "AAPL",
 				"expiry":        "2026-08-21",
 				"strike":        320.0,
@@ -200,7 +170,7 @@ func TestOptionCreateOrderValidation(t *testing.T) {
 		{
 			name: "negative quantity",
 			args: map[string]any{
-				"provider":      "webull",
+				"provider":      provider,
 				"underlying":    "AAPL",
 				"expiry":        "2026-08-21",
 				"strike":        320.0,
@@ -218,7 +188,7 @@ func TestOptionCreateOrderValidation(t *testing.T) {
 		{
 			name: "limit order without limit price",
 			args: map[string]any{
-				"provider":      "webull",
+				"provider":      provider,
 				"underlying":    "AAPL",
 				"expiry":        "2026-08-21",
 				"strike":        320.0,
@@ -234,19 +204,16 @@ func TestOptionCreateOrderValidation(t *testing.T) {
 		},
 	}
 
-	cfg := &config.Config{
-		TradingRisk: config.TradingRiskConfig{
-			PaperTradingMode: true,
-		},
-	}
-
-	tool := NewOptionCreateOrderTool(cfg)
+	tool := NewOptionCreateOrderTool(&config.Config{})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tool.Execute(context.Background(), tt.args)
 			if tt.wantErr && !result.IsError {
 				t.Errorf("expected error, got none")
+			}
+			if tt.wantErr && !strings.Contains(result.ForLLM, tt.errMatch) {
+				t.Errorf("expected error containing %q, got: %s", tt.errMatch, result.ForLLM)
 			}
 			if !tt.wantErr && result.IsError {
 				t.Errorf("expected no error, got: %s", result.ForLLM)

@@ -56,7 +56,7 @@ func RunToolLoop(
 		// 1. Build tool definitions
 		var providerToolDefs []providers.ToolDefinition
 		if config.Tools != nil {
-			providerToolDefs = config.Tools.ToProviderDefs()
+			providerToolDefs = config.Tools.ToProviderDefsFor(ctx)
 		}
 
 		// 2. Set default LLM options

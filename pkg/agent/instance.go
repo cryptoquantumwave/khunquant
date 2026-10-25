@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -116,7 +115,7 @@ func NewAgentInstance(
 		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, buildExecAllowPatterns(cfg))
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -543,12 +542,27 @@ func (a *AgentInstance) AllowsMCPServer(serverName string) bool {
 	return ok
 }
 
+// compilePatterns compiles allow_read_paths / allow_write_paths entries.
+//
+// L-2: patterns are matched with MatchString, which finds a match anywhere in
+// the path. An entry written as a directory - "/home/me/data" - therefore also
+// allowed "/tmp/x/home/me/data/..." and any other path containing it. Each
+// entry is now anchored at the start. That can only narrow what an entry
+// matches: ".*\.csv$" keeps its meaning, and an entry that relied on matching
+// mid-path stops matching (fail closed) with a warning naming it.
 func compilePatterns(patterns []string) []*regexp.Regexp {
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {
+		if !strings.HasPrefix(p, "^") {
+			logger.WarnCF("agent", "Anchoring allow-path pattern at the start of the path; "+
+				"write it with a leading ^ to silence this",
+				map[string]any{"pattern": p, "anchored": "^" + p})
+			p = "^" + p
+		}
 		re, err := regexp.Compile(p)
 		if err != nil {
-			fmt.Printf("Warning: invalid path pattern %q: %v\n", p, err)
+			logger.WarnCF("agent", "Ignoring invalid allow-path pattern",
+				map[string]any{"pattern": p, "error": err.Error()})
 			continue
 		}
 		compiled = append(compiled, re)
@@ -573,6 +587,35 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	return append(compiled, mediaDirPattern)
 }
 
+// buildExecAllowPatterns returns the paths exec may reach outside the
+// workspace.
+//
+// M-1: exec used to be handed the *read* allowlist. But exec is not a reader -
+// it runs a shell, and a path it may touch is a path it may write:
+// allow_read_paths granted "> /that/path/file" just as surely as "cat". A
+// configuration that reads as read-only was therefore read-write in practice,
+// which is the opposite of what the setting looks like it does.
+//
+// It gets the write allowlist instead, which is the honest reading of "a path
+// this agent may modify", plus the media temp directory that exec-based media
+// processing (ffmpeg and friends) writes into.
+func buildExecAllowPatterns(cfg *config.Config) []*regexp.Regexp {
+	var configured []string
+	if cfg != nil {
+		configured = cfg.Tools.AllowWritePaths
+	}
+
+	compiled := compilePatterns(configured)
+	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern())
+	for _, pattern := range compiled {
+		if pattern.String() == mediaDirPattern.String() {
+			return compiled
+		}
+	}
+
+	return append(compiled, mediaDirPattern)
+}
+
 func mediaTempDirPattern() string {
 	sep := regexp.QuoteMeta(string(os.PathSeparator))
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
@@ -580,6 +623,15 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store and snapshot store.
 func (a *AgentInstance) Close() error {
+	// Background/PTY exec sessions belong to this instance's ExecTool; kill
+	// them so an agent teardown never leaves orphaned shells behind.
+	if a.Tools != nil {
+		if t, ok := a.Tools.Get("exec"); ok {
+			if s, ok := t.(interface{ Shutdown() }); ok {
+				s.Shutdown()
+			}
+		}
+	}
 	if a.snapshotStore != nil {
 		a.snapshotStore.Close()
 	}

@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"math"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -69,10 +71,25 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		return ErrorResult(fmt.Sprintf("plan status is %q; only draft, ready, or failed plans can be opened.", plan.Status))
 	}
 
+	// Never open on top of an existing position, whatever the plan status says: a plan
+	// that failed or was left half-open can still hold real exposure, and a retry would
+	// stack a second position on it. The check fails closed.
+	hasExposure, err := t.store.HasOpenExposure(ctx, plan.ID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("cannot verify that plan %d has no open exposure: %v. Refusing to open.", plan.ID, err))
+	}
+	if hasExposure {
+		return ErrorResult(fmt.Sprintf(
+			"plan %d (status %q) still has open or unreconciled exposure from a previous attempt. "+
+				"Refusing to open another position on top of it. Run unwind_delta_neutral_position first "+
+				"(or close the position manually on the exchange if unwind reports no recorded exposure).",
+			plan.ID, plan.Status))
+	}
+
 	// --- Safety gates (sequence from futures.go §225-290) ---
 
 	// Gate 1: leverage opt-in
-	if err := broker.CheckLeverage(t.cfg, "open delta-neutral futures leg"); err != nil {
+	if err := broker.CheckLeverage(t.cfg, "open delta-neutral futures leg", broker.RiskIncrease); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -87,19 +104,24 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	}
 
 	// Gate 3: daily loss limit
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
-		return ErrorResult(err.Error())
+	lossLimit := t.cfg.TradingRisk.DailyLossLimitUSD
+	for _, key := range []string{
+		broker.AccountKey(t.cfg, plan.FuturesProvider, plan.FuturesAccount),
+		broker.AccountKey(t.cfg, plan.SpotProvider, plan.SpotAccount),
+	} {
+		if err := broker.GlobalLossTracker.CheckDailyLossFor(lossLimit, key); err != nil {
+			return ErrorResult(err.Error())
+		}
 	}
 
-	// Gate 4: rate limit on both providers
-	if !broker.DefaultLimiter.Allow(plan.FuturesProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for futures provider %q", plan.FuturesProvider)).
-			WithError(broker.ErrRateLimited)
+	// Gate 4: per-order value cap, applied to each leg's notional. Opening adds exposure,
+	// so this is a risk-adding gate and sits before the dry-run so a preview tells the truth.
+	legNotional := math.Max(plan.SpotNotionalUSDT, plan.FuturesNotionalUSDT)
+	if err := broker.CheckRiskNotional(t.cfg, legNotional); err != nil {
+		return ErrorResult(fmt.Sprintf("delta-neutral leg: %v", err))
 	}
-	if !broker.DefaultLimiter.Allow(plan.SpotProvider) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for spot provider %q", plan.SpotProvider)).
-			WithError(broker.ErrRateLimited)
-	}
+
+	// The rate limit is taken after the dry-run return, right before the first order.
 
 	// --- Entry spread gate ---
 	// Fetch the live spread once and reuse it for both the gate and the dry-run
@@ -146,9 +168,18 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 
 	// --- On confirm: execute the two-leg order (§7.9) ---
 
+	// Rate limit: both tokens up front (nothing is placed yet), so a missing second token
+	// cannot strand a half-open position. A dry-run above never reaches this point.
+	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
+		return r
+	}
+
 	// Create an Execution record (T2.5 state machine entry)
 	now := time.Now()
-	attemptID := fmt.Sprintf("attempt_%d_%d", plan.ID, rand.Int63n(1e6))
+	// M-18: math/rand is seeded predictably and only spans 1e6 values, so two
+	// attempts for the same plan could collide on an ID that is the
+	// idempotency key for a two-leg live order.
+	attemptID := fmt.Sprintf("attempt_%d_%s", plan.ID, uuid.NewString())
 	exec := &deltaneutral.Execution{
 		PlanID:      plan.ID,
 		AttemptID:   attemptID,
@@ -182,92 +213,97 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	}
 
 	// Execute the first leg
+	var firstOut legOutcome
 	var firstLegErr error
-	var firstLegFilled bool
 
 	if firstLegType == deltaneutral.LegTypeFutures {
-		firstLegFilled, firstLegErr = t.executeFuturesLeg(ctx, plan, exec)
+		firstOut, firstLegErr = t.executeFuturesLeg(ctx, plan, exec)
 	} else {
-		firstLegFilled, firstLegErr = t.executeSpotLeg(ctx, plan, exec)
+		firstOut, firstLegErr = t.executeSpotLeg(ctx, plan, exec)
 	}
 
-	if firstLegErr != nil {
-		// First leg failed — transition to first_leg_failed, then failed
+	if !firstOut.Filled {
+		// No order was accepted for the first leg: nothing changed on the exchange, so
+		// failing the plan (re-openable) is safe. HasOpenExposure guards the retry.
+		failMsg := "first leg did not fill"
+		if firstLegErr != nil {
+			failMsg = firstLegErr.Error()
+		}
 		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = firstLegErr.Error()
-		t.store.UpdateExecution(ctx, exec)
+		exec.ErrorMsg = failMsg
+		updateExecutionLogged(ctx, t.store, exec)
 
 		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
+		updateExecutionLogged(ctx, t.store, exec)
 
-		// Update plan status to reflect failure
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
+		setPlanStatusLogged(ctx, t.store, plan.ID, deltaneutral.PlanStatusFailed)
 
-		return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position not opened.", firstLegErr))
-	}
-
-	if !firstLegFilled {
-		// First leg did not fill — abort second leg
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = "first leg did not fill"
-		t.store.UpdateExecution(ctx, exec)
-
-		exec.State = string(deltaneutral.ExecutionStateFailed)
-		t.store.UpdateExecution(ctx, exec)
-
-		t.store.UpdatePlanStatus(ctx, plan.ID, "failed")
+		if firstLegErr != nil {
+			return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position not opened.", firstLegErr))
+		}
 		return ErrorResult("first leg did not fill. Second leg not placed. Position not opened.")
 	}
+
+	// From here on an order has been accepted by the exchange: a real position exists.
+	// Every failure below must end in recovery_required, never "failed".
+	firstBkErr := firstOut.BookkeepingErr
 
 	// First leg filled — transition to first_leg_filled, then placing_second_leg
 	exec.State = string(deltaneutral.ExecutionStateFirstLegFilled)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to first_leg_filled: %v", err))
+		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
 
 	exec.State = string(deltaneutral.ExecutionStatePlacingSecondLeg)
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to transition to placing_second_leg: %v", err))
+		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
 	}
 
 	// Execute the second leg
+	var secondOut legOutcome
 	var secondLegErr error
-	var secondLegFilled bool
 
 	if firstLegType == deltaneutral.LegTypeFutures {
 		// If futures was first, spot is second
-		secondLegFilled, secondLegErr = t.executeSpotLeg(ctx, plan, exec)
+		secondOut, secondLegErr = t.executeSpotLeg(ctx, plan, exec)
 	} else {
 		// If spot was first, futures is second
-		secondLegFilled, secondLegErr = t.executeFuturesLeg(ctx, plan, exec)
+		secondOut, secondLegErr = t.executeFuturesLeg(ctx, plan, exec)
 	}
+	secondBkErr := secondOut.BookkeepingErr
 
-	if secondLegErr != nil || !secondLegFilled {
-		// Second leg failed — transition to recovery_required (unhedged exposure)
-		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
+	if !secondOut.Filled {
+		// Second leg failed — unhedged exposure from the first leg.
+		secondMsg := "second leg did not fill"
 		if secondLegErr != nil {
-			exec.ErrorMsg = secondLegErr.Error()
-		} else {
-			exec.ErrorMsg = "second leg did not fill"
+			secondMsg = secondLegErr.Error()
 		}
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to update execution: %v", err))
-		}
+		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
+		exec.ErrorMsg = execErrMsg(secondMsg, firstBkErr)
+		updateExecutionLogged(ctx, t.store, exec)
 
-		exec.State = string(deltaneutral.ExecutionStateRecoveryRequired)
-		exec.ErrorMsg = "second leg failed — unhedged exposure detected. Run unwind_delta_neutral_position to close."
-		if err := t.store.UpdateExecution(ctx, exec); err != nil {
-			return ErrorResult(fmt.Sprintf("failed to transition to recovery_required: %v", err))
-		}
-
-		// Update plan status to recovery_required
-		t.store.UpdatePlanStatus(ctx, plan.ID, "recovery_required")
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+			"second leg failed — unhedged exposure detected. Run unwind_delta_neutral_position to close.", firstBkErr))
 
 		return ErrorResult(fmt.Sprintf(
 			"CRITICAL: Second leg execution failed — UNHEDGED EXPOSURE. "+
 				"First leg filled but second leg failed/unfilled. "+
-				"Run unwind_delta_neutral_position immediately to close the open position. Error: %v",
-			secondLegErr))
+				"Plan set to recovery_required. "+
+				"Run unwind_delta_neutral_position immediately to close the open position. Error: %v%s%s",
+			secondLegErr, bkNote(firstBkErr), note))
+	}
+
+	if firstBkErr != nil || secondBkErr != nil {
+		// Both orders went through but at least one leg row is missing: the position is
+		// real but the plan's recorded quantities are incomplete.
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+			"both legs filled but a leg record could not be saved — reconcile the exchange positions manually.",
+			firstBkErr, secondBkErr))
+		return ErrorResult(fmt.Sprintf(
+			"CRITICAL: both legs were filled on the exchange but a leg record could not be saved. "+
+				"Plan set to recovery_required and will NOT be re-opened. Verify the positions on the exchange; "+
+				"unwind cannot size an unrecorded leg, so close it manually (futures_close_position / create_order).%s%s%s",
+			bkNote(firstBkErr), bkNote(secondBkErr), note))
 	}
 
 	// Both legs filled — success
@@ -275,14 +311,23 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 	completedNow := time.Now()
 	exec.CompletedAt = &completedNow
 	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to finalize execution: %v", err))
+		note := escalateToRecovery(ctx, t.store, plan.ID, exec, fmt.Sprintf(
+			"both legs filled but the execution could not be finalized (%v). Legs are recorded; verify the plan state.", err))
+		return ErrorResult(fmt.Sprintf(
+			"both legs filled but the execution could not be finalized (%v). Plan set to recovery_required "+
+				"(it will NOT be re-opened); both legs are recorded, so unwind_delta_neutral_position can close it.%s",
+			err, note))
 	}
 
 	// Update plan: mark opened_at, set status to active
 	plan.OpenedAt = &completedNow
-	plan.Status = "active"
+	plan.Status = deltaneutral.PlanStatusActive
 	if err := t.store.UpdatePlan(ctx, plan); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update plan status: %v", err))
+		note := escalateToRecovery(ctx, t.store, plan.ID, nil, "")
+		return ErrorResult(fmt.Sprintf(
+			"both legs filled but the plan could not be updated to active (%v). Plan set to recovery_required "+
+				"(it will NOT be re-opened); both legs are recorded, so unwind_delta_neutral_position can close it.%s",
+			err, note))
 	}
 
 	return UserResult(fmt.Sprintf(
@@ -298,18 +343,31 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		plan.SpotSide, plan.SpotSymbol, plan.SpotProvider))
 }
 
+// firstLegBookkeepingFailed handles a failed execution-state write after the first leg
+// filled. The second leg is NOT placed (the store is unreliable), the plan goes to
+// recovery_required and the user is told to unwind.
+func (t *OpenDeltaNeutralPositionTool) firstLegBookkeepingFailed(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, err, firstBkErr error) *ToolResult {
+	note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
+		fmt.Sprintf("first leg filled but execution bookkeeping failed (%v); second leg NOT placed. Run unwind_delta_neutral_position.", err),
+		firstBkErr))
+	return ErrorResult(fmt.Sprintf(
+		"CRITICAL: first leg filled but the execution state could not be saved (%v). Second leg NOT placed — "+
+			"UNHEDGED EXPOSURE. Plan set to recovery_required; run unwind_delta_neutral_position.%s%s",
+		err, bkNote(firstBkErr), note))
+}
+
 // executeFuturesLeg places a futures order for the hedge leg and records an ExecutionLeg.
-func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (bool, error) {
+func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (legOutcome, error) {
 	fp, err := futuresProvider(ctx, t.cfg, plan.FuturesProvider, plan.FuturesAccount)
 	if err != nil {
-		return false, fmt.Errorf("futures provider: %w", err)
+		return legOutcome{}, fmt.Errorf("futures provider: %w", err)
 	}
 
 	// Derive order side ("buy"/"sell") from position side ("long"/"short").
 	// OKX requires side="sell" to open a short; passing "short" causes a 51000 error.
 	entrySide, positionSide, err := futuresPositionSide(plan.FuturesSide)
 	if err != nil {
-		return false, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
+		return legOutcome{}, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
 	}
 
 	// Fetch mark price and market metadata to compute the correct contract count.
@@ -317,10 +375,10 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 	// expect the number of contracts (e.g. 135 for CHZ where contractSize=10 CHZ each).
 	markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
 	if err != nil {
-		return false, fmt.Errorf("fetch mark price: %w", err)
+		return legOutcome{}, fmt.Errorf("fetch mark price: %w", err)
 	}
 	if markPrice <= 0 {
-		return false, fmt.Errorf("invalid mark price: %.2f", markPrice)
+		return legOutcome{}, fmt.Errorf("invalid mark price: %.2f", markPrice)
 	}
 
 	leverage := plan.FuturesLeverage
@@ -330,7 +388,7 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 
 	mkt, err := validateActiveSwapMarket(ctx, fp, plan.FuturesSymbol, int64(leverage))
 	if err != nil {
-		return false, fmt.Errorf("market validation: %w", err)
+		return legOutcome{}, fmt.Errorf("market validation: %w", err)
 	}
 	perContractSize := 1.0
 	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
@@ -352,7 +410,7 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 	hedgeNotional := plan.SpotNotionalUSDT * (1 - spotTakerFee)
 	numContracts, err := contractsFromNotional(hedgeNotional, markPrice, perContractSize, minAmount)
 	if err != nil {
-		return false, fmt.Errorf("contract count computation: %w", err)
+		return legOutcome{}, fmt.Errorf("contract count computation: %w", err)
 	}
 	// Store base-currency quantity (CHZ, BTC, …) so the API/UI shows a meaningful amount.
 	baseQty := numContracts * perContractSize
@@ -378,7 +436,7 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = fmt.Sprintf("set leverage: %v", err)
 		t.store.SaveExecutionLeg(ctx, leg)
-		return false, fmt.Errorf("set leverage: %w", err)
+		return legOutcome{}, fmt.Errorf("set leverage: %w", err)
 	}
 
 	// Create the futures order — pass MarginMode so OKX sets tdMode=isolated/cross on the order.
@@ -396,7 +454,7 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = err.Error()
 		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
+		return legOutcome{}, err
 	}
 
 	// OKX returns order ID immediately but fill data (Filled, Average, Cost) requires
@@ -435,43 +493,44 @@ func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, pl
 	// Update plan with actual fill cost so the P&L card uses real entry notional.
 	plan.FuturesNotionalUSDT = filledNotional
 
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
+	// The order has been accepted: from here the leg counts as FILLED whatever happens to
+	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
+	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
 }
 
 // executeSpotLeg places a spot order for the buy leg and records an ExecutionLeg.
-func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (bool, error) {
+func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (legOutcome, error) {
 	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
 	if err != nil {
-		return false, fmt.Errorf("spot provider: %w", err)
+		return legOutcome{}, fmt.Errorf("spot provider: %w", err)
 	}
 
 	tp, ok := sp.(broker.TradingProvider)
 	if !ok {
-		return false, fmt.Errorf("spot provider does not support order execution")
+		return legOutcome{}, fmt.Errorf("spot provider does not support order execution")
 	}
 
 	// Fetch current spot price
 	status, err := sp.GetMarketStatus(ctx, plan.SpotSymbol)
 	if err == nil && status == broker.MarketClosed {
-		return false, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
+		return legOutcome{}, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
 	}
 
 	// Fetch live spot price
 	md, ok := sp.(broker.MarketDataProvider)
 	if !ok {
-		return false, fmt.Errorf("spot provider does not support market data")
+		return legOutcome{}, fmt.Errorf("spot provider does not support market data")
 	}
 	ticker, err := md.FetchTicker(ctx, plan.SpotSymbol)
 	if err != nil {
-		return false, fmt.Errorf("fetch spot ticker: %w", err)
+		return legOutcome{}, fmt.Errorf("fetch spot ticker: %w", err)
 	}
 	price := 0.0
 	if ticker.Last != nil {
 		price = *ticker.Last
 	}
 	if price <= 0 {
-		return false, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
+		return legOutcome{}, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
 	}
 
 	// Compute quantity from notional and live price
@@ -499,7 +558,7 @@ func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan 
 		leg.State = string(deltaneutral.LegStateFailed)
 		leg.ErrorMsg = err.Error()
 		t.store.SaveExecutionLeg(ctx, leg)
-		return false, err
+		return legOutcome{}, err
 	}
 
 	// OKX returns order ID immediately but fill details (Filled, Average, Cost) are
@@ -542,8 +601,9 @@ func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan 
 	// Update plan with actual fill cost so the P&L card uses real entry notional.
 	plan.SpotNotionalUSDT = filledNotional
 
-	_, err = t.store.SaveExecutionLeg(ctx, leg)
-	return err == nil, err
+	// The order has been accepted: from here the leg counts as FILLED whatever happens to
+	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
+	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
 }
 
 // formatExecutionReview formats the execution review for dry-run output (§7.8).

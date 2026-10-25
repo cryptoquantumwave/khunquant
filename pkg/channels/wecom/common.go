@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
@@ -33,7 +34,11 @@ func verifySignature(token, msgSignature, timestamp, nonce, msgEncrypt string) b
 	if token == "" {
 		return false
 	}
-	return computeSignature(token, timestamp, nonce, msgEncrypt) == msgSignature
+	// L-4: compared with ==, which returns as soon as two bytes differ. An
+	// attacker who can send repeated callbacks can use that timing to recover a
+	// valid signature byte by byte without ever knowing the token.
+	expected := computeSignature(token, timestamp, nonce, msgEncrypt)
+	return hmac.Equal([]byte(expected), []byte(msgSignature))
 }
 
 // decryptMessage decrypts the encrypted message using AES

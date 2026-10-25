@@ -9,30 +9,15 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
-func (h *Handler) effectiveLauncherPublic() bool {
-	if h.serverPublicExplicit {
-		return h.serverPublic
-	}
-
-	cfg, err := h.loadLauncherConfig()
-	if err == nil {
-		return cfg.Public
-	}
-
-	return h.serverPublic
-}
-
-func (h *Handler) gatewayHostOverride() string {
-	if h.effectiveLauncherPublic() {
-		return "0.0.0.0"
-	}
-	return ""
-}
-
+// effectiveGatewayBindHost reports the host the gateway binds to, which is what
+// gateway.host says and nothing else.
+//
+// H-10: the launcher used to override this with 0.0.0.0 whenever the launcher
+// itself was started with -public, so a flag about the launcher's own listen
+// address silently moved the gateway - webhooks, pico - onto the LAN. An
+// operator who wants that now says so explicitly, by setting gateway.host or
+// the KHUNQUANT_GATEWAY_HOST environment variable it is bound to.
 func (h *Handler) effectiveGatewayBindHost(cfg *config.Config) string {
-	if override := h.gatewayHostOverride(); override != "" {
-		return override
-	}
 	if cfg == nil {
 		return ""
 	}

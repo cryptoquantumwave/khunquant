@@ -27,6 +27,11 @@ type Config struct {
 	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
 	LauncherToken        string   `json:"launcher_token,omitempty"`
 	DashboardPasswordHash string   `json:"dashboard_password_hash,omitempty"`
+	// BehindTLSProxy marks session cookies Secure even though the launcher
+	// itself serves plain HTTP, for deployments behind a TLS-terminating
+	// reverse proxy. An explicit setting, not X-Forwarded-Proto: that header
+	// is written by the client unless a proxy overwrites it.
+	BehindTLSProxy bool `json:"behind_tls_proxy,omitempty"`
 }
 
 // Default returns default launcher settings.
@@ -45,8 +50,14 @@ func Validate(cfg Config) error {
 		}
 	}
 	for _, cidr := range cfg.TrustedProxyCIDRs {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
 			return fmt.Errorf("invalid trusted proxy CIDR %q", cidr)
+		}
+		// M-15: a /0 trusts X-Forwarded-For from every peer, letting any
+		// client claim to be any address - including an allowed one.
+		if ones, _ := ipNet.Mask.Size(); ones == 0 {
+			return fmt.Errorf("trusted proxy CIDR %q trusts every address; list the proxy's own address instead", cidr)
 		}
 	}
 	return nil

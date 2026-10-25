@@ -63,8 +63,29 @@ type Execution struct {
 	FilledQuantity float64 // base asset amount
 	FeeQuote       float64 // fee in quote currency
 	Status         string  // "completed" | "failed" | "skipped"
-	ErrorMsg       string
+	ErrorMsg       string  // failure reason, or the gate that produced a "skipped" row
+	Side           string  // "buy" (default) | "sell"
 	CreatedAt      time.Time
+}
+
+// PaperSkipReason is the error_msg of the "skipped" row a paper-mode run
+// leaves behind. It doubles as the marker CountExecutionsInPeriodAt matches
+// when it is asked to count paper runs toward the per-period cap, so existing
+// rows depend on it staying exactly as written.
+const PaperSkipReason = "paper mode: simulated, no order placed"
+
+// StatsDelta is the change one filled order makes to its plan's cumulative
+// totals. AmountQuote is the quote value of the fill (cost for a buy, proceeds
+// for a sell) and Quantity the base quantity filled; both are non-negative.
+//
+// A buy adds both and recomputes the average cost. A sell removes Quantity and
+// AvgCost x Quantity of invested capital (neither goes below zero) and leaves
+// the average cost alone, so the remaining holding keeps the cost it was
+// bought at.
+type StatsDelta struct {
+	Side        string // "buy" (default) | "sell"
+	AmountQuote float64
+	Quantity    float64
 }
 
 // DCASummary holds PnL and aggregate statistics for a plan.

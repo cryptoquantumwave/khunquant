@@ -120,7 +120,8 @@ func NewBaseChannel(
 	if len(bc.allowList) == 0 {
 		logger.WarnCF("channels", "SECURITY: Channel allows EVERYONE (allow_from is empty)", map[string]any{
 			"channel": bc.name,
-			"hint":    "Set allow_from to your ID, or use '*' to explicitly acknowledge open access.",
+			"hint": "Set allow_from to your ID, or use '*' to explicitly acknowledge open access. " +
+				"A future release will treat an empty allow_from as deny-all.",
 		})
 	}
 

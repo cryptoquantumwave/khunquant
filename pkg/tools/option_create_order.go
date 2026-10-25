@@ -88,10 +88,15 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		stopPrice = &v
 	}
 
-	// --- Gate 0: paper trading mode redirect ---
-	if t.cfg.TradingRisk.PaperTradingMode {
-		paper := NewPaperTradeTool(t.cfg)
-		return paper.Execute(ctx, args)
+	// --- Gate 0: paper trading mode ---
+	// Options have no simulation, so the order is refused rather than placed
+	// for real. (This used to redirect to paper_trade, whose spot-only arguments
+	// rejected every option order with a misleading validation error.) The
+	// policy table carries the same refusal as a registry-level backstop.
+	if broker.IsPaperMode(t.cfg) {
+		msg := "option orders are not simulated in paper_trading_mode, and a real order would break paper mode. " +
+			"No order was placed. Disable paper_trading_mode to trade options."
+		return ErrorResult(msg).WithError(fmt.Errorf("%w: option orders", broker.ErrPaperModeUnsupported))
 	}
 
 	// --- Gate 1: basic validation ---
@@ -146,24 +151,29 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 	if notionalPrice == nil {
 		notionalPrice = stopPrice
 	}
-	riskAmount := quantity
+	if err := broker.CheckOrderType(t.cfg, strings.ToLower(orderTypeUpper)); err != nil {
+		return ErrorResult(err.Error())
+	}
 	if notionalPrice != nil {
 		// notional = limit_price × 100 (contracts) × quantity
-		riskAmount = quantity * (*notionalPrice) * 100
-	}
-	if err := broker.CheckRisk(t.cfg, strings.ToLower(side), strings.ToLower(orderTypeUpper), riskAmount, nil); err != nil {
-		return ErrorResult(err.Error())
+		//
+		// H-3: this was passed to CheckRisk as an "amount" with a nil price,
+		// which returned before looking at it, so max_order_value_usd never
+		// applied to an option order. It is a USD notional, so it goes to the
+		// notional check directly.
+		if err := broker.CheckRiskNotional(t.cfg, quantity*(*notionalPrice)*100); err != nil {
+			return ErrorResult(err.Error())
+		}
+	} else if t.cfg.TradingRisk.MaxOrderValueUSD > 0 {
+		// A market option order carries neither limit nor stop price, so there
+		// is no USD figure to measure. quantity alone is a contract count, not
+		// a notional, and comparing it to a USD ceiling would be meaningless.
+		return ErrorResult("cannot evaluate max_order_value_usd for an unpriced option order — supply a limit or stop price")
 	}
 
 	// --- Gate 1d: daily loss limit ---
-	if err := broker.GlobalLossTracker.CheckDailyLoss(t.cfg.TradingRisk.DailyLossLimitUSD); err != nil {
+	if err := broker.GlobalLossTracker.CheckDailyLossFor(t.cfg.TradingRisk.DailyLossLimitUSD, broker.AccountKey(t.cfg, providerID, account)); err != nil {
 		return ErrorResult(err.Error())
-	}
-
-	// --- Gate 2: rate limit ---
-	if !broker.DefaultLimiter.Allow(providerID) {
-		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
-			WithError(broker.ErrRateLimited)
 	}
 
 	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
@@ -236,7 +246,12 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		return UserResult(out)
 	}
 
-	// --- Gate 7: execute --- (req was built and validated above)
+	// --- Gate 7: rate limit, then execute --- (req was built and validated above)
+	// Taken only now, after the dry-run and large-order returns, so a preview spends nothing.
+	if !broker.DefaultLimiter.Allow(providerID) {
+		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
+			WithError(broker.ErrRateLimited)
+	}
 	order, err := opt.PlaceOptionOrder(ctx, req)
 	if err != nil {
 		if hint := reauthHint(err, providerID, account); hint != nil {

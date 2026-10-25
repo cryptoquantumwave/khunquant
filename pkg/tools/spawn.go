@@ -111,16 +111,41 @@ Task: %s`, label, task)
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
+		// The spawn outlives this tool call, and usually the turn that made
+		// it: the agent loop cancels a turn's context as soon as the turn
+		// returns. Run on a context that keeps the turn's values (turn state,
+		// origin, sender, turn ID) but not its cancellation, or a spawn still
+		// waiting for a concurrency slot would be cancelled by its parent
+		// merely finishing. A hard abort of the parent still stops it: that
+		// travels through the turn tree, not through this context.
+		spawnCtx := context.WithoutCancel(ctx)
+
+		cfg := SubTurnConfig{
+			Model:        t.defaultModel,
+			Tools:        nil, // Will inherit from parent via context
+			SystemPrompt: systemPrompt,
+			MaxTokens:    t.maxTokens,
+			Temperature:  t.temperature,
+			Async:        true, // Async execution
+			// The task runs to completion within its own timeout, whether or
+			// not the turn that started it is still running: it is work the
+			// user was told about. An explicit cancel still stops it.
+			Critical: true,
+			// The callback is the one way the result reaches the user; queueing
+			// it on the parent turn as well would deliver it twice.
+			NoPendingDelivery: true,
+		}
+		if agentID != "" {
+			// Run as the named agent, with its model and temperature: a model
+			// of the spawning agent's would override the target's own.
+			cfg.TargetAgentID = agentID
+			cfg.Model = ""
+			cfg.Temperature = 0
+		}
+
 		// Launch async sub-turn in goroutine
 		go func() {
-			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:        t.defaultModel,
-				Tools:        nil, // Will inherit from parent via context
-				SystemPrompt: systemPrompt,
-				MaxTokens:    t.maxTokens,
-				Temperature:  t.temperature,
-				Async:        true, // Async execution
-			})
+			result, err := t.spawner.SpawnSubTurn(spawnCtx, cfg)
 
 			if err != nil {
 				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
@@ -128,7 +153,7 @@ Task: %s`, label, task)
 
 			// Call callback if provided
 			if cb != nil {
-				cb(ctx, result)
+				cb(spawnCtx, result)
 			}
 		}()
 

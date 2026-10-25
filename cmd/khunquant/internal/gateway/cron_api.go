@@ -3,17 +3,19 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
-
-var interfaceAddrs = net.InterfaceAddrs
 
 type cronUpdateRequest struct {
 	Name     *string            `json:"name,omitempty"`
@@ -23,6 +25,23 @@ type cronUpdateRequest struct {
 	Schedule *cron.CronSchedule `json:"schedule,omitempty"`
 	Channel  *string            `json:"channel,omitempty"`
 	To       *string            `json:"to,omitempty"`
+}
+
+// ensureManagementToken mints and persists the cron management API's bearer
+// token on first use, the same way the sandbox and dev-MCP tokens are handled.
+//
+// H-1: the cron management API can create, edit and run agent directives, and
+// was guarded by source address alone. A token makes it a credential rather
+// than a network position.
+func ensureManagementToken(cfg *config.Config) {
+	if cfg.Gateway.ManagementToken != "" {
+		return
+	}
+	cfg.Gateway.ManagementToken = generateDevMCPToken()
+	if err := config.SaveConfig(internal.GetConfigPath(), cfg); err != nil {
+		logger.WarnCF("gateway", "Failed to persist the gateway management token; it will be regenerated next start",
+			map[string]any{"err": err.Error()})
+	}
 }
 
 // loopbackOnly rejects requests that do not originate from the loopback interface.
@@ -43,27 +62,47 @@ func loopbackOnly(next http.Handler) http.Handler {
 	})
 }
 
+// isLocalManagementIP accepts loopback only.
+//
+// H-1: this previously also accepted any address bound to a local interface,
+// which widens the management API to anything that can present the host's own
+// LAN address as a source - including a spoofed source on a gateway bound to
+// 0.0.0.0. The launcher reaches the gateway over 127.0.0.1 (gatewayBase forces
+// it), so nothing legitimate depends on the wider rule.
 func isLocalManagementIP(ip net.IP) bool {
-	if ip.IsLoopback() {
-		return true
-	}
-	addrs, err := interfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		switch v := addr.(type) {
-		case *net.IPNet:
-			if v.IP.Equal(ip) {
-				return true
-			}
-		case *net.IPAddr:
-			if v.IP.Equal(ip) {
-				return true
-			}
+	return ip.IsLoopback()
+}
+
+// noBrowser rejects requests a browser could have initiated. The management API
+// is for local tooling; a page the operator happens to be visiting must not be
+// able to drive it. Unlike a bearer token, these headers cannot be suppressed
+// by the calling page, and the launcher's own proxy forwards neither.
+func noBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, `{"error":"browser-originated requests are not allowed"}`, http.StatusForbidden)
+			return
 		}
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "none" {
+			http.Error(w, `{"error":"browser-originated requests are not allowed"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// guardedMux applies the management API's bearer-token and browser guards to
+// every handler registered through it. Wrapping the mux rather than each route
+// means a route added later cannot silently skip them.
+type guardedMux struct {
+	inner interface {
+		Handle(pattern string, handler http.Handler)
 	}
-	return false
+	token string
+}
+
+func (g *guardedMux) Handle(pattern string, handler http.Handler) {
+	g.inner.Handle(pattern, bearerTokenMiddleware(g.token, noBrowser(handler)))
 }
 
 // registerCronAPI registers live cron management routes on the gateway HTTP mux.
@@ -72,7 +111,11 @@ func isLocalManagementIP(ip net.IP) bool {
 // the linked plan's monitor_interval automatically.
 func registerCronAPI(mux interface {
 	Handle(pattern string, handler http.Handler)
-}, cs *cron.CronService, dnStore *deltaneutral.Store) {
+}, cs *cron.CronService, dnStore *deltaneutral.Store, token string) {
+	// Every route below additionally requires the management bearer token and
+	// refuses browser-originated requests.
+	mux = &guardedMux{inner: mux, token: token}
+
 	mux.Handle("GET /api/cron/jobs", loopbackOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jobs := cs.ListJobs(true)
 		if jobs == nil {
@@ -170,8 +213,15 @@ func registerCronAPI(mux interface {
 			http.Error(w, "id is required", http.StatusBadRequest)
 			return
 		}
-		if !cs.RunJobNow(id) {
-			http.Error(w, fmt.Sprintf("job %q not found", id), http.StatusNotFound)
+		if err := cs.RunJobNow(id); err != nil {
+			switch {
+			case errors.Is(err, cron.ErrJobNotFound):
+				http.Error(w, fmt.Sprintf("job %q not found", id), http.StatusNotFound)
+			case errors.Is(err, cron.ErrJobRunning):
+				http.Error(w, fmt.Sprintf("job %q is already running", id), http.StatusConflict)
+			default:
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

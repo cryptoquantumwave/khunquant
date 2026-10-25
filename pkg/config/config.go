@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -188,24 +189,49 @@ func (a ExchangeAccount) RedactedAPIKey() string {
 
 // TradingRiskConfig holds per-exchange risk controls for order execution.
 type TradingRiskConfig struct {
-	// PaperTradingMode forces all create_order calls to simulate without real execution.
+	// PaperTradingMode simulates create_order (every gate still runs; nothing
+	// reaches the exchange) and refuses every other tool that would open or enlarge
+	// a real position or move funds. Exits of real positions (futures close/reduce/
+	// flatten, delta-neutral unwind, cancels) still act on the real exchange. See SECURITY.md.
 	PaperTradingMode bool `json:"paper_trading_mode" env:"KHUNQUANT_TRADING_PAPER_MODE"`
 
 	// MaxOrderValueUSD rejects any single order whose notional exceeds this value (USD).
 	// 0 means no limit. Recommended: 10000.
 	MaxOrderValueUSD float64 `json:"max_order_value_usd" env:"KHUNQUANT_TRADING_MAX_ORDER_USD"`
 
-	// DailyLossLimitUSD pauses order execution when the day's realised losses
-	// exceed this value (USD). 0 means no limit.
+	// DailyLossLimitUSD pauses risk-increasing orders when the day's loss
+	// (realised losses, or equity drawdown since the start of the loss day,
+	// whichever is larger) reaches this value (USD). 0 means no limit.
 	DailyLossLimitUSD float64 `json:"daily_loss_limit_usd" env:"KHUNQUANT_TRADING_DAILY_LOSS_USD"`
+
+	// LossDayTimezone is the IANA time zone in which the loss day rolls over at
+	// local midnight (e.g. "Asia/Bangkok"). Default "UTC". An unknown zone is
+	// logged as an error and UTC is used.
+	LossDayTimezone string `json:"loss_day_timezone" env:"KHUNQUANT_TRADING_LOSS_DAY_TIMEZONE"`
+
+	// EquitySampleMinutes is how often the gateway samples account equity for
+	// the daily loss guard (only while DailyLossLimitUSD > 0). Default 5.
+	EquitySampleMinutes int `json:"equity_sample_minutes" env:"KHUNQUANT_TRADING_EQUITY_SAMPLE_MINUTES"`
 
 	// AllowMargin enables margin / cross-collateral order types.
 	// Default false — must explicitly opt-in.
 	AllowMargin bool `json:"allow_margin" env:"KHUNQUANT_TRADING_ALLOW_MARGIN"`
 
 	// AllowLeverage enables leveraged / futures order types.
-	// Default false — must explicitly opt-in.
+	//
+	// NOTE: unlike AllowMargin, this ships **enabled** — DefaultConfig sets
+	// AllowLeverage: true. The comment here used to claim the opposite, as did
+	// the CheckLeverage error message. Set it to false to require an explicit
+	// opt-in for futures.
 	AllowLeverage bool `json:"allow_leverage" env:"KHUNQUANT_TRADING_ALLOW_LEVERAGE"`
+
+	// MaxDCAAmountPerOrderUSD caps the USD notional of a single automated DCA
+	// order. 0 means no limit (the shipped default).
+	//
+	// Separate from MaxOrderValueUSD because DCA orders execute unattended on a
+	// schedule: an operator may reasonably want a tighter ceiling on what fires
+	// without anyone watching than on what they place by hand.
+	MaxDCAAmountPerOrderUSD float64 `json:"max_dca_amount_per_order_usd" env:"KHUNQUANT_TRADING_MAX_DCA_ORDER_USD"`
 }
 
 // OKXExchangeAccount extends ExchangeAccount with the OKX-specific passphrase.
@@ -653,6 +679,12 @@ type MaixCamConfig struct {
 	Enabled            bool                `json:"enabled"              yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_ENABLED"`
 	Host               string              `json:"host"                 yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_HOST"`
 	Port               int                 `json:"port"                 yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_PORT"`
+	// Token is the shared secret a device must send first ({"type":"auth",
+	// "token":"..."}). Required when Host is not loopback. A plain string, not
+	// SecureString, because the maixcam subtree is yaml:"-" and could not be
+	// restored from .security.yml; "token" is in CredentialFieldNames, which
+	// keeps it out of API responses and logs.
+	Token              string              `json:"token,omitempty"      yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_TOKEN"`
 	AllowFrom          FlexibleStringSlice `json:"allow_from"           yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_ALLOW_FROM"`
 	ReasoningChannelID string              `json:"reasoning_channel_id" yaml:"-" env:"KHUNQUANT_CHANNELS_MAIXCAM_REASONING_CHANNEL_ID"`
 }
@@ -733,7 +765,9 @@ type WeComConfig struct {
 	Enabled            bool                `json:"enabled"                     yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_ENABLED"`
 	Token              SecureString        `json:"token,omitzero"              yaml:"token,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_TOKEN"`
 	EncodingAESKey     SecureString        `json:"encoding_aes_key,omitzero"   yaml:"encoding_aes_key,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_ENCODING_AES_KEY"`
-	WebhookURL         string              `json:"webhook_url"                 yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_URL"`
+	// WebhookURL is a SecureString: the URL carries the bot secret in its
+	// ?key= query parameter, so it must not be serialised into config.json.
+	WebhookURL         SecureString        `json:"webhook_url,omitzero"        yaml:"webhook_url,omitempty" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_URL"`
 	WebhookHost        string              `json:"webhook_host"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_HOST"`
 	WebhookPort        int                 `json:"webhook_port"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PORT"`
 	WebhookPath        string              `json:"webhook_path"                yaml:"-" env:"KHUNQUANT_CHANNELS_WECOM_WEBHOOK_PATH"`
@@ -824,7 +858,7 @@ type TeamsWebhookTarget struct {
 
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"KHUNQUANT_HEARTBEAT_ENABLED"`
-	Interval int  `json:"interval" env:"KHUNQUANT_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Interval int  `json:"interval" env:"KHUNQUANT_HEARTBEAT_INTERVAL"` // minutes, min 30
 }
 
 type DevicesConfig struct {
@@ -991,6 +1025,13 @@ func (c *ModelConfig) Validate() error {
 type GatewayConfig struct {
 	Host string `json:"host" env:"KHUNQUANT_GATEWAY_HOST"`
 	Port int    `json:"port" env:"KHUNQUANT_GATEWAY_PORT"`
+	// ManagementToken guards the cron management API, which can create and run
+	// agent directives. Minted and persisted on first gateway start. It is a
+	// plain string rather than a SecureString because the Gateway subtree is
+	// tagged yaml:"-": a SecureString here would marshal as withheld with
+	// nothing in .security.yml to restore from, blanking itself on next save.
+	// It is kept out of API responses and logs by CredentialFieldNames instead.
+	ManagementToken string `json:"management_token,omitempty" env:"KHUNQUANT_GATEWAY_MANAGEMENT_TOKEN"`
 }
 
 type ToolDiscoveryConfig struct {
@@ -1066,6 +1107,17 @@ type CronToolsConfig struct {
 	ToolConfig            `    envPrefix:"KHUNQUANT_TOOLS_CRON_"`
 	ExecTimeoutMinutes    int      `                                 env:"KHUNQUANT_TOOLS_CRON_EXEC_TIMEOUT_MINUTES"     json:"exec_timeout_minutes"` // 0 means no timeout
 	CommandAllowedRemotes []string `                                 env:"KHUNQUANT_TOOLS_CRON_COMMAND_ALLOWED_REMOTES" json:"command_allowed_remotes"`
+	// Workers bounds how many scheduled jobs run concurrently (<=0 selects 4).
+	// At most one LLM-backed job runs at a time regardless of this value.
+	Workers int `env:"KHUNQUANT_TOOLS_CRON_WORKERS" json:"workers"`
+	// MisfireGraceMinutes is how late a one-shot job may start after the assistant
+	// was offline at its due time and still run. Older ones are marked missed,
+	// disabled and reported once. 0 means no grace.
+	MisfireGraceMinutes int `env:"KHUNQUANT_TOOLS_CRON_MISFIRE_GRACE_MINUTES" json:"misfire_grace_minutes"`
+	// JobTimeoutMinutes caps a single scheduled run, whatever its kind. 0 means no
+	// timeout. ExecTimeoutMinutes above is separate: it only bounds the shell
+	// command of a command job.
+	JobTimeoutMinutes int `env:"KHUNQUANT_TOOLS_CRON_JOB_TIMEOUT_MINUTES" json:"job_timeout_minutes"`
 }
 
 type ExecConfig struct {
@@ -1075,6 +1127,12 @@ type ExecConfig struct {
 	CustomDenyPatterns  []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"  json:"custom_deny_patterns"`
 	CustomAllowPatterns []string `                                 env:"KHUNQUANT_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS" json:"custom_allow_patterns"`
 	TimeoutSeconds      int      `                                 env:"KHUNQUANT_TOOLS_EXEC_TIMEOUT_SECONDS"       json:"timeout_seconds"` // 0 means use default (60s)
+	// EnvPassthrough names environment variables exec children may inherit in
+	// addition to the base allowlist in shell_env.go. Empty by default: this
+	// process holds LLM and exchange API keys in its environment, and a child
+	// that inherits them hands every one of them to any command the model runs.
+	// An entry may end in "*" to pass a prefix group (e.g. "CI_*").
+	EnvPassthrough []string `env:"KHUNQUANT_TOOLS_EXEC_ENV_PASSTHROUGH" json:"env_passthrough,omitempty"`
 }
 
 type SkillsToolsConfig struct {
@@ -1168,6 +1226,18 @@ type ToolsConfig struct {
 	FuturesCancelOrders       ToolConfig `json:"futures_cancel_orders"      envPrefix:"KHUNQUANT_TOOLS_FUTURES_CANCEL_ORDERS_"`
 	FuturesEmergencyFlatten   ToolConfig `json:"futures_emergency_flatten"  envPrefix:"KHUNQUANT_TOOLS_FUTURES_EMERGENCY_FLATTEN_"`
 
+	// Options (Track B3)
+	//
+	// These were registered in instance.go but had no config fields, no arms in
+	// IsToolEnabled and no defaults entry. IsToolEnabled is default-allow for
+	// unknown names, so all five ran unconditionally and no setting could turn
+	// them off - including option_create_order, which places real orders.
+	OptionQuote       ToolConfig `json:"option_quote"        envPrefix:"KHUNQUANT_TOOLS_OPTION_QUOTE_"`
+	OptionCreateOrder ToolConfig `json:"option_create_order" envPrefix:"KHUNQUANT_TOOLS_OPTION_CREATE_ORDER_"`
+	OptionCancelOrder ToolConfig `json:"option_cancel_order" envPrefix:"KHUNQUANT_TOOLS_OPTION_CANCEL_ORDER_"`
+	OptionGetOrder    ToolConfig `json:"option_get_order"    envPrefix:"KHUNQUANT_TOOLS_OPTION_GET_ORDER_"`
+	OptionOpenOrders  ToolConfig `json:"option_open_orders"  envPrefix:"KHUNQUANT_TOOLS_OPTION_OPEN_ORDERS_"`
+
 	// Technical analysis tools (Track C)
 	CalculateIndicators ToolConfig `json:"calculate_indicators" envPrefix:"KHUNQUANT_TOOLS_CALCULATE_INDICATORS_"`
 	MarketAnalysis      ToolConfig `json:"market_analysis"      envPrefix:"KHUNQUANT_TOOLS_MARKET_ANALYSIS_"`
@@ -1212,6 +1282,34 @@ type ToolsConfig struct {
 
 	// Security tools
 	ConfigEncryptKeys ToolConfig `json:"config_encrypt_keys" envPrefix:"KHUNQUANT_TOOLS_CONFIG_ENCRYPT_KEYS_"`
+
+	// Policies holds operator additions to the built-in tool policy table,
+	// keyed by tool name. It is sparse on purpose: SaveConfig writes every
+	// field, so seeding it from the code defaults would freeze today's table
+	// into every config.json and a later hardening would never apply. Only
+	// tools the operator names appear here.
+	Policies map[string]ToolPolicyConfig `json:"policies,omitempty"`
+}
+
+// ToolPolicyConfig is an operator's policy addition for one tool. Fields can
+// only tighten what the built-in table allows.
+type ToolPolicyConfig struct {
+	// RequireApproval holds each call until the operator replies /approve with
+	// a one-time code sent to the chat. Ignored for tools that reduce exposure.
+	RequireApproval bool `json:"require_approval,omitempty"`
+}
+
+// ApprovalRequiredTools returns the tools the operator has flagged
+// require_approval, sorted.
+func (c *ToolsConfig) ApprovalRequiredTools() []string {
+	var names []string
+	for name, p := range c.Policies {
+		if p.RequireApproval {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled.
@@ -1251,6 +1349,10 @@ type ClawHubRegistryConfig struct {
 	Timeout         int    `json:"timeout"           env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
 	MaxZipSize      int    `json:"max_zip_size"      env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
 	MaxResponseSize int    `json:"max_response_size" env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
+	// AllowUnverified installs a skill even when its moderation metadata
+	// cannot be fetched. Off by default: without metadata there is no malware
+	// verdict, and installing then means running unreviewed third-party code.
+	AllowUnverified bool `json:"allow_unverified,omitempty" env:"KHUNQUANT_SKILLS_REGISTRIES_CLAWHUB_ALLOW_UNVERIFIED"`
 }
 
 // MCPServerConfig defines configuration for a single MCP server
@@ -1265,6 +1367,14 @@ type MCPServerConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
+	// InheritEnv names variables from the launching process to pass through to
+	// the server (stdio only), on top of a base allowlist (PATH, HOME, locale,
+	// ...). A trailing "*" allows a prefix. Nothing else is inherited: the
+	// process environment holds every LLM and exchange API key.
+	InheritEnv []string `json:"inherit_env,omitempty"`
+	// InheritAllEnv passes the launching process's entire environment through,
+	// the pre-M-5 behaviour. Logged as a warning on every start.
+	InheritAllEnv bool `json:"inherit_all_env,omitempty"`
 	// Type is "stdio", "sse", or "http" (default: stdio if command is set, sse if url is set)
 	Type string `json:"type,omitempty"`
 	// URL is used for SSE/HTTP transport
@@ -1338,10 +1448,16 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Versioned migration steps (migrations.go). Never saves: the new version
+	// is persisted by the next SaveConfig. A failing step fails the load, since
+	// the config may be half-migrated.
+	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
+		return nil, err
+	}
+
 	// Migrate legacy channel config fields to new unified structures.
 	// Still unconditional: these are idempotent and predate versioning, and
-	// gating them on version carries user-data risk for no gain until there is
-	// a second version to gate against.
+	// are deliberately not step-gated (see migration.go).
 	cfg.migrateChannelConfigs()
 
 	// Auto-migrate: if only legacy providers config exists, convert to model_list
@@ -1362,6 +1478,8 @@ func LoadConfig(path string) (*Config, error) {
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
 	}
+
+	registerSecretsForRedaction(cfg)
 
 	return cfg, nil
 }
@@ -1401,6 +1519,16 @@ func LoadConfigSkipSecurity(path string) (*Config, error) {
 	}
 
 	if err := env.Parse(cfg); err != nil {
+		return nil, err
+	}
+
+	// Same version gate and migrations as LoadConfig. Callers of this loader
+	// may go on to save, and a save stamps this build's version, so a config
+	// from a newer build must be refused here too.
+	if err := checkConfigVersion(cfg.Version); err != nil {
+		return nil, err
+	}
+	if err := migrateLoadedConfig(path, data, cfg, cfg.Version); err != nil {
 		return nil, err
 	}
 
@@ -1744,6 +1872,16 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.FuturesCancelOrders.Enabled
 	case "futures_emergency_flatten":
 		return t.FuturesEmergencyFlatten.Enabled
+	case "option_quote":
+		return t.OptionQuote.Enabled
+	case "option_create_order":
+		return t.OptionCreateOrder.Enabled
+	case "option_cancel_order":
+		return t.OptionCancelOrder.Enabled
+	case "option_get_order":
+		return t.OptionGetOrder.Enabled
+	case "option_open_orders":
+		return t.OptionOpenOrders.Enabled
 	case "calculate_indicators":
 		return t.CalculateIndicators.Enabled
 	case "market_analysis":

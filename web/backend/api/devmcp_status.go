@@ -8,10 +8,16 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
+// devMCPStatus deliberately carries no token.
+//
+// M-8: this response included the dev-MCP bearer token, so anyone who could
+// reach the launcher could read the credential that authenticates the dev MCP
+// server - a debugging endpoint handing out an authentication secret. Whether
+// the server is enabled and where it listens is all a caller needs; an operator
+// who needs the token reads it from config.
 type devMCPStatus struct {
 	Enabled  bool   `json:"enabled"`
 	Endpoint string `json:"endpoint,omitempty"`
-	Token    string `json:"token,omitempty"`
 }
 
 func (h *Handler) registerDevMCPStatusRoutes(mux *http.ServeMux) {
@@ -31,7 +37,6 @@ func (h *Handler) handleDevMCPStatus(w http.ResponseWriter, r *http.Request) {
 		port := cfg.Gateway.Port
 		prefix := cfg.Debug.DevMCP.PathPrefix
 		status.Endpoint = fmt.Sprintf("http://127.0.0.1:%d%s", port, prefix)
-		status.Token = cfg.Debug.DevMCP.Token
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)

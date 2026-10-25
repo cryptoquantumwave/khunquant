@@ -10,17 +10,6 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 )
 
-// priceAlertPayload is encoded as JSON in CronPayload.Message.
-type priceAlertPayload struct {
-	ProviderID string  `json:"provider"`
-	Account    string  `json:"account"`
-	Symbol     string  `json:"symbol"`
-	Condition  string  `json:"condition"` // "above" | "below" | "cross_above" | "cross_below"
-	Threshold  float64 `json:"threshold"`
-	AlertMsg   string  `json:"alert_msg"`
-	Recurring  bool    `json:"recurring"`
-}
-
 // SetPriceAlertTool manages price alerts backed by the cron scheduler.
 type SetPriceAlertTool struct {
 	cfg         *config.Config
@@ -96,11 +85,15 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 	if providerID == "" || symbol == "" || condition == "" || threshold == 0 {
 		return ErrorResult("provider, symbol, condition, and threshold are required for create")
 	}
-	if condition != "above" && condition != "below" {
-		return ErrorResult("condition must be 'above' or 'below'")
+	if !ValidAlertCondition(condition) {
+		return ErrorResult(fmt.Sprintf("invalid condition %q; allowed values: above, below", condition))
+	}
+	cooldown, err := parseAlertCooldown(args)
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 
-	payload := priceAlertPayload{
+	payload := PriceAlertPayload{
 		ProviderID: providerID,
 		Account:    account,
 		Symbol:     symbol,
@@ -108,6 +101,8 @@ func (t *SetPriceAlertTool) createAlert(ctx context.Context, args map[string]any
 		Threshold:  threshold,
 		AlertMsg:   message,
 		Recurring:  recurring,
+
+		CooldownMinutes: cooldown,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

@@ -203,7 +203,7 @@ func TestProactiveTurn_DefaultSubsetsAreOfferedInFull(t *testing.T) {
 			}
 			// propose_order is in the candidate list but exists only while approvals
 			// are on (off here): the list is the same, the registry decides.
-			want := slices.DeleteFunc(slices.Clone(tc.want), func(n string) bool { return n == tools.NameProposeOrder })
+			want := slices.DeleteFunc(slices.Clone(tc.want), func(n string) bool { return n == tools.NameProposeOrder || n == tools.NameRemember })
 			for _, name := range want {
 				if !offered[name] {
 					t.Errorf("default subset names %q but the turn was not offered it (offered: %v)", name, offered)

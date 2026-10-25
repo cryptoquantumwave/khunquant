@@ -349,11 +349,52 @@ func setMeta(ctx context.Context, tx *sql.Tx, key, value string) error {
 // reduced to one clean line here: a newline in a title never becomes a second
 // item line. An item deferred from a message that could not be delivered
 // (ReasonDeferred) ends with a "delayed" note giving the time it was raised, in
-// the zone of its At. The message carries no actions and no footer.
+// the zone of its At. The message carries no footer; the one kind of item that
+// needs the owner's answer, a memory suggestion, is rendered apart (see
+// renderMemoryBlock).
 func RenderDigest(items []Decision) (title, body string) {
+	title, body, _ = renderDigest(items)
+	return title, body
+}
+
+// renderDigest is RenderDigest plus the session form of the body. It is non-empty only
+// when the digest carries a memory suggestion: the suggested fact is shown to the owner
+// in the chat and is not kept in the session a model reads (SessionWithheld stands in
+// for it), so that a fact nobody approved is in no prompt.
+func renderDigest(items []Decision) (title, body, sessionBody string) {
 	n := len(items)
 	if n == 0 {
-		return "", ""
+		return "", "", ""
+	}
+	var memory, reflect, others []Decision
+	for _, d := range items {
+		switch {
+		case isMemoryItem(d):
+			memory = append(memory, d)
+		case isReflectionItem(d):
+			reflect = append(reflect, d)
+		default:
+			others = append(others, d)
+		}
+	}
+	body = renderOthers(others)
+	if len(memory)+len(reflect) > 0 {
+		// First, so that a body cut to the channel's length loses the end of the ordinary
+		// items and never the end of a fact or a change the owner is about to approve.
+		sessionBody = joinBlocks(renderMemoryBlock(memory, false), renderReflectionBlock(reflect, false), SessionWithheld, body)
+		body = joinBlocks(renderMemoryBlock(memory, true), renderReflectionBlock(reflect, true), body)
+	}
+	noun := "items"
+	if n == 1 {
+		noun = "item"
+	}
+	return "Daily digest — " + strconv.Itoa(n) + " " + noun, body, sessionBody
+}
+
+func renderOthers(items []Decision) string {
+	n := len(items)
+	if n == 0 {
+		return ""
 	}
 	ranked := append([]Decision(nil), items...)
 	sort.SliceStable(ranked, func(i, j int) bool { return ranksBefore(ranked[i], ranked[j]) })
@@ -397,12 +438,136 @@ func RenderDigest(items []Decision) (title, body string) {
 	if n > maxDigestItems {
 		b.WriteString("\n\nand " + strconv.Itoa(n-maxDigestItems) + " more")
 	}
+	return b.String()
+}
 
-	noun := "items"
-	if n == 1 {
-		noun = "item"
+// maxDigestMemory is how many memory suggestions a digest shows: each is answered with
+// two buttons, and a message carries at most bus.MaxActions of them.
+const maxDigestMemory = 4
+
+// isMemoryItem reports whether d announces a memory suggestion, and has the fact to show.
+func isMemoryItem(d Decision) bool {
+	return strings.HasPrefix(d.Candidate.TriggerID, proactive.MemoryTriggerPrefix) && strings.TrimSpace(d.Candidate.Quote) != ""
+}
+
+// MemorySuggestion is a memory suggestion as a digest shows it: its proposal code and the
+// fact, exactly as rendered.
+type MemorySuggestion struct{ Code, Fact string }
+
+// MemorySuggestions returns the suggestions a digest shows, in the order it shows them, so
+// that a deliverer can attach buttons only where the stored proposal says what the owner
+// was shown.
+func MemorySuggestions(decisions []Decision) []MemorySuggestion {
+	var out []MemorySuggestion
+	for _, d := range rankedMemory(decisions) {
+		out = append(out, MemorySuggestion{Code: memoryCode(d), Fact: memoryFact(d)})
 	}
-	return "Daily digest — " + strconv.Itoa(n) + " " + noun, b.String()
+	return out
+}
+
+func memoryCode(d Decision) string {
+	return oneLine(strings.TrimPrefix(d.Candidate.TriggerID, proactive.MemoryTriggerPrefix), 16)
+}
+
+func memoryFact(d Decision) string { return oneLine(d.Candidate.Quote, proactive.MaxQuoteRunes) }
+
+func rankedMemory(decisions []Decision) []Decision {
+	var out []Decision
+	for _, d := range decisions {
+		if isMemoryItem(d) {
+			out = append(out, d)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return ranksBefore(out[i], out[j]) })
+	return out[:min(len(out), maxDigestMemory)]
+}
+
+// renderMemoryBlock lists the memory suggestions of a digest: the headline built by code,
+// the fact as a quoted block, and how to answer. The fact is shown whole (it was cleaned
+// to one line of at most MaxQuoteRunes when it was suggested, and is stored as shown), so
+// that what the owner approves is exactly what is saved. withFacts=false is the session form.
+func renderMemoryBlock(memory []Decision, withFacts bool) string {
+	shown := rankedMemory(memory)
+	if len(shown) == 0 {
+		return ""
+	}
+	lines := []string{"Memory suggestions - saved only if you approve them:"}
+	for _, d := range shown {
+		lines = append(lines, "• "+oneLine(d.Candidate.Title, maxDigestLineRune))
+		if withFacts {
+			lines = append(lines, "  > "+memoryFact(d))
+		}
+		code := memoryCode(d)
+		lines = append(lines, "  Save: /approve "+code+"   Discard: /reject "+code)
+	}
+	if extra := len(memory) - len(shown); extra > 0 {
+		lines = append(lines, "and "+strconv.Itoa(extra)+" more memory suggestions, shown in a later digest")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// maxDigestReflection is how many reflection suggestions a digest shows: the proposal
+// bound, so every pending one is listed. Buttons go to as many as fit a message.
+const maxDigestReflection = 5
+
+// isReflectionItem reports whether d announces a change the nightly reflection suggests.
+func isReflectionItem(d Decision) bool {
+	return strings.HasPrefix(d.Candidate.TriggerID, proactive.ReflectionTriggerPrefix) && strings.TrimSpace(d.Candidate.Quote) != ""
+}
+
+// ReflectionSuggestion is a reflection suggestion as a digest shows it: the proposal code
+// and the change, exactly as rendered.
+type ReflectionSuggestion struct{ Code, Change string }
+
+func rankedReflection(decisions []Decision) []Decision {
+	var out []Decision
+	for _, d := range decisions {
+		if isReflectionItem(d) {
+			out = append(out, d)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return ranksBefore(out[i], out[j]) })
+	return out[:min(len(out), maxDigestReflection)]
+}
+
+func reflectionCode(d Decision) string {
+	return oneLine(strings.TrimPrefix(d.Candidate.TriggerID, proactive.ReflectionTriggerPrefix), 16)
+}
+
+func reflectionChange(d Decision) string { return oneLine(d.Candidate.Quote, proactive.MaxQuoteRunes) }
+
+// ReflectionSuggestions returns the suggestions a digest shows, in the order it shows
+// them, so that a deliverer can attach buttons only where the stored proposal says what
+// the owner was shown.
+func ReflectionSuggestions(decisions []Decision) []ReflectionSuggestion {
+	var out []ReflectionSuggestion
+	for _, d := range rankedReflection(decisions) {
+		out = append(out, ReflectionSuggestion{Code: reflectionCode(d), Change: reflectionChange(d)})
+	}
+	return out
+}
+
+// renderReflectionBlock lists the reflection suggestions of a digest: the headline and
+// the change built by code, the model's reason under a "Why" label (prose, never parsed),
+// and how to answer. withFacts=false is the session form: headlines only.
+func renderReflectionBlock(reflect []Decision, withFacts bool) string {
+	shown := rankedReflection(reflect)
+	if len(shown) == 0 {
+		return ""
+	}
+	lines := []string{"Suggested changes - made only if you approve them:"}
+	for _, d := range shown {
+		lines = append(lines, "• "+oneLine(d.Candidate.Title, maxDigestLineRune))
+		if withFacts {
+			lines = append(lines, "  > "+reflectionChange(d))
+			if why, _ := d.Candidate.Evidence["why"].(string); strings.TrimSpace(why) != "" {
+				lines = append(lines, "  Why: "+oneLine(why, 300))
+			}
+		}
+		code := reflectionCode(d)
+		lines = append(lines, "  Approve: /approve "+code+"   Discard: /reject "+code)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ranksBefore orders decisions by severity (high first), salience (high first),

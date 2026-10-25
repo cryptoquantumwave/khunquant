@@ -299,6 +299,12 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// The child has its own timeout for self-protection.
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// Under a scheduled job a synchronous child runs inside it: when the job's
+	// deadline or a /stop cancels its context, the child stops too, instead of
+	// holding the worker until its own timeout. Without a scheduler nothing changes.
+	if !cfg.Async && inScheduledJob(ctx) {
+		defer context.AfterFunc(ctx, cancel)()
+	}
 
 	childID := al.generateSubTurnID()
 	childTS := newTurnState(childCtx, childID, parentTS)
@@ -329,6 +335,8 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// sent in the parent's turn, and must suppress the parent's duplicate
 	// final reply exactly as if the parent had sent it.
 	childCtx = tools.WithTurnID(childCtx, tools.TurnID(ctx))
+	// The child's LLM calls count towards the turn that spawned it.
+	childCtx = carryUsageAgg(childCtx, ctx)
 	// A synchronous child runs while its caller - a tool call inside the
 	// parent turn - is blocked on it, so it is still working under the parent's
 	// session lock and may re-enter it; without the marker it would deadlock

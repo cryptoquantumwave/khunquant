@@ -2,6 +2,7 @@ package sweep
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -421,5 +422,29 @@ func TestSweep_PromptIsDeterministic(t *testing.T) {
 	p2 := BuildPrompt(worldmodel.RenderChanges(d, 20, 3200), []Topic{topics[2], topics[1], topics[0]}, "hb")
 	if p1 != p2 {
 		t.Fatalf("order of the topics changed the prompt:\n%s\n---\n%s", p1, p2)
+	}
+}
+
+// A turn the cognition budget skipped is not a failure: however many ticks it
+// skips, the mark stays, the failure count does not move, and the range is not
+// abandoned; the sweep that runs once the budget is back handles it.
+func TestSweep_BudgetSkipIsNotAFailure(t *testing.T) {
+	r := newRig(bigMove())
+	skipped := fmt.Errorf("proactive turn: %w", proactive.ErrTurnSkipped)
+	r.turn.errs = []error{skipped, skipped, skipped, skipped, skipped}
+	for i := range 5 {
+		res := r.run.Run(context.Background(), "p")
+		if res.Outcome != ResultSkipped || res.Err != nil {
+			t.Fatalf("sweep %d = %+v, want a skip without an error", i, res)
+		}
+	}
+	if len(r.world.sets) != 0 {
+		t.Fatalf("a skipped sweep moved the mark: %v", r.world.sets)
+	}
+	if st := r.state.Stats(); st.TurnFailures != 0 || st.RangesAbandoned != 0 {
+		t.Fatalf("stats = %+v, want no failures and nothing abandoned", st)
+	}
+	if res := r.run.Run(context.Background(), "p"); res.Outcome != ResultCompleted || len(r.world.sets) != 1 {
+		t.Fatalf("sweep once the budget is back = %+v, moves %v", res, r.world.sets)
 	}
 }

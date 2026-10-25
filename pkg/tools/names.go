@@ -103,9 +103,16 @@ const (
 	// Order proposals (pkg/approval): the model suggests, the owner decides.
 	NameProposeOrder = "propose_order"
 
+	// Memory: the owner's conversation saves a fact at once; any other turn only
+	// suggests it, and the owner confirms it in the next digest.
+	NameRemember = "remember"
+
 	// Proactive turns. respond_proactive is registered per turn on a clone of
 	// the agent's registry and never globally, so it has no catalog entry.
 	NameRespondProactive = "respond_proactive"
+	// The nightly reflection's one output tool (pkg/reflection), registered per turn
+	// like respond_proactive and open to the reflection turn only.
+	NameProposeReflection = "propose_reflection"
 
 	// DCA — Dollar Cost Averaging (Track E)
 	NameCreateDCAPlan   = "create_dca_plan"

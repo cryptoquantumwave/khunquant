@@ -176,7 +176,7 @@ func TestFilter(t *testing.T) {
 }
 
 func TestKnownKindsAndKindOf(t *testing.T) {
-	if len(KnownKinds()) != 11 {
+	if len(KnownKinds()) != 13 {
 		t.Errorf("%d kinds: %v", len(KnownKinds()), KnownKinds())
 	}
 	for _, k := range KnownKinds() {
@@ -184,7 +184,7 @@ func TestKnownKindsAndKindOf(t *testing.T) {
 		if info.class == "" {
 			t.Errorf("kind %s has no class", k)
 		}
-		if len(classWords[info.class]) == 0 && info.class != classExternal && info.class != classLevel && info.class != classDrawdown {
+		if len(classWords[info.class]) == 0 && info.class != classExternal && info.class != classLevel && info.class != classDrawdown && info.class != classGoal && info.class != classNews {
 			t.Errorf("class %s (kind %s) has no words", info.class, k)
 		}
 	}

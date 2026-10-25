@@ -114,7 +114,7 @@ func newSetCommand(d deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg.Proactive.Owner = owner
+			cfg.Proactive.Owner = owner.WithWebFrom(cfg.Proactive.Owner)
 			if err := d.save(path, cfg); err != nil {
 				return fmt.Errorf("error saving config: %w", err)
 			}
@@ -139,7 +139,7 @@ func newClearCommand(d deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg.Proactive.Owner = config.OwnerConfig{}
+			cfg.Proactive.Owner = config.OwnerConfig{}.WithWebFrom(cfg.Proactive.Owner)
 			if err := d.save(path, cfg); err != nil {
 				return fmt.Errorf("error saving config: %w", err)
 			}

@@ -118,7 +118,7 @@ func (s *Service) executable(ctx context.Context, id string) (Proposal, OrderPar
 	if p.Status != StatusApproved && p.Status != StatusExecuting {
 		return Proposal{}, OrderParams{}, fmt.Errorf("approval: proposal %s is %s, not approved", p.Code, p.Status)
 	}
-	ownerID, ok := s.owner()
+	ownerID, ok := s.o.Cfg.OwnerDecider(p.DecidedBy)
 	if !ok || p.DecidedAt == nil || !identity.SameSender(p.DecidedBy, ownerID) {
 		return Proposal{}, OrderParams{}, fmt.Errorf("approval: proposal %s was not decided by the configured owner", p.Code)
 	}

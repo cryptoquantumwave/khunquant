@@ -60,7 +60,8 @@ const (
 	intentReminding = "It is set up; the owner is reminded at the time."
 	intentOrderLive = "It is set up as a notice: when its trigger fires the owner is told which standing order it is. " +
 		"Nothing is proposed or done automatically yet."
-	intentGoalNote = "It is kept in front of the assistant in every conversation; nothing checks it against the market automatically yet."
+	intentGoalChecked = "It is kept in front of the assistant and checked against the world model; the owner is told if its expectation stops holding."
+	intentGoalNote    = "It is kept in front of the assistant in every conversation; nothing checks it against the market automatically yet."
 )
 
 // liveNote says whether an active watch, reminder or standing order is working.
@@ -80,6 +81,8 @@ func liveNote(it intent.Intent, comp IntentCompiler) string {
 		return intentReminding
 	case intent.TypeStandingOrder:
 		return intentOrderLive
+	case intent.TypeGoal:
+		return intentGoalChecked
 	}
 	return intentWatching
 }

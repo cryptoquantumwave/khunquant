@@ -10,6 +10,7 @@ package proactive
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -201,6 +202,11 @@ func (t *Trust) UnmarshalJSON(data []byte) error {
 	*t = Trust(v)
 	return nil
 }
+
+// ErrTurnSkipped is the error of a model turn the cognition scheduler chose not
+// to run (its budget is spent). It is not a failure of the turn: callers that
+// count failures must not count it, and callers with a template deliver that.
+var ErrTurnSkipped = errors.New("proactive: turn skipped by the cognition budget")
 
 // TurnKind classifies every LLM turn; tool ceilings and budgets key on it.
 type TurnKind string

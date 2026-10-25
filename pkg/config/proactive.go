@@ -51,7 +51,7 @@ type ProactiveConfig struct {
 	Mandates   MandatesConfig           `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
 	Cognition  CognitionConfig          `json:"cognition"`
 	Policy     ModeConfig               `json:"policy"     envPrefix:"KHUNQUANT_PROACTIVE_POLICY_"`
-	News       ToggleConfig             `json:"news"       envPrefix:"KHUNQUANT_PROACTIVE_NEWS_"`
+	News       NewsConfig               `json:"news"       envPrefix:"KHUNQUANT_PROACTIVE_NEWS_"`
 	Reflection ReflectionConfig         `json:"reflection"`
 	Learning   LearningConfig           `json:"learning"`
 }
@@ -62,6 +62,18 @@ type OwnerConfig struct {
 	Channel  string `json:"channel"   env:"KHUNQUANT_PROACTIVE_OWNER_CHANNEL"`   // "telegram"
 	ChatID   string `json:"chat_id"   env:"KHUNQUANT_PROACTIVE_OWNER_CHAT_ID"`   // the owner's DM chat id
 	SenderID string `json:"sender_id" env:"KHUNQUANT_PROACTIVE_OWNER_SENDER_ID"` // canonical "telegram:123456"
+	// WebIsOwner makes the authenticated web launcher chat a second owner route
+	// (see web_owner.go). Unset means true; false restores "only the configured
+	// route is the owner". It has no effect without a valid owner above.
+	WebIsOwner *bool `json:"web_is_owner,omitempty" env:"KHUNQUANT_PROACTIVE_OWNER_WEB_IS_OWNER"`
+}
+
+// WithWebFrom returns o carrying prev's web_is_owner choice. A write path that
+// builds a fresh OwnerConfig (ValidateOwnerInput, a clear) calls it so that
+// changing or clearing the route cannot silently turn an explicit false back on.
+func (o OwnerConfig) WithWebFrom(prev OwnerConfig) OwnerConfig {
+	o.WebIsOwner = prev.WebIsOwner
+	return o
 }
 
 // ProactiveHeartbeatConfig selects how the heartbeat behaves.
@@ -115,7 +127,10 @@ type ApprovalsConfig struct {
 	ExpiryMinutes int  `json:"expiry_minutes" env:"KHUNQUANT_PROACTIVE_APPROVALS_EXPIRY_MINUTES"`
 }
 
-// CognitionConfig bounds proactive LLM use.
+// CognitionConfig bounds proactive LLM use. WakesPerHour and TokensPerDay limit
+// background (budgeted) model use; 0 is not "unlimited" but "no budgeted work":
+// every such job runs its fallback instead. Negative values are refused by
+// validation.
 type CognitionConfig struct {
 	Enabled          bool   `json:"enabled"            env:"KHUNQUANT_PROACTIVE_COGNITION_ENABLED"`
 	MaxConcurrentLLM int    `json:"max_concurrent_llm" env:"KHUNQUANT_PROACTIVE_COGNITION_MAX_CONCURRENT_LLM"`
@@ -137,6 +152,13 @@ type LearningConfig struct {
 }
 
 // ModeConfig is a single off | shadow | live mode.
+//
+// For proactive.policy it selects the policy engine (pkg/policy): off records
+// nothing; shadow records, in policy_decisions and as policy.decision events, what
+// the engine would have decided for each tool call while the existing checks keep
+// deciding; live ENFORCES the engine's verdict through a tool hook, strictly on top
+// of the existing checks (it adds refusals and never allows what they refuse). Live
+// needs proactive on and a valid owner, else it runs as shadow (Effective says so).
 type ModeConfig struct {
 	Mode string `json:"mode" env:"MODE"`
 }
@@ -161,6 +183,35 @@ const MaxTriggerParamBytes = 4 << 10
 type ToggleConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
 }
+
+// NewsConfig is proactive.news: the quarantined news source (pkg/perception/sources,
+// news.go). It is off by default, and it needs proactive.cognition: every article is
+// read by a tool-less model call that is a budgeted cognition job, so with cognition
+// off news does not run at all (Effective reports it as a downgrade, not a silent
+// no-op). The limits below bound what one run and one day may spend; 0 for either
+// parse limit means no parsing (as in proactive.cognition, 0 is never "unlimited").
+type NewsConfig struct {
+	Enabled bool `json:"enabled" env:"ENABLED"`
+	// IntervalMinutes is the time between runs (60); a run happens only in the owner's
+	// active hours. At least NewsMinIntervalMinutes.
+	IntervalMinutes int `json:"interval_minutes" env:"INTERVAL_MINUTES"`
+	// MaxAssets is how many assets one run looks at (8): the held ones of weight at
+	// least 2% and the symbols of the owner's active watches, biggest holding first.
+	MaxAssets int `json:"max_assets" env:"MAX_ASSETS"`
+	// MaxParsesPerRun and MaxParsesPerDay bound the model calls (articles read) per run
+	// and per owner-local day. Each is one wake of proactive.cognition.wakes_per_hour,
+	// which the composer shares, so the defaults are small.
+	MaxParsesPerRun int `json:"max_parses_per_run" env:"MAX_PARSES_PER_RUN"`
+	MaxParsesPerDay int `json:"max_parses_per_day" env:"MAX_PARSES_PER_DAY"`
+	// RunSeconds is the wall time one run may take (300).
+	RunSeconds int `json:"run_seconds" env:"RUN_SECONDS"`
+}
+
+// Defaults and floor of proactive.news.
+const (
+	NewsMinIntervalMinutes = 10
+	NewsMaxAssetsCap       = 20
+)
 
 // MandatesConfig is proactive.mandates: standing permissions for deterministic DCA runs.
 type MandatesConfig struct {
@@ -194,6 +245,7 @@ func defaultProactiveConfig() ProactiveConfig {
 		Triggers:   TriggersConfig{Mode: ProactiveModeOff},
 		Approvals:  ApprovalsConfig{Enabled: false, ExpiryMinutes: 10},
 		Cognition:  CognitionConfig{MaxConcurrentLLM: 1, WakesPerHour: 6, TokensPerDay: 200000},
+		News:       NewsConfig{IntervalMinutes: 60, MaxAssets: 8, MaxParsesPerRun: 3, MaxParsesPerDay: 12, RunSeconds: 300},
 		Policy:     ModeConfig{Mode: ProactiveModeOff},
 		Reflection: ReflectionConfig{Enabled: false, AtLocal: "21:00"},
 		Learning:   LearningConfig{Enabled: false, HoldoutRate: 0.05},
@@ -318,6 +370,11 @@ func ValidateProactive(c ProactiveConfig) error {
 		{"proactive.cognition.max_concurrent_llm", c.Cognition.MaxConcurrentLLM},
 		{"proactive.cognition.wakes_per_hour", c.Cognition.WakesPerHour},
 		{"proactive.cognition.tokens_per_day", c.Cognition.TokensPerDay},
+		{"proactive.news.interval_minutes", c.News.IntervalMinutes},
+		{"proactive.news.max_assets", c.News.MaxAssets},
+		{"proactive.news.max_parses_per_run", c.News.MaxParsesPerRun},
+		{"proactive.news.max_parses_per_day", c.News.MaxParsesPerDay},
+		{"proactive.news.run_seconds", c.News.RunSeconds},
 	} {
 		if n.v < 0 {
 			errs = append(errs, fmt.Errorf("%s must not be negative (got %d)", n.field, n.v))
@@ -492,6 +549,15 @@ func (e EffectiveModes) CanDeliver() bool { return e.Enabled && e.OwnerConfigure
 // off and shadow values are returned as configured, an unknown mode string
 // falls back to that field's default, and the remaining switches are the
 // configured value AND-ed with Enabled. It is a pure function of c.
+//
+// policy.mode live takes the owner away from nobody, so it needs one: the owner
+// column of the autonomy dial is the owner's own turn, and with no owner every
+// user turn is someone else's and could not trade. Without proactive on and a valid
+// owner:
+//
+//	policy.mode     live     -> shadow
+//
+// The engine records only while Enabled is also true; PolicyMode alone does not turn it on.
 func (c ProactiveConfig) Effective() EffectiveModes {
 	valid := ValidateProactive(c) == nil
 	route, haveOwner := c.OwnerRoute()
@@ -520,6 +586,20 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	e.Learning = c.Enabled && c.Learning.Enabled
 	e.Approvals = c.Enabled && c.Approvals.Enabled
 	e.Mandates = c.Enabled && c.Mandates.Enabled
+	// The reflection is a budgeted cognition job: without the scheduler it has no budget
+	// to run under, and it is never run around one.
+	if e.Reflection && !e.Cognition {
+		e.Reflection = false
+		e.Downgrades = append(e.Downgrades, "proactive: cognition is off; reflection.enabled true → false")
+	}
+
+	// Every article is read by a budgeted cognition job: without the scheduler there
+	// is no budget to spend, so news does not run (and does not run unbudgeted).
+	if e.News && !e.Cognition {
+		e.News = false
+		e.Downgrades = append(e.Downgrades,
+			"proactive: cognition is off; news.enabled true → false (reading an article is a budgeted cognition job)")
+	}
 
 	if c.Enabled && ownerOK {
 		// A sweep is a governed heartbeat that is started by what changed, so it
@@ -574,6 +654,10 @@ func (c ProactiveConfig) Effective() EffectiveModes {
 	if e.TriggersMode == ProactiveModeLive {
 		e.TriggersMode = ProactiveModeShadow
 		down("triggers.mode live → shadow")
+	}
+	if e.PolicyMode == ProactiveModeLive {
+		e.PolicyMode = ProactiveModeShadow
+		down("policy.mode live → shadow")
 	}
 	if e.HeartbeatMode != HeartbeatModeLegacy {
 		down(fmt.Sprintf("heartbeat.mode %s → legacy", e.HeartbeatMode))
@@ -696,4 +780,40 @@ func redactOwnerValues(c ProactiveConfig, s string) string {
 		}
 	}
 	return s
+}
+
+// ValidateTradingRisk reports every problem in the policy engine's brakes as one
+// joined error, or nil: a negative or non-finite value, a share above 100, or a share
+// cap at all (see below).
+func ValidateTradingRisk(t TradingRiskConfig) error {
+	var errs []error
+	if t.MaxOrdersPer10Min < 0 {
+		errs = append(errs, fmt.Errorf("trading_risk.max_orders_per_10min must not be negative (got %d)", t.MaxOrdersPer10Min))
+	}
+	if p := t.MaxSymbolSharePct; math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 100 {
+		errs = append(errs, fmt.Errorf("trading_risk.max_symbol_share_pct must be between 0 and 100 (got %v)", p))
+	} else if p > 0 {
+		// No portfolio source is wired into the engine yet, and a cap whose share
+		// cannot be measured refuses the order, so enforcing it would block every buy.
+		// A later change that passes an Exposure to tools.NewPolicyEngine (the gateway
+		// builds the engine in policy_wiring.go) lifts this check; until then live mode
+		// is not armed while the cap is set.
+		errs = append(errs, fmt.Errorf("trading_risk.max_symbol_share_pct is not supported yet (got %v): no portfolio source is wired, so the cap cannot be measured; leave it 0", p))
+	}
+	for _, s := range t.SymbolAllowlist {
+		if strings.TrimSpace(s) == "" {
+			errs = append(errs, errors.New("trading_risk.symbol_allowlist must not contain an empty symbol"))
+			break
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// reportTradingRisk is called by both loaders, beside reportProactive. It never
+// fails the load; an invalid brake is logged once per process and the engine
+// treats the invalid value as off.
+func reportTradingRisk(t TradingRiskConfig) {
+	if err := ValidateTradingRisk(t); err != nil {
+		logProactiveOnce(proactiveErrorLog, "trading_risk: invalid policy brake, ignoring it: "+err.Error())
+	}
 }

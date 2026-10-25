@@ -302,6 +302,9 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	// only on the whole text of an owner's message in the owner's own chat (see
 	// pkg/control). A new caller needs the same property and a deliberate edit here.
 	assertSites(t, "Service.Decide", callSitesWithArgs(srcs, "Decide", 5), "pkg/control/approve.go:Dispatcher.decideProposal")
+	// The web launcher chat's decision marker is set in the same one place, after the
+	// control path has checked the message with config.IsWebOwnerTurn.
+	assertSites(t, "WithWebDecider", callSites(srcs, "WithWebDecider"), "pkg/control/approve.go:Dispatcher.decideProposal")
 	assertSites(t, "the order workflow body", callSites(srcs, "runOrder"))
 
 	// The workflow is registered in exactly one place, and its definition is the

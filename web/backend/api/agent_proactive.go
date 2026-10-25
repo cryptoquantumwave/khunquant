@@ -431,7 +431,7 @@ func (h *Handler) handleProactiveOwnerPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	cfg, err := h.updateProactiveConfig(func(c *config.ProactiveConfig) error {
-		c.Owner = owner
+		c.Owner = owner.WithWebFrom(c.Owner)
 		return nil
 	})
 	if err != nil {
@@ -446,7 +446,7 @@ func (h *Handler) handleProactiveOwnerDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	cfg, err := h.updateProactiveConfig(func(c *config.ProactiveConfig) error {
-		c.Owner = config.OwnerConfig{}
+		c.Owner = config.OwnerConfig{}.WithWebFrom(c.Owner)
 		return nil
 	})
 	if err != nil {

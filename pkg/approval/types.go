@@ -13,8 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
-// Kind says what a proposal proposes. Only orders exist in this change; the type
-// is the spec's so that the table and the hash do not change when the others come.
+// Kind says what a proposal proposes: an order, a mandate or a memory.
 type Kind string
 
 // KindOrder is a spot or futures order.

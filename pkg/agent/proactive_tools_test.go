@@ -102,7 +102,7 @@ func TestProactiveDefaultSubsets_AreWithinTheCeiling(t *testing.T) {
 				t.Errorf("%s: %s is listed twice", tc.kind, n)
 			}
 			seen[n] = true
-			if n == tools.NameProposeOrder {
+			if n == tools.NameProposeOrder || n == tools.NameRemember {
 				// Granted by name to a trusted candidate turn only; its grant is
 				// tested in pkg/tools (TestProposeOrder_TurnMatrix).
 				continue

@@ -141,8 +141,21 @@ func VerifiedMandate(p Proposal) (MandateParams, error) {
 
 // verifyProposal proves a stored proposal of any kind matches its hash.
 func verifyProposal(p Proposal) error {
-	if p.Kind == KindMandate {
+	switch p.Kind {
+	case KindMandate:
 		_, err := VerifiedMandate(p)
+		return err
+	case KindMemory:
+		_, err := VerifiedMemory(p)
+		return err
+	case KindTriggerParam:
+		_, err := VerifiedTriggerParam(p)
+		return err
+	case KindIntentCleanup:
+		_, err := VerifiedIntentCleanup(p)
+		return err
+	case KindMute:
+		_, err := VerifiedMute(p)
 		return err
 	}
 	_, err := decodeVerified(p)
@@ -191,7 +204,7 @@ func (s *Service) ProposeMandate(ctx context.Context, r MandateRequest) (Proposa
 	defer s.mu.Unlock()
 
 	now := s.now()
-	if codes, err := s.st.pendingCodes(ctx, now, true); err != nil {
+	if codes, err := s.st.pendingCodes(ctx, now, classMandate); err != nil {
 		return Proposal{}, err
 	} else if len(codes) >= MaxPendingMandate {
 		return Proposal{}, &PendingError{Codes: codes}
@@ -219,7 +232,7 @@ func (s *Service) ProposeMandate(ctx context.Context, r MandateRequest) (Proposa
 		if bounds.hourly {
 			return Proposal{}, ErrHourlyLimit
 		}
-		codes, _ := s.st.pendingCodes(ctx, now, true)
+		codes, _ := s.st.pendingCodes(ctx, now, classMandate)
 		return Proposal{}, &PendingError{Codes: codes}
 	case err != nil:
 		return Proposal{}, err

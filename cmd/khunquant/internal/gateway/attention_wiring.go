@@ -24,8 +24,9 @@ type ownerNotifier interface {
 }
 
 // attentionDeliverer adapts the notify service to attention.Deliverer, so that
-// pkg/attention does not import pkg/notify. A message carries no actions and no
-// footer; a digest is sent without a notification sound.
+// pkg/attention does not import pkg/notify. A message carries no footer and, except
+// for the memory suggestions of a digest (digestActions), no actions; a digest is sent
+// without a notification sound.
 type attentionDeliverer struct{ svc ownerNotifier }
 
 func (a attentionDeliverer) Deliver(ctx context.Context, m attention.Message) (bool, error) {
@@ -37,6 +38,7 @@ func (a attentionDeliverer) Deliver(ctx context.Context, m attention.Message) (b
 		InterventionID:      m.InterventionID,
 		DisableNotification: m.Silent,
 	}
+	n.Actions = digestActions(ctx, m) // Save and Discard for the memory suggestions of a digest
 	if m.SessionRestricted {
 		// The owner is sent the message as it is; the session, which the model reads
 		// on the owner's next turn, gets the form without text from outside.

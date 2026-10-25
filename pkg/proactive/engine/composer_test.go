@@ -187,6 +187,8 @@ func TestComposer_ErrorTimeoutAndCancelReturnErrors(t *testing.T) {
 	for name, err := range map[string]error{
 		"error":    errors.New("provider down"),
 		"deadline": fmt.Errorf("proactive turn exceeded its 1m0s deadline: %w", context.DeadlineExceeded),
+		// The cognition budget is spent: the turn is skipped, the template goes out.
+		"budget skip": fmt.Errorf("proactive turn: %w (budget_exhausted)", proactive.ErrTurnSkipped),
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := NewComposer(&fakeRunner{err: err})

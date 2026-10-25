@@ -144,9 +144,10 @@ func newRigWith(t *testing.T, override map[string]triggers.Factory) *rig {
 	r.store.SetClock(r.clock)
 	cfg := triggers.CrossConfig{}
 	factories := map[string]triggers.Factory{
-		triggers.KindPriceCross:     triggers.PriceCrossFactory(cfg),
-		triggers.KindIndicatorCross: triggers.IndicatorCrossFactory(cfg),
-		triggers.KindTimeAt:         triggers.TimeAtFactory(cfg),
+		triggers.KindPriceCross:      triggers.PriceCrossFactory(cfg),
+		triggers.KindIndicatorCross:  triggers.IndicatorCrossFactory(cfg),
+		triggers.KindTimeAt:          triggers.TimeAtFactory(cfg),
+		triggers.KindGoalDiscrepancy: triggers.GoalDiscrepancyFactory(triggers.GoalConfig{}),
 	}
 	for k, f := range override {
 		factories[k] = f

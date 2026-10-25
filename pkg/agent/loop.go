@@ -23,12 +23,14 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/cognition"
 	"github.com/cryptoquantumwave/khunquant/pkg/commands"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/constants"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/routing"
@@ -70,6 +72,9 @@ type AgentLoop struct {
 	// It is created with the loop and handed to the context builder of every agent
 	// whenever a registry is installed, so a reload keeps it.
 	background *backgroundSections
+
+	// sched is the cognition scheduler, nil without cognition (see cognition.go).
+	sched atomic.Pointer[schedulerHolder]
 }
 
 // processOptions configures how a message is processed
@@ -81,6 +86,7 @@ type processOptions struct {
 	ReplyToMessageID        string              // Current inbound reply target message ID
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
+	WebAuthenticated        bool                // The message came over a pico connection authenticated with the pico token (never set for a sub-turn or follow-up)
 	UserMessage             string              // User message content (may include prefix)
 	ForcedSkills            []string            // Skills to carry in full in a light prompt (PromptFull already has them all)
 	PromptMode              PromptMode          // PromptFull (default: user turns), PromptLight (background turns) or PromptProactive
@@ -122,6 +128,11 @@ type processOptions struct {
 	NoOutbound bool
 	// Report, when set, receives the provider usage and the model of the turn.
 	Report *turnReport
+	// UsageSink, when set, is called once as the turn finishes (also when it
+	// fails) with the provider usage summed over every LLM call of the turn and
+	// of the sub-turns that ran inside it. A sub-turn that outlives the turn is
+	// not counted. nil = nothing is collected.
+	UsageSink func(providers.UsageInfo)
 }
 
 // modelOverride selects the model tier of a turn.
@@ -448,62 +459,77 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// Process message
-			// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
-			// Currently disabled because files are deleted before the LLM can access their content.
-			// defer func() {
-			// 	if al.mediaStore != nil && msg.MediaScope != "" {
-			// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
-			// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
-			// 				"scope": msg.MediaScope,
-			// 				"error": releaseErr.Error(),
-			// 			})
-			// 		}
-			// 	}
-			// }()
-
-			// Name the turn before it starts, so that afterwards we can ask what
-			// the message tool did during this turn and no other. Heartbeat
-			// and cron turns run concurrently with this one on the same tool
-			// instances; without a turn of its own to ask about, a message a
-			// heartbeat sends would make this turn's reply look already sent.
-			turnID := tools.NewTurnID()
-			response, err := al.processMessage(tools.WithTurnID(ctx, turnID), msg)
-			if err != nil {
-				response = providers.FriendlyError(err)
+			// With cognition on, the message becomes a job (its route and session
+			// are resolved first) and Run goes on reading; otherwise it is handled
+			// right here, as it always was.
+			if !al.dispatchInbound(ctx, msg) {
+				al.handleInbound(ctx, msg)
 			}
-
-			if response != "" {
-				// Check if the message tool already sent to this chat during
-				// this turn. If so, skip publishing to avoid duplicate
-				// messages to the user.
-				alreadySent := al.messageSentInTurn(turnID, msg.Channel, msg.ChatID)
-
-				if !alreadySent {
-					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: response,
-					})
-					logger.InfoCF("agent", "Published outbound response",
-						map[string]any{
-							"channel":     msg.Channel,
-							"chat_id":     msg.ChatID,
-							"content_len": len(response),
-						})
-				} else {
-					logger.DebugCF(
-						"agent",
-						"Skipped outbound (message tool already sent)",
-						map[string]any{"channel": msg.Channel},
-					)
-				}
-			}
-
-			// This loop named the turn, so it clears the turn's state.
-			al.clearTurnMessageState(turnID)
 		}
 	}
+}
+
+// handleInbound runs one inbound message to its reply: the turn, then the
+// publish of what it answered unless the message tool already did. It returns
+// the turn's error (the reply to it has been published). Run calls it for each
+// message, or the scheduler does from a job.
+func (al *AgentLoop) handleInbound(ctx context.Context, msg bus.InboundMessage) error {
+	// Process message
+	// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
+	// Currently disabled because files are deleted before the LLM can access their content.
+	// defer func() {
+	// 	if al.mediaStore != nil && msg.MediaScope != "" {
+	// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
+	// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
+	// 				"scope": msg.MediaScope,
+	// 				"error": releaseErr.Error(),
+	// 			})
+	// 		}
+	// 	}
+	// }()
+
+	// Name the turn before it starts, so that afterwards we can ask what
+	// the message tool did during this turn and no other. Heartbeat
+	// and cron turns run concurrently with this one on the same tool
+	// instances; without a turn of its own to ask about, a message a
+	// heartbeat sends would make this turn's reply look already sent.
+	turnID := tools.NewTurnID()
+	response, err := al.processMessage(tools.WithTurnID(ctx, turnID), msg)
+	procErr := err
+	if err != nil {
+		response = providers.FriendlyError(err)
+	}
+
+	if response != "" {
+		// Check if the message tool already sent to this chat during
+		// this turn. If so, skip publishing to avoid duplicate
+		// messages to the user.
+		alreadySent := al.messageSentInTurn(turnID, msg.Channel, msg.ChatID)
+
+		if !alreadySent {
+			al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+				Channel: msg.Channel,
+				ChatID:  msg.ChatID,
+				Content: response,
+			})
+			logger.InfoCF("agent", "Published outbound response",
+				map[string]any{
+					"channel":     msg.Channel,
+					"chat_id":     msg.ChatID,
+					"content_len": len(response),
+				})
+		} else {
+			logger.DebugCF(
+				"agent",
+				"Skipped outbound (message tool already sent)",
+				map[string]any{"channel": msg.Channel},
+			)
+		}
+	}
+
+	// This loop named the turn, so it clears the turn's state.
+	al.clearTurnMessageState(turnID)
+	return procErr
 }
 
 // messageSentInTurn reports whether the message tool sent to channel+chatID
@@ -1043,6 +1069,15 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		NoHistory:  noHistory,
 	}
 
+	var box turnBox[string]
+	spec := al.directSpec(msg, tools.ToolOrigin(ctx) == tools.OriginCron)
+	if err, scheduled := al.submitTurn(ctx, spec, func(jctx context.Context) error {
+		resp, err := al.processMessage(jctx, msg)
+		box.put(resp, err)
+		return err
+	}); scheduled {
+		return box.outcome(err)
+	}
 	return al.processMessage(ctx, msg)
 }
 
@@ -1061,17 +1096,33 @@ func (al *AgentLoop) ProcessHeartbeat(
 	// applies afterwards (the heartbeat borrows the user's last active channel,
 	// which would otherwise make it "remote") changes nothing.
 	ctx = tools.WithToolOrigin(ctx, tools.OriginHeartbeat)
-	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:           "heartbeat",
-		Channel:              channel,
-		ChatID:               chatID,
-		UserMessage:          content,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true, // Don't load session history for heartbeat
-	})
+	run := func(ctx context.Context) (string, error) {
+		return al.runAgentLoop(ctx, agent, processOptions{
+			SessionKey:           "heartbeat",
+			Channel:              channel,
+			ChatID:               chatID,
+			UserMessage:          content,
+			DefaultResponse:      defaultResponse,
+			EnableSummary:        false,
+			SendResponse:         false,
+			SuppressToolFeedback: true,
+			NoHistory:            true, // Don't load session history for heartbeat
+		})
+	}
+	// With cognition on the tick is background model spend: a job at legacy
+	// priority, counted against the budget. Over budget the tick is skipped.
+	var box turnBox[string]
+	if err, scheduled := al.submitTurn(ctx, turnSpec{
+		Kind: proactive.TurnHeartbeatLegacy, Priority: cognition.PriLegacy, Session: "heartbeat",
+		Budgeted: true, Deadline: legacyTurnDeadline,
+	}, func(jctx context.Context) error {
+		resp, err := run(jctx)
+		box.put(resp, err)
+		return err
+	}); scheduled {
+		return box.outcome(err)
+	}
+	return run(ctx)
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
@@ -1134,6 +1185,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ReplyToMessageID:        inboundMetadata(msg, metadataKeyReplyToMessage),
 		SenderID:                msg.SenderID,
 		SenderDisplayName:       msg.Sender.DisplayName,
+		WebAuthenticated:        msg.Channel == config.WebChannel && msg.Sender.WebAuthenticated,
 		UserMessage:             msg.Content,
 		Media:                   msg.Media,
 		DefaultResponse:         defaultResponse,
@@ -1420,6 +1472,9 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	ctx, reportDone := reportUsage(ctx, opts.UsageSink)
+	defer reportDone()
+
 	// A turn with tools of its own runs on a per-turn copy of the agent whose
 	// registry is a clone with those tools added. The shared registry never
 	// sees them, and every agent.Tools use below - definitions, execution, the
@@ -1484,6 +1539,9 @@ func (al *AgentLoop) runAgentLoop(
 		// The sender is what an operator approval is bound to: only the person
 		// who made a request can approve it.
 		ctx = tools.WithToolSender(ctx, opts.SenderID)
+		if opts.WebAuthenticated {
+			ctx = tools.WithWebAuth(ctx)
+		}
 
 		rootTS.ctx = ctx
 
@@ -2138,6 +2196,7 @@ func (al *AgentLoop) runLLMIteration(
 		if opts.Report != nil {
 			opts.Report.add(response.Usage, calledModel)
 		}
+		addTurnUsage(ctx, response.Usage)
 
 		// Save finishReason to turnState for SubTurn truncation detection
 		if ts := turnStateFromContext(ctx); ts != nil {

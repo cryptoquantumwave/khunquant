@@ -25,6 +25,7 @@ type ToolRegistry struct {
 	mu         sync.RWMutex
 	version    atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
 	mediaStore media.MediaStore
+	hooks      []Hook // see AddHook; guarded by mu
 }
 
 type mediaStoreAware interface {
@@ -252,6 +253,14 @@ func (r *ToolRegistry) ExecuteWithContext(
 		return refusal
 	}
 
+	// Hooks come after today's checks, so they only ever refuse more.
+	hooks := r.hookChain()
+	if refusal := runBeforeHooks(ctx, hooks, name, args); refusal != nil {
+		logger.WarnCF("tool", "Tool call refused by a hook",
+			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
+		return refusal
+	}
+
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult
@@ -299,6 +308,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	}
 
 	result = normalizeToolResult(result, name, r.mediaStore, channel, chatID)
+	runAfterHooks(ctx, hooks, name, args, result)
 
 	duration := time.Since(start)
 
@@ -445,6 +455,7 @@ func (r *ToolRegistry) CloneFiltered(keep func(name string) bool) *ToolRegistry 
 	clone := &ToolRegistry{
 		tools:      make(map[string]*ToolEntry, len(r.tools)),
 		mediaStore: r.mediaStore,
+		hooks:      append([]Hook(nil), r.hooks...),
 	}
 	for name, entry := range r.tools {
 		if keep != nil && !keep(name) {

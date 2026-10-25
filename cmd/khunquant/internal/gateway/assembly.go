@@ -23,6 +23,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
@@ -190,6 +191,15 @@ type assemblyDeps struct {
 	// the caller never sets it.
 	Control *controlRuntime
 
+	// Cognition is the turn scheduler of this generation (cognition_wiring.go);
+	// buildServices sets it on its own copy of the deps before anything that runs
+	// a turn starts, and the caller never sets it.
+	Cognition *cognitionRuntime
+
+	// Policy is the policy engine's shadow record (policy_wiring.go); buildServices sets it
+	// on its own copy of the deps right after the control path, and the caller never sets it.
+	Policy *policyRuntime
+
 	// DNFlow is the delta-neutral workflow side (dn_workflows_wiring.go); buildServices
 	// sets it on its own copy of the deps before the workflow engine is built.
 	DNFlow *dnFlowRuntime
@@ -260,6 +270,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// reload (the agent loop outlives both).
 	wireEventBus(d)
 
+	// The turn scheduler, before anything that runs a model turn (cron, channels,
+	// heartbeat) starts. Off, it builds nothing and clears what a previous generation
+	// installed on the agent loop.
+	s.Cognition = buildCognition(d)
+	d.Cognition = s.Cognition
+
 	s.LossGuard = lossGuardStarter(cfg)
 
 	// The alert side: the late-bound route from the alert tools to the trigger
@@ -312,6 +328,12 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// and the routes need the kill flag, so it comes before both.
 	s.Control = buildControl(d, s.ChannelManager)
 	d.Control = s.Control
+
+	// The policy engine records what it would decide for each tool call, beside the
+	// existing checks. It needs the kill flag, so it follows the control path, and
+	// perception's housekeeper trims its table, so it precedes perception.
+	s.Policy = buildPolicy(d)
+	d.Policy = s.Policy
 
 	// Inject channel manager and media store into the agent loop.
 	al.SetChannelManager(s.ChannelManager)
@@ -381,8 +403,9 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	// Order approvals: the service is built first, because its workflow definition
 	// goes to the engine below, and attached after, because it needs the engine to
 	// start workflows. With approvals off none of it exists.
-	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager)
+	s.Approval = buildApproval(d, s.NotifyService, s.ChannelManager, s.Attention, s.Perception.triggerRegistry())
 	d.Approval = s.Approval
+	s.Policy.attachMandates(s.Approval) // the engine's read-only mandate lookup
 
 	// The workflow engine: built only when a definition is registered (the approval
 	// one is, while approvals are on), so a gateway without one gains no goroutine
@@ -404,6 +427,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 
 	s.journalLive.Store(buildJournal(d))
 	s.Approval.attach(s.journalLive.Load())
+	s.Reflection = startReflection(d, s) // after the approval service it proposes through
 	s.DNFlow.attach(s.journalLive.Load())
 	if s.CronService != nil {
 		s.DCAFlow.attach(d, s.journalLive.Load(), s.Perception, s.CronService)
@@ -490,6 +514,9 @@ func heartbeatHandler(al *agent.AgentLoop) heartbeat.HeartbeatHandler {
 		}
 		// Use ProcessHeartbeat - no session history, each heartbeat is independent
 		response, err := al.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
+		if errors.Is(err, proactive.ErrTurnSkipped) {
+			return tools.SilentResult("Heartbeat skipped") // over the cognition budget: not an error
+		}
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
 		}
@@ -532,7 +559,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
 	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
-		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)))
+		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
+		withCognitionStats(s.Cognition.stats), withPolicyStats())
 	registerTriggerAPIFor(mux, s, d)
 	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken)
 
@@ -567,12 +595,22 @@ func stopServices(s *gatewayServices, shutdownTimeout time.Duration) {
 		s.HeartbeatService.Stop()
 	}
 
+	// Then the turn scheduler: every service below is one a running job uses, so
+	// the jobs go first (queued ones finish for a while, then the rest is cancelled)
+	// and a producer that submits afterwards is refused and degrades to its template.
+	s.Reflection.stop() // before the scheduler: its one job a day is submitted there
+	s.Reflection = nil
+	s.Cognition.stop(shutdownTimeout)
+	s.Cognition = nil
+
 	// The control path lets go of the services it acts on before they stop, so that
 	// an /approve that arrives while they do is told approvals are unavailable and
 	// does not approve an order that nothing is left to execute. It stays installed
 	// on the channels until they have stopped (below): taking it off earlier would
 	// hand a late /approve or /stop to the agent instead.
 	s.Control.detach()
+	s.Policy.stop() // before the approval side closes the mandate store it reads
+	s.Policy = nil
 
 	// The approval sweeper and propose_order go before the engine: no new proposal
 	// may start while the services it needs are being stopped, and the sweeper edits

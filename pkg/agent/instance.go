@@ -130,6 +130,13 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("append_file") {
 		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 	}
+	// remember keeps a fact in memory/MEMORY.md: at once in the owner's own conversation,
+	// as a suggestion the owner confirms in the digest anywhere else. It is registered
+	// like the file tools it replaces for a background turn; which turn may call it is
+	// decided by tools.TurnMayCall.
+	if cfg.Tools.IsToolEnabled(tools.NameRemember) {
+		toolsRegistry.Register(tools.NewRememberTool(workspace))
+	}
 
 	if cfg.Tools.IsToolEnabled("get_assets_list") {
 		toolsRegistry.Register(tools.NewExchangeBalanceTool(cfg))

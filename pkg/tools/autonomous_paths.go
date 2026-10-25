@@ -42,6 +42,7 @@ var autonomousProtectedPaths = []struct {
 	{"sandbox", "sandbox fixtures and the stored Webull session"},
 	{"whatsapp", "the WhatsApp session store (credentials)"},
 	{"pairing", "pending channel pairing requests (pairing/requests.json): access-control state, so a background turn must not plant or alter a pairing code"},
+	{"calendar", "market holiday lists (set_holidays.json, us_holidays.json): the clock source gates market evaluation on them, so a background turn that could write one could switch evaluation off on a trading day"},
 	{"agents.md", "system prompt of every user turn"},
 	{"identity.md", "system prompt of every user turn"},
 	{"soul.md", "system prompt of every user turn"},

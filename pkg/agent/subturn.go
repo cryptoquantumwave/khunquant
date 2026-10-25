@@ -138,30 +138,7 @@ type SubTurnConfig struct {
 	// Can be extended with topP, etc.
 }
 
-// ====================== Sub-turn Events (Aligned with EventBus) ======================
-type SubTurnSpawnEvent struct {
-	ParentID string
-	ChildID  string
-	Config   SubTurnConfig
-}
-
-type SubTurnEndEvent struct {
-	ChildID string
-	Result  *tools.ToolResult
-	Err     error
-}
-
-type SubTurnResultDeliveredEvent struct {
-	ParentID string
-	ChildID  string
-	Result   *tools.ToolResult
-}
-
-type SubTurnOrphanResultEvent struct {
-	ParentID string
-	ChildID  string
-	Result   *tools.ToolResult
-}
+// Sub-turn events (SubTurnSpawnEvent and the others) are defined in eventsink.go.
 
 // ====================== Context Keys ======================
 type agentLoopKeyType struct{}
@@ -373,16 +350,27 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	al.activeTurnStates.addSubTurn(childTS)
 	defer al.activeTurnStates.removeSubTurn(childTS)
 
-	// 6. Emit Spawn event
-	MockEventBus.Emit(SubTurnSpawnEvent{
-		ParentID: parentTS.turnID,
-		ChildID:  childID,
-		Config:   cfg,
+	// 6. Emit Spawn event. The sink is read once so this sub-turn's events all
+	// go to the same place even if the loop's sink is replaced meanwhile. The
+	// event carries identifiers and settings, never the prompt.
+	sink := al.subTurnSink()
+	startedAt := time.Now()
+	sink.emit(SubTurnSpawnEvent{
+		ParentID:  parentTS.turnID,
+		ChildID:   childID,
+		AgentID:   cfg.AgentID,
+		Model:     cfg.Model,
+		Async:     cfg.Async,
+		Critical:  cfg.Critical,
+		ToolCount: len(cfg.Tools),
+		Timeout:   timeout,
 	})
 
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
+		panicked := false
 		if r := recover(); r != nil {
+			panicked = true
 			err = fmt.Errorf("subturn panicked: %v", r)
 			result = nil
 			logger.ErrorCF("subturn", "SubTurn panicked", map[string]any{
@@ -394,14 +382,21 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 
 		// Result Delivery Strategy (Async vs Sync)
 		if cfg.Async && !cfg.NoPendingDelivery {
-			deliverSubTurnResult(parentTS, childID, result)
+			deliverSubTurnResult(sink, parentTS, childID, result)
 		}
 
-		MockEventBus.Emit(SubTurnEndEvent{
-			ChildID: childID,
-			Result:  result,
-			Err:     err,
-		})
+		end := SubTurnEndEvent{
+			ParentID: parentTS.turnID,
+			ChildID:  childID,
+			Status:   subTurnStatus(err, panicked),
+			Duration: time.Since(startedAt),
+		}
+		if result != nil {
+			end.HasResult = true
+			end.ResultIsErr = result.IsError
+			end.ResultBytes = len(result.ForLLM)
+		}
+		sink.emit(end)
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
@@ -430,7 +425,10 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 // Event emissions:
 //   - SubTurnResultDeliveredEvent: successful delivery to channel
 //   - SubTurnOrphanResultEvent: delivery failed (parent finished or channel full)
-func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.ToolResult) {
+func deliverSubTurnResult(sink eventSink, parentTS *turnState, childID string, result *tools.ToolResult) {
+	if sink == nil {
+		sink = noopSink{}
+	}
 	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
 	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
 	defer func() {
@@ -442,10 +440,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 				"recover":   r,
 			})
 			if result != nil {
-				MockEventBus.Emit(SubTurnOrphanResultEvent{
+				sink.emit(SubTurnOrphanResultEvent{
 					ParentID: parentTS.turnID,
 					ChildID:  childID,
-					Result:   result,
 				})
 			}
 		}
@@ -458,10 +455,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	// If parent turn has already finished, treat this as an orphan result
 	if isFinished || resultChan == nil {
 		if result != nil {
-			MockEventBus.Emit(SubTurnOrphanResultEvent{
+			sink.emit(SubTurnOrphanResultEvent{
 				ParentID: parentTS.turnID,
 				ChildID:  childID,
-				Result:   result,
 			})
 		}
 		return
@@ -474,10 +470,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 	select {
 	case resultChan <- result:
 		// Successfully delivered
-		MockEventBus.Emit(SubTurnResultDeliveredEvent{
+		sink.emit(SubTurnResultDeliveredEvent{
 			ParentID: parentTS.turnID,
 			ChildID:  childID,
-			Result:   result,
 		})
 	case <-parentTS.Finished():
 		// Parent finished while we were waiting to deliver.
@@ -487,10 +482,9 @@ func deliverSubTurnResult(parentTS *turnState, childID string, result *tools.Too
 			"child_id":  childID,
 		})
 		if result != nil {
-			MockEventBus.Emit(SubTurnOrphanResultEvent{
+			sink.emit(SubTurnOrphanResultEvent{
 				ParentID: parentTS.turnID,
 				ChildID:  childID,
-				Result:   result,
 			})
 		}
 	}

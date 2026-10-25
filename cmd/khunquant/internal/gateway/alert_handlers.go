@@ -203,6 +203,7 @@ func handlePriceAlertJob(
 		return "", fmt.Errorf("%s: deliver notification: %w", kind, err)
 	}
 
+	legacyAlertFired.Add(1) // delivered: counted for the shadow period's daily comparison
 	if !payload.Recurring {
 		cronService.RemoveJob(job.ID)
 		return "alert fired", nil
@@ -402,6 +403,7 @@ func handleIndicatorAlertJob(
 		return "", fmt.Errorf("%s: deliver notification: %w", kind, err)
 	}
 
+	legacyAlertFired.Add(1) // delivered: counted for the shadow period's daily comparison
 	if !payload.Recurring {
 		cronService.RemoveJob(job.ID)
 		return "alert fired", nil

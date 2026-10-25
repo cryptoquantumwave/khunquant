@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -259,6 +260,19 @@ func (t *OptionCreateOrderTool) Execute(ctx context.Context, args map[string]any
 		}
 		return ErrorResult(fmt.Sprintf("PlaceOptionOrder failed: %v", err)).WithError(err)
 	}
+
+	// Report the accepted order to the perception order feed. The notional is the
+	// one the gates above already used (limit or stop price x 100 x contracts).
+	optionNotional := 0.0
+	if notionalPrice != nil {
+		optionNotional = quantity * (*notionalPrice) * 100
+	}
+	publishOrder(ctx, orderReport{
+		tool: NameOptionCreateOrder, provider: providerID, account: account, symbol: strings.ToUpper(underlying),
+		side: sideUpper, kind: orderTypeUpper, amount: quantity, unit: orderfeed.UnitOptionContracts, order: order,
+		notionalUSD: optionNotional, notionalKnown: notionalPrice != nil,
+		// Not paper: paper mode refuses option orders before they reach this point.
+	})
 
 	id := "-"
 	if order.Id != nil {

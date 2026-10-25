@@ -9,6 +9,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
@@ -248,6 +249,13 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		}
 		return ErrorResult(fmt.Sprintf("CreateOrder failed: %v", err)).WithError(err)
 	}
+
+	// Report the accepted order to the perception order feed (paper orders are marked).
+	publishOrder(ctx, orderReport{
+		tool: NameCreateOrder, provider: providerID, account: account, symbol: symbol, side: side, kind: orderType,
+		amount: amount, unit: orderfeed.UnitBase, order: order,
+		notionalUSD: nq.USD, notionalKnown: priced && nq.USDKnown, paper: paper,
+	})
 
 	id := "-"
 	if order.Id != nil {

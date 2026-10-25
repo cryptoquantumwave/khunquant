@@ -25,6 +25,8 @@ const (
 	backupName = "HEARTBEAT.md.v1.bak"
 	// maxBackups bounds the search for a free backup name.
 	maxBackups = 1000
+	// userTasksLine is the line that ends the instructions of both templates.
+	userTasksLine = "Add your heartbeat tasks below this line:"
 )
 
 // deps are the command's seams.
@@ -37,8 +39,8 @@ func defaultDeps() deps {
 	return deps{configPath: internal.GetConfigPath, load: config.LoadConfig}
 }
 
-// NewHeartbeatCommand returns `khunquant heartbeat` with its upgrade-template
-// subcommand.
+// NewHeartbeatCommand returns `khunquant heartbeat` with its status and
+// upgrade-template subcommands.
 func NewHeartbeatCommand() *cobra.Command {
 	return newHeartbeatCommand(defaultDeps())
 }
@@ -52,39 +54,88 @@ func newHeartbeatCommand(d deps) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newUpgradeTemplateCommand(d))
+	cmd.AddCommand(newStatusCommand(d), newUpgradeTemplateCommand(d))
 	return cmd
+}
+
+func newStatusCommand(d deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show the heartbeat mode and which HEARTBEAT.md template is in use",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := d.load(d.configPath())
+			if err != nil {
+				return fmt.Errorf("error loading config: %w", err)
+			}
+			return printStatus(cmd.OutOrStdout(), cfg)
+		},
+	}
+}
+
+// printStatus says whether the heartbeat is enabled, the mode that actually
+// applies, and what HEARTBEAT.md is.
+func printStatus(out io.Writer, cfg *config.Config) error {
+	workspace := cfg.WorkspacePath()
+	if workspace == "" {
+		return errors.New("the workspace is not configured")
+	}
+	path := filepath.Join(workspace, templateFile)
+	e := cfg.Proactive.Effective()
+	fmt.Fprintf(out, "heartbeat enabled: %t (every %d minutes)\n", cfg.Heartbeat.Enabled, cfg.Heartbeat.Interval)
+	fmt.Fprintf(out, "heartbeat mode: %s\n", e.HeartbeatMode)
+
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		fmt.Fprintf(out, "%s: missing (the heartbeat writes the v2 template, with no tasks, when it next runs)\n", path)
+	case err != nil:
+		return fmt.Errorf("reading %s: %w", path, err)
+	case hb.IsV2Template(string(data)):
+		fmt.Fprintf(out, "%s: v2 template\n", path)
+	case hb.IsV1Template(string(data)):
+		fmt.Fprintf(out, "%s: v1 template (works; run `khunquant heartbeat upgrade-template` to move to v2)\n", path)
+	default:
+		fmt.Fprintf(out, "%s: your own file (neither template)\n", path)
+	}
+	return nil
 }
 
 func newUpgradeTemplateCommand(d deps) *cobra.Command {
 	var dryRun, force bool
 	cmd := &cobra.Command{
 		Use:   "upgrade-template",
-		Short: "Replace HEARTBEAT.md with the v2 template, keeping a backup",
-		Long: "The v2 template is written for a governed heartbeat: the model reports what it finds " +
-			"through respond_proactive, and the system decides whether, when and where you hear about it. " +
-			"The current HEARTBEAT.md is copied to HEARTBEAT.md.v1.bak first (an existing backup is never " +
-			"overwritten; HEARTBEAT.md.v1.bak.1, .2, ... are used instead), then the new file is written. " +
-			"A file that is already v2 is left alone. While the effective heartbeat mode is not governed the v2 " +
-			"template would make heartbeats deliver nothing, so the command refuses unless --force is given.",
+		Short: "Replace HEARTBEAT.md with the v2 template, keeping a backup and your tasks",
+		Long: "The v2 template is shorter than v1 and works in every heartbeat mode: the model reports " +
+			"through respond_proactive when the heartbeat is governed or a sweep, and sends one short message " +
+			"in the default legacy mode. The current HEARTBEAT.md is copied to HEARTBEAT.md.v1.bak first (an " +
+			"existing backup is never overwritten; HEARTBEAT.md.v1.bak.1, .2, ... are used instead), then the " +
+			"new file is written. The tasks you wrote below the \"Add your heartbeat tasks below this line:\" " +
+			"line are carried into the new file; a file without that line is kept whole under the new tasks " +
+			"section. A file that is already v2 is left alone.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := d.load(d.configPath())
 			if err != nil {
 				return fmt.Errorf("error loading config: %w", err)
 			}
+			if force {
+				fmt.Fprintln(cmd.OutOrStdout(), "Note: --force is no longer needed; the v2 template works in every heartbeat mode.")
+			}
 			// The heartbeat service reads HEARTBEAT.md from this workspace.
-			return upgradeTemplate(cmd.OutOrStdout(), cfg, dryRun, force)
+			return upgradeTemplate(cmd.OutOrStdout(), cfg, dryRun)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be done and change nothing")
-	cmd.Flags().BoolVar(&force, "force", false,
-		"Upgrade even though the effective heartbeat mode is not governed (heartbeats then deliver nothing)")
+	// Kept so that a script written for the earlier command does not fail on an
+	// unknown flag; it does nothing.
+	cmd.Flags().BoolVar(&force, "force", false, "No longer needed; accepted and ignored")
+	_ = cmd.Flags().MarkHidden("force")
 	return cmd
 }
 
 // upgradeTemplate does the work of the command.
-func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun, force bool) error {
+func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun bool) error {
 	workspace := cfg.WorkspacePath()
 	if workspace == "" {
 		return errors.New("the workspace is not configured")
@@ -102,20 +153,9 @@ func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun, force bool) erro
 		return nil
 	}
 
-	// A v2 file under a heartbeat that is not governed delivers nothing: say so
-	// before anything is written, and go on only when asked to.
-	notGoverned := cfg.Proactive.Effective().HeartbeatMode != config.HeartbeatModeGoverned
-	if notGoverned {
-		fmt.Fprintf(out, "WARNING: the heartbeat is in legacy mode; with the v2 template it will deliver nothing "+
-			"until proactive.heartbeat.mode is governed and attention is live "+
-			"(that needs proactive enabled, an owner and attention.mode live).\n")
-		if !force && !dryRun {
-			return errors.New("refusing to upgrade HEARTBEAT.md while the heartbeat is not governed; " +
-				"nothing was changed (use --force to upgrade anyway)")
-		}
-		if !force {
-			fmt.Fprintln(out, "[dry run] Without --force the upgrade would be refused.")
-		}
+	next, outcome := hb.TemplateV2(), hb.TasksWereShippedDefault
+	if !missing {
+		next, outcome = hb.UpgradeToV2(string(current))
 	}
 
 	var backup string
@@ -132,8 +172,8 @@ func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun, force bool) erro
 		} else {
 			fmt.Fprintf(out, "[dry run] Would back up %s as %s\n", path, backup)
 			fmt.Fprintf(out, "[dry run] Would write the v2 template to %s\n", path)
+			printKept(out, outcome, backup, true)
 		}
-		printAfter(out, backup, true)
 		fmt.Fprintln(out, "[dry run] Nothing was changed.")
 		return nil
 	}
@@ -146,28 +186,38 @@ func upgradeTemplate(out io.Writer, cfg *config.Config, dryRun, force bool) erro
 	} else {
 		fmt.Fprintf(out, "%s does not exist; there is nothing to back up.\n", path)
 	}
-	if err := fileutil.WriteFileAtomic(path, []byte(hb.TemplateV2()), 0o644); err != nil {
+	if err := fileutil.WriteFileAtomic(path, []byte(next), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	fmt.Fprintf(out, "Wrote the v2 template to %s\n", path)
-	printAfter(out, backup, false)
+	if !missing {
+		printKept(out, outcome, backup, false)
+	}
+	fmt.Fprintln(out, "A running gateway reads the file at its next heartbeat; no restart is needed.")
 	return nil
 }
 
-// printAfter says what the user should know once the file is (or, in a dry run,
-// would be) replaced.
-func printAfter(out io.Writer, backup string, dryRun bool) {
-	if backup != "" {
-		verb := "is"
-		if dryRun {
-			verb = "will be"
-		}
-		fmt.Fprintf(out, "Your previous file, with any tasks you added, %s in %s.\n", verb, backup)
-		fmt.Fprintf(out, "The v2 template has its own task list: copy your own tasks below its %q line.\n",
-			"Add your heartbeat tasks below this line:")
+// printKept says what became of the owner's tasks; backup is the file that holds
+// the previous content whole.
+func printKept(out io.Writer, outcome hb.UpgradeOutcome, backup string, dryRun bool) {
+	verb := "kept"
+	if dryRun {
+		verb = "would be kept"
 	}
-	if !dryRun {
-		fmt.Fprintln(out, "A running gateway reads the file at its next heartbeat; no restart is needed.")
+	switch outcome {
+	case hb.TasksKept:
+		fmt.Fprintf(out, "Your tasks (everything below the %q line) %s in the new file.\n", userTasksLine, verb)
+	case hb.TasksWereShippedDefault:
+		fmt.Fprintf(out, "Your task list was the default one of the v1 template; the new file has the v2 default task.\n")
+	case hb.TasksNone:
+		fmt.Fprintf(out, "You had no tasks, so the new file has none either and runs nothing until you add one.\n")
+	case hb.TasksWholeFile:
+		fmt.Fprintf(out, "WARNING: the old file has no %q line, so its WHOLE content was %s under the new "+
+			"tasks section, instructions included. Review it and delete what the v2 instructions already cover; "+
+			"the original is in %s.\n", userTasksLine, verb, backup)
+	}
+	if outcome != hb.TasksNone {
+		fmt.Fprintf(out, "Your previous file is in %s.\n", backup)
 	}
 }
 

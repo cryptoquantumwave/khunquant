@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -94,30 +95,69 @@ func (p *profileContributor) Close() error { return nil }
 
 // --- Portfolio contributor ---
 
+// Bounds on the exchange-supplied names printed in the portfolio section. They
+// are far above any real ticker or account name, so an ordinary row is rendered
+// exactly as it always was.
+const (
+	maxPortfolioAssetRunes   = 64
+	maxPortfolioAccountRunes = 64
+	maxPortfolioQuoteRunes   = 16
+)
+
 type portfolioContributor struct {
 	store     *snapshot.Store
 	maxAssets int
+	now       func() time.Time // nil = time.Now; set by tests
 }
 
 func (p *portfolioContributor) Name() string { return "portfolio" }
 
+// Section renders the newest snapshot of either kind: the owner's own latest, or
+// the latest automatic one (perception's 15-minute snapshot) when that was taken
+// after it. An own snapshot renders as it always has. An automatic one says in
+// the header that it is automatic and how old it was when this context was built
+// (the section is cached for the collector's TTL, so the age is that of the
+// build), and, when some assets could not be priced, that it is partial and how
+// many assets the figures leave out. The section stays one header line plus at
+// most maxAssets rows either way.
 func (p *portfolioContributor) Section(ctx context.Context) (string, error) {
 	snapshots, err := p.store.QuerySnapshots(ctx, snapshot.QueryFilter{Limit: 1})
 	if err != nil {
 		return "", fmt.Errorf("query snapshots: %w", err)
 	}
-	if len(snapshots) == 0 {
+
+	// A failed read of the automatic rows leaves the owner's snapshot as it was.
+	auto, autoErr := p.store.LatestAuto(ctx)
+	if autoErr != nil {
+		logger.DebugCF("agent", "financial context: latest automatic snapshot read failed",
+			map[string]any{"error": autoErr.Error()})
+		auto = nil
+	}
+	useAuto := auto != nil && (len(snapshots) == 0 || auto.TakenAt.After(snapshots[0].TakenAt))
+
+	if len(snapshots) == 0 && !useAuto {
 		return "", nil
 	}
 
-	snap, err := p.store.GetSnapshot(ctx, snapshots[0].ID)
-	if err != nil {
-		return "", fmt.Errorf("get snapshot: %w", err)
+	var snap *snapshot.Snapshot
+	if useAuto {
+		snap = auto
+	} else {
+		snap, err = p.store.GetSnapshot(ctx, snapshots[0].ID)
+		if err != nil {
+			return "", fmt.Errorf("get snapshot: %w", err)
+		}
 	}
 
+	quote := sanitizeInline(snap.Quote, maxPortfolioQuoteRunes)
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Portfolio (%s, as of %s): %.2f\n",
-		snap.Quote, snap.TakenAt.Format("2006-01-02 15:04"), snap.TotalValue)
+	if useAuto {
+		fmt.Fprintf(&sb, "Portfolio (%s, as of %s UTC, %s): %.2f\n",
+			quote, snap.TakenAt.UTC().Format("2006-01-02 15:04"), p.autoNote(snap), snap.TotalValue)
+	} else {
+		fmt.Fprintf(&sb, "Portfolio (%s, as of %s): %.2f\n",
+			quote, snap.TakenAt.Format("2006-01-02 15:04"), snap.TotalValue)
+	}
 
 	// Sort positions by Value descending, take top N.
 	positions := snap.Positions
@@ -130,13 +170,49 @@ func (p *portfolioContributor) Section(ctx context.Context) (string, error) {
 	for _, pos := range positions {
 		accountPart := ""
 		if pos.Account != "" {
-			accountPart = pos.Account + " "
+			accountPart = sanitizeInline(pos.Account, maxPortfolioAccountRunes) + " "
 		}
 		fmt.Fprintf(&sb, "- %s%s: %.6g (%.2f %s)\n",
-			accountPart, pos.Asset, pos.Quantity, pos.Value, snap.Quote)
+			accountPart, sanitizeInline(pos.Asset, maxPortfolioAssetRunes), pos.Quantity, pos.Value, quote)
 	}
 
 	return strings.TrimRight(sb.String(), "\n"), nil
+}
+
+// autoNote is the header phrase for an automatic snapshot: its kind, its age at
+// this moment, and the partial marker when the note records unpriced assets.
+func (p *portfolioContributor) autoNote(snap *snapshot.Snapshot) string {
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	note := "automatic snapshot, " + formatSnapshotAge(now().Sub(snap.TakenAt)) + " old when this context was built"
+	switch n := len(snapshot.UnpricedFromNote(snap.Note)); {
+	case n == 1:
+		note += ", PARTIAL: 1 asset could not be priced and is left out of these figures"
+	case n > 1:
+		note += fmt.Sprintf(", PARTIAL: %d assets could not be priced and are left out of these figures", n)
+	}
+	return note
+}
+
+// formatSnapshotAge renders an age as whole minutes, hours and minutes, or days
+// and hours. A negative age (a clock that moved back) is shown as zero.
+func formatSnapshotAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	mins := int(d / time.Minute)
+	switch {
+	case mins < 1:
+		return "under 1 min"
+	case mins < 60:
+		return fmt.Sprintf("%d min", mins)
+	case mins < 24*60:
+		return fmt.Sprintf("%d h %d min", mins/60, mins%60)
+	default:
+		return fmt.Sprintf("%d d %d h", mins/(24*60), mins%(24*60)/60)
+	}
 }
 
 func (p *portfolioContributor) Close() error { return p.store.Close() }

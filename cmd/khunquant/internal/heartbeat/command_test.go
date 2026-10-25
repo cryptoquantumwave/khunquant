@@ -19,6 +19,15 @@ import (
 const v1File = "# Heartbeat\n\n## How delivery actually works\n\nCall `message`.\n\n" +
 	"Add your heartbeat tasks below this line:\n\n- my own task: check SOL\n"
 
+// v2With is the v2 template's instructions followed by tasks.
+func v2With(tasks string) string {
+	v2 := hb.TemplateV2()
+	return v2[:strings.Index(v2, userTasksLine)+len(userTasksLine)] + "\n\n" + tasks + "\n"
+}
+
+// v1Upgraded is v1File after the upgrade: the owner's one task survives.
+var v1Upgraded = v2With("- my own task: check SOL")
+
 // rig points the command at a temp workspace.
 type rig struct {
 	t         *testing.T
@@ -93,12 +102,13 @@ func TestUpgradeTemplate_BacksUp(t *testing.T) {
 	out, err := r.run()
 	require.NoError(t, err)
 
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
+	assert.Equal(t, v1Upgraded, r.read("HEARTBEAT.md"), "the owner's task survives")
 	assert.Equal(t, v1File, r.read("HEARTBEAT.md.v1.bak"), "the backup is the old file, byte for byte")
 	assert.Equal(t, []string{"HEARTBEAT.md", "HEARTBEAT.md.v1.bak"}, r.files(), "no temp file is left behind")
 	assert.Contains(t, out, "Backed up")
 	assert.Contains(t, out, "HEARTBEAT.md.v1.bak")
-	assert.Contains(t, out, "copy your own tasks")
+	assert.Contains(t, out, "Your tasks")
+	assert.Contains(t, out, "kept")
 	assert.True(t, hb.IsV2Template(r.read("HEARTBEAT.md")))
 	assert.False(t, hb.IsV1Template(r.read("HEARTBEAT.md")))
 }
@@ -114,7 +124,7 @@ func TestUpgradeTemplate_IsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "already the v2 template")
 	assert.Equal(t, files, r.files(), "a second run must not add a backup")
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
+	assert.Equal(t, v1Upgraded, r.read("HEARTBEAT.md"))
 	assert.Equal(t, v1File, r.read("HEARTBEAT.md.v1.bak"))
 
 	// A v2 file the user has edited is still v2: it is not touched either.
@@ -144,7 +154,7 @@ func TestUpgradeTemplate_NeverOverwritesAnExistingBackup(t *testing.T) {
 	assert.Equal(t, "an older backup, precious", r.read("HEARTBEAT.md.v1.bak"))
 	assert.Equal(t, v1File, r.read("HEARTBEAT.md.v1.bak.1"))
 	assert.Equal(t, v1File+"\n- another edit\n", r.read("HEARTBEAT.md.v1.bak.2"))
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
+	assert.Equal(t, v2With("- my own task: check SOL\n\n- another edit"), r.read("HEARTBEAT.md"))
 }
 
 func TestWriteBackup_RefusesToReplace(t *testing.T) {
@@ -196,76 +206,6 @@ func TestUpgradeTemplate_MissingFileGetsV2WithoutABackup(t *testing.T) {
 	assert.Empty(t, r2.files())
 }
 
-// A file the user wrote from scratch has neither marker. It is still replaced
-// (they asked for the upgrade), and what they wrote survives in the backup.
-func TestUpgradeTemplate_CustomFileIsBackedUp(t *testing.T) {
-	r := newRig(t)
-	const custom = "Every hour, tell me the BTC price.\n"
-	r.write("HEARTBEAT.md", custom)
-	out, err := r.run()
-	require.NoError(t, err)
-	assert.Equal(t, custom, r.read("HEARTBEAT.md.v1.bak"))
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
-	assert.Contains(t, out, "any tasks you added")
-}
-
-const legacyWarning = "WARNING: the heartbeat is in legacy mode; with the v2 template it will deliver nothing " +
-	"until proactive.heartbeat.mode is governed and attention is live"
-
-// While the effective mode is not governed the v2 file would make heartbeats
-// deliver nothing: the command warns before writing and refuses without --force.
-func TestUpgradeTemplate_LegacyModeNeedsForce(t *testing.T) {
-	r := newLegacyRig(t)
-	r.write("HEARTBEAT.md", v1File)
-	before := r.files()
-
-	out, err := r.run()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--force")
-	assert.Contains(t, out, legacyWarning)
-	assert.Equal(t, before, r.files(), "a refused upgrade writes nothing")
-	assert.Equal(t, v1File, r.read("HEARTBEAT.md"))
-
-	// A governed config that attention cannot back (shadow) is not governed either.
-	g := newRig(t)
-	g.cfg.Proactive.Attention.Mode = config.ProactiveModeShadow
-	g.write("HEARTBEAT.md", v1File)
-	out, err = g.run()
-	require.Error(t, err)
-	assert.Contains(t, out, legacyWarning)
-	assert.Equal(t, v1File, g.read("HEARTBEAT.md"))
-
-	// --dry-run shows the warning and the refusal, and writes nothing.
-	out, err = r.run("--dry-run")
-	require.NoError(t, err)
-	assert.Contains(t, out, legacyWarning)
-	assert.Contains(t, out, "Without --force the upgrade would be refused")
-	assert.Equal(t, before, r.files())
-
-	// --force goes ahead, with the warning first.
-	out, err = r.run("--force")
-	require.NoError(t, err)
-	assert.Less(t, strings.Index(out, legacyWarning), strings.Index(out, "Wrote the v2 template"),
-		"the warning must come before anything is written")
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
-	assert.Equal(t, v1File, r.read("HEARTBEAT.md.v1.bak"))
-
-	// A v2 file in legacy mode is still just "already v2".
-	out, err = r.run()
-	require.NoError(t, err)
-	assert.Contains(t, out, "already the v2 template")
-}
-
-func TestUpgradeTemplate_GovernedNeedsNoForce(t *testing.T) {
-	r := newRig(t)
-	r.write("HEARTBEAT.md", v1File)
-	out, err := r.run()
-	require.NoError(t, err)
-	assert.NotContains(t, out, "WARNING")
-	assert.Contains(t, out, "no restart is needed")
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
-}
-
 func TestUpgradeTemplate_ConfigErrorIsReported(t *testing.T) {
 	cmd := newHeartbeatCommand(deps{
 		configPath: func() string { return "x" },
@@ -287,5 +227,5 @@ func TestUpgradeTemplate_UsesTheWorkspaceTheHeartbeatReads(t *testing.T) {
 	r.write("HEARTBEAT.md", v1File)
 	_, err := r.run()
 	require.NoError(t, err)
-	assert.Equal(t, hb.TemplateV2(), r.read("HEARTBEAT.md"))
+	assert.Equal(t, v1Upgraded, r.read("HEARTBEAT.md"))
 }

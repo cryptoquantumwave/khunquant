@@ -75,3 +75,16 @@ type GroupSummary struct {
 	Count                        int
 	AvgValue, MinValue, MaxValue float64
 }
+
+const (
+	// LabelAuto labels the snapshots the scheduled portfolio source takes. The label
+	// is reserved: SaveSnapshot refuses it, so a snapshot that the owner or the model
+	// took can never be pruned by PruneAuto.
+	LabelAuto = "auto"
+
+	// AutoNote is the note every automatic snapshot carries (AutoNoteWith adds the
+	// list of unpriced assets after it). PruneAuto and every listing require an
+	// automatic note as well as the label, so a snapshot saved with the label "auto" before the
+	// label was reserved is left alone.
+	AutoNote = "scheduled portfolio snapshot (perception)"
+)

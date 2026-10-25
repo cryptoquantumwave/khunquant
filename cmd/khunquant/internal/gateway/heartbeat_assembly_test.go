@@ -192,18 +192,24 @@ func TestHeartbeatAssembly_V1TemplateWarnsOncePerStartAndReload(t *testing.T) {
 		t.Fatal("the user's HEARTBEAT.md was rewritten")
 	}
 
-	// Legacy with a v1 file: nothing to say.
+	// Legacy with a v1 file: one INFO line naming the command, not a warning.
 	if err := f.reload(compose(withOwner("1001"), withHeartbeat(config.HeartbeatModeLegacy))); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(logs.String(), phrase); n != 2 {
-		t.Fatalf("legacy + v1 file warned (%d total)", n)
+	if n := strings.Count(logs.String(), phrase); n != 3 {
+		t.Fatalf("legacy + v1 file: %d lines naming the command in total, want 3 (one more than before)", n)
+	}
+	last := logs.String()[strings.LastIndex(logs.String(), "HEARTBEAT.md is the v1 template"):]
+	if !strings.Contains(last, "keeps working") {
+		t.Errorf("the legacy notice does not say the file keeps working:\n%s", last)
+	}
+	if got, _ := os.ReadFile(path); string(got) != v1 {
+		t.Fatal("the user's HEARTBEAT.md was rewritten")
 	}
 }
 
-// A v2 file under a legacy heartbeat: the model would be told to call a tool
-// that does not exist, so say so once and leave the file alone.
-func TestHeartbeatAssembly_V2TemplateUnderLegacyWarns(t *testing.T) {
+// A v2 file works under a legacy heartbeat, so it gets no advisory at all.
+func TestHeartbeatAssembly_V2TemplateUnderLegacyIsQuiet(t *testing.T) {
 	logs := captureLogs(t)
 	f := newAssemblyFixtureNoBuild(t, withHeartbeat(config.HeartbeatModeLegacy))
 	idleV2 := heartbeat.TemplateV2()
@@ -216,11 +222,10 @@ func TestHeartbeatAssembly_V2TemplateUnderLegacyWarns(t *testing.T) {
 	f.build(f.initial)
 
 	out := logs.String()
-	if n := strings.Count(out, "HEARTBEAT.md is the v2 template"); n != 1 {
-		t.Fatalf("%d warnings, want 1\n%s", n, out)
-	}
-	if !strings.Contains(out, "HEARTBEAT.md.v1.bak") {
-		t.Errorf("the warning does not give the fix:\n%s", out)
+	for _, banned := range []string{"HEARTBEAT.md is the v", "upgrade-template"} {
+		if strings.Contains(out, banned) {
+			t.Fatalf("a v2 file under legacy logged %q\n%s", banned, out)
+		}
 	}
 	if got, _ := os.ReadFile(path); string(got) != idleV2 {
 		t.Fatal("the user's HEARTBEAT.md was rewritten")

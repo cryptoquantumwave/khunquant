@@ -34,10 +34,13 @@ const V1Marker = "How delivery actually works"
 // V2Marker is the phrase of the marker line the v2 template starts with.
 const V2Marker = "khunquant:heartbeat-template v2"
 
-// templateV2 is the v2 HEARTBEAT.md: the only copy of its text. New installs are
-// not given it (onboarding copies workspace/HEARTBEAT.md, the v1 file, because
-// the default heartbeat mode is legacy); `khunquant heartbeat upgrade-template`
-// writes it, and a governed service recreates a missing file from it.
+// templateV2 is the v2 HEARTBEAT.md: the only copy of its text, and the file every
+// heartbeat mode runs on. It tells the model to report with respond_proactive when
+// it has that tool (a governed or sweep heartbeat) and to send one short `message`
+// when it does not (a legacy heartbeat). workspace/HEARTBEAT.md, which onboarding
+// copies to new installs, is a byte-identical copy (a test holds them together);
+// `khunquant heartbeat upgrade-template` moves an existing install to it, and a
+// missing file is recreated from it in every mode.
 //
 //go:embed template_v2.md
 var templateV2 string
@@ -64,68 +67,38 @@ func idleTemplateV2() string {
 	return templateV2[:i+len(userTasksMarker)] + "\n"
 }
 
-// legacyDefaultTemplate is what a legacy-contract service writes when
-// HEARTBEAT.md is missing.
-const legacyDefaultTemplate = `# Heartbeat Check List
-
-This file contains tasks for the heartbeat service to check periodically.
-
-## Examples
-
-- Check for unread messages
-- Review upcoming calendar events
-- Check device status (e.g., MaixCam)
-
-## Instructions
-
-- Execute ALL tasks listed below. Do NOT skip any task.
-- For simple tasks (e.g., report current time), respond directly.
-- For complex tasks that may take time, use the spawn tool to create a subagent.
-- The spawn tool is async - subagent results will be sent to the user automatically.
-- After spawning a subagent, CONTINUE to process remaining tasks.
-- Only respond with HEARTBEAT_OK when ALL tasks are done AND nothing needs attention.
-
----
-
-Add your heartbeat tasks below this line:
-`
-
-// defaultTemplate is the file written when HEARTBEAT.md is missing: the one that
-// matches the contract, so a governed install never gets v1 instructions.
-func defaultTemplate(c Contract) string {
-	if c == ContractGoverned {
-		return idleTemplateV2()
-	}
-	return legacyDefaultTemplate
-}
-
-// TemplateAdvisory returns the warning to give when content does not match the
-// contract c, or "" when it does (or when there is nothing to say). It never
-// changes the file: a user's HEARTBEAT.md is theirs.
+// TemplateAdvisory returns what to tell the operator when content is the v1
+// template, and whether it is a warning (true) or only a notice (false); it
+// returns "" when there is nothing to say. It never changes the file: a user's
+// HEARTBEAT.md is theirs.
 //
-//   - governed with a v1 file: the turn still works, because the proactive
-//     contract the runtime puts ahead of the file tells the model to use
-//     respond_proactive and `message` is not available; the file's own
+//   - governed or sweep with a v1 file (a warning): the turn still works, because
+//     the proactive contract the runtime puts ahead of the file tells the model to
+//     use respond_proactive and `message` is not available; the file's own
 //     instructions are wrong for it and cost tokens.
-//   - legacy with a v2 file: the file tells the model to call respond_proactive,
-//     which a legacy turn does not have, so nothing would reach the user.
-func TemplateAdvisory(content string, c Contract) string {
-	switch {
-	case c == ContractGoverned && IsV1Template(content) && !IsV2Template(content):
+//   - legacy with a v1 file (a notice): it keeps working exactly as before; the v2
+//     file is shorter and also works in legacy mode.
+//
+// A v2 file is right under every contract, so it has no advisory.
+func TemplateAdvisory(content string, c Contract) (msg string, warn bool) {
+	if !IsV1Template(content) || IsV2Template(content) {
+		return "", false
+	}
+	if c == ContractGoverned {
 		return "HEARTBEAT.md is the v1 template: it tells the model to call the `message` tool, " +
 			"which a governed heartbeat does not have. The heartbeat still works and its decisions are " +
 			"delivered through attention, but the file's instructions are out of date. " +
-			"Run `khunquant heartbeat upgrade-template` to back it up as HEARTBEAT.md.v1.bak and switch to v2"
-	case c == ContractLegacy && IsV2Template(content):
-		return "HEARTBEAT.md is the v2 template but the heartbeat is in legacy mode: the file tells the model " +
-			"to call `respond_proactive`, which a legacy heartbeat does not have, so until this is fixed " +
-			"heartbeats run and deliver nothing. Restore HEARTBEAT.md.v1.bak if you have it, otherwise " +
-			"delete HEARTBEAT.md to get the default back (idle until you add tasks), or set " +
-			"proactive.heartbeat.mode to governed (needs proactive enabled, an owner and attention.mode live). " +
-			"HEARTBEAT.md has not been changed"
+			"Run `khunquant heartbeat upgrade-template` to back it up as HEARTBEAT.md.v1.bak and switch to v2 " +
+			"(your tasks are kept)", true
 	}
-	return ""
+	return "HEARTBEAT.md is the v1 template. It keeps working as it is, and has not been changed. " +
+		"The v2 template is shorter and works in every heartbeat mode: run " +
+		"`khunquant heartbeat upgrade-template` to back this file up as HEARTBEAT.md.v1.bak and switch to it " +
+		"(your tasks are kept)", false
 }
 
-// warnLog is the sink for TemplateAdvisory warnings; tests replace it.
-var warnLog = func(msg string, fields map[string]any) { logger.WarnCF("heartbeat", msg, fields) }
+// warnLog and infoLog are the sinks for TemplateAdvisory; tests replace them.
+var (
+	warnLog = func(msg string, fields map[string]any) { logger.WarnCF("heartbeat", msg, fields) }
+	infoLog = func(msg string, fields map[string]any) { logger.InfoCF("heartbeat", msg, fields) }
+)

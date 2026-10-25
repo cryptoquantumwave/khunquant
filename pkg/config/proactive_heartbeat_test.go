@@ -13,6 +13,7 @@ import (
 func TestEffective_GovernedHeartbeatNeedsLiveAttention(t *testing.T) {
 	for _, att := range []string{ProactiveModeShadow, ProactiveModeOff, ""} {
 		c := liveProactive()
+		c.Triggers.Mode = ProactiveModeOff // its own rule is tested below
 		c.Heartbeat.Mode = HeartbeatModeGoverned
 		c.Attention.Mode = att
 		e := c.Effective()
@@ -32,14 +33,15 @@ func TestEffective_GovernedHeartbeatNeedsLiveAttention(t *testing.T) {
 		t.Errorf("governed + live attention + owner must stay governed: %+v", e)
 	}
 
-	// Legacy and sweep are not touched by this rule.
-	for _, hb := range []string{HeartbeatModeLegacy, HeartbeatModeSweep} {
+	// Legacy is not touched by this rule (sweep has its own, tested below).
+	{
 		c := liveProactive()
-		c.Heartbeat.Mode = hb
+		c.Triggers.Mode = ProactiveModeOff
+		c.Heartbeat.Mode = HeartbeatModeLegacy
 		c.Attention.Mode = ProactiveModeShadow
 		e := c.Effective()
-		if e.HeartbeatMode != hb || len(e.Downgrades) != 0 {
-			t.Errorf("%s with shadow attention changed: %+v", hb, e)
+		if e.HeartbeatMode != HeartbeatModeLegacy || len(e.Downgrades) != 0 {
+			t.Errorf("legacy with shadow attention changed: %+v", e)
 		}
 	}
 
@@ -135,5 +137,67 @@ func TestHeartbeatModel_IndependentOfDowngrades(t *testing.T) {
 	}
 	if e.HeartbeatModel != proactive.ModelTierLight {
 		t.Errorf("tier = %q, want light as configured", e.HeartbeatModel)
+	}
+}
+
+// Live triggers deliver through attention: with attention off or shadow (the default)
+// a live trigger's candidates would be logged and sent nowhere, while the migration
+// had already switched the cron alert jobs off. So live triggers need live attention.
+func TestEffective_LiveTriggersNeedLiveAttention(t *testing.T) {
+	for _, att := range []string{ProactiveModeShadow, ProactiveModeOff, ""} {
+		c := liveProactive()
+		c.Heartbeat.Mode = HeartbeatModeLegacy
+		c.Triggers.Mode = ProactiveModeLive
+		c.Attention.Mode = att
+		e := c.Effective()
+		if e.TriggersMode != ProactiveModeShadow {
+			t.Errorf("attention %q: triggers = %s, want shadow", att, e.TriggersMode)
+		}
+		want := "proactive: attention.mode is " + e.AttentionMode + ", not live; triggers.mode live → shadow"
+		if len(e.Downgrades) != 1 || !contains(e.Downgrades, want) {
+			t.Errorf("attention %q: downgrades = %q, want exactly %q", att, e.Downgrades, want)
+		}
+	}
+
+	// Live attention and a valid owner: live stays live, nothing is said.
+	c := liveProactive()
+	c.Triggers.Mode = ProactiveModeLive
+	if e := c.Effective(); e.TriggersMode != ProactiveModeLive || len(e.Downgrades) != 0 {
+		t.Errorf("live triggers + live attention + owner must stay live: %+v", e)
+	}
+
+	// Off and shadow triggers are never touched by it.
+	for _, m := range []string{ProactiveModeOff, ProactiveModeShadow} {
+		c := liveProactive()
+		c.Heartbeat.Mode = HeartbeatModeLegacy // a sweep needs live attention, and says so
+		c.Triggers.Mode = m
+		c.Attention.Mode = ProactiveModeShadow
+		if e := c.Effective(); e.TriggersMode != m || len(e.Downgrades) != 0 {
+			t.Errorf("triggers %s changed: %+v", m, e)
+		}
+	}
+
+	// Without an owner the existing downgrade already names triggers once; the rule
+	// must not add a second entry for it.
+	c = liveProactive()
+	c.Triggers.Mode = ProactiveModeLive
+	c.Attention.Mode = ProactiveModeShadow
+	c.Owner = OwnerConfig{}
+	n := 0
+	for _, d := range c.Effective().Downgrades {
+		if strings.HasSuffix(d, "triggers.mode live → shadow") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("triggers downgrade listed %d times without an owner, want 1", n)
+	}
+
+	// Attention off with proactive disabled: the same single entry.
+	c = liveProactive()
+	c.Enabled = false
+	c.Triggers.Mode = ProactiveModeLive
+	if e := c.Effective(); e.TriggersMode != ProactiveModeShadow {
+		t.Errorf("disabled: %+v", e)
 	}
 }

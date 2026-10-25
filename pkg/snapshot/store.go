@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
 const schema = `
@@ -56,22 +57,14 @@ func NewStore(workspacePath string) (*Store, error) {
 		return nil, fmt.Errorf("snapshot: create dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "snapshots.db")
-	db, err := sql.Open("sqlite", dbPath)
+	// sqlitex.Open puts busy_timeout, foreign_keys, WAL and synchronous in the DSN, so
+	// EVERY pooled connection has them. Several handles write this file (the agent's
+	// tools, the web handler, the scheduled portfolio source); pragmas run through
+	// db.Exec configured only one connection and left no busy timeout, so two writers
+	// collided with "database is locked" at once.
+	db, err := sqlitex.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: open db: %w", err)
-	}
-
-	// SQLite pragmas for performance and correctness.
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA cache_size=-2000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("snapshot: %s: %w", pragma, err)
-		}
 	}
 
 	if _, err := db.Exec(schema); err != nil {
@@ -90,8 +83,38 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// ErrReservedLabel is returned by SaveSnapshot for the label LabelAuto.
+var ErrReservedLabel = errors.New("the snapshot label \"auto\" is reserved for scheduled snapshots")
+
+// IsReservedLabel reports whether label is the reserved automatic label, in any
+// case and with surrounding spaces.
+func IsReservedLabel(label string) bool {
+	return strings.EqualFold(strings.TrimSpace(label), LabelAuto)
+}
+
 // SaveSnapshot persists a snapshot and its positions. It sets snap.ID on success.
+// The label "auto" is reserved for SaveAutoSnapshot and refused here.
 func (s *Store) SaveSnapshot(ctx context.Context, snap *Snapshot) (int64, error) {
+	if IsReservedLabel(snap.Label) {
+		return 0, ErrReservedLabel
+	}
+	return s.save(ctx, snap)
+}
+
+// SaveAutoSnapshot persists a scheduled snapshot: it sets the label, keeps a note
+// that is an automatic one (AutoNote, or AutoNoteWith for a snapshot with unpriced
+// assets; anything else is replaced by AutoNote) and stores the time in UTC. Only
+// the scheduled portfolio source calls it.
+func (s *Store) SaveAutoSnapshot(ctx context.Context, snap *Snapshot) (int64, error) {
+	snap.Label = LabelAuto
+	if !IsAutoNote(snap.Note) {
+		snap.Note = AutoNote
+	}
+	snap.TakenAt = snap.TakenAt.UTC()
+	return s.save(ctx, snap)
+}
+
+func (s *Store) save(ctx context.Context, snap *Snapshot) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -184,6 +207,8 @@ func (s *Store) QuerySnapshots(ctx context.Context, f QueryFilter) ([]Snapshot, 
 		where = append(where, "s.label = ?")
 		args = append(args, f.Label)
 	}
+	// Automatic snapshots appear only when they are asked for by their label.
+	where, args = excludeAuto(f.Label, where, args)
 
 	// Source and Asset filters require a join to positions.
 	needJoin := f.Source != "" || f.Asset != ""
@@ -243,6 +268,7 @@ func (s *Store) SnapshotSummary(ctx context.Context, f SummaryFilter) (*Summary,
 		where = append(where, "s.label = ?")
 		args = append(args, f.Label)
 	}
+	where, args = excludeAuto(f.Label, where, args)
 
 	needJoin := f.Source != ""
 	fromClause := "snapshots s"
@@ -373,15 +399,29 @@ func (s *Store) computeGroups(ctx context.Context, f SummaryFilter, fromClause, 
 
 // DeleteSnapshots removes snapshots matching the filter. It always keeps the
 // most recent KeepLast snapshots (default 5) as a safety measure.
+//
+// Automatic snapshots (see LabelAuto) are the pipeline's baselines and are handled
+// apart from the owner's:
+//   - the KeepLast safety net is computed over the owner's snapshots, so that the
+//     96 automatic rows a day cannot take it up; a delete by the label "auto"
+//     computes it over the automatic ones instead;
+//   - a filter touches automatic rows only when its Label is exactly "auto", or when
+//     it names one by ID (an explicit request; the ID is not protected by KeepLast
+//     unless it is among the newest automatic rows of a label=auto delete). A delete
+//     by time or by another label never removes one: PruneAuto is their retention.
 func (s *Store) DeleteSnapshots(ctx context.Context, f DeleteFilter) (int, error) {
 	keepLast := f.KeepLast
 	if keepLast <= 0 {
 		keepLast = 5
 	}
 
-	// Get IDs to keep (most recent N).
-	keepRows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM snapshots ORDER BY taken_at DESC LIMIT ?`, keepLast)
+	// Get IDs to keep (most recent N), of the class this delete works on.
+	autoCond, autoArgs := autoSQL("")
+	keepQuery := `SELECT id FROM snapshots WHERE NOT ` + autoCond + ` ORDER BY taken_at DESC LIMIT ?`
+	if f.Label == LabelAuto {
+		keepQuery = `SELECT id FROM snapshots WHERE ` + autoCond + ` ORDER BY taken_at DESC LIMIT ?`
+	}
+	keepRows, err := s.db.QueryContext(ctx, keepQuery, append(autoArgs, keepLast)...)
 	if err != nil {
 		return 0, err
 	}
@@ -411,6 +451,11 @@ func (s *Store) DeleteSnapshots(ctx context.Context, f DeleteFilter) (int, error
 
 	if len(where) == 0 {
 		return 0, fmt.Errorf("delete requires at least one filter (id, before, or label)")
+	}
+	// Without the label "auto" or an explicit ID, automatic rows are out of reach.
+	if f.Label != LabelAuto && f.ID == nil {
+		where = append(where, "NOT "+autoCond)
+		args = append(args, autoArgs...)
 	}
 
 	// Exclude kept IDs.
@@ -463,4 +508,76 @@ func (s *Store) loadPositions(ctx context.Context, snapshotID int64) ([]Position
 		positions = append(positions, p)
 	}
 	return positions, rows.Err()
+}
+
+// PruneAuto deletes automatic snapshots (label LabelAuto and an automatic note, see
+// IsAutoNote) taken
+// more than keepDays days before now, except the first of each UTC day. It never
+// touches a snapshot with any other label, so snapshots the owner or the model took
+// are safe. It returns the number of snapshots deleted. keepDays must be positive:
+// zero would delete every day's first snapshot too.
+func (s *Store) PruneAuto(ctx context.Context, keepDays int) (int, error) {
+	return s.pruneAutoAt(ctx, time.Now(), keepDays)
+}
+
+func (s *Store) pruneAutoAt(ctx context.Context, now time.Time, keepDays int) (int, error) {
+	if keepDays <= 0 {
+		return 0, fmt.Errorf("snapshot: PruneAuto keepDays must be positive (got %d)", keepDays)
+	}
+	cutoff := now.UTC().AddDate(0, 0, -keepDays)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	autoCond, autoArgs := autoSQL("")
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, taken_at FROM snapshots WHERE `+autoCond+` ORDER BY taken_at ASC, id ASC`, autoArgs...)
+	if err != nil {
+		return 0, err
+	}
+	var doomed []int64
+	firstOfDay := map[string]bool{}
+	for rows.Next() {
+		var id int64
+		var takenAt string
+		if err := rows.Scan(&id, &takenAt); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		t, perr := time.Parse(time.RFC3339, takenAt)
+		if perr != nil {
+			continue // not a time we wrote: leave it
+		}
+		t = t.UTC()
+		day := t.Format("2006-01-02")
+		first := !firstOfDay[day]
+		firstOfDay[day] = true
+		if t.Before(cutoff) && !first {
+			doomed = append(doomed, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+
+	// Positions are deleted explicitly although foreign_keys is on for every
+	// connection (see NewStore): the cascade is then redundant, not required. The
+	// snapshot delete repeats the automatic test, so nothing else can be removed.
+	for _, id := range doomed {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM positions WHERE snapshot_id = ?`, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM snapshots WHERE id = ? AND `+autoCond, append([]any{id}, autoArgs...)...); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(doomed), nil
 }

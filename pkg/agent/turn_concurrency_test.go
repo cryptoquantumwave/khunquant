@@ -948,26 +948,24 @@ func TestSpawnAsync_SurvivesParentNormalReturn(t *testing.T) {
 	// Watch sub-turn lifecycle events for this parent's child.
 	var (
 		evMu    sync.Mutex
-		spawned = map[string]string{} // parent turn ID -> child ID
-		ended   = map[string]error{}  // child ID -> how it ended
+		spawned = map[string]string{}        // parent turn ID -> child ID
+		ended   = map[string]SubTurnStatus{} // child ID -> how it ended
 		evSeen  = make(chan struct{}, 1)
 	)
-	originalEmit := MockEventBus.Emit
-	MockEventBus.Emit = func(e any) {
+	al.setEventSink(eventSinkFunc(func(e any) {
 		evMu.Lock()
 		switch ev := e.(type) {
 		case SubTurnSpawnEvent:
 			spawned[ev.ParentID] = ev.ChildID
 		case SubTurnEndEvent:
-			ended[ev.ChildID] = ev.Err
+			ended[ev.ChildID] = ev.Status
 		}
 		evMu.Unlock()
 		select {
 		case evSeen <- struct{}{}:
 		default:
 		}
-	}
-	defer func() { MockEventBus.Emit = originalEmit }()
+	}))
 
 	res := awaitTurn(t, "the parent turn", startTurn(context.Background(), al, "PARENT_TURN", "agent:main:spawn-survives"))
 	if res.err != nil || res.response != "parent done" {
@@ -994,11 +992,11 @@ func TestSpawnAsync_SurvivesParentNormalReturn(t *testing.T) {
 	for {
 		evMu.Lock()
 		childID, started := spawned[ts.turnID]
-		err, done := ended[childID]
+		status, done := ended[childID]
 		evMu.Unlock()
 		if started && done {
-			if err != nil {
-				t.Fatalf("spawned sub-turn ended with %v, want a clean finish", err)
+			if status != SubTurnOK {
+				t.Fatalf("spawned sub-turn ended with status %q, want a clean finish", status)
 			}
 			break
 		}

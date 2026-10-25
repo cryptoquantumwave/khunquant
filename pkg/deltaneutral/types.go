@@ -188,9 +188,14 @@ type SpotState struct {
 
 // FuturesState describes the futures leg's position and risk metrics
 type FuturesState struct {
-	Available         bool
-	MarkPrice         float64
-	Contracts         float64
+	Available bool
+	MarkPrice float64
+	// Contracts is a CONTRACT COUNT, not a base quantity: the base quantity is
+	// Contracts x ContractSize.
+	Contracts float64
+	// ContractSize is the base-currency size of one contract (OKX CHZ: 10, OKX BTC:
+	// 0.01, Binance USDT-M: 1); 0 when it could not be determined.
+	ContractSize      float64
 	NotionalUSDT      float64
 	UnrealizedPnLUSDT float64
 	LiquidationPrice  float64
@@ -215,6 +220,22 @@ type EvaluationInput struct {
 	EntrySpreadPct float64 // pre-computed entry spread: (futuresMarkPrice - spotPrice) / spotPrice * 100
 	ExitSpreadPct  float64 // pre-computed exit spread: (spotPrice - futuresMarkPrice) / futuresMarkPrice * 100
 	Now            time.Time
+
+	// PnLUSDT is the plan's profit and loss so far (net unrealized of both legs plus
+	// the funding and fees booked), valid only when PnLKnown. Without it the profit
+	// progress scores nothing and neither the profit target nor the drawdown limit
+	// can be judged.
+	PnLUSDT  float64
+	PnLKnown bool
+	// Liquidity is the measured liquidity of the plan's markets, nil when nothing
+	// was measured (the liquidity component then scores nothing).
+	Liquidity *LiquidityInfo
+}
+
+// LiquidityInfo is a measurement of how deep the plan's markets are.
+type LiquidityInfo struct {
+	// SlippageBps is the slippage, in basis points, of closing the plan's size.
+	SlippageBps float64
 }
 
 // HealthEvaluation is the output of the deterministic health evaluator
@@ -226,4 +247,30 @@ type HealthEvaluation struct {
 	RecommendedAction string
 	DataStatus        string
 	Err               error
+
+	// LegMismatchPct is how far the spot quantity and the futures base quantity
+	// (contracts x contract size) are apart, in percent of the spot quantity; 0 when
+	// it could not be measured. It is not persisted with the snapshot.
+	LegMismatchPct float64
+
+	// PnLUSDT and PnLKnown echo the profit and loss the evaluation was given.
+	PnLUSDT  float64
+	PnLKnown bool
+}
+
+// CooldownDuration is the plan's alert cooldown as a duration. Valid values of
+// RiskPolicy.AlertCooldownDuration are "1h", "4h", "8h", "1d" and "3d"; anything else
+// is one hour.
+func CooldownDuration(s string) time.Duration {
+	switch s {
+	case "4h":
+		return 4 * time.Hour
+	case "8h":
+		return 8 * time.Hour
+	case "1d":
+		return 24 * time.Hour
+	case "3d":
+		return 3 * 24 * time.Hour
+	}
+	return time.Hour
 }

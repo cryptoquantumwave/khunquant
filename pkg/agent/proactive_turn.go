@@ -87,6 +87,14 @@ type ProactiveTurnRequest struct {
 	// allows. Definitions are most of what a turn's first call carries besides
 	// its prompt, so a short list is the main lever on its size.
 	Tools []string
+	// CallerSuppliesChanges says the Prompt already carries the changes the world
+	// model holds, rendered from a window of the caller's own (the heartbeat sweep),
+	// so the turn leaves out the background "changes since you last looked" section
+	// that a proactive turn otherwise carries. The turn then does not move that
+	// section's window either (its mark, MarkProactive): it was not shown, and the
+	// next turn that does show it still sees the changes since ITS last look. The
+	// default (false) is every other turn exactly as before.
+	CallerSuppliesChanges bool
 }
 
 // ProactiveTurnResult is what a proactive turn decided. Nothing in it has been
@@ -253,6 +261,7 @@ func (al *AgentLoop) RunProactiveTurn(
 		ModelOverride:        model,
 		NoOutbound:           true,
 		Report:               report,
+		NoBackgroundSections: req.CallerSuppliesChanges,
 	})
 
 	res.InputTokens, res.OutputTokens, res.Model = report.snapshot()
@@ -274,6 +283,12 @@ func (al *AgentLoop) RunProactiveTurn(
 	if res.Decisions == nil {
 		// Out of iterations with nothing declared: no decision to act on.
 		return res, errors.New("proactive turn: ended at max_tool_iterations without a decision")
+	}
+
+	// The turn completed with a decision: whatever the background section showed it
+	// has been seen.
+	if !req.CallerSuppliesChanges {
+		al.background.turnCompleted(ctx)
 	}
 
 	logger.InfoCF("agent", "Proactive turn finished", map[string]any{

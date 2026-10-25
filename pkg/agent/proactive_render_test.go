@@ -62,6 +62,21 @@ func blockLines(t *testing.T, block, nonce string) (body []string, trailer []str
 	return body, trailer[1:]
 }
 
+// Only id, trigger, severity, subject and title of a candidate reach the prompt: not
+// its Detail, its Quote (text from outside) and not its Evidence.
+func TestRenderCandidates_NeitherQuoteNorDetailNorEvidenceIsRendered(t *testing.T) {
+	const nonce = "0123456789abcdef"
+	c := cand("c1", proactive.SeverityWarning, true)
+	c.Quote, c.Detail = "QUOTED-TEXT-FROM-OUTSIDE", "DETAIL-LINE-NUMBERS"
+	c.Evidence = map[string]any{"message": "EVIDENCE-MESSAGE"}
+	block, _ := renderCandidates([]proactive.Candidate{c}, nonce)
+	for _, secret := range []string{"QUOTED-TEXT", "DETAIL-LINE", "EVIDENCE-MESSAGE"} {
+		if strings.Contains(block, secret) {
+			t.Fatalf("%s reached the prompt:\n%s", secret, block)
+		}
+	}
+}
+
 func TestRenderCandidates_UntrustedTextCannotForgeTheBlock(t *testing.T) {
 	const nonce = "0123456789abcdef"
 	block, refs := renderCandidates([]proactive.Candidate{

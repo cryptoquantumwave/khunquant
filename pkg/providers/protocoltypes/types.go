@@ -83,3 +83,10 @@ type ToolFunctionDefinition struct {
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
 }
+
+// ConversationStartPlaceholder is the user turn put in front of a history that
+// would otherwise open with an assistant message (a proactive message in a
+// brand-new session). Most chat APIs require a conversation to open with a user
+// turn. The history sanitizer adds it once; request builders that must not
+// reject a bare assistant opener check for it first.
+const ConversationStartPlaceholder = "(conversation start)"

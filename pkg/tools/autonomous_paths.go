@@ -20,8 +20,8 @@ import (
 // a new state directory or prompt file appears, add it here.
 //
 // Not listed on purpose: memory/*.md (including memory/MEMORY.md) and
-// HEARTBEAT.md. The spec lets autonomous turns keep notes, and the heartbeat's
-// alert ledger lives in MEMORY.md. They still influence later turns, which is
+// HEARTBEAT.md. The spec lets autonomous turns keep notes, and a legacy
+// heartbeat's alert ledger lives in MEMORY.md (a governed one has no write tool). They still influence later turns, which is
 // an accepted residual (SECURITY.md) left to a later trust phase.
 var autonomousProtectedPaths = []struct {
 	// Path is relative to the workspace, slash-separated, lower case. A
@@ -38,6 +38,7 @@ var autonomousProtectedPaths = []struct {
 	{"memory/dca", "the DCA plan store (plans, schedules, execution history)"},
 	{"memory/delta_neutral", "the delta-neutral plan store (plans, legs, history)"},
 	{"memory/snapshots", "the portfolio snapshot store"},
+	{"memory/proactive", "the proactive-agent store (proactive.db): attention budgets, intents, proposals and the journal that gate what the agent says and does unprompted"},
 	{"sandbox", "sandbox fixtures and the stored Webull session"},
 	{"whatsapp", "the WhatsApp session store (credentials)"},
 	{"pairing", "pending channel pairing requests (pairing/requests.json): access-control state, so a background turn must not plant or alter a pairing code"},

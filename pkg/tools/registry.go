@@ -425,6 +425,15 @@ func (r *ToolRegistry) List() []string {
 // will NOT be visible to the clone, preventing recursive subagent spawning.
 // The version counter is reset to 0 in the clone as it's a new independent registry.
 func (r *ToolRegistry) Clone() *ToolRegistry {
+	return r.CloneFiltered(nil)
+}
+
+// CloneFiltered is Clone limited to the tools keep returns true for (keep is
+// asked with the name the tool is registered under). A tool left out is not
+// merely hidden from the definitions: the clone does not have it, so a call to
+// it by name gets "tool not found" like any unknown tool. The receiver is not
+// changed. A nil keep keeps everything.
+func (r *ToolRegistry) CloneFiltered(keep func(name string) bool) *ToolRegistry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	clone := &ToolRegistry{
@@ -432,6 +441,9 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 		mediaStore: r.mediaStore,
 	}
 	for name, entry := range r.tools {
+		if keep != nil && !keep(name) {
+			continue
+		}
 		clone.tools[name] = &ToolEntry{
 			Tool:   entry.Tool,
 			IsCore: entry.IsCore,

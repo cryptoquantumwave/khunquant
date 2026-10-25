@@ -492,6 +492,15 @@
     "install_skill": {
       "enabled": true
     },
+    "load_skill": {
+      "enabled": true
+    },
+    "get_profile": {
+      "enabled": true
+    },
+    "update_profile": {
+      "enabled": true
+    },
     "list_dir": {
       "enabled": true
     },

@@ -491,6 +491,9 @@ func DefaultConfig() *Config {
 			InstallSkill: ToolConfig{
 				Enabled: true,
 			},
+			LoadSkill: ToolConfig{
+				Enabled: true, // read-only; light prompts list skills and rely on it
+			},
 			ListDir: ToolConfig{
 				Enabled: true,
 			},
@@ -673,6 +676,15 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 
+			// User profile. update_profile is on by default: it is gated by the
+			// owner rule and refused in background turns, not by being off.
+			GetProfile: ToolConfig{
+				Enabled: true,
+			},
+			UpdateProfile: ToolConfig{
+				Enabled: true,
+			},
+
 			// Security tools — disabled by default; opt-in for agent access to secrets
 			ConfigEncryptKeys: ToolConfig{
 				Enabled: false,
@@ -692,6 +704,7 @@ func DefaultConfig() *Config {
 			Enabled:  true,
 			Interval: 30,
 		},
+		Proactive: defaultProactiveConfig(),
 		Devices: DevicesConfig{
 			Enabled:    false,
 			MonitorUSB: true,

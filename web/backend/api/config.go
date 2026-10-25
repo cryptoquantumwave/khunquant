@@ -68,6 +68,9 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redactSecrets(tree)
+	// The owner's chat and sender IDs are not credentials, but they are masked
+	// here as on the proactive page; see config_owner.go for the save-side rule.
+	maskOwnerInTree(tree)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(tree); err != nil {
@@ -82,6 +85,10 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if !allowStateChange(w, r) {
 		return
 	}
+	// Serialise with the proactive owner routes: this save reads the stored
+	// owner and writes the whole file back.
+	h.proactive.cfgMu.Lock()
+	defer h.proactive.cfgMu.Unlock()
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -107,6 +114,15 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if onDisk, diskErr := h.configAsTree(); diskErr == nil {
 		restoreRedactedSecrets(raw, onDisk)
 	}
+	// The owner's IDs arrive masked (or omitted); put the stored ones back.
+	var storedOwner config.OwnerConfig
+	if diskCfg, diskErr := config.LoadConfig(h.configPath); diskErr == nil {
+		storedOwner = diskCfg.Proactive.Owner
+	}
+	if err = restoreOwnerIDs(raw, storedOwner, true); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	normalizedBody, err := json.Marshal(raw)
 	if err != nil {
 		http.Error(w, "Failed to normalize config payload", http.StatusBadRequest)
@@ -124,6 +140,10 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if execAllowRemoteOmitted(body) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
+	}
+	if cfg.Proactive.Owner, err = resolveOwnerSave(storedOwner, cfg.Proactive.Owner); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if errs := validateConfig(&cfg); len(errs) > 0 {
@@ -177,6 +197,10 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	if !allowStateChange(w, r) {
 		return
 	}
+	// Serialise with the proactive owner routes: this save reads the stored
+	// owner and writes the whole file back.
+	h.proactive.cfgMu.Lock()
+	defer h.proactive.cfgMu.Unlock()
 
 	patchBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -215,6 +239,12 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	// never edited; restore those from the on-disk values before merging, so
 	// the merge cannot overwrite a real secret with the placeholder.
 	restoreRedactedSecrets(patch, base)
+	// Likewise for the owner's IDs, which GET /api/config serves masked.
+	storedOwner := cfg.Proactive.Owner
+	if err = restoreOwnerIDs(patch, storedOwner, false); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Recursively merge patch into base
 	mergeMap(base, patch)
@@ -238,6 +268,10 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	// Restore secrets that round-tripped through JSON as "[NOT_HERE]".
 	if err := newCfg.SecurityCopyFrom(h.configPath); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load security config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if newCfg.Proactive.Owner, err = resolveOwnerSave(storedOwner, newCfg.Proactive.Owner); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

@@ -270,6 +270,15 @@ func buildRequestBody(
 		}
 	}
 
+	// The Messages API wants the conversation to open with a user turn; see the
+	// same step in the SDK-based Anthropic adapter.
+	if opensWithAssistantText(messages) {
+		apiMessages = append([]any{map[string]any{
+			"role":    "user",
+			"content": protocoltypes.ConversationStartPlaceholder,
+		}}, apiMessages...)
+	}
+
 	result["messages"] = apiMessages
 
 	// Set system prompt if present
@@ -414,6 +423,7 @@ func asFloat(v any) (float64, bool) {
 // non-empty name in conversation history.
 const unknownToolPlaceholder = "unknown_tool"
 
+
 // resolveToolCall resolves a ToolCall's name and arguments, using Function
 // as a fallback for fields that don't serialize (json:"-"). If both Name and
 // Function.Name are empty (or whitespace), name is set to
@@ -463,4 +473,17 @@ type contentBlock struct {
 type usageInfo struct {
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+}
+
+// opensWithAssistantText reports whether the first non-system message is a
+// plain-text assistant message. An assistant turn that carries tool calls is
+// deliberately left alone: it is a malformed history, not a proactive message.
+func opensWithAssistantText(messages []Message) bool {
+	for _, m := range messages {
+		if m.Role == "system" {
+			continue
+		}
+		return m.Role == "assistant" && len(m.ToolCalls) == 0
+	}
+	return false
 }

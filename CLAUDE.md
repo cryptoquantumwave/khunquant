@@ -160,6 +160,10 @@ See SECURITY.md for the full posture. The rules that new code most often breaks:
   with no class. Exits are trade tools too, so autonomous turns cannot call them. A turn-starting call
   site must tag its origin (`tools.WithToolOrigin`); a context built from `context.Background()`
   that runs a model-driven turn must carry the origin and `AutomationScope` over.
+- **A new read-class tool is visible to proactive turns automatically.** A read tool that sends model-chosen
+  data to a third party (as `web_fetch` does with its URL) must be excluded in `proactiveTurnMayCall`
+  (`pkg/tools/policy.go`). A turn the proactive pipeline starts goes through `agent.RunProactiveTurn` and never
+  tags `OriginProactive` itself.
 - **A new workspace state directory or prompt file goes in `autonomousProtectedPaths`**
   (`pkg/tools/autonomous_paths.go`): autonomous turns may write workspace files with
   `write_file`/`edit_file`/`append_file`, except under that list, so anything that acts as state,

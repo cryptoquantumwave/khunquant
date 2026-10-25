@@ -130,20 +130,35 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 }
 
 func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	_, err := c.SendWithIDs(ctx, msg)
+	return err
+}
+
+// SendWithIDs implements channels.IDReportingSender. It returns the ID of the
+// Discord message it created. The Manager has already split msg to the channel's
+// length limit, so one call creates one message.
+func (c *DiscordChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
-		return channels.ErrNotRunning
+		return nil, channels.ErrNotRunning
 	}
 
 	channelID := msg.ChatID
 	if channelID == "" {
-		return fmt.Errorf("channel ID is empty")
+		return nil, fmt.Errorf("channel ID is empty")
 	}
 
 	if len([]rune(msg.Content)) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return c.sendChunk(ctx, channelID, msg.Content, msg.ReplyToMessageID)
+	id, err := c.sendChunk(ctx, channelID, msg.Content, msg.ReplyToMessageID)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, nil
+	}
+	return []string{id}, nil
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -268,18 +283,25 @@ func (c *DiscordChannel) SendPlaceholder(ctx context.Context, chatID string) (st
 	return msg.ID, nil
 }
 
-func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, replyToID string) error {
+// sendChunk sends one message and returns its Discord message ID. If the send
+// times out, the message may still be created later; its ID is then not known.
+func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, replyToID string) (string, error) {
 	// Use the passed ctx for timeout control
 	sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 
-	done := make(chan error, 1)
+	type sendResult struct {
+		id  string
+		err error
+	}
+	done := make(chan sendResult, 1)
 	go func() {
+		var sent *discordgo.Message
 		var err error
 
 		// If we have an ID, we send the message as "Reply"
 		if replyToID != "" {
-			_, err = c.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			sent, err = c.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 				Content: content,
 				Reference: &discordgo.MessageReference{
 					MessageID: replyToID,
@@ -288,20 +310,24 @@ func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, repl
 			})
 		} else {
 			// Otherwise, we send a normal message
-			_, err = c.session.ChannelMessageSend(channelID, content)
+			sent, err = c.session.ChannelMessageSend(channelID, content)
 		}
 
-		done <- err
+		res := sendResult{err: err}
+		if sent != nil {
+			res.id = sent.ID
+		}
+		done <- res
 	}()
 
 	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("discord send: %w", channels.ErrTemporary)
+	case res := <-done:
+		if res.err != nil {
+			return "", fmt.Errorf("discord send: %w", channels.ErrTemporary)
 		}
-		return nil
+		return res.id, nil
 	case <-sendCtx.Done():
-		return sendCtx.Err()
+		return "", sendCtx.Err()
 	}
 }
 

@@ -62,7 +62,7 @@ func (f *dnFakeSpot) LoadMarkets(_ context.Context) (map[string]ccxt.MarketInter
 // TradingProvider
 func (f *dnFakeSpot) CreateOrder(_ context.Context, _, _, side string, amount float64, _ *float64, _ map[string]interface{}) (ccxt.Order, error) {
 	if f.orderErr {
-		return ccxt.Order{}, context.DeadlineExceeded
+		return ccxt.Order{}, &ccxt.Error{Type: "InvalidOrder", Message: "rejected"} // a definite refusal: nothing was placed
 	}
 	f.orders = append(f.orders, dnFakeSpotOrder{side: side, amount: amount})
 	id := "spot-order-1"
@@ -72,7 +72,12 @@ func (f *dnFakeSpot) CancelOrder(_ context.Context, _, _ string) (ccxt.Order, er
 	return ccxt.Order{}, nil
 }
 func (f *dnFakeSpot) FetchOrder(_ context.Context, _, _ string) (ccxt.Order, error) {
-	return ccxt.Order{}, nil
+	// A market order is filled in full by the time it is read back.
+	if len(f.orders) == 0 {
+		return ccxt.Order{}, nil
+	}
+	id, st, filled := "spot-order-1", "closed", f.orders[len(f.orders)-1].amount
+	return ccxt.Order{Id: &id, Status: &st, Filled: &filled}, nil
 }
 func (f *dnFakeSpot) FetchOpenOrders(_ context.Context, _ string) ([]ccxt.Order, error) {
 	return nil, nil
@@ -99,7 +104,7 @@ type dnFakeFutures struct {
 	*mockFuturesProvider
 	orderErr   bool
 	pnl        *float64 // unrealised PnL reported on the live position
-	noPosition bool // FetchFuturesPositions reports no live position (liquidated / closed by hand)
+	noPosition bool     // FetchFuturesPositions reports no live position (liquidated / closed by hand)
 
 	orders []broker.FuturesOrderRequest // every CreateFuturesOrder call that was accepted
 }
@@ -131,11 +136,18 @@ func (m *dnFakeFutures) LoadFuturesMarkets(_ context.Context) (map[string]ccxt.M
 }
 func (m *dnFakeFutures) CreateFuturesOrder(_ context.Context, req broker.FuturesOrderRequest) (ccxt.Order, error) {
 	if m.orderErr {
-		return ccxt.Order{}, context.DeadlineExceeded
+		return ccxt.Order{}, &ccxt.Error{Type: "InvalidOrder", Message: "rejected"} // a definite refusal: nothing was placed
 	}
 	m.orders = append(m.orders, req)
 	id := "fut-order-1"
 	return ccxt.Order{Id: &id}, nil
+}
+func (m *dnFakeFutures) FetchFuturesOrder(_ context.Context, _, _ string) (ccxt.Order, error) {
+	if len(m.orders) == 0 {
+		return ccxt.Order{}, nil
+	}
+	id, st, filled := "fut-order-1", "closed", m.orders[len(m.orders)-1].Amount
+	return ccxt.Order{Id: &id, Status: &st, Filled: &filled}, nil
 }
 func (m *dnFakeFutures) FetchFuturesPositions(_ context.Context, _ []string) ([]ccxt.Position, error) {
 	if m.noPosition {
@@ -175,6 +187,9 @@ func seedDNFakePlan(t *testing.T, store *deltaneutral.Store, name, status string
 	if err := store.UpdatePlan(context.Background(), p); err != nil {
 		t.Fatalf("update plan providers: %v", err)
 	}
+	// The confirmed open runs as the journaled workflow dn.open: give the tool an engine.
+	// A test whose open tool has another config arms its own over this one.
+	armDNOpen(t, leverageOnCfg(), store)
 	return id
 }
 

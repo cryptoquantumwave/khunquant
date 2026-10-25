@@ -192,6 +192,7 @@ func TestCSRFProtectedEndpoints(t *testing.T) {
 		{"PATCH", "/api/cron/jobs/test-id", "cron_update", "json", false},
 		{"DELETE", "/api/cron/jobs/test-id", "cron_delete", "empty", false},
 		{"POST", "/api/cron/jobs/test-id/run", "cron_run", "empty", false},
+		{"POST", "/api/control/kill", "control_kill", "empty", true},
 
 		// Pairing
 		{"POST", "/api/pairing/approve/test-code", "pairing_approve", "empty", false},

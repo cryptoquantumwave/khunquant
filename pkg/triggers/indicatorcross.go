@@ -202,7 +202,7 @@ func IndicatorCrossFactory(cfg CrossConfig) Factory {
 			return nil, err
 		}
 		return &indicatorCross{
-			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg, owner: OwnerAlertSpec(spec.Kind, spec.Origin),
+			id: spec.Kind + ":" + spec.ID, p: p, cfg: cfg, owner: OwnerAlertSpec(spec.Kind, spec.Origin), intent: intentOf(spec),
 			line: newLine(p.Direction, p.Threshold, p.hysteresis(), cooldownOrDefault(p.CooldownMin), p.fireIfAlready(), p.Recurring),
 		}, nil
 	}
@@ -216,6 +216,8 @@ type indicatorCross struct {
 	// owner: the spec is an alert the owner set (OwnerAlertSpec); its candidates are
 	// marked OwnerRequested.
 	owner bool
+	// intent: the intent the spec was compiled from, if any (see intentspec.go).
+	intent intentRef
 }
 
 func (t *indicatorCross) ID() string { return t.id }
@@ -298,5 +300,6 @@ func (t *indicatorCross) candidate(value float64, trust proactive.Trust, v world
 		crossDetail(thai, t.p.Provider, thr, now), msg,
 		ev, trust, t.p.CooldownMin, v.Now())
 	c.OwnerRequested = t.owner
+	c = t.intent.shape(KindIndicatorCross, t.p.Symbol, thai, c)
 	return c
 }

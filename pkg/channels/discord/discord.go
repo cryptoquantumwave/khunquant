@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/net/http/httpproxy"
 	"github.com/gorilla/websocket"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
@@ -26,6 +27,10 @@ import (
 
 const (
 	sendTimeout = 10 * time.Second
+
+	// maxMessageLength is the length Discord allows a message (the Manager splits
+	// to it).
+	maxMessageLength = 2000
 )
 
 var (
@@ -43,6 +48,9 @@ type DiscordChannel struct {
 	typingMu   sync.Mutex
 	typingStop map[string]chan struct{} // chatID → stop signal
 	botUserID  string                   // stored for mention checking
+	taps       seenTaps                 // interaction IDs already handled
+	// ackDeadline overrides interactionAckDeadline (tests).
+	ackDeadline time.Duration
 }
 
 func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordChannel, error) {
@@ -63,7 +71,7 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 		return nil, err
 	}
 	base := channels.NewBaseChannel("discord", cfg, bus, cfg.AllowFrom,
-		channels.WithMaxMessageLength(2000),
+		channels.WithMaxMessageLength(maxMessageLength),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
 		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
@@ -90,6 +98,10 @@ func (c *DiscordChannel) Start(ctx context.Context) error {
 	c.botUserID = botUser.ID
 
 	c.session.AddHandler(c.handleMessage)
+	// The one handler of button taps. Message components need no gateway intent,
+	// and nothing else in the process registers for interactions, so a tap is
+	// handled here and only here (a repeated delivery is dropped by c.taps).
+	c.session.AddHandler(c.handleInteraction)
 
 	if err := c.session.Open(); err != nil {
 		return fmt.Errorf("failed to open discord session: %w", err)
@@ -151,14 +163,43 @@ func (c *DiscordChannel) SendWithIDs(ctx context.Context, msg bus.OutboundMessag
 		return nil, nil
 	}
 
-	id, err := c.sendChunk(ctx, channelID, msg.Content, msg.ReplyToMessageID)
-	if err != nil {
-		return nil, err
+	// Buttons: the text fallback of the actions stays in the body (the Manager
+	// leaves it out for a channel that renders actions), and the buttons go on the
+	// last message only. If any action cannot be encoded the message goes without
+	// buttons: all of them or none.
+	chunks := []string{msg.Content}
+	var components []discordgo.MessageComponent
+	if len(msg.Actions) > 0 {
+		chunks = channels.AppendActionFooter(chunks, msg.Actions, maxMessageLength)
+		var cErr error
+		if components, cErr = buildComponents(msg.Actions); cErr != nil {
+			logger.WarnCF("discord", "Invalid message actions, sending the message without buttons", map[string]any{
+				"intervention_id": msg.InterventionID,
+				"actions":         len(msg.Actions),
+				"error":           cErr.Error(),
+			})
+			components = nil
+		}
 	}
-	if id == "" {
-		return nil, nil
+
+	var ids []string
+	replyTo := msg.ReplyToMessageID
+	for i, chunk := range chunks {
+		var comps []discordgo.MessageComponent
+		if i == len(chunks)-1 {
+			comps = components
+		}
+		id, err := c.sendChunk(ctx, channelID, chunk, replyTo, comps)
+		if err != nil {
+			return ids, err
+		}
+		if id != "" {
+			ids = append(ids, id)
+		}
+		// Only the first message is a reply.
+		replyTo = ""
 	}
-	return []string{id}, nil
+	return ids, nil
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -285,7 +326,9 @@ func (c *DiscordChannel) SendPlaceholder(ctx context.Context, chatID string) (st
 
 // sendChunk sends one message and returns its Discord message ID. If the send
 // times out, the message may still be created later; its ID is then not known.
-func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, replyToID string) (string, error) {
+func (c *DiscordChannel) sendChunk(
+	ctx context.Context, channelID, content, replyToID string, components []discordgo.MessageComponent,
+) (string, error) {
 	// Use the passed ctx for timeout control
 	sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
@@ -299,15 +342,17 @@ func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, repl
 		var sent *discordgo.Message
 		var err error
 
-		// If we have an ID, we send the message as "Reply"
-		if replyToID != "" {
-			sent, err = c.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-				Content: content,
-				Reference: &discordgo.MessageReference{
+		// If we have an ID, we send the message as "Reply"; buttons need the
+		// complex form too.
+		if replyToID != "" || len(components) > 0 {
+			data := &discordgo.MessageSend{Content: content, Components: components}
+			if replyToID != "" {
+				data.Reference = &discordgo.MessageReference{
 					MessageID: replyToID,
 					ChannelID: channelID,
-				},
-			})
+				}
+			}
+			sent, err = c.session.ChannelMessageSendComplex(channelID, data)
 		} else {
 			// Otherwise, we send a normal message
 			sent, err = c.session.ChannelMessageSend(channelID, content)
@@ -349,18 +394,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	}
 
 	// Check allowlist first to avoid downloading attachments for rejected users
-	sender := bus.SenderInfo{
-		Platform:    "discord",
-		PlatformID:  m.Author.ID,
-		CanonicalID: identity.BuildCanonicalID("discord", m.Author.ID),
-		Username:    m.Author.Username,
-	}
-	// Build display name
-	displayName := m.Author.Username
-	if m.Author.Discriminator != "" && m.Author.Discriminator != "0" {
-		displayName += "#" + m.Author.Discriminator
-	}
-	sender.DisplayName = displayName
+	sender := discordSender(m.Author)
 
 	if !c.IsAllowedSender(sender) {
 		logger.DebugCF("discord", "Message rejected by allowlist", map[string]any{
@@ -485,6 +519,24 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	c.HandleMessage(c.ctx, peer, m.ID, senderID, m.ChannelID, content, mediaPaths, metadata, sender)
 }
 
+// discordSender is the sender of a message or a tap in the one canonical form
+// ("discord:<id>") the allow-list and the control path compare.
+func discordSender(u *discordgo.User) bus.SenderInfo {
+	sender := bus.SenderInfo{
+		Platform:    "discord",
+		PlatformID:  u.ID,
+		CanonicalID: identity.BuildCanonicalID("discord", u.ID),
+		Username:    u.Username,
+	}
+	// Build display name
+	displayName := u.Username
+	if u.Discriminator != "" && u.Discriminator != "0" {
+		displayName += "#" + u.Discriminator
+	}
+	sender.DisplayName = displayName
+	return sender
+}
+
 // startTyping starts a continuous typing indicator loop for the given chatID.
 // It stops any existing typing loop for that chatID before starting a new one.
 func (c *DiscordChannel) startTyping(chatID string) {
@@ -578,7 +630,11 @@ func applyDiscordProxy(session *discordgo.Session, proxyAddr string) error {
 		}
 		proxyFunc = http.ProxyURL(proxyURL)
 	} else if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
-		proxyFunc = http.ProxyFromEnvironment
+		// Read the environment now, as the check above did. http.ProxyFromEnvironment
+		// caches it once per process, so an earlier call anywhere in the process
+		// would make this channel ignore the proxy the check just saw.
+		envProxy := httpproxy.FromEnvironment().ProxyFunc()
+		proxyFunc = func(r *http.Request) (*url.URL, error) { return envProxy(r.URL) }
 	}
 
 	if proxyFunc == nil {

@@ -1,0 +1,23 @@
+Unwind review (DRY-RUN):
+  Plan:                    unwind-golden (ID 1)
+  Status:                  active
+
+Leg 1 (Futures Close):
+  Provider/Account:        dnfake / futures
+  Symbol:                  BTC/USDT:USDT
+  Side:                    (opposite of short)
+  Amount:                  10 base (recorded)
+  Order Type:              market (reduce-only)
+
+Leg 2 (Spot Sell):
+  Provider/Account:        dnfake / main
+  Symbol:                  BTC/USDT
+  Side:                    sell
+  Amount:                  10 tokens (recorded)
+  Order Type:              market
+
+Estimated Closure Costs:
+  Est. Exit Cost (USDT):   0.00
+
+
+Set confirm=true to execute closure.

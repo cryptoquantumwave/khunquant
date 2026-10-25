@@ -48,7 +48,7 @@ type ProactiveConfig struct {
 	Triggers   TriggersConfig           `json:"triggers"   envPrefix:"KHUNQUANT_PROACTIVE_TRIGGERS_"`
 	Intents    ToggleConfig             `json:"intents"    envPrefix:"KHUNQUANT_PROACTIVE_INTENTS_"`
 	Approvals  ApprovalsConfig          `json:"approvals"`
-	Mandates   ToggleConfig             `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
+	Mandates   MandatesConfig           `json:"mandates"   envPrefix:"KHUNQUANT_PROACTIVE_MANDATES_"`
 	Cognition  CognitionConfig          `json:"cognition"`
 	Policy     ModeConfig               `json:"policy"     envPrefix:"KHUNQUANT_PROACTIVE_POLICY_"`
 	News       ToggleConfig             `json:"news"       envPrefix:"KHUNQUANT_PROACTIVE_NEWS_"`
@@ -160,6 +160,14 @@ const MaxTriggerParamBytes = 4 << 10
 // ToggleConfig is a single on/off switch.
 type ToggleConfig struct {
 	Enabled bool `json:"enabled" env:"ENABLED"`
+}
+
+// MandatesConfig is proactive.mandates: standing permissions for deterministic DCA runs.
+type MandatesConfig struct {
+	Enabled bool `json:"enabled" env:"ENABLED"`
+	// PriceMovePct: a mandated run asks instead of buying when the price moved more
+	// than this many percent since the plan's last execution (0 = the default, 5).
+	PriceMovePct float64 `json:"price_move_pct,omitempty" env:"PRICE_MOVE_PCT"`
 }
 
 // defaultProactiveConfig is the shipped default: proactive off, everything

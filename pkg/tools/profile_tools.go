@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
-	"github.com/cryptoquantumwave/khunquant/pkg/identity"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
@@ -259,44 +258,27 @@ func (t *UpdateProfileTool) Execute(ctx context.Context, args map[string]any) *T
 // authorize decides whether this turn may change the profile. It returns the
 // name to record as the author, or a refusal message for the model.
 func (t *UpdateProfileTool) authorize(ctx context.Context) (by, refusal string) {
-	origin := ToolOrigin(ctx)
-	switch {
-	case origin == "" || IsAutonomousOrigin(origin):
+	by, verdict := checkOwnerTurn(ctx, t.cfg, true)
+	switch verdict {
+	case ownerYes:
+		return by, ""
+	case ownerBackground:
 		return "", "update_profile is not available in background or scheduled turns: only the owner, in a conversation, can change the profile"
-	case origin == OriginInternal:
-		if ToolChannel(ctx) != cliChannel {
-			return "", "update_profile can only be used by the owner in a chat or at the command line, not from an automated turn"
-		}
-		return cliChannel, ""
-	case origin == OriginRemote:
-		sender := canonicalSender(ctx)
-		if t.cfg == nil {
-			return "", ownerSetupHint
-		}
-		route, ok := t.cfg.Proactive.OwnerRoute()
-		if !ok {
-			return "", "No owner is configured, so the profile cannot be changed from a chat. " + ownerSetupHint
-		}
-		if sender == "" || !strings.EqualFold(sender, route.SenderID) {
-			return "", "Only the owner can change the profile, and this message is not from the configured owner. " + ownerSetupHint
-		}
-		return sender, ""
+	case ownerAutomated:
+		return "", "update_profile can only be used by the owner in a chat or at the command line, not from an automated turn"
+	case ownerSubTurn:
+		return "", "update_profile can only be used by the owner in their own message, not by a delegated task (a subagent): the profile can only be changed by the owner in their own chat or at the command line"
+	case ownerNoConfig:
+		return "", ownerSetupHint
+	case ownerNoOwner:
+		return "", "No owner is configured, so the profile cannot be changed from a chat. " + ownerSetupHint
+	case ownerOther:
+		return "", "Only the owner can change the profile, and this message is not from the configured owner. " + ownerSetupHint
 	}
 	return "", "update_profile is not available in this kind of turn"
 }
 
 const ownerSetupHint = "To become the owner, send /whoami in your chat to see your sender id, then run `khunquant owner set` on the machine running KhunQuant."
-
-// canonicalSender returns the turn's sender as "platform:id". Channels set the
-// sender to that form already; a raw id is qualified with the turn's channel,
-// the way the allow-list falls back.
-func canonicalSender(ctx context.Context) string {
-	sender := ToolSender(ctx)
-	if platform, id, ok := identity.ParseCanonicalID(sender); ok {
-		return identity.BuildCanonicalID(platform, id)
-	}
-	return identity.BuildCanonicalID(ToolChannel(ctx), sender)
-}
 
 func changedProfileFields(a, b intent.Profile) []string {
 	type field struct {

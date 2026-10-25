@@ -14,7 +14,7 @@ import (
 
 var allKinds = []string{
 	KindPriceCross, KindIndicatorCross, KindDCADue, KindDNHealth, KindExternal,
-	KindMoveVsVol, KindDrawdown, KindAllocationDrift, KindLiquidationDistance, KindDataStale,
+	KindMoveVsVol, KindDrawdown, KindAllocationDrift, KindLiquidationDistance, KindDataStale, KindTimeAt,
 }
 
 func TestOwnerAlertSpec(t *testing.T) {
@@ -49,14 +49,14 @@ func TestOwnerAlertSpec(t *testing.T) {
 		}
 	}
 	// No other kind, whatever the origin.
-	if len(allKinds) != 10 {
-		t.Fatalf("the table must cover all ten kinds, has %d", len(allKinds))
+	if len(allKinds) != 11 {
+		t.Fatalf("the table must cover all eleven kinds, has %d", len(allKinds))
 	}
 	for _, k := range allKinds {
-		if k == KindPriceCross || k == KindIndicatorCross {
+		if k == KindPriceCross || k == KindIndicatorCross || k == KindTimeAt {
 			continue
 		}
-		for _, o := range []string{OriginSetPriceAlert, OriginSetIndicatorAlert, MigratedOriginPrefix + "1", "builtin", PortfolioSpecOrigin, DCASpecOrigin} {
+		for _, o := range []string{OriginSetPriceAlert, OriginSetIndicatorAlert, MigratedOriginPrefix + "1", "builtin", PortfolioSpecOrigin, DCASpecOrigin, IntentOrderOrigin("abc")} {
 			if OwnerAlertSpec(k, o) {
 				t.Errorf("OwnerAlertSpec(%q, %q) = true", k, o)
 			}
@@ -169,9 +169,9 @@ func markedFires(kind string) evalFn {
 }
 
 // The registry clears the mark from every candidate whose spec is not an owner's
-// alert, for all ten kinds and for the origins an owner's alert has, and counts it.
+// alert, for all eleven kinds and for the origins an owner's alert has, and counts it.
 func TestOwnerAlert_RegistryClearsTheMarkFromEveryOtherSpec(t *testing.T) {
-	origins := []string{OriginSetPriceAlert, OriginSetIndicatorAlert, MigratedOriginPrefix + "j1", "builtin", "test", "intent"}
+	origins := []string{OriginSetPriceAlert, OriginSetIndicatorAlert, MigratedOriginPrefix + "j1", "builtin", "test", "intent", IntentOrigin("abc"), IntentOrderOrigin("abc")}
 	for _, kind := range allKinds {
 		for _, origin := range origins {
 			t.Run(kind+"/"+origin, func(t *testing.T) {

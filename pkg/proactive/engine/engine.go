@@ -141,6 +141,12 @@ type Options struct {
 	Bus   Publisher
 	Clock Clock
 
+	// Housekeepers are called every second after the four stages, on the pipeline
+	// goroutine, like a stage that implements Housekeeper. They are for work that
+	// belongs to no stage (the intent ledger's expiry). Each must be quick, local
+	// and throttle itself.
+	Housekeepers []Housekeeper
+
 	// InboxSize and MaxSubjects default to DefaultInboxSize and DefaultMaxSubjects.
 	InboxSize   int
 	MaxSubjects int
@@ -185,7 +191,9 @@ type Engine struct {
 	bus  Publisher
 	clk  Clock
 
-	in      *inbox
+	extraHousekeepers []Housekeeper
+
+	in     *inbox
 	c       *counters
 	running atomic.Bool
 
@@ -213,8 +221,8 @@ func New(o Options) *Engine {
 	c := &counters{}
 	return &Engine{
 		wm: o.WorldModel, ev: o.Evaluator, at: o.Attention, disp: o.Dispatcher,
-		bus: o.Bus, clk: o.Clock,
-		in: newInbox(o.InboxSize, o.MaxSubjects, c), c: c,
+		bus: o.Bus, clk: o.Clock, extraHousekeepers: o.Housekeepers,
+		in:newInbox(o.InboxSize, o.MaxSubjects, c), c: c,
 		warned: map[string]time.Time{},
 	}
 }
@@ -512,5 +520,8 @@ func (e *Engine) housekeep(ctx context.Context) {
 		if h, ok := s.stage.(Housekeeper); ok {
 			e.stage(s.name, func() { h.Housekeep(ctx, now) })
 		}
+	}
+	for _, h := range e.extraHousekeepers {
+		e.stage("housekeeper", func() { h.Housekeep(ctx, now) })
 	}
 }

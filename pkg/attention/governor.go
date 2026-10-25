@@ -541,6 +541,30 @@ func (g *Governor) Mute(ctx context.Context, keyPrefix string, until time.Time, 
 	return nil
 }
 
+// MuteExact silences exactly the dedup key until the given time: a candidate whose
+// DedupKey equals it, and none that merely starts with it ("price:BTC:above:6" does
+// not silence "price:BTC:above:65000"). It is what a snooze is. Unlike Mute it is
+// not a prefix and never matches a trigger ID. Muting a key again replaces its deadline.
+func (g *Governor) MuteExact(ctx context.Context, dedupKey string, until time.Time, reason string) error {
+	dedupKey = strings.TrimSpace(dedupKey)
+	if dedupKey == "" {
+		return errors.New("attention: mute needs a dedup key")
+	}
+	now := g.clock()
+	if !until.After(now) {
+		return errors.New("attention: mute deadline is not in the future")
+	}
+	reason = clampRunes(reason, maxMuteReasonRunes)
+	_, err := g.db.ExecContext(ctx,
+		`INSERT INTO attention_mutes (key, until_ms, reason, created_ms, exact) VALUES (?, ?, ?, ?, 1)
+		 ON CONFLICT(key) DO UPDATE SET until_ms = excluded.until_ms, reason = excluded.reason, created_ms = excluded.created_ms, exact = 1`,
+		"="+dedupKey, until.UnixMilli(), reason, now.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("attention: mute: %w", err)
+	}
+	return nil
+}
+
 // Unmute removes the mute with exactly this prefix. Unmuting a prefix that is
 // not muted is not an error.
 func (g *Governor) Unmute(ctx context.Context, keyPrefix string) error {

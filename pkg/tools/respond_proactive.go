@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
@@ -74,7 +75,7 @@ func (t *RespondProactiveTool) Description() string {
 }
 
 func (t *RespondProactiveTool) Parameters() map[string]any {
-	return map[string]any{
+	params := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"decision": map[string]any{
@@ -111,6 +112,16 @@ func (t *RespondProactiveTool) Parameters() map[string]any {
 		},
 		"required": []string{"decision"},
 	}
+	if t.approvals {
+		// Only while approvals are on: the schema is part of every wake-up's first
+		// call, and without approvals there is no proposal to refer to.
+		params["properties"].(map[string]any)["proposal_ref"] = map[string]any{
+			"type":        "string",
+			"maxLength":   approval.CodeLen,
+			"description": "propose: the code propose_order returned.",
+		}
+	}
+	return params
 }
 
 func (t *RespondProactiveTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -179,15 +190,33 @@ func (t *RespondProactiveTool) Execute(ctx context.Context, args map[string]any)
 		sev = capSev
 	}
 
-	if kind == proactive.DecidePropose && !t.approvals {
-		kind = proactive.DecideAsk
-		notes = append(notes, "approvals are off, so this was recorded as ask")
+	proposalRef, err := proactiveStringArg(args, "proposal_ref")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	proposalRef = approval.NormalizeCode(proposalRef)
+	if kind == proactive.DecidePropose {
+		scope := ProposalScopeFrom(ctx)
+		switch {
+		case !t.approvals:
+			kind = proactive.DecideAsk
+			notes = append(notes, "approvals are off, so this was recorded as ask")
+		case proposalRef == "" || scope == nil || !scope.Created(proposalRef):
+			// A propose names a proposal this turn created through propose_order;
+			// anything else is only a question to the owner.
+			kind = proactive.DecideAsk
+			proposalRef = ""
+			notes = append(notes, "no proposal made in this turn matches proposal_ref, so this was recorded as ask")
+		}
 	}
 
 	d := proactive.Decision{
 		Kind:     kind,
 		Severity: sev,
 		DedupKey: normalizeDedupKey(dedupRaw),
+	}
+	if kind == proactive.DecidePropose {
+		d.ProposalRef = proposalRef
 	}
 	if kind != proactive.DecideSilent {
 		d.Text = text

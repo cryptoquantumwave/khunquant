@@ -14,6 +14,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers/intents"
 )
 
 const (
@@ -56,12 +57,14 @@ type agentTurnRunner struct{ run proactiveRunner }
 
 func (a agentTurnRunner) RunProactiveTurn(ctx context.Context, req engine.TurnRequest) (engine.TurnResult, error) {
 	res, err := a.run.RunProactiveTurn(ctx, agent.ProactiveTurnRequest{
-		Kind:         req.Kind,
-		Prompt:       req.Prompt,
-		Candidates:   req.Candidates,
-		ForcedSkills: req.ForcedSkills,
-		Deadline:     req.Deadline,
-		Model:        req.Model,
+		Kind:           req.Kind,
+		Prompt:         req.Prompt,
+		Candidates:     req.Candidates,
+		ForcedSkills:   req.ForcedSkills,
+		Deadline:       req.Deadline,
+		Model:          req.Model,
+		DeliverNow:     req.DeliverNow,
+		InterventionID: req.InterventionID,
 	})
 	return engine.TurnResult{
 		Decisions: res.Decisions, FinalText: res.FinalText, ContractViolated: res.ContractViolated,
@@ -109,6 +112,13 @@ type perceptionRuntime struct {
 
 	// clock is the clock source, when it is among the sources (for its counters).
 	clock *sources.ClockSource
+
+	// intentComp is the intent compiler, when there is a trigger registry to compile
+	// into (intents_wiring.go). agentLoop is who it tells.
+	intentComp   *intents.Compiler
+	intentCancel context.CancelFunc
+	intentDone   chan struct{}
+	agentLoop    *agent.AgentLoop
 
 	// devicesTakenOver: the device adapter is among the sources, so the legacy
 	// device service must not be started.
@@ -158,12 +168,15 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	rt.dispatch = engine.NewDefaultDispatcher(ob)
 	rt.composer, _ = ob.Composer.(*engine.Composer) // set by buildAttention, before the outbox ran
 
-	opts := engine.Options{Attention: ob, Dispatcher: rt.dispatch}
+	// A live execute_dca candidate (a plan with a mandate) goes to the dca.execute
+	// workflow; every other candidate goes to the outbox as before.
+	opts := engine.Options{Attention: ob, Dispatcher: dcaDispatcher{next: rt.dispatch, shared: d.Shared}}
 	if bus := d.Shared.eventBus(); bus != nil {
 		opts.Bus = bus
 	}
 	rt.attachWorldModel(d, &opts)
 	rt.attachTriggers(&d, &opts) // before the sources: the market source reads d.Demands
+	rt.attachIntents(d, &opts)
 	rt.engine = engine.New(opts)
 	rt.manager = perception.NewManager(rt.engine.Emitter())
 
@@ -180,7 +193,8 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 	}
 	rt.attachFinance(d)
 	rt.attachDCADue(d)
-	rt.attachDNPlans(d) // after the triggers, whose demands say which plans to watch
+	rt.attachDNPlans(d)      // after the triggers, whose demands say which plans to watch
+	rt.startIntentCompiler() // after the sources: it schedules reminders on the clock
 
 	engCtx, engCancel := context.WithCancel(context.Background())
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
@@ -333,7 +347,8 @@ func (rt *perceptionRuntime) stop() {
 	if rt == nil {
 		return
 	}
-	rt.stopFinanceFeed() // no new orders reach an engine that is stopping
+	rt.detachIntentTools() // the compiler itself stops after the drain, below
+	rt.stopFinanceFeed()   // no new orders reach an engine that is stopping
 	ctx, cancel := context.WithTimeout(context.Background(), perceptionSourcesStopTimeout)
 	rt.mgrCancel()
 	if err := rt.manager.Stop(ctx); err != nil {
@@ -349,6 +364,9 @@ func (rt *perceptionRuntime) stop() {
 	case <-time.After(perceptionEngineStopTimeout):
 		logger.WarnCF("perception", "Pipeline engine did not stop in time", nil)
 	}
+	// After the drain, so that a firing the drain committed is counted: the compiler
+	// writes what is queued as it stops.
+	rt.stopIntentCompiler()
 	// After the drain: every event the pipeline held is in the model now, and the
 	// final checkpoint writes it.
 	rt.stopWorldModel()

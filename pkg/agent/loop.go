@@ -49,6 +49,7 @@ type AgentLoop struct {
 	fallback         *providers.FallbackChain
 	channelManager   *channels.Manager
 	mediaStore       media.MediaStore
+	intentCompiler   atomic.Pointer[intentCompilerBox]
 	transcriber      voice.Transcriber
 	cmdRegistry      *commands.Registry
 	mcp              mcpRuntime
@@ -250,7 +251,15 @@ func registerSharedTools(
 	// The profile tools share one store (the user has one profile) and are
 	// built once here, so they reach both the CLI agent and the gateway and are
 	// rebuilt with the new config on every reload. See profile_wiring.go.
-	profile := profileTools(cfg, openProfileStore(cfg))
+	profileStore := openProfileStore(cfg)
+	profile := profileTools(cfg, profileStore)
+	// The intent tools share that store and exist only while the intent ledger is
+	// on (proactive.enabled and proactive.intents.enabled); a reload builds them
+	// afresh, so switching it on or off takes effect without a restart.
+	profile = append(profile, intentTools(cfg, profileStore, al.intentCompilerRoute)...)
+	// propose_order exists only while approvals are on (proactive.enabled and
+	// proactive.approvals.enabled); a reload builds it afresh.
+	profile = append(profile, proposalTools(cfg)...)
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
@@ -1580,7 +1589,7 @@ func (al *AgentLoop) runAgentLoop(
 	// 1.5. Proactive context budget check: compress before LLM call
 	// rather than waiting for a 400 context-length error.
 	if !opts.NoHistory {
-		toolDefs := agent.Tools.ToProviderDefsFor(ctx)
+		toolDefs := agent.Tools.ToProviderDefsFor(tools.WithToolContext(ctx, opts.Channel, opts.ChatID))
 		if isOverContextBudget(agent.ContextWindow, messages, toolDefs, agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": opts.SessionKey})
@@ -1879,7 +1888,9 @@ func (al *AgentLoop) runLLMIteration(
 		// Build tool definitions
 		// Definitions are filtered by the same predicate that gates execution, so
 		// an autonomous turn is never shown a tool it would be refused.
-		providerToolDefs := agent.Tools.ToProviderDefsFor(ctx)
+		// The channel is part of "is this the owner in a conversation", which
+		// propose_order's definition depends on; ExecuteWithContext adds it the same way.
+		providerToolDefs := agent.Tools.ToProviderDefsFor(tools.WithToolContext(ctx, opts.Channel, opts.ChatID))
 
 		// Log LLM request details
 		logger.DebugCF("agent", "LLM request",
@@ -2284,6 +2295,12 @@ func (al *AgentLoop) runLLMIteration(
 		// Save assistant message with tool calls to session
 		agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
 
+		// The calls of one response run concurrently. A proactive turn's trust is
+		// lowered by any tool that reads outside text, so the whole batch is noted
+		// BEFORE any call of it runs: otherwise a propose_order beside a web_search
+		// would pass or fail by goroutine scheduling.
+		tools.NoteToolCalls(ctx, toolNames...)
+
 		// Execute tool calls in parallel
 		type indexedAgentResult struct {
 			result *tools.ToolResult
@@ -2651,6 +2668,8 @@ func (al *AgentLoop) handleCommand(
 // never shared between two buses.
 func armToolPolicy(cfg *config.Config, msgBus *bus.MessageBus) {
 	tools.SetPolicyConfig(cfg.TradingRisk.PaperTradingMode)
+	// Who the owner is and whether approvals are on, for propose_order's turn check.
+	tools.SetProposalConfig(cfg)
 	if ignored := tools.SetRequiredApprovals(cfg.Tools.ApprovalRequiredTools()); len(ignored) > 0 {
 		logger.WarnCF("agent", "Ignoring require_approval on tools that reduce exposure",
 			map[string]any{"tools": ignored})

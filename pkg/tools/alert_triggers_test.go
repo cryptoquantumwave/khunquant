@@ -296,6 +296,30 @@ func TestSetIndicatorAlertTool_CronPathUnchangedWhenNotLive(t *testing.T) {
 	}
 }
 
+// A spec compiled from an intent has an alert's kind and the owner-alert mark, but it is
+// not an alert the alert tools list or cancel: the intent tools own it.
+func TestAlertTools_IntentSpecsAreNeitherListedNorCancelled(t *testing.T) {
+	reg := &fakeAlertTriggers{live: true}
+	cronSvc := newTestCronServiceForAlerts(t)
+	price := NewSetPriceAlertTool(config.DefaultConfig(), cronSvc).WithTriggers(resolver(reg))
+	reg.specs = []triggers.Spec{
+		{ID: "01HINTENT", Kind: triggers.KindPriceCross, Mode: triggers.ModeLive, Origin: triggers.IntentOrigin("01HINTENT"), IntentID: "01HINTENT",
+			Params: json.RawMessage(`{"provider":"okx","symbol":"SOL/USDT","direction":"below","threshold":120,"message":"ZXQ-TITLE"}`)},
+		{ID: "01HORDER", Kind: triggers.KindIndicatorCross, Mode: triggers.ModeLive, Origin: triggers.IntentOrderOrigin("01HORDER"), IntentID: "01HORDER",
+			Params: json.RawMessage(`{}`)},
+	}
+	res := price.Execute(groupCtx, map[string]any{"action": "list"})
+	if strings.Contains(res.ForLLM, "01HINTENT") || strings.Contains(res.ForLLM, "ZXQ-TITLE") || strings.Contains(res.ForLLM, "01HORDER") {
+		t.Fatalf("an intent's spec is listed as an alert:\n%s", res.ForLLM)
+	}
+	for _, id := range []string{"01HINTENT", "01HORDER"} {
+		res = price.Execute(groupCtx, map[string]any{"action": "cancel", "id": id})
+		if !res.IsError || len(reg.specs) != 2 {
+			t.Fatalf("cancel %s: %+v; %d specs left", id, res, len(reg.specs))
+		}
+	}
+}
+
 func TestAlertTools_ListAndCancelAcrossBothKinds(t *testing.T) {
 	reg := &fakeAlertTriggers{live: true}
 	cronSvc := newTestCronServiceForAlerts(t)

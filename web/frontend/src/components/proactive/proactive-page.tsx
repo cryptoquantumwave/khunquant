@@ -8,6 +8,7 @@ import { DecisionsSection } from "@/components/proactive/decisions-section"
 import { ModesSection } from "@/components/proactive/modes-section"
 import { OwnerSection } from "@/components/proactive/owner-section"
 import { ProfileSection } from "@/components/proactive/profile-section"
+import { StopSection } from "@/components/proactive/stop-section"
 
 export function ProactivePage() {
   const { t } = useTranslation()
@@ -41,6 +42,7 @@ export function ProactivePage() {
               <ModesSection status={status} />
             </>
           )}
+          <StopSection />
           <ProfileSection />
           <DecisionsSection />
         </div>

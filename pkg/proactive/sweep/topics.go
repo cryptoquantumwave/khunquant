@@ -47,6 +47,7 @@ const (
 	classStale       = "stale"
 	classDCA         = "dca"
 	classExternal    = "external" // whatever the sender said: the key only
+	classReminder    = "reminder"
 )
 
 // What a topic's subject is, for the classes that are about one.
@@ -79,6 +80,7 @@ var kinds = map[string]kindInfo{
 	"data_stale":           {classStale, subjNone, 0},        // data_stale:<source>:stale<n>
 	"dca_due":              {classDCA, subjPlan, 1},          // dca_due:<plan>:<due ms>
 	"external":             {classExternal, subjNone, 0},     // external:<name>:<hash>
+	"time_at":              {classReminder, subjNone, 0},     // time_at:<intent>:<due ms>
 }
 
 // KnownKinds lists the trigger kinds the sweep has a class for, sorted.
@@ -112,6 +114,7 @@ var classWords = map[string][]string{
 	classHedge:       {"hedge", "hedged", "hedging"},
 	classStale:       {"stale", "outage", "unreachable", "offline", "disconnected", "lagging"},
 	classDCA:         {"dca"},
+	classReminder:    {"reminder", "reminders", "remind", "reminded"},
 }
 
 // A portfolio-wide drawdown is also said as "the portfolio is down 6%" or "below

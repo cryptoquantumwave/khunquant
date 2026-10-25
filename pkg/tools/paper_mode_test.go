@@ -598,6 +598,7 @@ func TestPaperMode_ReduceOnlyExitAllowedReal(t *testing.T) {
 		env := newPaperEnv(t, true)
 		armPolicy(t, true, defaultToolPolicies())
 		id := seedDNFakePlan(t, env.store, "mr5-unwind", "active")
+		armDNOpen(t, env.cfg, env.store) // the workflow's exchange sees paper mode too: an exit must stay real
 		// Unwind sizes only from the plan's recorded legs.
 		seedDNOpenLegs(t, env.store, id, deltaneutral.ExecutionStateBothLegsFilled, 10, 10)
 
@@ -650,6 +651,7 @@ var paperModeSkips = map[string]string{
 	NameUpdateDCAPlan:          "writes a plan row only; places no order",
 	NameUpdateDeltaNeutralPlan: "its one exchange call (live leverage on an active plan) is refused in the tool: TestPaperMode_UpdateDNPlanLeverageRejected",
 	NameInstallSkill:           "fetches and installs a skill; makes no exchange call",
+	NameProposeOrder:           "stores a proposal and sends a card; places nothing itself. The order is placed by the approval.order workflow, through TradingProviderFor (a simulation in paper mode) - TestApprovalBackend_PaperMode*",
 }
 
 func paperCases() map[string]paperCase {

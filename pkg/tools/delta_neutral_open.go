@@ -2,20 +2,21 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
-	"time"
-
-	"github.com/google/uuid"
+	"strings"
+	"sync/atomic"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
-	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
-// OpenDeltaNeutralPositionTool opens a delta-neutral position by executing the approval-mode
-// two-leg execution (futures hedge + spot buy), driving the T2.5 state machine.
+// OpenDeltaNeutralPositionTool opens a delta-neutral position: it checks the plan,
+// shows the dry-run, and on confirm starts the journaled two-leg workflow dn.open
+// (futures hedge + spot buy; see pkg/deltaneutral/workflows.go).
 type OpenDeltaNeutralPositionTool struct {
 	cfg   *config.Config
 	store *deltaneutral.Store
@@ -167,457 +168,117 @@ func (t *OpenDeltaNeutralPositionTool) Execute(ctx context.Context, args map[str
 		return UserResult(review)
 	}
 
-	// --- On confirm: execute the two-leg order (§7.9) ---
-
-	// Rate limit: both tokens up front (nothing is placed yet), so a missing second token
-	// cannot strand a half-open position. A dry-run above never reaches this point.
-	if r := allowDNLegs(plan.FuturesProvider, plan.SpotProvider); r != nil {
-		return r
+	// --- On confirm: start the journaled workflow dn.open (spec MR-309) ---
+	//
+	// The open is a durable workflow, not a function of this call: a crash between the
+	// legs resumes without a second order. The tool starts it, waits up to dnOpenWait
+	// and reports; the validation, the gates, the legs and the bookkeeping all
+	// happen in the workflow, which re-checks the plan and the exposure itself.
+	w := currentDNWorkflows()
+	if w == nil {
+		return ErrorResult("the workflow engine is not running, so a two-leg open cannot be made durable. " +
+			"Refusing to open: a crash between the legs could not be resumed. Nothing was placed.")
 	}
-
-	// Create an Execution record (T2.5 state machine entry)
-	now := time.Now()
-	// M-18: math/rand is seeded predictably and only spans 1e6 values, so two
-	// attempts for the same plan could collide on an ID that is the
-	// idempotency key for a two-leg live order.
-	attemptID := fmt.Sprintf("attempt_%d_%s", plan.ID, uuid.NewString())
-	exec := &deltaneutral.Execution{
-		PlanID:      plan.ID,
-		AttemptID:   attemptID,
-		State:       string(deltaneutral.ExecutionStateValidating),
-		RequestedAt: now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	execID, err := t.store.SaveExecution(ctx, exec)
+	id, err := w.Start(ctx, deltaneutral.KindOpen, deltaneutral.OpenInput{
+		PlanID: plan.ID, FirstLeg: deltaneutral.FirstLegType(false),
+		Origin: ToolOrigin(ctx), Sender: ToolSender(ctx),
+	})
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to save execution record: %v", err))
+		return ErrorResult(fmt.Sprintf("could not start the open workflow: %v. Nothing was placed.", err))
 	}
-	exec.ID = execID
-
-	// Determine first leg (default: futures first per FirstLegType)
-	spotLessLiquid := false // Could enhance per real market data; default to false
-	firstLegType := deltaneutral.FirstLegType(spotLessLiquid)
-
-	// Transition to awaiting_approval
-	exec.State = string(deltaneutral.ExecutionStateAwaitingApproval)
-	approvedNow := time.Now()
-	exec.ApprovedAt = &approvedNow
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update execution state: %v", err))
+	wctx, cancel := context.WithTimeout(ctx, dnOpenWait)
+	defer cancel()
+	wf, err := w.Wait(wctx, id)
+	if err != nil {
+		return UserResult(fmt.Sprintf("Opening plan %d is in progress (workflow %s); you will get a message when it finishes.", plan.ID, id))
 	}
+	return t.openResult(ctx, w, plan, id, wf)
+}
 
-	// Transition to placing_first_leg
-	exec.State = string(deltaneutral.ExecutionStatePlacingFirstLeg)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to update execution state: %v", err))
-	}
-
-	// Execute the first leg
-	var firstOut legOutcome
-	var firstLegErr error
-
-	if firstLegType == deltaneutral.LegTypeFutures {
-		firstOut, firstLegErr = t.executeFuturesLeg(ctx, plan, exec)
-	} else {
-		firstOut, firstLegErr = t.executeSpotLeg(ctx, plan, exec)
-	}
-
-	if !firstOut.Filled {
-		// No order was accepted for the first leg: nothing changed on the exchange, so
-		// failing the plan (re-openable) is safe. HasOpenExposure guards the retry.
-		failMsg := "first leg did not fill"
-		if firstLegErr != nil {
-			failMsg = firstLegErr.Error()
+// openResult turns the finished workflow into the tool's answer.
+func (t *OpenDeltaNeutralPositionTool) openResult(ctx context.Context, w DNWorkflows, plan *deltaneutral.Plan, id string, wf journal.Workflow) *ToolResult {
+	var res deltaneutral.OpenResult
+	steps, err := w.Steps(ctx, id)
+	for _, s := range steps {
+		if s.Name == "finalize" && len(s.Output) > 0 {
+			_ = json.Unmarshal(s.Output, &res)
 		}
-		exec.State = string(deltaneutral.ExecutionStateFirstLegFailed)
-		exec.ErrorMsg = failMsg
-		updateExecutionLogged(ctx, t.store, exec)
-
-		exec.State = string(deltaneutral.ExecutionStateFailed)
-		updateExecutionLogged(ctx, t.store, exec)
-
-		setPlanStatusLogged(ctx, t.store, plan.ID, deltaneutral.PlanStatusFailed)
-
-		if firstLegErr != nil {
-			return ErrorResult(fmt.Sprintf("first leg execution failed: %v. Second leg not placed. Position not opened.", firstLegErr))
-		}
-		return ErrorResult("first leg did not fill. Second leg not placed. Position not opened.")
 	}
-
-	// From here on an order has been accepted by the exchange: a real position exists.
-	// Every failure below must end in recovery_required, never "failed".
-	firstBkErr := firstOut.BookkeepingErr
-
-	// First leg filled — transition to first_leg_filled, then placing_second_leg
-	exec.State = string(deltaneutral.ExecutionStateFirstLegFilled)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
-	}
-
-	exec.State = string(deltaneutral.ExecutionStatePlacingSecondLeg)
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		return t.firstLegBookkeepingFailed(ctx, plan, exec, err, firstBkErr)
-	}
-
-	// Execute the second leg
-	var secondOut legOutcome
-	var secondLegErr error
-
-	if firstLegType == deltaneutral.LegTypeFutures {
-		// If futures was first, spot is second
-		secondOut, secondLegErr = t.executeSpotLeg(ctx, plan, exec)
-	} else {
-		// If spot was first, futures is second
-		secondOut, secondLegErr = t.executeFuturesLeg(ctx, plan, exec)
-	}
-	secondBkErr := secondOut.BookkeepingErr
-
-	if !secondOut.Filled {
-		// Second leg failed — unhedged exposure from the first leg.
-		secondMsg := "second leg did not fill"
-		if secondLegErr != nil {
-			secondMsg = secondLegErr.Error()
-		}
-		exec.State = string(deltaneutral.ExecutionStateSecondLegFailed)
-		exec.ErrorMsg = execErrMsg(secondMsg, firstBkErr)
-		updateExecutionLogged(ctx, t.store, exec)
-
-		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
-			"second leg failed — unhedged exposure detected. Run unwind_delta_neutral_position to close.", firstBkErr))
-
+	if err != nil || res.Result == "" {
 		return ErrorResult(fmt.Sprintf(
-			"CRITICAL: Second leg execution failed — UNHEDGED EXPOSURE. "+
-				"First leg filled but second leg failed/unfilled. "+
-				"Plan set to recovery_required. "+
-				"Run unwind_delta_neutral_position immediately to close the open position. Error: %v%s%s",
-			secondLegErr, bkNote(firstBkErr), note))
+			"The open workflow %s ended %s without a result%s. Check the plan's executions and the exchange positions before doing anything else; "+
+				"the plan may be recovery_required.", id, wf.Status, mapJoin(": ", wf.Error)))
 	}
-
-	if firstBkErr != nil || secondBkErr != nil {
-		// Both orders went through but at least one leg row is missing: the position is
-		// real but the plan's recorded quantities are incomplete.
-		note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
-			"both legs filled but a leg record could not be saved — reconcile the exchange positions manually.",
-			firstBkErr, secondBkErr))
+	switch res.Result {
+	case deltaneutral.ResultOpened:
+		return UserResult(fmt.Sprintf(
+			"Delta-neutral position successfully opened:\n"+
+				"  Plan:       %s (ID %d)\n"+
+				"  Attempt:    %s\n"+
+				"  Futures:    %s %s on %s\n"+
+				"  Spot:       %s %s on %s\n"+
+				"  Status:     active\n",
+			plan.Name, plan.ID, res.AttemptID,
+			plan.FuturesSide, plan.FuturesSymbol, plan.FuturesProvider,
+			plan.SpotSide, plan.SpotSymbol, plan.SpotProvider))
+	case deltaneutral.ResultRefused:
+		out := ErrorResult(res.Message + ". Nothing was placed.")
+		if strings.Contains(res.Message, broker.ErrRateLimited.Error()) {
+			out = out.WithError(broker.ErrRateLimited)
+		}
+		return out
+	case deltaneutral.ResultNotOpened:
+		return ErrorResult(fmt.Sprintf("%s. Second leg not placed. Position not opened.", res.Message))
+	case deltaneutral.ResultUnrecorded:
 		return ErrorResult(fmt.Sprintf(
-			"CRITICAL: both legs were filled on the exchange but a leg record could not be saved. "+
+			"CRITICAL: both legs were filled on the exchange but a leg record could not be saved (%s). "+
 				"Plan set to recovery_required and will NOT be re-opened. Verify the positions on the exchange; "+
-				"unwind cannot size an unrecorded leg, so close it manually (futures_close_position / create_order).%s%s%s",
-			bkNote(firstBkErr), bkNote(secondBkErr), note))
+				"unwind cannot size an unrecorded leg, so close it manually (futures_close_position / create_order).", res.Message))
 	}
-
-	// Both legs filled — success
-	exec.State = string(deltaneutral.ExecutionStateBothLegsFilled)
-	completedNow := time.Now()
-	exec.CompletedAt = &completedNow
-	if err := t.store.UpdateExecution(ctx, exec); err != nil {
-		note := escalateToRecovery(ctx, t.store, plan.ID, exec, fmt.Sprintf(
-			"both legs filled but the execution could not be finalized (%v). Legs are recorded; verify the plan state.", err))
-		return ErrorResult(fmt.Sprintf(
-			"both legs filled but the execution could not be finalized (%v). Plan set to recovery_required "+
-				"(it will NOT be re-opened); both legs are recorded, so unwind_delta_neutral_position can close it.%s",
-			err, note))
-	}
-
-	// Update plan: mark opened_at, set status to active
-	plan.OpenedAt = &completedNow
-	plan.Status = deltaneutral.PlanStatusActive
-	if err := t.store.UpdatePlan(ctx, plan); err != nil {
-		note := escalateToRecovery(ctx, t.store, plan.ID, nil, "")
-		return ErrorResult(fmt.Sprintf(
-			"both legs filled but the plan could not be updated to active (%v). Plan set to recovery_required "+
-				"(it will NOT be re-opened); both legs are recorded, so unwind_delta_neutral_position can close it.%s",
-			err, note))
-	}
-
-	return UserResult(fmt.Sprintf(
-		"Delta-neutral position successfully opened:\n"+
-			"  Plan:       %s (ID %d)\n"+
-			"  Attempt:    %s\n"+
-			"  Futures:    %s %s on %s\n"+
-			"  Spot:       %s %s on %s\n"+
-			"  Status:     active\n",
-		plan.Name, plan.ID,
-		attemptID,
-		plan.FuturesSide, plan.FuturesSymbol, plan.FuturesProvider,
-		plan.SpotSide, plan.SpotSymbol, plan.SpotProvider))
-}
-
-// firstLegBookkeepingFailed handles a failed execution-state write after the first leg
-// filled. The second leg is NOT placed (the store is unreliable), the plan goes to
-// recovery_required and the user is told to unwind.
-func (t *OpenDeltaNeutralPositionTool) firstLegBookkeepingFailed(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution, err, firstBkErr error) *ToolResult {
-	note := escalateToRecovery(ctx, t.store, plan.ID, exec, execErrMsg(
-		fmt.Sprintf("first leg filled but execution bookkeeping failed (%v); second leg NOT placed. Run unwind_delta_neutral_position.", err),
-		firstBkErr))
 	return ErrorResult(fmt.Sprintf(
-		"CRITICAL: first leg filled but the execution state could not be saved (%v). Second leg NOT placed — "+
-			"UNHEDGED EXPOSURE. Plan set to recovery_required; run unwind_delta_neutral_position.%s%s",
-		err, bkNote(firstBkErr), note))
+		"CRITICAL: the open did not complete and a position may be UNHEDGED: %s. "+
+			"Plan set to recovery_required (it will NOT be re-opened). A recovery has started: it reads what is really open on the exchange "+
+			"and asks you to approve closing exactly the orphaned quantity (reduce-only). Nothing is closed without your approval; "+
+			"you can also run unwind_delta_neutral_position.", res.Message))
 }
 
-// executeFuturesLeg places a futures order for the hedge leg and records an ExecutionLeg.
-func (t *OpenDeltaNeutralPositionTool) executeFuturesLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (legOutcome, error) {
-	fp, err := futuresProvider(ctx, t.cfg, plan.FuturesProvider, plan.FuturesAccount)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("futures provider: %w", err)
+func mapJoin(sep, s string) string {
+	if s == "" {
+		return ""
 	}
-
-	// Derive order side ("buy"/"sell") from position side ("long"/"short").
-	// OKX requires side="sell" to open a short; passing "short" causes a 51000 error.
-	entrySide, positionSide, err := futuresPositionSide(plan.FuturesSide)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("invalid futures_side %q: %w", plan.FuturesSide, err)
-	}
-
-	// Fetch mark price and market metadata to compute the correct contract count.
-	// Raw notional/markPrice gives base-currency units (e.g. 1351 CHZ), but exchanges
-	// expect the number of contracts (e.g. 135 for CHZ where contractSize=10 CHZ each).
-	markPrice, err := fp.FetchFuturesMarkPrice(ctx, plan.FuturesSymbol)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("fetch mark price: %w", err)
-	}
-	if markPrice <= 0 {
-		return legOutcome{}, fmt.Errorf("invalid mark price: %.2f", markPrice)
-	}
-
-	leverage := plan.FuturesLeverage
-	if leverage <= 0 {
-		leverage = 1
-	}
-
-	mkt, err := validateActiveSwapMarket(ctx, fp, plan.FuturesSymbol, int64(leverage))
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("market validation: %w", err)
-	}
-	perContractSize := 1.0
-	if mkt.ContractSize != nil && *mkt.ContractSize > 0 {
-		perContractSize = *mkt.ContractSize
-	}
-	minAmount := 1.0
-	if mkt.Limits.Amount.Min != nil && *mkt.Limits.Amount.Min > 0 {
-		minAmount = *mkt.Limits.Amount.Min
-	}
-	// Size futures to cover the NET spot quantity after spot taker-fee deduction.
-	// Spot fee is taken from received tokens (not USDT), so:
-	//   net_spot_qty = (SpotNotionalUSDT / spot_price) × (1 - fee)
-	//   ≈ SpotNotionalUSDT × (1 - fee) / futures_price  (prices are nearly equal)
-	// Using SpotNotionalUSDT × (1-fee) instead of FuturesNotionalUSDT removes the
-	// ~7 ALGO unhedged gap seen previously; residual mismatch is only contract rounding.
-	// TODO: fetch actual spot taker fee from the user's account tier via the exchange API
-	// instead of hardcoding 0.1%. Users on higher tiers or using fee tokens (BNB/OKX) pay less.
-	const spotTakerFee = 0.001 // 0.1% — OKX / Binance default spot taker rate
-	hedgeNotional := plan.SpotNotionalUSDT * (1 - spotTakerFee)
-	numContracts, err := contractsFromNotional(hedgeNotional, markPrice, perContractSize, minAmount)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("contract count computation: %w", err)
-	}
-	// Store base-currency quantity (CHZ, BTC, …) so the API/UI shows a meaningful amount.
-	baseQty := numContracts * perContractSize
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:           exec.ID,
-		LegType:               string(deltaneutral.LegTypeFutures),
-		Provider:              plan.FuturesProvider,
-		Account:               plan.FuturesAccount,
-		Symbol:                plan.FuturesSymbol,
-		Side:                  entrySide,
-		OrderType:             "market",
-		RequestedAmount:       baseQty,
-		RequestedNotionalUSDT: plan.FuturesNotionalUSDT,
-		RequestedPrice:        markPrice,
-		State:                 string(deltaneutral.LegStatePlacing),
-		CreatedAt:             time.Now(),
-		UpdatedAt:             time.Now(),
-	}
-
-	// Apply leverage before placing the futures order.
-	if _, err := fp.SetFuturesLeverage(ctx, plan.FuturesSymbol, int64(leverage), plan.FuturesMarginMode, positionSide); err != nil {
-		leg.State = string(deltaneutral.LegStateFailed)
-		leg.ErrorMsg = fmt.Sprintf("set leverage: %v", err)
-		t.store.SaveExecutionLeg(ctx, leg)
-		return legOutcome{}, fmt.Errorf("set leverage: %w", err)
-	}
-
-	// Create the futures order — pass MarginMode so OKX sets tdMode=isolated/cross on the order.
-	// set_leverage alone is not enough; OKX also requires tdMode on each order.
-	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       plan.FuturesSymbol,
-		OrderType:    "market",
-		Side:         entrySide,
-		Amount:       numContracts,
-		PositionSide: positionSide,
-		ReduceOnly:   false,
-		MarginMode:   plan.FuturesMarginMode,
-	})
-	if err != nil {
-		leg.State = string(deltaneutral.LegStateFailed)
-		leg.ErrorMsg = err.Error()
-		t.store.SaveExecutionLeg(ctx, leg)
-		return legOutcome{}, err
-	}
-
-	// OKX returns order ID immediately but fill data (Filled, Average, Cost) requires
-	// a subsequent FetchFuturesOrder call. Fetch once to get actual fill details.
-	// Use mergeOrderFillData so the create response is not discarded wholesale —
-	// on Binance the create response may carry commission that FetchOrder does not.
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := fp.FetchFuturesOrder(ctx, oid, plan.FuturesSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	// Use actual fill data; fall back to pre-fill estimates when unavailable.
-	filledBase := baseQty
-	avgFill := markPrice
-	filledNotional := plan.FuturesNotionalUSDT
-	if order.Filled != nil && *order.Filled > 0 {
-		filledBase = *order.Filled * perContractSize // contracts → base currency
-	}
-	if order.Average != nil && *order.Average > 0 {
-		avgFill = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	}
-
-	// Report the accepted order to the perception order feed (amount in contracts).
-	publishOrder(ctx, orderReport{
-		tool: NameOpenDeltaNeutralPosition, provider: plan.FuturesProvider, account: plan.FuturesAccount,
-		symbol: plan.FuturesSymbol, side: entrySide, kind: "market", amount: numContracts, unit: orderfeed.UnitContracts,
-		order: order, notionalUSD: filledNotional, notionalKnown: (order.Cost != nil && *order.Cost > 0) && usdQuoted(plan.FuturesSymbol, plan.FuturesProvider),
-	})
-
-	leg.OrderID = orderID(order)
-	leg.State = string(deltaneutral.LegStateFilled)
-	leg.FilledQuantity = filledBase
-	leg.FilledNotionalUSDT = filledNotional
-	leg.AvgFillPrice = avgFill
-	if order.Fee.Cost != nil && *order.Fee.Cost > 0 {
-		leg.FeeUSDT = -(*order.Fee.Cost) // futures fees are settled in USDT; negate so fees are negative (cost)
-	}
-
-	// Update plan with actual fill cost so the P&L card uses real entry notional.
-	plan.FuturesNotionalUSDT = filledNotional
-
-	// The order has been accepted: from here the leg counts as FILLED whatever happens to
-	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
-	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
+	return sep + s
 }
 
-// executeSpotLeg places a spot order for the buy leg and records an ExecutionLeg.
-func (t *OpenDeltaNeutralPositionTool) executeSpotLeg(ctx context.Context, plan *deltaneutral.Plan, exec *deltaneutral.Execution) (legOutcome, error) {
-	sp, err := broker.CreateProviderForAccount(plan.SpotProvider, plan.SpotAccount, t.cfg)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("spot provider: %w", err)
-	}
+// dnOpenWait is how long the tool waits for the workflow before it answers "in progress".
+var dnOpenWait = deltaneutral.OpenWait
 
-	tp, ok := sp.(broker.TradingProvider)
-	if !ok {
-		return legOutcome{}, fmt.Errorf("spot provider does not support order execution")
-	}
+// DNWorkflows is the part of the journal engine the delta-neutral open tool uses.
+// *journal.Engine satisfies it.
+type DNWorkflows interface {
+	Start(ctx context.Context, kind string, input any) (string, error)
+	Wait(ctx context.Context, id string) (journal.Workflow, error)
+	Steps(ctx context.Context, id string) ([]journal.StepRecord, error)
+}
 
-	// Fetch current spot price
-	status, err := sp.GetMarketStatus(ctx, plan.SpotSymbol)
-	if err == nil && status == broker.MarketClosed {
-		return legOutcome{}, fmt.Errorf("spot market %s is closed", plan.SpotSymbol)
-	}
+// dnWorkflowsHolder is the late-bound engine, like the approval proposer: the tool is
+// registered before the engine exists, the gateway sets it on every build and reload
+// and clears it when the services stop.
+var dnWorkflowsHolder atomic.Pointer[DNWorkflows]
 
-	// Fetch live spot price
-	md, ok := sp.(broker.MarketDataProvider)
-	if !ok {
-		return legOutcome{}, fmt.Errorf("spot provider does not support market data")
+// SetDNWorkflows attaches the engine to open_delta_neutral_position; nil detaches it.
+func SetDNWorkflows(w DNWorkflows) {
+	if w == nil {
+		dnWorkflowsHolder.Store(nil)
+		return
 	}
-	ticker, err := md.FetchTicker(ctx, plan.SpotSymbol)
-	if err != nil {
-		return legOutcome{}, fmt.Errorf("fetch spot ticker: %w", err)
-	}
-	price := 0.0
-	if ticker.Last != nil {
-		price = *ticker.Last
-	}
-	if price <= 0 {
-		return legOutcome{}, fmt.Errorf("invalid spot price for %s", plan.SpotSymbol)
-	}
+	dnWorkflowsHolder.Store(&w)
+}
 
-	// Compute quantity from notional and live price
-	quantity := plan.SpotNotionalUSDT / price
-
-	leg := &deltaneutral.ExecutionLeg{
-		ExecutionID:           exec.ID,
-		LegType:               string(deltaneutral.LegTypeSpot),
-		Provider:              plan.SpotProvider,
-		Account:               plan.SpotAccount,
-		Symbol:                plan.SpotSymbol,
-		Side:                  plan.SpotSide,
-		OrderType:             "market",
-		RequestedAmount:       quantity,
-		RequestedNotionalUSDT: plan.SpotNotionalUSDT,
-		RequestedPrice:        price,
-		State:                 string(deltaneutral.LegStatePlacing),
-		CreatedAt:             time.Now(),
-		UpdatedAt:             time.Now(),
+func currentDNWorkflows() DNWorkflows {
+	if w := dnWorkflowsHolder.Load(); w != nil {
+		return *w
 	}
-
-	// Place the spot order
-	order, err := tp.CreateOrder(ctx, plan.SpotSymbol, "market", plan.SpotSide, quantity, nil, nil)
-	if err != nil {
-		leg.State = string(deltaneutral.LegStateFailed)
-		leg.ErrorMsg = err.Error()
-		t.store.SaveExecutionLeg(ctx, leg)
-		return legOutcome{}, err
-	}
-
-	// OKX returns order ID immediately but fill details (Filled, Average, Cost) are
-	// only populated in a subsequent FetchOrder call. Fetch once to get actual data.
-	// Use mergeOrderFillData so the create response is not discarded wholesale —
-	// on Binance the create response may carry commission that FetchOrder does not.
-	if oid := orderID(order); oid != "" {
-		if fetched, fetchErr := tp.FetchOrder(ctx, oid, plan.SpotSymbol); fetchErr == nil {
-			order = mergeOrderFillData(order, fetched)
-		}
-	}
-
-	// Use actual fill data; fall back to pre-fill estimates when unavailable.
-	// For OKX spot buys, order.Filled is gross ALGO before fee deduction.
-	// order.Cost is USDT paid. Fee is deducted from received ALGO, not USDT.
-	filledQty := quantity
-	avgFill := price
-	filledNotional := plan.SpotNotionalUSDT
-	if order.Filled != nil && *order.Filled > 0 {
-		filledQty = *order.Filled
-	}
-	if order.Average != nil && *order.Average > 0 {
-		avgFill = *order.Average
-	}
-	if order.Cost != nil && *order.Cost > 0 {
-		filledNotional = *order.Cost
-	}
-
-	publishOrder(ctx, orderReport{
-		tool: NameOpenDeltaNeutralPosition, provider: plan.SpotProvider, account: plan.SpotAccount,
-		symbol: plan.SpotSymbol, side: plan.SpotSide, kind: "market", amount: quantity, unit: orderfeed.UnitBase,
-		order: order, notionalUSD: filledNotional, notionalKnown: (order.Cost != nil && *order.Cost > 0) && usdQuoted(plan.SpotSymbol, plan.SpotProvider),
-	})
-
-	leg.OrderID = orderID(order)
-	leg.State = string(deltaneutral.LegStateFilled)
-	leg.FilledQuantity = filledQty
-	leg.FilledNotionalUSDT = filledNotional
-	leg.AvgFillPrice = avgFill
-	// Spot fee: side-aware conversion (buy fee is in base currency; sell fee is in USDT).
-	// See spotFeeCostUSDT for the full rationale.
-	if fee := spotFeeCostUSDT(order, plan.SpotSide, avgFill); fee > 0 {
-		leg.FeeUSDT = -fee // negative = cost
-	}
-
-	// Update plan with actual fill cost so the P&L card uses real entry notional.
-	plan.SpotNotionalUSDT = filledNotional
-
-	// The order has been accepted: from here the leg counts as FILLED whatever happens to
-	// the bookkeeping. saveFilledLeg retries and, on final failure, leaves a trace.
-	return legOutcome{Filled: true, BookkeepingErr: saveFilledLeg(ctx, t.store, exec, leg)}, nil
+	return nil
 }
 
 // formatExecutionReview formats the execution review for dry-run output (§7.8).

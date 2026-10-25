@@ -143,3 +143,29 @@ export function putProactiveProfile(patch: ProfilePatch): Promise<ProfileState> 
 export function getProactiveDecisions(limit = 50): Promise<ProactiveDecision[]> {
   return request<ProactiveDecision[]>(`/decisions?limit=${limit}`)
 }
+
+export interface StopResult {
+  killed: boolean
+  changed: boolean
+  // The same text /stop answers in chat.
+  text: string
+}
+
+// Runs /stop on the gateway: engages the kill flag and cancels running turns,
+// workflows, mandates, pending proposals and the agent's open orders.
+export async function stopAgent(): Promise<StopResult> {
+  const res = await fetch("/api/control/kill", { method: "POST" })
+  if (!res.ok) {
+    let message = `API error: ${res.status} ${res.statusText}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (typeof body.error === "string" && body.error.trim() !== "") {
+        message = body.error
+      }
+    } catch {
+      // not a JSON error body; keep the status line
+    }
+    throw new Error(message)
+  }
+  return res.json() as Promise<StopResult>
+}

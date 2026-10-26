@@ -32,6 +32,13 @@ type BinanceExchange struct {
 // Public endpoints (OHLCV, tickers, order book) always use a credential-free
 // CCXT instance so that IP-restricted API keys do not interfere.
 func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExchange, error) {
+	// Armed but not started: refuse to build a client at all. Skipping the URL
+	// rewrite instead would leave a real-host client that the instance cache keeps.
+	isSandboxed, baseURL := sandbox.GlobalState()
+	if isSandboxed && baseURL == "" {
+		return nil, fmt.Errorf("sandbox: enabled but server not started")
+	}
+
 	hasAuth := creds.APIKey.String() != "" && creds.Secret.String() != ""
 
 	var ccxtCreds map[string]interface{}
@@ -81,8 +88,7 @@ func NewBinanceExchange(creds config.ExchangeAccount, testnet bool) (*BinanceExc
 	}
 
 	// If sandbox mode is enabled, rewrite all URLs to point to the sandbox server.
-	isSandboxed, baseURL := sandbox.GlobalState()
-	if isSandboxed && baseURL != "" {
+	if isSandboxed {
 		// Rewrite URLs for all exchange instances.
 		for _, ex := range []interface{}{spot, usdm, coinm, publicSpot} {
 			if err := sandbox.RewriteExchangeURLs(Name, ex, baseURL); err != nil {

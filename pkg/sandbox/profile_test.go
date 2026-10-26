@@ -36,6 +36,9 @@ func TestProfile_ValuesAndChannelsOff(t *testing.T) {
 		cfg.ModelList[0].ModelName != "sim" || cfg.Agents.Defaults.ModelName != cfg.ModelList[0].ModelName {
 		t.Errorf("model = %+v default=%q", cfg.ModelList, cfg.Agents.Defaults.ModelName)
 	}
+	if cfg.Agents.Defaults.FollowUpNudge {
+		t.Error("follow_up_nudge is on: one scripted text answer would be two model calls")
+	}
 	if cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled {
 		t.Error("exec or MCP enabled in the profile")
 	}

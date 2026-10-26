@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,10 +13,13 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -24,9 +28,9 @@ import (
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
 //
-// RULE for every lab group (inspect, chat, and what SBX-03/04/06 add): (*lab.Lab).AddGroup
-// is called ONCE per process, from registerLabGroups, right after buildLab and before
-// the first buildServices. Never from registerSandboxLab or anything else that runs per
+// RULE for every lab group (inspect, chat, llm, and what SBX-03/06 add): (*lab.Lab).AddGroup
+// is called ONCE per process, from registerLabGroups (which also attaches the sim
+// engine), right after buildLab and before the first buildServices. Never from registerSandboxLab or anything else that runs per
 // generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when
 // a generation starts, and registerDevMCP runs before registerSandboxLab, so a group
 // added there is missing from that generation's tools. What a group needs from the
@@ -88,7 +92,57 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		j = l.Journal
 	}
 	shared.simWorld = simchat.NewWorld(j, func() time.Time { return l.Now() }, cfg.Channels.SimChat)
-	return l.AddGroup(shared.simWorld.Group())
+	if err := l.AddGroup(shared.simWorld.Group()); err != nil {
+		return err
+	}
+	// The simulated model: the engine answers every model call of the process (the
+	// provider factory builds only sim/*, which talks to the attached engine), so it
+	// is attached once, with the lab, and detached when the lab closes.
+	var sj sim.Journal
+	if l.Journal != nil {
+		sj = simJournal{l.Journal}
+	}
+	e, err := sim.NewEngine(sim.EngineOptions{
+		Journal: sj, TurnInfo: simTurnInfo, Store: filepath.Join(l.Home, "lab", "llm_script.json"),
+	})
+	if err != nil {
+		return err
+	}
+	if err := sim.Attach(e); err != nil {
+		return err
+	}
+	l.OnClose(func() error { sim.Detach(e); return nil })
+	return l.AddGroup(llmops.Group(e))
+}
+
+// simJournal writes the simulated model's llm.call / llm.complete entries to the lab
+// journal (sim cannot import labjournal: see its imports_test.go).
+type simJournal struct{ j *labjournal.Journal }
+
+func (s simJournal) Record(kind, subject string, payload json.RawMessage) {
+	s.j.Append(labjournal.Entry{Kind: kind, Source: "sim", Subject: subject, Payload: payload})
+}
+
+// simTurnInfo tells the simulated model what kind of turn a call belongs to, from the
+// context the agent loop tagged. pkg/providers/sim cannot import pkg/tools; this can.
+// A sub-turn comes first (it keeps its parent's origin), then a proactive or reflection
+// turn by its kind, then the legacy wake-ups by origin; a person's message, from a chat
+// or the console, is "user". An untagged context is "unknown", never a guess.
+func simTurnInfo(ctx context.Context) sim.CallInfo {
+	ci := sim.CallInfo{Origin: tools.ToolOrigin(ctx), TurnID: tools.TurnID(ctx), Sender: tools.ToolSender(ctx)}
+	switch kind := tools.ProactiveTurnKind(ctx); {
+	case tools.IsSubTurn(ctx):
+		ci.Turn = string(proactive.TurnSubTurn)
+	case kind != "":
+		ci.Turn = string(kind)
+	case ci.Origin == tools.OriginHeartbeat:
+		ci.Turn = string(proactive.TurnHeartbeatLegacy)
+	case ci.Origin == tools.OriginCron:
+		ci.Turn = string(proactive.TurnCronLegacy)
+	case ci.Origin == tools.OriginRemote || ci.Origin == tools.OriginInternal:
+		ci.Turn = string(proactive.TurnUser)
+	}
+	return ci
 }
 
 // attachSimChat binds this generation's simchat channel (the manager built a new one)

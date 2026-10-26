@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -126,6 +127,19 @@ func initTermuxSSL() {
 // isReplay says whether the process was started as `khunquant replay`.
 func isReplay(args []string) bool { return len(args) > 1 && args[1] == "replay" }
 
+// isSandboxJSON says whether the process was started as `khunquant sandbox ... --json`,
+// whose standard output must be nothing but the JSON.
+func isSandboxJSON(args []string) bool {
+	return len(args) > 1 && args[1] == "sandbox" && slices.Contains(args, "--json")
+}
+
+// isLockedGateway says whether the process was asked to run as a locked sandbox
+// gateway (the gateway's own lockRequested: the env switch or the flag). It runs
+// before the gateway arms its lock, so it only reads the request.
+func isLockedGateway(args []string) bool {
+	return os.Getenv("KQ_SANDBOX_LOCKED") == "1" || slices.Contains(args, "--sandbox-locked")
+}
+
 // exitStatus is how the process ends for an error from a command. A command that
 // silences cobra's own error output (`khunquant trigger`) returns an error that
 // names its exit status; its message is printed here, on stderr. Any other error
@@ -151,7 +165,7 @@ func main() {
 	// `khunquant replay` prints its report and writes nothing but the file it was told
 	// to: no banner on its standard output, no cache file, no network call for news of
 	// an update.
-	quiet := isReplay(os.Args)
+	quiet := isReplay(os.Args) || isSandboxJSON(os.Args)
 	if !quiet {
 		fmt.Printf("%s", banner)
 	}
@@ -163,8 +177,11 @@ func main() {
 
 	// Read the cached update result instantly (no network wait), and kick off
 	// a background refresh so the cache stays fresh for the next invocation.
+	// A locked sandbox gateway makes no update check: it would call GitHub before the
+	// egress guard is armed and write a cache under the instance home, which the lock
+	// then refuses as a second ~/.khunquant.
 	var info *updater.UpdateInfo
-	if !quiet {
+	if !quiet && !isLockedGateway(os.Args) {
 		info = updater.CheckForUpdateCached(updater.DefaultOwner, updater.DefaultRepo, config.GetVersion())
 	}
 	if info != nil && info.IsOutdated {

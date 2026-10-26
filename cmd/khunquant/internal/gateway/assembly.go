@@ -114,6 +114,10 @@ type sharedResources struct {
 	// labObserver is the lab journal's bus subscription, started on first use and
 	// kept across reloads (sandbox_lab_wiring.go). Guarded by mu.
 	labObserver *labjournal.Observer
+	// labTapped is the registry the tool-call tap is on (guarded by mu); labGen is the
+	// generation the lab groups read (sandbox_lab_wiring.go).
+	labTapped *tools.ToolRegistry
+	labGen    atomic.Pointer[gatewayServices]
 }
 
 // sweepState returns the process's sweep state, creating it on first use.
@@ -454,6 +458,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
 	s.Control.attachManage(d, s.Perception)
+	publishLabGeneration(d.Shared, s)
 
 	// The owner's responses to proactive messages, recorded only with proactive.learning
 	// on. After the control path (taps and replies reach it) and the outbox (whose

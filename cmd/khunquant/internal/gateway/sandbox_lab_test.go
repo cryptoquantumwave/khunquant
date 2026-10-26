@@ -167,9 +167,14 @@ func TestLabNotRegisteredWhenUnlocked(t *testing.T) {
 			t.Fatal("an unlocked gateway has a labjournal subscriber")
 		}
 	}
-	if f.shared.labObserver != nil || f.shared.lab != nil {
-		t.Fatal("an unlocked gateway holds lab state")
+	if f.shared.labObserver != nil || f.shared.lab != nil || f.shared.labTapped != nil || f.shared.labGen.Load() != nil {
+		t.Fatal("an unlocked gateway holds lab state (observer, lab, tool tap or published generation)")
 	}
+	// No registry is tapped, and no lab tool reaches the dev-MCP server (which is on).
+	if mcpTools(t, f, testDevMCPToken)["sandbox_inspect"] {
+		t.Fatal("an unlocked gateway lists sandbox_inspect")
+	}
+
 	if _, err := os.Stat(filepath.Join(config.HomeDir(), "lab")); err == nil {
 		t.Fatal("an unlocked gateway created a lab directory")
 	}
@@ -223,8 +228,12 @@ func TestDevMCPLockedUsesInstanceToken(t *testing.T) {
 		t.Errorf("/dev-mcp with the instance token = %d", code)
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/inspect", port)
-	if code, body, err := postJSON(url, lockTestToken, `{"op":"journal"}`); err != nil || code != http.StatusNotFound {
-		t.Errorf("lab route with no group registered = %d (%v) %s, want 404 unknown_group", code, err, body)
+	if code, body, err := postJSON(url, lockTestToken, `{"op":"journal","limit":5}`); err != nil || code != http.StatusOK ||
+		!strings.Contains(body, `"entries"`) || !strings.Contains(body, `"drops"`) {
+		t.Errorf("inspect journal on the real gateway's first generation = %d (%v) %s, want 200 with entries and drops", code, err, body)
+	}
+	if !mcpToolsAt(t, fmt.Sprintf("http://127.0.0.1:%d/dev-mcp", port), lockTestToken)["sandbox_inspect"] {
+		t.Error("tools/list of the real gateway's first generation has no sandbox_inspect")
 	}
 	if code, _, _ := postJSON(url, "", `{}`); code != http.StatusUnauthorized {
 		t.Errorf("lab route without a token = %d, want 401", code)

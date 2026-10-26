@@ -13,12 +13,23 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
 // This file is the only place the gateway builds and attaches Sandbox Lab
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
+//
+// RULE for every lab group (inspect, and what SBX-02/03/04/06 add): (*lab.Lab).AddGroup
+// is called ONCE per process, from registerLabGroups, right after buildLab and before
+// the first buildServices. Never from registerSandboxLab or anything else that runs per
+// generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when
+// a generation starts, and registerDevMCP runs before registerSandboxLab, so a group
+// added there is missing from that generation's tools. What a group needs from the
+// current generation it reads at call time through a closure over sharedResources (see
+// labDeps), never by capturing a generation's services.
 
 // buildLab builds the process-lifetime lab from the enforced config. It starts the
 // sandbox server (which publishes its base URL) and fails when there are no venues.
@@ -62,12 +73,73 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 	return nil
 }
 
-// registerSandboxLab starts the observer and mounts the lab route; it does nothing
-// unless the process is locked.
+// registerLabGroups adds the lab's groups to the registry, once per process (see the
+// rule above). Call it right after buildLab, before the first buildServices.
+func registerLabGroups(l *lab.Lab, shared *sharedResources) error {
+	return l.AddGroup(inspect.Group(l.Journal, labDeps(shared)))
+}
+
+// labDeps is the inspect group's view of the current generation, looked up on every
+// call. An op whose service this generation does not run gets a nil dependency and
+// answers unavailable; between generations nothing is published.
+func labDeps(shared *sharedResources) func() inspect.Deps {
+	return func() inspect.Deps {
+		s := shared.labGen.Load()
+		if s == nil {
+			return inspect.Deps{}
+		}
+		var d inspect.Deps
+		if rt := s.journalLive.Load(); rt != nil {
+			d.Workflows = rt.engine.List
+		}
+		if s.Approval != nil && s.Approval.svc != nil {
+			d.Pending = s.Approval.svc.ListPending
+		}
+		if s.Policy != nil && s.Policy.store != nil {
+			d.Policy = s.Policy.store.Recent
+		}
+		return d
+	}
+}
+
+// publishLabGeneration makes s the generation the lab groups read. It runs once s has
+// its approval service, workflow engine and policy record, so no group sees a half-built
+// generation; retireLabGeneration withdraws a generation before its services stop.
+func publishLabGeneration(shared *sharedResources, s *gatewayServices) {
+	if shared.lab != nil {
+		shared.labGen.Store(s)
+	}
+}
+
+func (r *sharedResources) retireLabGeneration() { r.labGen.Store(nil) }
+
+// attachLabTap puts the tool-call tap on the default agent's registry, once per
+// registry: a reload builds a new registry (ReloadProviderAndConfig), and a recovery
+// rebuild reuses the old one.
+func attachLabTap(shared *sharedResources, reg *tools.ToolRegistry) {
+	if shared.lab == nil || shared.lab.Journal == nil || reg == nil {
+		return
+	}
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	if shared.labTapped != reg {
+		reg.AddHook(labToolTap{j: shared.lab.Journal})
+		shared.labTapped = reg
+	}
+}
+
+// registerSandboxLab starts the observer, taps tool calls and mounts the lab route; it
+// does nothing unless the process is locked.
 func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error {
 	lk, locked := sandbox.LockInfo()
 	if !locked || s.lab == nil {
 		return nil
+	}
+	d.Shared.retireLabGeneration() // until buildServices has built this one
+	if reg := d.AgentLoop.GetRegistry(); reg != nil {
+		if inst := reg.GetDefaultAgent(); inst != nil {
+			attachLabTap(d.Shared, inst.Tools)
+		}
 	}
 	if err := startLabObserver(s.lab, d.Shared); err != nil {
 		return fmt.Errorf("starting the lab observer: %w", err)

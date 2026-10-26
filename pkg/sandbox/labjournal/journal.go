@@ -57,6 +57,9 @@ type Journal struct {
 
 	mu      sync.Mutex
 	sources []func() uint64
+
+	cmu    sync.Mutex
+	commit chan struct{} // closed, and replaced, after every batch that was written
 }
 
 var migrations = []sqlitex.Migration{{Component: "labjournal", Version: 1, SQL: `
@@ -80,7 +83,7 @@ func Open(o Options) (*Journal, error) {
 	}
 	j := &Journal{
 		db: db, now: o.Now, q: make(chan item, cmp.Or(o.Queue, 8192)),
-		stop: make(chan struct{}), done: make(chan struct{}),
+		stop: make(chan struct{}), done: make(chan struct{}), commit: make(chan struct{}),
 	}
 	if j.now == nil {
 		j.now = time.Now
@@ -201,11 +204,23 @@ func (j *Journal) write(batch []item) {
 		j.drops.Add(uint64(len(es)))
 		logger.WarnCF("labjournal", "Could not write journal entries", map[string]any{"err": err.Error()})
 	}
+	j.cmu.Lock()
+	close(j.commit)
+	j.commit = make(chan struct{})
+	j.cmu.Unlock()
 	for _, it := range batch {
 		if it.barrier != nil {
 			close(it.barrier)
 		}
 	}
+}
+
+// commitSignal returns a channel that is closed when the next batch has been written.
+// Take it before reading, so a commit between the read and the wait is not missed.
+func (j *Journal) commitSignal() <-chan struct{} {
+	j.cmu.Lock()
+	defer j.cmu.Unlock()
+	return j.commit
 }
 
 func (j *Journal) insert(es []Entry) error {

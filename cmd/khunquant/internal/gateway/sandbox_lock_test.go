@@ -296,7 +296,9 @@ type lockedFixture struct {
 	nilProvider bool
 }
 
-func newLockedFixture(t *testing.T) *lockedFixture {
+// newLockedFixture starts a locked gateway; mutate, if any, changes the first
+// generation's config (on top of lockedBaseConfig).
+func newLockedFixture(t *testing.T, mutate ...func(*config.Config)) *lockedFixture {
 	t.Helper()
 	home := newInstanceHome(t)
 	lk := lockProcessForTest(t, home)
@@ -324,7 +326,12 @@ func newLockedFixture(t *testing.T) *lockedFixture {
 	t.Cleanup(func() { logger.SetAdditionalWriter(nil) })
 
 	f.bus = bus.NewMessageBus()
-	f.initial = f.config(lockedBaseConfig)
+	f.initial = f.config(func(c *config.Config) {
+		lockedBaseConfig(c)
+		for _, m := range mutate {
+			m(c)
+		}
+	})
 	if err := enforceLockedConfig(f.initial, lk); err != nil {
 		t.Fatalf("enforceLockedConfig: %v", err)
 	}
@@ -338,6 +345,9 @@ func newLockedFixture(t *testing.T) *lockedFixture {
 	lf.lab = l
 	f.shared.lab = l
 	f.shared.add("sandbox lab", l)
+	if err := registerLabGroups(l, f.shared); err != nil { // as gatewayCmd does, before the first build
+		t.Fatalf("registerLabGroups: %v", err)
+	}
 
 	t.Cleanup(func() {
 		if f.services != nil {

@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"time"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
 
 // CallTimeout caps every Call: the HTTP server writes with a 30 s timeout. Long waits
 // are loops of calls.
-const CallTimeout = 25 * time.Second
+const CallTimeout = labjournal.MaxWait
 
 // OpFunc runs one operation. args is the whole request object, "op" included.
 type OpFunc func(ctx context.Context, args json.RawMessage) (any, error)

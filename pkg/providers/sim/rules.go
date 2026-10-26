@@ -59,7 +59,7 @@ const (
 	callerComplete = "complete"
 
 	toolIDPrefix   = "sim_"
-	maxToolRounds  = 8    // consecutive tool-call responses to one turn
+	maxToolRounds  = 8 // consecutive tool-call responses to one turn
 	defaultThen    = "OK."
 	noMatchText    = "(sim: no rule matched)"
 	fallbackText   = "text"

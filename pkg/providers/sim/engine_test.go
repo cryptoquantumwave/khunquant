@@ -247,15 +247,15 @@ func TestPutValidates(t *testing.T) {
 	e, _ := newTestEngine(t)
 	ok := Rule{ID: "a", Respond: Respond{Text: "x"}}
 	for name, rules := range map[string][]Rule{
-		"no id":            {{Respond: Respond{Text: "x"}}},
-		"duplicate":        {ok, ok},
-		"bad turn":         {{ID: "b", Match: Match{Turn: "nonsense"}, Respond: Respond{Text: "x"}}},
-		"bad caller":       {{ID: "b", Match: Match{Complete: "nonsense"}, Respond: Respond{Text: "x"}}},
-		"empty respond":    {{ID: "b"}},
-		"tool and calls":   {{ID: "b", Respond: Respond{Tool: "t", ToolCalls: []ToolCallSpec{{Name: "u"}}}}},
-		"error and text":   {{ID: "b", Respond: Respond{Error: "e", Text: "x"}}},
-		"unnamed call":     {{ID: "b", Respond: Respond{ToolCalls: []ToolCallSpec{{}}}}},
-		"negative times":   {{ID: "b", Times: -1, Respond: Respond{Text: "x"}}},
+		"no id":          {{Respond: Respond{Text: "x"}}},
+		"duplicate":      {ok, ok},
+		"bad turn":       {{ID: "b", Match: Match{Turn: "nonsense"}, Respond: Respond{Text: "x"}}},
+		"bad caller":     {{ID: "b", Match: Match{Complete: "nonsense"}, Respond: Respond{Text: "x"}}},
+		"empty respond":  {{ID: "b"}},
+		"tool and calls": {{ID: "b", Respond: Respond{Tool: "t", ToolCalls: []ToolCallSpec{{Name: "u"}}}}},
+		"error and text": {{ID: "b", Respond: Respond{Error: "e", Text: "x"}}},
+		"unnamed call":   {{ID: "b", Respond: Respond{ToolCalls: []ToolCallSpec{{}}}}},
+		"negative times": {{ID: "b", Times: -1, Respond: Respond{Text: "x"}}},
 	} {
 		if err := e.Put(rules, true, ""); err == nil {
 			t.Errorf("%s: Put accepted the script", name)

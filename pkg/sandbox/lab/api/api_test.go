@@ -16,7 +16,7 @@ func newMux(t *testing.T, guard func(http.Handler) http.Handler) *http.ServeMux 
 	l := &lab.Lab{}
 	err := l.AddGroup(lab.Group{Name: "g", Ops: []lab.Op{
 		{Name: "echo", Run: func(_ context.Context, a json.RawMessage) (any, error) {
-			return map[string]any{"got": json.RawMessage(a)}, nil
+			return map[string]any{"got": a}, nil
 		}},
 		{Name: "bad", Run: func(context.Context, json.RawMessage) (any, error) { return nil, lab.Errorf(lab.CodeBadArgs, "nope") }},
 		{Name: "gone", Run: func(context.Context, json.RawMessage) (any, error) {

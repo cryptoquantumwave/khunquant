@@ -24,7 +24,9 @@ var statusOf = map[string]int{
 // Register mounts the lab route on mux. guard wraps the handler: the caller supplies
 // the loopback and instance-token checks, so this package knows no secret. A call
 // runs under lab.CallTimeout and a body is capped at 1 MiB.
-func Register(mux interface{ Handle(string, http.Handler) }, l *lab.Lab, guard func(http.Handler) http.Handler) {
+func Register(mux interface {
+	Handle(pattern string, h http.Handler)
+}, l *lab.Lab, guard func(http.Handler) http.Handler) {
 	mux.Handle("POST /api/sandbox/lab/{group}", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		if err != nil {

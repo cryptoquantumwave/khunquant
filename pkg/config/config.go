@@ -621,6 +621,29 @@ type ChannelsConfig struct {
 	Pico         PicoConfig         `json:"pico"        yaml:"pico,omitempty"`
 	IRC          IRCConfig          `json:"irc"         yaml:"irc,omitempty"`
 	TeamsWebhook TeamsWebhookConfig `json:"teams_webhook" yaml:"teams_webhook,omitempty"`
+	SimChat      SimChatConfig      `json:"simchat"     yaml:"-"`
+}
+
+// SimChatConfig configures the simulated chat channel of a sandbox instance. It has
+// no effect outside one: the channel is built only in a process under the sandbox lock.
+type SimChatConfig struct {
+	Enabled   bool                `json:"enabled"`
+	AllowFrom FlexibleStringSlice `json:"allow_from"`
+	// Personas default to owner, stranger, alice and bob when empty.
+	Personas []SimChatPersona `json:"personas,omitempty"`
+	// Groups maps a group name to its member personas; the default is team: alice, bob.
+	Groups       map[string][]string `json:"groups,omitempty"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty"`
+}
+
+// SimChatPersona is one simulated chat user. Its messages carry the sender
+// "simchat:<ID>".
+type SimChatPersona struct {
+	Name        string `json:"name"`
+	ID          string `json:"id,omitempty"` // default Name
+	DisplayName string `json:"display_name,omitempty"`
+	// Unauthenticated lets another persona claim this sender ID (an IRC nick).
+	Unauthenticated bool `json:"unauthenticated,omitempty"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.

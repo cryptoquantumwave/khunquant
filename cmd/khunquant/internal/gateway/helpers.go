@@ -820,10 +820,16 @@ func registerDevMCP(
 	shared *sharedResources,
 	al *agent.AgentLoop,
 ) {
-	// Auto-generate a token if not already configured, then persist it so the
-	// WebUI status endpoint and subsequent restarts can read the same token.
-	if cfg.Debug.DevMCP.Token == "" {
-		cfg.Debug.DevMCP.Token = generateDevMCPToken()
+	// Under the sandbox lock the instance token is the bearer: nothing is generated,
+	// saved to config or printed. Otherwise a token is auto-generated if not configured,
+	// then persisted so the WebUI status endpoint and later restarts read the same one.
+	token := cfg.Debug.DevMCP.Token
+	lk, locked := sandbox.LockInfo()
+	if locked {
+		token = lk.Token
+	} else if token == "" {
+		token = generateDevMCPToken()
+		cfg.Debug.DevMCP.Token = token
 		if err := config.SaveConfig(internal.GetConfigPath(), cfg); err != nil {
 			logger.WarnCF("devmcp", "Failed to persist dev-mcp token to config", map[string]any{"err": err.Error()})
 		}
@@ -848,13 +854,16 @@ func registerDevMCP(
 
 	prefix := cfg.Debug.DevMCP.PathPrefix
 	endpoint := fmt.Sprintf("http://%s:%d%s", cfg.Gateway.Host, cfg.Gateway.Port, prefix)
-	guarded := loopbackOnly(bearerTokenMiddleware(cfg.Debug.DevMCP.Token,
-		http.StripPrefix(prefix, handler)))
+	guarded := loopbackOnly(bearerTokenMiddleware(token, http.StripPrefix(prefix, handler)))
 
 	mux.Handle(prefix, guarded)
 	mux.Handle(prefix+"/", guarded)
 
-	fmt.Printf("🔌 Dev MCP: %s\n   Token:    %s\n", endpoint, cfg.Debug.DevMCP.Token)
+	if locked {
+		fmt.Printf("🔌 Dev MCP: %s (bearer: the instance token)\n", endpoint)
+	} else {
+		fmt.Printf("🔌 Dev MCP: %s\n   Token:    %s\n", endpoint, token)
+	}
 	logger.WarnCF("devmcp",
 		fmt.Sprintf("Developer MCP server enabled at %s — disable in production", endpoint),
 		nil)

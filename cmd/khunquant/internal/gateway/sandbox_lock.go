@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
 )
 
 const (
@@ -82,7 +83,8 @@ func lockOptionsFromEnv() (sandbox.LockOptions, error) {
 }
 
 // armSandboxLock locks the process (arming the sandbox state as enabled with no
-// server, so exchange traffic fails closed) and makes SaveConfig refuse every write.
+// server, so exchange traffic fails closed), makes SaveConfig refuse every write and
+// installs the loopback-only egress guard.
 func armSandboxLock(lk sandbox.LockOptions) error {
 	if err := sandbox.Lock(lk); err != nil {
 		return err
@@ -90,7 +92,7 @@ func armSandboxLock(lk sandbox.LockOptions) error {
 	config.SetSaveGuard(func(string) error {
 		return errors.New("config is read-only under the sandbox lock")
 	})
-	return nil
+	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
 }
 
 // enforceLockedConfig forces the invariants of a locked config. It runs on the

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
@@ -259,7 +260,7 @@ func gatewayCmd(debug, locked bool) error {
 	defer stopWatch()
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, shutdownSignals(isLocked)...)
 
 	// Main event loop - wait for signals or config changes
 	for {
@@ -282,6 +283,15 @@ func gatewayCmd(debug, locked bool) error {
 			}
 		}
 	}
+}
+
+// shutdownSignals stop the gateway gracefully. A locked instance is also stopped by
+// SIGTERM (`sandbox down`, the supervisor); an unlocked gateway still handles only Ctrl+C.
+func shutdownSignals(locked bool) []os.Signal {
+	if locked {
+		return []os.Signal{os.Interrupt, syscall.SIGTERM}
+	}
+	return []os.Signal{os.Interrupt}
 }
 
 // shutdownGateway performs a complete gateway shutdown

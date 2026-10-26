@@ -249,6 +249,41 @@ func TestLockedGateway_TokenNeverOnDisk(t *testing.T) {
 	}
 }
 
+// `khunquant sandbox down` stops an instance with SIGTERM: a locked gateway must
+// shut down gracefully on it (exit 0), and an unlocked one keeps handling only
+// Ctrl+C.
+func TestLockedGateway_SIGTERMStopsCleanly(t *testing.T) {
+	p := startLockedProcess(t)
+	p.waitReady()
+
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.wait(30 * time.Second); err != nil {
+		t.Fatalf("SIGTERM did not stop the locked gateway cleanly: %v\n%s", err, p.out.String())
+	}
+	if !strings.Contains(p.out.String(), "Shutting down") {
+		t.Errorf("no graceful shutdown in the output:\n%s", p.out.String())
+	}
+}
+
+func TestShutdownSignals(t *testing.T) {
+	has := func(sigs []os.Signal, want os.Signal) bool {
+		for _, s := range sigs {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	if u := shutdownSignals(false); len(u) != 1 || !has(u, os.Interrupt) {
+		t.Errorf("unlocked signals = %v, want only os.Interrupt", u)
+	}
+	if l := shutdownSignals(true); !has(l, os.Interrupt) || !has(l, syscall.SIGTERM) {
+		t.Errorf("locked signals = %v, want os.Interrupt and SIGTERM", l)
+	}
+}
+
 func TestLockedGateway_ReloadFailureExit3(t *testing.T) {
 	p := startLockedProcess(t)
 	p.waitReady()

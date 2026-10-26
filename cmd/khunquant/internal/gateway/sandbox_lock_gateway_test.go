@@ -89,12 +89,7 @@ func startLockedProcess(t *testing.T) *lockedProcess {
 
 	// The child's HOME and TMPDIR are private dirs the token scan covers too.
 	childHome, childTmp := t.TempDir(), t.TempDir()
-	p := &lockedProcess{
-		t: t, home: home, port: port, out: &syncBuffer{}, exited: make(chan struct{}),
-		scanDirs: []string{home, childHome, childTmp},
-	}
-	p.cmd = exec.Command(os.Args[0], "-test.run=^TestHelperLockedGateway$")
-	p.cmd.Env = []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + childTmp,
 		"HOME=" + childHome,
@@ -103,8 +98,20 @@ func startLockedProcess(t *testing.T) *lockedProcess {
 		"KQ_SANDBOX_LOCKED=1",
 		"KQ_SANDBOX_TOKEN=" + lockTestToken,
 		"KQ_SANDBOX_INSTANCE=subprocess",
-		helperEnv + "=1",
 	}
+	return launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
+}
+
+// launchLockedProcess re-executes the test binary as the locked gateway with exactly
+// env (plus the helper switch).
+func launchLockedProcess(t *testing.T, home string, port int, env, scanDirs []string) *lockedProcess {
+	t.Helper()
+	p := &lockedProcess{
+		t: t, home: home, port: port, out: &syncBuffer{}, exited: make(chan struct{}),
+		scanDirs: scanDirs,
+	}
+	p.cmd = exec.Command(os.Args[0], "-test.run=^TestHelperLockedGateway$")
+	p.cmd.Env = append(append([]string(nil), env...), helperEnv+"=1")
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	if err := p.cmd.Start(); err != nil {
 		t.Fatalf("start locked gateway: %v", err)

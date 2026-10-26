@@ -29,6 +29,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/owner"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/replay"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/risk"
+	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/sandboxlab"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/skills"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/start"
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/status"
@@ -69,6 +70,7 @@ func NewKhunquantCommand() *cobra.Command {
 		model.NewModelCommand(),
 		risk.NewRiskCommand(),
 		owner.NewOwnerCommand(),
+		sandboxlab.NewSandboxCommand(),
 		uninstall.NewUninstallCommand(),
 		update.NewUpdateCommand(),
 		version.NewVersionCommand(),

@@ -76,42 +76,19 @@ func ChannelAllowed(name string) bool {
 	return name == "simchat"
 }
 
-// refusedProtocols spawn an agent, call a local daemon or use OAuth, none of which
-// the egress guard can see.
-var refusedProtocols = map[string]bool{
-	"claude-cli": true, "claudecli": true, "codex-cli": true, "codexcli": true,
-	"github-copilot": true, "copilot": true, "antigravity": true,
-	"gemini-code-assist": true, "google-gemini": true,
-}
-
-// CheckLockedModel says whether a model with this protocol and API base may be
-// built under the lock. It returns nil when the process is not locked.
-func CheckLockedModel(protocol, apiBase string) error {
+// CheckLockedModel says whether a model with this protocol may be built under the
+// lock: only the simulated "sim" protocol. Every real provider is refused, however
+// it is reached (an HTTP API, an agent CLI, a local daemon or OAuth), because the
+// egress guard cannot see all of them. It returns nil when the process is not locked.
+// This is the one place the rule lives; the model factory and the config overlay
+// both ask it.
+func CheckLockedModel(protocol string) error {
 	lockMu.RLock()
 	defer lockMu.RUnlock()
-	if !locked {
+	if !locked || protocol == "sim" {
 		return nil
 	}
-	p := strings.ToLower(strings.TrimSpace(protocol))
-	if refusedProtocols[p] {
-		return fmt.Errorf("sandbox: protocol %q is not allowed under the sandbox lock", protocol)
-	}
-	if p == "sim" {
-		return nil
-	}
-	host := apiBaseHost(apiBase)
-	if host == "" {
-		return fmt.Errorf("sandbox: protocol %q needs a loopback api_base under the sandbox lock", protocol)
-	}
-	if hostIsLoopback(host) {
-		return nil
-	}
-	for _, h := range lockOpts.AllowHosts {
-		if strings.EqualFold(strings.TrimSpace(h), host) {
-			return nil
-		}
-	}
-	return fmt.Errorf("sandbox: api_base host %q is neither loopback nor allowed under the sandbox lock", host)
+	return fmt.Errorf("sandbox: protocol %q is not allowed under the sandbox lock: only sim/* models are built", protocol)
 }
 
 // ResetLockForTest clears the lock and the global state. Test binaries only.

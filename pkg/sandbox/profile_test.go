@@ -32,8 +32,8 @@ func TestProfile_ValuesAndChannelsOff(t *testing.T) {
 	if cfg.Gateway.Host != "127.0.0.1" || cfg.Gateway.Port != 18791 {
 		t.Errorf("gateway = %s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	}
-	if len(cfg.ModelList) != 1 || cfg.ModelList[0].Model != "openai/sandbox-offline" ||
-		cfg.ModelList[0].APIBase != "http://127.0.0.1:9/v1" || cfg.Agents.Defaults.ModelName != cfg.ModelList[0].ModelName {
+	if len(cfg.ModelList) != 1 || cfg.ModelList[0].Model != "sim/scripted" ||
+		cfg.ModelList[0].ModelName != "sim" || cfg.Agents.Defaults.ModelName != cfg.ModelList[0].ModelName {
 		t.Errorf("model = %+v default=%q", cfg.ModelList, cfg.Agents.Defaults.ModelName)
 	}
 	if cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled {
@@ -136,7 +136,7 @@ func TestWriteProfile_StaysInsideHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("profile does not load: %v", err)
 	}
-	if loaded.Gateway.Port != 18792 || loaded.ModelList[0].APIKey.String() != "sandbox" {
-		t.Errorf("round trip: port=%d key=%q", loaded.Gateway.Port, loaded.ModelList[0].APIKey.String())
+	if loaded.Gateway.Port != 18792 || loaded.ModelList[0].Model != "sim/scripted" {
+		t.Errorf("round trip: port=%d model=%q", loaded.Gateway.Port, loaded.ModelList[0].Model)
 	}
 }

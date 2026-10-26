@@ -121,7 +121,7 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	for i := range cfg.ModelList {
 		m := &cfg.ModelList[i]
 		protocol, _ := providers.ExtractProtocol(m.Model)
-		if err := sandbox.CheckLockedModel(protocol, providers.ResolveAPIBase(m)); err != nil {
+		if err := sandbox.CheckLockedModel(protocol); err != nil {
 			return fmt.Errorf("model_list[%d] %q: %w", i, m.ModelName, err)
 		}
 		if m.AuthMethod != "" {

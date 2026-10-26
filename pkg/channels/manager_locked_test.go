@@ -59,14 +59,25 @@ func TestInitChannel_LockedOnlySimchat(t *testing.T) {
 	if telegramCalls.Load() != 0 {
 		t.Fatal("the telegram factory ran under the sandbox lock")
 	}
-	if got := m.GetEnabledChannels(); len(got) != 0 {
-		t.Fatalf("channels built under the lock = %v, want none", got)
-	}
-
-	// simchat is the one channel the lock lets through.
-	m.initChannel("simchat", "SimChat")
+	// simchat is the one channel the lock lets through, and a locked manager builds it.
 	if simchatCalls.Load() != 1 {
 		t.Fatalf("simchat factory calls = %d, want 1", simchatCalls.Load())
+	}
+	if got := m.GetEnabledChannels(); len(got) != 1 || got[0] != "simchat" {
+		t.Fatalf("channels built under the lock = %v, want [simchat]", got)
+	}
+}
+
+func TestInitChannels_UnlockedNeverBuildsSimchat(t *testing.T) {
+	simchatCalls := stubFactory(t, "simchat")
+	sandbox.ResetLockForTest()
+	t.Cleanup(sandbox.ResetLockForTest)
+
+	if _, err := NewManager(config.DefaultConfig(), bus.NewMessageBus(), nil); err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if simchatCalls.Load() != 0 {
+		t.Fatal("an unlocked manager built the simchat channel")
 	}
 }
 

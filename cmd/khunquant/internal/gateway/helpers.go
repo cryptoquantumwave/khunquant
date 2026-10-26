@@ -55,6 +55,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/pid"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
@@ -91,6 +92,7 @@ type gatewayServices struct {
 	HealthServer     *health.Server
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
+	lab              *lab.Lab                        // the process-lifetime lab; non-nil only when locked (set from sharedResources)
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
 	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint
@@ -115,16 +117,35 @@ func (s *sandboxStateReseter) ResetState() error {
 	return nil
 }
 
-func gatewayCmd(debug bool) error {
+func gatewayCmd(debug, locked bool) error {
 	if debug {
 		logger.SetLevel(logger.DEBUG)
 		fmt.Println("🔍 Debug mode enabled")
 	}
 
+	// The lock is process state, decided here before the config is read, so the
+	// config can neither request it nor undo it.
+	var lk sandbox.LockOptions
+	if lockRequested(locked) {
+		var err error
+		if lk, err = lockOptionsFromEnv(); err != nil {
+			return err
+		}
+		if err = armSandboxLock(lk); err != nil {
+			return err
+		}
+	}
+	isLocked := sandbox.Locked()
+
 	configPath := internal.GetConfigPath()
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("error loading config: %w", err)
+	}
+	if isLocked {
+		if err := enforceLockedConfig(cfg, lk); err != nil {
+			return lockFatal(err)
+		}
 	}
 
 	// Arm sandbox state immediately after config load, before any exchange clients
@@ -138,7 +159,11 @@ func gatewayCmd(debug bool) error {
 
 	provider, modelID, err := providers.CreateProvider(cfg)
 	if err != nil {
-		return fmt.Errorf("error creating provider: %w", err)
+		err = fmt.Errorf("error creating provider: %w", err)
+		if isLocked {
+			return lockFatal(err)
+		}
+		return err
 	}
 
 	// Use the resolved model ID from provider creation
@@ -157,6 +182,17 @@ func gatewayCmd(debug bool) error {
 			logger.Warn(fmt.Sprintf("Closing shared gateway resources: %v", err))
 		}
 	}()
+
+	// Locked: the sandbox server, store and simulator are built here, once, and
+	// kept until the process ends. A reload never rebuilds them.
+	if isLocked {
+		l, err := buildLab(cfg, lk)
+		if err != nil {
+			return lockFatal(fmt.Errorf("building the sandbox lab: %w", err))
+		}
+		shared.lab = l
+		shared.add("sandbox lab", l)
+	}
 
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")
@@ -204,6 +240,9 @@ func gatewayCmd(debug bool) error {
 		Shared:    shared,
 	})
 	if err != nil {
+		if isLocked {
+			return lockFatal(err)
+		}
 		return err
 	}
 
@@ -234,6 +273,12 @@ func gatewayCmd(debug bool) error {
 			err := handleConfigReload(ctx, agentLoop, newCfg, &provider, services, shared, msgBus)
 			if err != nil {
 				logger.Errorf("Config reload failed: %v", err)
+				// Locked: a reload that fails leaves nothing trustworthy, so stop
+				// loudly (exit 3) instead of carrying on.
+				if isLocked {
+					shutdownGateway(services, agentLoop, provider, true)
+					return lockFatal(err)
+				}
 			}
 		}
 	}
@@ -278,6 +323,17 @@ func handleConfigReload(
 	msgBus *bus.MessageBus,
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
+
+	// Locked: force the invariants onto the new config before anything stops, so a
+	// config that breaks them is refused with the running services untouched. The
+	// recovery paths below reuse al.GetConfig(), which was enforced when adopted.
+	locked := sandbox.Locked()
+	if locked {
+		lk, _ := sandbox.LockInfo()
+		if err := enforceLockedConfig(newCfg, lk); err != nil {
+			return fmt.Errorf("config refused under the sandbox lock: %w", err)
+		}
+	}
 
 	newModel := newCfg.Agents.Defaults.ModelName
 	if newModel == "" {
@@ -337,11 +393,14 @@ func handleConfigReload(
 	// its own config saves (web/backend/api/config.go).
 	exchanges.ResetInstanceCache()
 
-	// Handle sandbox enable/disable toggle
+	// Handle sandbox enable/disable toggle. Locked, the sandbox server is
+	// process-lifetime: it is never stopped, disabled or rebuilt here.
 	wasEnabled := services.SandboxServer != nil
 	isEnabled := newCfg.Debug.Sandbox.Enabled
 
-	if wasEnabled && !isEnabled {
+	if locked {
+		logger.Debugf("sandbox: locked, server kept across the reload")
+	} else if wasEnabled && !isEnabled {
 		// Disable: stop the server and clear state
 		logger.Info("  Disabling sandbox...")
 		services.SandboxServer.Stop()
@@ -380,6 +439,12 @@ func handleConfigReload(
 // its API endpoints on mux. Called only from registerGatewayRoutes: after the mux
 // is set up and before channels start.
 func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewayServices) error {
+	// Under the lock the server was built once at start and lives as long as the
+	// process: nothing here may stop, rebuild, persist or print.
+	if sandbox.Locked() {
+		return registerLockedSandbox(mux, services, services.lab)
+	}
+
 	// Stop any server left over from a previous start. handleConfigReload's
 	// recovery paths call reloadServices directly when the new provider or the
 	// agent loop fails to load, bypassing the enable/disable toggle that would
@@ -442,7 +507,7 @@ func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewa
 	services.SandboxToken = cfg.Debug.Sandbox.Token
 
 	// Register API routes (pass store separately since Server doesn't expose it)
-	registerSandboxAPI(mux, store, services.SandboxToken, services.SimulatorReseter, fixturesDir)
+	mountSandboxAPI(mux, services, store, fixturesDir)
 
 	baseURL := srv.BaseURL()
 	fmt.Printf("🏜️  Sandbox: %s\n   Token:    %s\n", baseURL, services.SandboxToken)

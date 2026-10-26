@@ -351,6 +351,13 @@ func (m *Manager) initChannels() error {
 		m.initChannel("teams_webhook", "Teams Webhook")
 	}
 
+	// The simulated chat channel is the one channel a locked sandbox instance runs.
+	// Its adapter registers the "simchat" factory; until one is registered this
+	// only logs, and StartAll then reports that no channel is enabled.
+	if sandbox.Locked() {
+		m.initChannel("simchat", "SimChat")
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})

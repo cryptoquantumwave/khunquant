@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
 
 // Options configures New.
@@ -29,6 +30,7 @@ type Lab struct {
 	Store   *sandbox.Store
 	State   *sandbox.StateManager
 	Sim     *sandbox.StatefulSimulator
+	Journal *labjournal.Journal // opened by the gateway under the lock
 	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
 	// Later PRs add their components here: Market, Clock, Faults, Web, Crash, ...
 

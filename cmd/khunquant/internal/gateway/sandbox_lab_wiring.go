@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -22,7 +24,7 @@ import (
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
 //
-// RULE for every lab group (inspect, and what SBX-02/03/04/06 add): (*lab.Lab).AddGroup
+// RULE for every lab group (inspect, chat, and what SBX-03/04/06 add): (*lab.Lab).AddGroup
 // is called ONCE per process, from registerLabGroups, right after buildLab and before
 // the first buildServices. Never from registerSandboxLab or anything else that runs per
 // generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when
@@ -75,8 +77,31 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 
 // registerLabGroups adds the lab's groups to the registry, once per process (see the
 // rule above). Call it right after buildLab, before the first buildServices.
-func registerLabGroups(l *lab.Lab, shared *sharedResources) error {
-	return l.AddGroup(inspect.Group(l.Journal, labDeps(shared)))
+func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) error {
+	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
+		return err
+	}
+	// The chat group's world lives as long as the process; each generation's channel
+	// attaches to it (attachSimChat). The personas are those of the first config.
+	var j simchat.Journal
+	if l.Journal != nil { // a nil *Journal inside the interface would not be nil
+		j = l.Journal
+	}
+	shared.simWorld = simchat.NewWorld(j, func() time.Time { return l.Now() }, cfg.Channels.SimChat)
+	return l.AddGroup(shared.simWorld.Group())
+}
+
+// attachSimChat binds this generation's simchat channel (the manager built a new one)
+// to the process's world, so the chat group talks to the channel that is running now.
+func attachSimChat(shared *sharedResources, cm *channels.Manager) {
+	if shared.simWorld == nil || cm == nil {
+		return
+	}
+	if ch, ok := cm.GetChannel("simchat"); ok {
+		if sc, ok := ch.(*simchat.Channel); ok {
+			sc.Attach(shared.simWorld)
+		}
+	}
 }
 
 // labDeps is the inspect group's view of the current generation, looked up on every
@@ -141,6 +166,7 @@ func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error
 			attachLabTap(d.Shared, inst.Tools)
 		}
 	}
+	attachSimChat(d.Shared, s.ChannelManager)
 	if err := startLabObserver(s.lab, d.Shared); err != nil {
 		return fmt.Errorf("starting the lab observer: %w", err)
 	}

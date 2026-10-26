@@ -32,7 +32,6 @@ func TestHelperLockedGateway(t *testing.T) {
 	if os.Getenv(helperEnv) != "1" {
 		t.Skip("helper process for the locked gateway tests")
 	}
-	registerStubSimchat()
 	err := gatewayCmd(false, true)
 	code := 0
 	if err != nil {

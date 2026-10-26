@@ -302,7 +302,6 @@ func newLockedFixture(t *testing.T, mutate ...func(*config.Config)) *lockedFixtu
 	t.Helper()
 	home := newInstanceHome(t)
 	lk := lockProcessForTest(t, home)
-	registerStubSimchat()
 
 	f := &assemblyFixture{
 		t:         t,
@@ -345,7 +344,7 @@ func newLockedFixture(t *testing.T, mutate ...func(*config.Config)) *lockedFixtu
 	lf.lab = l
 	f.shared.lab = l
 	f.shared.add("sandbox lab", l)
-	if err := registerLabGroups(l, f.shared); err != nil { // as gatewayCmd does, before the first build
+	if err := registerLabGroups(l, f.shared, f.initial); err != nil { // as gatewayCmd does, before the first build
 		t.Fatalf("registerLabGroups: %v", err)
 	}
 
@@ -369,6 +368,7 @@ func lockedBaseConfig(c *config.Config) {
 		APIBase: "http://127.0.0.1:9/v1", APIKey: *config.NewSecureString("sandbox"),
 	}}
 	c.Agents.Defaults.ModelName = "sandbox"
+	c.Channels.SimChat.Enabled, c.Channels.SimChat.AllowFrom = true, config.FlexibleStringSlice{"*"}
 }
 
 // reload drives the production reload path with a config that is valid under the

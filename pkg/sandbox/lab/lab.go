@@ -25,11 +25,12 @@ type Options struct {
 
 // Lab holds the components of one sandbox instance.
 type Lab struct {
-	Home    string
-	Server  *sandbox.Server
-	Store   *sandbox.Store
-	State   *sandbox.StateManager
-	Sim     *sandbox.StatefulSimulator
+	Home   string
+	Server *sandbox.Server
+	Store  *sandbox.Store
+	State  *sandbox.StateManager
+	Sim    *sandbox.StatefulSimulator
+
 	Journal *labjournal.Journal // opened by the gateway under the lock
 	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
 	// Later PRs add their components here: Market, Clock, Faults, Web, Crash, ...

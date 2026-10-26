@@ -10,11 +10,8 @@ import (
 	"time"
 )
 
-// The group registry is the one table both front-ends read: POST /api/sandbox/lab/<group>
-// and the in-instance MCP tool sandbox_<group>. Components plug in through AddGroup.
-
-// CallTimeout caps every Call: the HTTP server writes with a 30 s timeout, so a
-// longer call would be cut off mid-response. Long waits are loops of calls.
+// CallTimeout caps every Call: the HTTP server writes with a 30 s timeout. Long waits
+// are loops of calls.
 const CallTimeout = 25 * time.Second
 
 // OpFunc runs one operation. args is the whole request object, "op" included.
@@ -36,7 +33,6 @@ type Group struct {
 	Ops         []Op
 }
 
-// Error codes of Error.
 const (
 	CodeUnknownGroup = "unknown_group"
 	CodeUnknownOp    = "unknown_op"
@@ -67,12 +63,12 @@ var reservedTools = map[string]bool{
 	"sandbox_upsert_fixture": true, "sandbox_reload_fixtures": true, "sandbox_reset_simulator": true,
 }
 
-func (g Group) check() error {
+// AddGroup registers g in the table both front-ends read (POST /api/sandbox/lab/<group>
+// and the MCP tool sandbox_<group>). It fails on a bad or reserved name, a duplicate
+// group or op, or an op with no Run.
+func (l *Lab) AddGroup(g Group) error {
 	if !nameRE.MatchString(g.Name) || reservedTools[g.Name] || reservedTools["sandbox_"+g.Name] {
 		return fmt.Errorf("lab: group name %q is invalid or collides with a dev-MCP tool", g.Name)
-	}
-	if len(g.Ops) == 0 {
-		return fmt.Errorf("lab: group %q has no ops", g.Name)
 	}
 	seen := map[string]bool{}
 	for _, o := range g.Ops {
@@ -81,14 +77,8 @@ func (g Group) check() error {
 		}
 		seen[o.Name] = true
 	}
-	return nil
-}
-
-// AddGroup registers g, or fails on a bad or reserved name, a duplicate group or op,
-// or an op with no Run.
-func (l *Lab) AddGroup(g Group) error {
-	if err := g.check(); err != nil {
-		return err
+	if len(g.Ops) == 0 {
+		return fmt.Errorf("lab: group %q has no ops", g.Name)
 	}
 	l.gmu.Lock()
 	defer l.gmu.Unlock()

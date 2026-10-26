@@ -850,6 +850,7 @@ func registerDevMCP(
 		DebugTap: store,
 		LogBuf:   shared.LogBuf,
 		Cfg:      cfg,
+		Lab:      shared.lab,
 	})
 
 	prefix := cfg.Debug.DevMCP.PathPrefix
@@ -859,10 +860,9 @@ func registerDevMCP(
 	mux.Handle(prefix, guarded)
 	mux.Handle(prefix+"/", guarded)
 
-	if locked {
-		fmt.Printf("🔌 Dev MCP: %s (bearer: the instance token)\n", endpoint)
-	} else {
-		fmt.Printf("🔌 Dev MCP: %s\n   Token:    %s\n", endpoint, token)
+	fmt.Printf("🔌 Dev MCP: %s\n", endpoint)
+	if !locked {
+		fmt.Printf("   Token:    %s\n", token)
 	}
 	logger.WarnCF("devmcp",
 		fmt.Sprintf("Developer MCP server enabled at %s — disable in production", endpoint),

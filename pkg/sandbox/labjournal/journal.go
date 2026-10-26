@@ -4,10 +4,10 @@
 package labjournal
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,13 +19,9 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
-const (
-	defaultQueue = 8192 // entries Append can queue before it drops
-	batchMax     = 256  // entries per transaction
-)
+const batchMax = 256 // entries per transaction
 
-// Entry is one journal row. Kind follows the lab plan's prefix scheme
-// (event.<kind>, chat.*, workflow.step, proposal, policy.decision, tool.call, ...).
+// Entry is one journal row. Kind: event.<kind>, chat.*, workflow.step, proposal, ...
 type Entry struct {
 	Seq      int64           `json:"seq"`
 	SimTime  time.Time       `json:"sim_time"`
@@ -40,10 +36,9 @@ type Entry struct {
 type Options struct {
 	Path  string           // <KHUNQUANT_HOME>/lab/journal.db
 	Now   func() time.Time // sim time; nil = time.Now
-	Queue int              // default 8192
+	Queue int              // entries Append can queue before it drops (default 8192)
 }
 
-// item is a queued entry or a flush barrier.
 type item struct {
 	e       Entry
 	barrier chan struct{}
@@ -72,9 +67,6 @@ CREATE INDEX lab_journal_kind ON lab_journal(kind, seq);`}}
 // Open opens (creating it, 0600, in a 0700 directory) the journal at o.Path and
 // starts its writer. The file survives a restart; Seq continues from the last row.
 func Open(o Options) (*Journal, error) {
-	if o.Path == "" {
-		return nil, errors.New("labjournal: empty path")
-	}
 	if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
 		return nil, fmt.Errorf("labjournal: create dir: %w", err)
 	}
@@ -86,11 +78,8 @@ func Open(o Options) (*Journal, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if o.Queue <= 0 {
-		o.Queue = defaultQueue
-	}
 	j := &Journal{
-		db: db, now: o.Now, q: make(chan item, o.Queue),
+		db: db, now: o.Now, q: make(chan item, cmp.Or(o.Queue, 8192)),
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	if j.now == nil {
@@ -100,8 +89,8 @@ func Open(o Options) (*Journal, error) {
 	return j, nil
 }
 
-// Append queues e and returns at once. A full queue drops the entry and counts it in Drops. Zero times are stamped (wall, then sim); a payload
-// that is not JSON is stored as a JSON string.
+// Append queues e and returns at once; a full queue drops it (counted in Drops). Zero
+// times are stamped, and a payload that is not JSON is stored as a JSON string.
 func (j *Journal) Append(e Entry) {
 	if e.WallTime.IsZero() {
 		e.WallTime = time.Now()
@@ -146,8 +135,6 @@ func (j *Journal) Flush(ctx context.Context) error {
 	b := item{barrier: make(chan struct{})}
 	select {
 	case j.q <- b:
-	case <-j.done:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}

@@ -46,8 +46,7 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 }
 
 // startLabObserver subscribes the journal to the shared bus once per process (a second
-// subscriber would journal every event twice). It closes with the shared resources,
-// before the lab and with it the journal.
+// subscriber would journal every event twice); it closes before the lab and its journal.
 func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 	shared.mu.Lock()
 	defer shared.mu.Unlock()
@@ -63,8 +62,8 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 	return nil
 }
 
-// registerSandboxLab starts the observer and puts POST /api/sandbox/lab/<group> on
-// mux. It does nothing unless the process is locked: no route, observer or journal.
+// registerSandboxLab starts the observer and mounts the lab route; it does nothing
+// unless the process is locked.
 func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error {
 	lk, locked := sandbox.LockInfo()
 	if !locked || s.lab == nil {

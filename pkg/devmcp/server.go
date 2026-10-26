@@ -8,6 +8,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
 
 // Deps holds the runtime objects the MCP server reads from.
@@ -16,14 +17,16 @@ type Deps struct {
 	DebugTap *debugtap.Store
 	LogBuf   *debugtap.LogBuffer
 	Cfg      *config.Config
+	Lab      *lab.Lab // nil unless the process is locked
 }
 
 // NewMCPServer constructs an mcp.Server with read-only and sandbox write tools registered.
-// Tools are registered in two phases:
+// Tools are registered in three phases:
 //  1. registerReadOnlyTools (tools.go) — read-only diagnostic tools
 //  2. registerSandboxTools (sandbox_tools.go) — write-capable sandbox fixture management
+//  3. registerLabTools (lab_tools.go) — the lab's sandbox_<group> tools, locked instances only
 //
-// Both registrations use s.AddTool, the ONLY site where tools are added.
+// All registrations use s.AddTool, the ONLY site where tools are added.
 func NewMCPServer(d Deps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "khunquant-dev",
@@ -32,6 +35,7 @@ func NewMCPServer(d Deps) *mcp.Server {
 
 	registerReadOnlyTools(s, d) // defined in tools.go
 	registerSandboxTools(s, d)  // defined in sandbox_tools.go
+	registerLabTools(s, d)      // defined in lab_tools.go
 
 	return s
 }

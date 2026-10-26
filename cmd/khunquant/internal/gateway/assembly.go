@@ -28,6 +28,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -110,6 +111,9 @@ type sharedResources struct {
 	// reload never stops or rebuilds it, so its server port and simulator state
 	// survive config.patch. Set before the first buildServices, then read-only.
 	lab *lab.Lab
+	// labObserver is the lab journal's bus subscription, started on first use and
+	// kept across reloads (sandbox_lab_wiring.go). Guarded by mu.
+	labObserver *labjournal.Observer
 }
 
 // sweepState returns the process's sweep state, creating it on first use.
@@ -601,7 +605,7 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) er
 			logger.Errorf("sandbox: failed to %s: %v", phase{reload: d.Reload}.pick("start", "restart"), err)
 		}
 	}
-	return nil
+	return registerSandboxLab(mux, s, d)
 }
 
 // stopServices stops all services of one generation and cleans up their

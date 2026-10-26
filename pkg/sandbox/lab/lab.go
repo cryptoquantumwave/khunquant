@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
 
 // Options configures New.
@@ -28,7 +30,10 @@ type Lab struct {
 	Store  *sandbox.Store
 	State  *sandbox.StateManager
 	Sim    *sandbox.StatefulSimulator
-	// Later PRs add their components here: Market, Journal, Clock, Faults, Web, Crash, ...
+
+	Journal *labjournal.Journal // opened by the gateway under the lock
+	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
+	// Later PRs add their components here: Market, Clock, Faults, Web, Crash, ...
 
 	fixturesDir string
 	token       string
@@ -36,6 +41,9 @@ type Lab struct {
 	mu      sync.Mutex
 	onClose []func() error
 	closed  bool
+
+	gmu    sync.RWMutex // guards groups (group.go)
+	groups map[string]Group
 }
 
 // New loads the fixtures, seeds the simulator and starts the sandbox server. It
@@ -74,6 +82,7 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 		Store:       store,
 		State:       state,
 		Sim:         sim,
+		Now:         time.Now,
 		fixturesDir: opts.FixturesDir,
 		token:       opts.Token,
 	}, nil

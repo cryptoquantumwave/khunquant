@@ -12,13 +12,14 @@ const MaxLimit = 1000
 
 // Query selects entries. Kinds are exact ("chat.in") or a prefix ("chat.*"); Since and
 // Until bound the sim time; AfterSeq is the cursor (Seq > AfterSeq). The result is the
-// oldest Limit matches, in Seq order.
+// oldest Limit matches in Seq order, or with Desc the newest Limit matches, newest first.
 type Query struct {
 	Kinds    []string
 	Since    time.Time
 	Until    time.Time
 	Subject  string
 	AfterSeq int64
+	Desc     bool
 	Limit    int // default 100, at most MaxLimit
 }
 
@@ -62,7 +63,11 @@ func (j *Journal) Query(ctx context.Context, q Query) ([]Entry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	text += fmt.Sprintf(" ORDER BY seq LIMIT %d", min(limit, MaxLimit))
+	order := "seq"
+	if q.Desc {
+		order = "seq DESC"
+	}
+	text += fmt.Sprintf(" ORDER BY %s LIMIT %d", order, min(limit, MaxLimit))
 
 	rows, err := j.db.QueryContext(ctx, text, args...)
 	if err != nil {

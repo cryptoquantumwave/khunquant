@@ -109,7 +109,7 @@ func TestPressRejectOnApprovalCard(t *testing.T) {
 		t.Fatalf("card buttons = %v, want approve and reject", have)
 	}
 
-	res := r.mustRun("press", `{"on":{"to":"dm:owner","contains":["BTC"]},"action":"reject","as":"owner"}`)
+	res := r.mustRun("press", `{"on":{"to":"dm:owner","severity":"warning","contains":["BTC"]},"action":"reject","as":"owner"}`)
 	if res["edit"] != true && res["text"] == "" {
 		t.Fatalf("press result = %v", res)
 	}

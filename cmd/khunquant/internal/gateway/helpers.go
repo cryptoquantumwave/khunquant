@@ -193,6 +193,9 @@ func gatewayCmd(debug, locked bool) error {
 		}
 		shared.lab = l
 		shared.add("sandbox lab", l)
+		if err := registerLabGroups(l, shared); err != nil {
+			return lockFatal(fmt.Errorf("registering the lab groups: %w", err))
+		}
 	}
 
 	// Print agent startup info
@@ -354,6 +357,7 @@ func handleConfigReload(
 
 	// Stop all services before reloading
 	logger.Info("  Stopping all services...")
+	shared.retireLabGeneration()
 	stopServices(services, serviceShutdownTimeout)
 
 	// Create new provider from updated config first to ensure validity

@@ -26,6 +26,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/sweep"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -102,6 +104,12 @@ type sharedResources struct {
 	// process: a sweep still running when a reload builds the next generation is
 	// seen by it (sweep_wiring.go). Created on first use, guarded by mu.
 	sweep *sweep.State
+
+	// lab is the Sandbox Lab (sandbox_lab_wiring.go): nil unless the process is
+	// locked. It is built once at start, closed through add at shutdown, and a
+	// reload never stops or rebuilds it, so its server port and simulator state
+	// survive config.patch. Set before the first buildServices, then read-only.
+	lab *lab.Lab
 }
 
 // sweepState returns the process's sweep state, creating it on first use.
@@ -250,6 +258,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		s.SimulatorReseter = prev.SimulatorReseter
 		s.DebugTap = prev.DebugTap
 	}
+	s.lab = d.Shared.lab
 	if err := ctx.Err(); err != nil {
 		return s, fmt.Errorf("service assembly aborted: %w", err)
 	}
@@ -362,7 +371,9 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	s.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
 	s.ChannelManager.SetupHTTPServer(addr, s.HealthServer)
-	registerGatewayRoutes(s.ChannelManager, s, d)
+	if err := registerGatewayRoutes(s.ChannelManager, s, d); err != nil {
+		return s, fmt.Errorf("error %s gateway routes: %w", starting, err)
+	}
 
 	// context.Background(), not ctx: channel goroutines (e.g. pico WebSocket
 	// readLoops) must not be cancelled when this function returns. Channels are
@@ -560,7 +571,10 @@ func observeHeartbeatSends(al *agent.AgentLoop, hs *heartbeat.HeartbeatService) 
 // sandbox server whose API it serves). It is the only place routes are added:
 // buildServices calls it right after SetupHTTPServer and before StartAll, on a
 // first start and on every reload, because the mux is recreated each time.
-func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
+//
+// It returns an error only for a locked sandbox that could not be attached; an
+// unlocked sandbox failure is logged and the gateway carries on, as it always did.
+func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) error {
 	cfg := d.Cfg
 
 	ensureManagementToken(cfg)
@@ -579,11 +593,15 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
 		teardownDevMCP(s, d.Shared, d.AgentLoop)
 	}
 
-	if cfg.Debug.Sandbox.Enabled {
+	if cfg.Debug.Sandbox.Enabled || sandbox.Locked() {
 		if err := startAndRegisterSandbox(mux, cfg, s); err != nil {
+			if sandbox.Locked() {
+				return fmt.Errorf("sandbox: failed to %s: %w", phase{reload: d.Reload}.pick("start", "restart"), err)
+			}
 			logger.Errorf("sandbox: failed to %s: %v", phase{reload: d.Reload}.pick("start", "restart"), err)
 		}
 	}
+	return nil
 }
 
 // stopServices stops all services of one generation and cleans up their

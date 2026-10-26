@@ -26,6 +26,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 const (
@@ -219,6 +220,12 @@ func NewManager(cfg *config.Config, messageBus *bus.MessageBus, store media.Medi
 
 // initChannel is a helper that looks up a factory by name and creates the channel.
 func (m *Manager) initChannel(name, displayName string) {
+	// Under the sandbox lock no real chat adapter is built, whatever the config says.
+	if !sandbox.ChannelAllowed(name) {
+		logger.WarnCF("channels", "Channel not built: only simchat is allowed under the sandbox lock",
+			map[string]any{"channel": displayName})
+		return
+	}
 	f, ok := getFactory(name)
 	if !ok {
 		logger.WarnCF("channels", "Factory not registered", map[string]any{
@@ -342,6 +349,13 @@ func (m *Manager) initChannels() error {
 	// configured could accept messages and deliver them nowhere.
 	if m.config.Channels.TeamsWebhook.Enabled && len(m.config.Channels.TeamsWebhook.Webhooks) > 0 {
 		m.initChannel("teams_webhook", "Teams Webhook")
+	}
+
+	// The simulated chat channel is the one channel a locked sandbox instance runs.
+	// Its adapter registers the "simchat" factory; until one is registered this
+	// only logs, and StartAll then reports that no channel is enabled.
+	if sandbox.Locked() {
+		m.initChannel("simchat", "SimChat")
 	}
 
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{

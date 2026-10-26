@@ -12,6 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	anthropicmessages "github.com/cryptoquantumwave/khunquant/pkg/providers/anthropic_messages"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/azure"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
@@ -78,6 +79,18 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	}
 
 	protocol, modelID := ExtractProtocol(cfg.Model)
+
+	// Under the sandbox lock only plain HTTP providers on loopback (or an allowed
+	// host) may be built. This is the one place every provider construction passes
+	// through. OAuth/token auth ignores api_base, so it is refused outright.
+	if sandbox.Locked() {
+		if err := sandbox.CheckLockedModel(protocol, ResolveAPIBase(cfg)); err != nil {
+			return nil, "", err
+		}
+		if cfg.AuthMethod != "" {
+			return nil, "", fmt.Errorf("sandbox: auth_method %q is not allowed under the sandbox lock", cfg.AuthMethod)
+		}
+	}
 
 	switch protocol {
 	case "openai":

@@ -57,6 +57,7 @@ func registerSandboxAPI(mux interface {
 type sandboxStatusResponse struct {
 	Enabled     bool     `json:"enabled"`
 	Running     bool     `json:"running"`
+	Locked      bool     `json:"locked"`
 	BaseURL     string   `json:"base_url,omitempty"`
 	FixturesDir string   `json:"fixtures_dir,omitempty"`
 	Venues      []string `json:"venues"`
@@ -67,12 +68,12 @@ func handleSandboxStatus(w http.ResponseWriter, r *http.Request, store *sandbox.
 	venues := store.Venues()
 	sort.Strings(venues)
 
-	// The server is considered running if state is enabled
-	running := enabled
-
+	// Enabled with no base URL is the armed-but-not-serving state (and, locked, the
+	// fail-closed one), so running means a server address is published.
 	resp := sandboxStatusResponse{
 		Enabled:     enabled,
-		Running:     running,
+		Running:     baseURL != "",
+		Locked:      sandbox.Locked(),
 		BaseURL:     baseURL,
 		FixturesDir: fixturesDir,
 		Venues:      venues,

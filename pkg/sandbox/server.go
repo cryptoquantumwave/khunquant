@@ -55,7 +55,25 @@ func GetInstance() *Server {
 
 // SetGlobalState updates the global sandbox state (enabled flag and base URL).
 // Called by Server.Start() and Server.Stop() to keep the live state in sync.
+//
+// Under the process lock (see Lock) the sandbox cannot be switched off: enabled=false
+// is refused, and a base URL that is not loopback is dropped. Both store (true, ""),
+// which makes exchange traffic fail closed.
 func SetGlobalState(enabled bool, baseURL string) {
+	lockMu.RLock()
+	defer lockMu.RUnlock()
+	if locked {
+		switch {
+		case !enabled:
+			logger.WarnCF("sandbox", "locked process refused to disable the sandbox", nil)
+			baseURL = ""
+		case baseURL != "" && !hostIsLoopback(apiBaseHost(baseURL)):
+			logger.WarnCF("sandbox", "locked process refused a non-loopback sandbox URL",
+				map[string]any{"url": baseURL})
+			baseURL = ""
+		}
+		enabled = true
+	}
 	globalStateMu.Lock()
 	defer globalStateMu.Unlock()
 	globalEnabled = enabled

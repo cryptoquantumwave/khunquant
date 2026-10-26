@@ -420,24 +420,9 @@ func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewa
 	// The simulator will be consulted before the fixture store for write endpoints.
 	stateManager := sandbox.NewStateManager()
 
-	// Seed Markets from fixtures so the simulator can handle order requests
-	// (contractSize and minAmount are needed for order validation)
-	for _, venue := range store.Venues() {
-		venueState := stateManager.GetState(venue)
-		sandbox.SeedMarketsFromFixtures(venue, store, venueState)
-
-		// Seed dev-mode default values for MarkPrices and Balances
-		// These are required for the simulator to accept orders
-		// Values are arbitrary dev defaults; easily changed
-		for symbol := range venueState.Markets {
-			venueState.MarkPrices[symbol] = 50000 // Default price for all symbols
-		}
-		venueState.Balances["USDT"] = sandbox.Balance{Free: 100000, Locked: 0}
-
-		// Capture the seeded state as the reset baseline. Without this, calling the reset
-		// tool will wipe all simulator state and leave it inert until process restart.
-		stateManager.SnapshotAsSeed(venue)
-	}
+	// Seed markets (contractSize and minAmount are needed for order validation),
+	// mark prices and balances so the simulator can handle order requests.
+	sandbox.SeedDevDefaults(store, stateManager)
 
 	sim := sandbox.NewStatefulSimulator(stateManager)
 	srv.SetResponder(sim)

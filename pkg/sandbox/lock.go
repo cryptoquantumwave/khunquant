@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -124,6 +125,43 @@ func ResetLockForTest() {
 	globalStateMu.Lock()
 	globalEnabled, globalBaseURL = false, ""
 	globalStateMu.Unlock()
+}
+
+// PathInside reports whether p is root itself or lies under it. Both sides are made
+// absolute and have symlinks resolved as far as they exist (so /var vs /private/var
+// and a symlink inside root that points out of it are both judged by where they
+// really lead). An empty root or p is never inside.
+func PathInside(root, p string) bool {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(p) == "" {
+		return false
+	}
+	r, p2 := resolveExisting(root), resolveExisting(p)
+	rel, err := filepath.Rel(r, p2)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveExisting makes p absolute and resolves symlinks in its longest existing
+// ancestor, keeping the not-yet-existing tail as written.
+func resolveExisting(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	cur, tail := abs, ""
+	for {
+		if res, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(res, tail)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
 }
 
 // apiBaseHost returns the lower-cased host name of an API base URL ("" if none).

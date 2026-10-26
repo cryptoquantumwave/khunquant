@@ -10,6 +10,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
 )
 
 // lockTestToken is the instance token of every locked test: 32+ characters, as
@@ -113,6 +114,8 @@ func lockProcessForTest(t *testing.T, home string) sandbox.LockOptions {
 	t.Helper()
 	setLockEnv(t, home)
 	sandbox.ResetLockForTest()
+	egress.ResetForTest()
+	t.Cleanup(egress.ResetForTest)
 	t.Cleanup(func() { config.SetSaveGuard(nil) })
 	t.Cleanup(sandbox.ResetLockForTest)
 

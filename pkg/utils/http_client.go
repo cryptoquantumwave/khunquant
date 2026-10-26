@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
 )
 
 // CreateHTTPClient creates an HTTP client with optional proxy support.
@@ -15,6 +16,8 @@ import (
 // Supported proxy schemes: http, https, socks5, socks5h.
 // This client is NOT wrapped in the sandbox transport and should only be used
 // for non-exchange traffic (e.g., web search, data fetching).
+// With the sandbox egress guard installed it can only dial loopback and the allowed
+// hosts, and no proxy (given or from the environment) is used.
 func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
 	client := &http.Client{
 		Timeout: timeout,
@@ -46,6 +49,11 @@ func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, err
 		client.Transport.(*http.Transport).Proxy = http.ProxyURL(proxy)
 	} else {
 		client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment
+	}
+
+	if egress.Installed() {
+		tr := client.Transport.(*http.Transport)
+		tr.Proxy, tr.DialContext = nil, egress.DialContext(egress.Current())
 	}
 
 	return client, nil

@@ -89,12 +89,7 @@ func startLockedProcess(t *testing.T) *lockedProcess {
 
 	// The child's HOME and TMPDIR are private dirs the token scan covers too.
 	childHome, childTmp := t.TempDir(), t.TempDir()
-	p := &lockedProcess{
-		t: t, home: home, port: port, out: &syncBuffer{}, exited: make(chan struct{}),
-		scanDirs: []string{home, childHome, childTmp},
-	}
-	p.cmd = exec.Command(os.Args[0], "-test.run=^TestHelperLockedGateway$")
-	p.cmd.Env = []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + childTmp,
 		"HOME=" + childHome,
@@ -103,8 +98,20 @@ func startLockedProcess(t *testing.T) *lockedProcess {
 		"KQ_SANDBOX_LOCKED=1",
 		"KQ_SANDBOX_TOKEN=" + lockTestToken,
 		"KQ_SANDBOX_INSTANCE=subprocess",
-		helperEnv + "=1",
 	}
+	return launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
+}
+
+// launchLockedProcess re-executes the test binary as the locked gateway with exactly
+// env (plus the helper switch).
+func launchLockedProcess(t *testing.T, home string, port int, env, scanDirs []string) *lockedProcess {
+	t.Helper()
+	p := &lockedProcess{
+		t: t, home: home, port: port, out: &syncBuffer{}, exited: make(chan struct{}),
+		scanDirs: scanDirs,
+	}
+	p.cmd = exec.Command(os.Args[0], "-test.run=^TestHelperLockedGateway$")
+	p.cmd.Env = append(append([]string(nil), env...), helperEnv+"=1")
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	if err := p.cmd.Start(); err != nil {
 		t.Fatalf("start locked gateway: %v", err)
@@ -246,6 +253,41 @@ func TestLockedGateway_TokenNeverOnDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(p.home, "config.json")); err != nil || files < 2 {
 		t.Fatalf("expected the instance files to have been scanned (files=%d, err=%v)", files, err)
+	}
+}
+
+// `khunquant sandbox down` stops an instance with SIGTERM: a locked gateway must
+// shut down gracefully on it (exit 0), and an unlocked one keeps handling only
+// Ctrl+C.
+func TestLockedGateway_SIGTERMStopsCleanly(t *testing.T) {
+	p := startLockedProcess(t)
+	p.waitReady()
+
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.wait(30 * time.Second); err != nil {
+		t.Fatalf("SIGTERM did not stop the locked gateway cleanly: %v\n%s", err, p.out.String())
+	}
+	if !strings.Contains(p.out.String(), "Shutting down") {
+		t.Errorf("no graceful shutdown in the output:\n%s", p.out.String())
+	}
+}
+
+func TestShutdownSignals(t *testing.T) {
+	has := func(sigs []os.Signal, want os.Signal) bool {
+		for _, s := range sigs {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	if u := shutdownSignals(false); len(u) != 1 || !has(u, os.Interrupt) {
+		t.Errorf("unlocked signals = %v, want only os.Interrupt", u)
+	}
+	if l := shutdownSignals(true); !has(l, os.Interrupt) || !has(l, syscall.SIGTERM) {
+		t.Errorf("locked signals = %v, want os.Interrupt and SIGTERM", l)
 	}
 }
 

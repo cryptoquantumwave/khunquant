@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
 )
 
 const (
@@ -55,9 +56,13 @@ func lockOptionsFromEnv() (sandbox.LockOptions, error) {
 	if home == "" {
 		return sandbox.LockOptions{}, errors.New("sandbox lock: KHUNQUANT_HOME must name the instance home")
 	}
+	// `sandbox up` runs the gateway with HOME=<instance home>, which has no .khunquant
+	// of its own: there ~ is the instance, not an install, and the check is skipped.
 	if userHome, err := os.UserHomeDir(); err == nil {
 		realHome := filepath.Join(userHome, ".khunquant")
-		if sandbox.PathInside(realHome, home) || sandbox.PathInside(home, realHome) {
+		_, statErr := os.Lstat(realHome)
+		upHome := os.IsNotExist(statErr) && sandbox.PathInside(userHome, home) && sandbox.PathInside(home, userHome)
+		if !upHome && (sandbox.PathInside(realHome, home) || sandbox.PathInside(home, realHome)) {
 			return sandbox.LockOptions{}, errors.New("sandbox lock: KHUNQUANT_HOME must not be, contain or lie inside ~/.khunquant")
 		}
 	}
@@ -82,7 +87,8 @@ func lockOptionsFromEnv() (sandbox.LockOptions, error) {
 }
 
 // armSandboxLock locks the process (arming the sandbox state as enabled with no
-// server, so exchange traffic fails closed) and makes SaveConfig refuse every write.
+// server, so exchange traffic fails closed), makes SaveConfig refuse every write and
+// installs the loopback-only egress guard.
 func armSandboxLock(lk sandbox.LockOptions) error {
 	if err := sandbox.Lock(lk); err != nil {
 		return err
@@ -90,7 +96,7 @@ func armSandboxLock(lk sandbox.LockOptions) error {
 	config.SetSaveGuard(func(string) error {
 		return errors.New("config is read-only under the sandbox lock")
 	})
-	return nil
+	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
 }
 
 // enforceLockedConfig forces the invariants of a locked config. It runs on the

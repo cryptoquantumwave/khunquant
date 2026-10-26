@@ -64,6 +64,7 @@ func TestNewKhunquantCommand(t *testing.T) {
 		"replay",
 		"owner",
 		"risk",
+		"sandbox",
 		"skills",
 		"start",
 		"status",

@@ -26,6 +26,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/health"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 const (
@@ -219,6 +220,12 @@ func NewManager(cfg *config.Config, messageBus *bus.MessageBus, store media.Medi
 
 // initChannel is a helper that looks up a factory by name and creates the channel.
 func (m *Manager) initChannel(name, displayName string) {
+	// Under the sandbox lock no real chat adapter is built, whatever the config says.
+	if !sandbox.ChannelAllowed(name) {
+		logger.WarnCF("channels", "Channel not built: only simchat is allowed under the sandbox lock",
+			map[string]any{"channel": displayName})
+		return
+	}
 	f, ok := getFactory(name)
 	if !ok {
 		logger.WarnCF("channels", "Factory not registered", map[string]any{

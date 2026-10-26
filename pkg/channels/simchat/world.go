@@ -36,8 +36,9 @@ type Button struct {
 	Data   string `json:"data"`
 }
 
-// OutMsg is a message the instance sent, as the outbox shows it. Severity, DedupKey and
-// InterventionID are set only for a proactive message ("" otherwise).
+// OutMsg is a message the instance sent, as the outbox shows it. Severity is the
+// message's own ("info" for an ordinary reply, whose zero value it is); DedupKey and
+// InterventionID are "" unless a proactive sender set them.
 type OutMsg struct {
 	Seq            int64     `json:"seq"`
 	ID             string    `json:"id,omitempty"` // "" when the send was refused
@@ -208,9 +209,7 @@ func (w *World) deliver(ctx context.Context, msg bus.OutboundMessage) ([]string,
 		InterventionID: msg.InterventionID, Silent: msg.DisableNotification, Buttons: []Button{},
 		At: time.Now(), SimAt: w.now(),
 	}
-	if msg.IsProactive() {
-		m.Severity = msg.Severity.String()
-	}
+	m.Severity = msg.Severity.String() // an owner's approval card has one but no intervention id
 	m.Buttons = encodeButtons(msg.Actions)
 	w.mu.Lock()
 	w.seq++

@@ -9,6 +9,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
@@ -65,7 +66,9 @@ func TestSendOwnerDMReachesBus(t *testing.T) {
 
 func TestSendRefusedByAllowList(t *testing.T) {
 	r := newRig(t, func(c *config.SimChatConfig) { c.AllowFrom = config.FlexibleStringSlice{"simchat:owner"} })
-	r.mustRun("send", `{"as":"stranger","text":"let me in"}`)
+	if res := r.mustRun("send", `{"as":"stranger","text":"let me in"}`); res["delivered"] != false {
+		t.Fatalf("a refused sender's send = %v, want delivered:false", res)
+	}
 	if m, ok := r.inbound(); ok {
 		t.Fatalf("a sender outside allow_from reached the agent: %+v", m)
 	}
@@ -172,7 +175,7 @@ func TestOutMsgCarriesProactiveMetadata(t *testing.T) {
 			t.Errorf("button %d = %v (parsed %q %q %v)", i, b, id, payload, err)
 		}
 	}
-	if p := msgs[1].(map[string]any); p["severity"] != "" || p["intervention_id"] != "" {
+	if p := msgs[1].(map[string]any); p["severity"] != "info" || p["intervention_id"] != "" || p["dedup_key"] != "" || p["silent"] != false {
 		t.Errorf("an ordinary reply carries proactive metadata: %v", p)
 	}
 
@@ -293,7 +296,10 @@ func TestDownStateManagerRetries(t *testing.T) {
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
 
 	send := func(content string) {
-		if err := r.b.PublishOutbound(context.Background(), bus.OutboundMessage{Channel: "simchat", ChatID: "dm:owner", Content: content}); err != nil {
+		// A proactive message, as the issue's check words it: "the next proactive send".
+		msg := bus.OutboundMessage{Channel: "simchat", ChatID: "dm:owner", Content: content,
+			InterventionID: "I-2", Severity: proactive.SeverityNotice, DedupKey: "k"}
+		if err := r.b.PublishOutbound(context.Background(), msg); err != nil {
 			t.Fatal(err)
 		}
 	}

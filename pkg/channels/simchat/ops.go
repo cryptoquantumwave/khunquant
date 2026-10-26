@@ -125,8 +125,14 @@ func (w *World) sendOp(ctx context.Context, args json.RawMessage) (any, error) {
 	w.inID++
 	id := "in-" + strconv.FormatInt(w.inID, 10)
 	w.mu.Unlock()
+	allowed := ch.IsAllowedSender(snd) // HandleMessage drops a refused sender without a word
 	w.log("chat.in", chatID, map[string]any{"id": id, "as": a.As, "sender": snd.CanonicalID, "text": a.Text,
-		"reply_to": a.ReplyTo, "quote": a.Quote, "forwarded": a.Forwarded, "mention": a.Mention, "spoofed_by": spoofedBy})
+		"reply_to": a.ReplyTo, "quote": a.Quote, "forwarded": a.Forwarded, "mention": a.Mention, "spoofed_by": spoofedBy,
+		"allowed": allowed})
+	if !allowed {
+		return map[string]any{"id": id, "chat": chatID, "sender": snd.CanonicalID, "delivered": false,
+			"reason": "the channel's allow_from refuses this sender"}, nil
+	}
 	ch.HandleMessage(ctx, bus.Peer{Kind: kind, ID: chatID}, id, snd.CanonicalID, chatID, content, nil, meta, snd)
 	return map[string]any{"id": id, "chat": chatID, "sender": snd.CanonicalID, "delivered": true}, nil
 }

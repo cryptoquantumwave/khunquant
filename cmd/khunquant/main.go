@@ -137,7 +137,8 @@ func isSandboxJSON(args []string) bool {
 // gateway (the gateway's own lockRequested: the env switch or the flag). It runs
 // before the gateway arms its lock, so it only reads the request.
 func isLockedGateway(args []string) bool {
-	return os.Getenv("KQ_SANDBOX_LOCKED") == "1" || slices.Contains(args, "--sandbox-locked")
+	return os.Getenv("KQ_SANDBOX_LOCKED") == "1" ||
+		slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--sandbox-locked") }) // also =true
 }
 
 // exitStatus is how the process ends for an error from a command. A command that

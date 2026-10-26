@@ -35,6 +35,7 @@ func TestStartupModes(t *testing.T) {
 	t.Setenv("KQ_SANDBOX_LOCKED", "")
 	assert.False(t, isLockedGateway([]string{"khunquant", "gateway"}))
 	assert.True(t, isLockedGateway([]string{"khunquant", "gateway", "--sandbox-locked"}))
+	assert.True(t, isLockedGateway([]string{"khunquant", "gateway", "--sandbox-locked=true"}))
 	t.Setenv("KQ_SANDBOX_LOCKED", "1")
 	assert.True(t, isLockedGateway([]string{"khunquant", "gateway"}))
 

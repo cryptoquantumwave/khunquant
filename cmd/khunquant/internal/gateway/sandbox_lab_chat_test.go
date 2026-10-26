@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -32,8 +34,8 @@ func chatOutbox(t *testing.T, url, to string) []map[string]any {
 	return out.Messages
 }
 
-// waitChatOutbox waits until the chat's outbox holds n messages (a control reply is
-// delivered by the manager's worker, a moment after send returns).
+// waitChatOutbox waits until the chat's outbox holds n messages (a message published to
+// the bus is delivered by the manager's worker, a moment after it is published).
 func waitChatOutbox(t *testing.T, url, to string, n int) []map[string]any {
 	t.Helper()
 	var msgs []map[string]any
@@ -65,7 +67,8 @@ func TestLabChatSurvivesReload(t *testing.T) {
 	}
 
 	// /whoami is answered by the control path, which needs no LLM and no owner: the
-	// reply leaves through the real manager and lands in the outbox.
+	// channel sends the reply itself (synchronously, not through the manager) and it
+	// lands in the outbox.
 	if code, body, err := postJSON(chatURL, lockTestToken, `{"op":"send","as":"stranger","text":"/whoami"}`); err != nil || code != http.StatusOK {
 		t.Fatalf("POST chat send = %d (%v) %s", code, err, body)
 	}
@@ -78,6 +81,16 @@ func TestLabChatSurvivesReload(t *testing.T) {
 	if err != nil || code != http.StatusOK || !strings.Contains(body, `"chat.out"`) {
 		t.Fatalf("inspect outbox = %d (%v) %s, want the chat.out entry", code, err, body)
 	}
+
+	// The manager's path: a message published to the bus reaches the channel.
+	publish := func(content string) {
+		t.Helper()
+		if err := f.bus.PublishOutbound(context.Background(), bus.OutboundMessage{Channel: "simchat", ChatID: "dm:bob", Content: content}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish("before the reload")
+	waitChatOutbox(t, chatURL, "dm:bob", 1)
 
 	if err := f.reload(func(c *config.Config) { c.Debug.DevMCP.Enabled = true }); err != nil {
 		t.Fatal(err)
@@ -93,6 +106,8 @@ func TestLabChatSurvivesReload(t *testing.T) {
 		t.Fatalf("POST chat send after the reload = %d (%v) %s", code, err, body)
 	}
 	waitChatOutbox(t, chatURL, "dm:alice", 1)
+	publish("after the reload") // delivered by the new generation's manager to the re-attached channel
+	waitChatOutbox(t, chatURL, "dm:bob", 2)
 	if len(chatOutbox(t, chatURL, "dm:stranger")) != 1 {
 		t.Fatal("the outbox lost the message from before the reload")
 	}

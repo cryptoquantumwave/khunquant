@@ -66,7 +66,8 @@ func TestLockOptionsFromEnv(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(realHome, ".khunquant"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{realHome, filepath.Join(realHome, ".khunquant")} {
+	parent := filepath.Dir(realHome)
+	for _, d := range []string{parent, realHome, filepath.Join(realHome, ".khunquant")} {
 		if err := os.WriteFile(filepath.Join(d, instanceMarker), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -85,6 +86,10 @@ func TestLockOptionsFromEnv(t *testing.T) {
 		{"home that contains the real home", map[string]string{
 			"KHUNQUANT_HOME":   realHome,
 			"KHUNQUANT_CONFIG": filepath.Join(realHome, "config.json"),
+		}},
+		{"parent of the real home", map[string]string{
+			"KHUNQUANT_HOME":   parent,
+			"KHUNQUANT_CONFIG": filepath.Join(parent, "config.json"),
 		}},
 		{"no marker", map[string]string{
 			"KHUNQUANT_HOME":   t.TempDir(),
@@ -106,6 +111,34 @@ func TestLockOptionsFromEnv(t *testing.T) {
 			t.Errorf("%s: the error leaks the token: %v", tc.name, err)
 		}
 		setLockEnv(t, home) // restore the valid environment
+	}
+}
+
+// `khunquant sandbox up` runs the gateway with HOME set to the instance home. The
+// overlap check against ~/.khunquant must not refuse that (it would make every
+// instance unstartable), yet must keep refusing a home that really overlaps it.
+func TestLockOptionsFromEnv_HomeIsInstanceHome(t *testing.T) {
+	home := newInstanceHome(t)
+	setLockEnv(t, home)
+	t.Setenv("HOME", home)
+	if _, err := lockOptionsFromEnv(); err != nil {
+		t.Fatalf("HOME=<instance home> refused: %v", err)
+	}
+
+	// HOME elsewhere and the instance home inside <HOME>/.khunquant: still refused.
+	other := t.TempDir()
+	t.Setenv("HOME", other)
+	inside := filepath.Join(other, ".khunquant", "x")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inside, instanceMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KHUNQUANT_HOME", inside)
+	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(inside, "config.json"))
+	if _, err := lockOptionsFromEnv(); err == nil {
+		t.Fatal("a home inside ~/.khunquant was accepted")
 	}
 }
 

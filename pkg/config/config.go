@@ -1598,7 +1598,28 @@ func (c *Config) migrateChannelConfigs() {
 	}
 }
 
+// saveGuard, when set, is asked before every SaveConfig and can veto it.
+var saveGuard atomic.Pointer[func(path string) error]
+
+// SetSaveGuard installs a hook that SaveConfig calls first; an error from it is
+// returned by SaveConfig and nothing is written (neither config.json nor
+// .security.yml). The sandbox lock uses it so a locked gateway never writes config.
+// nil clears the guard.
+func SetSaveGuard(f func(path string) error) {
+	if f == nil {
+		saveGuard.Store(nil)
+		return
+	}
+	saveGuard.Store(&f)
+}
+
 func SaveConfig(path string, cfg *Config) error {
+	if g := saveGuard.Load(); g != nil {
+		if err := (*g)(path); err != nil {
+			return err
+		}
+	}
+
 	// Save sensitive fields (SecureString values) to .security.yml before
 	// marshaling config.json, so JSON only ever writes "[NOT_HERE]".
 	if err := saveSecurityConfig(securityPath(path), cfg); err != nil {

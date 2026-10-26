@@ -80,11 +80,22 @@ func (m *dcaGateMock) CreateOrder(_ context.Context, _ string, orderType, side s
 	if m.orderErr != nil {
 		return ccxt.Order{}, m.orderErr
 	}
-	if m.orderResp != nil {
-		return *m.orderResp, nil
-	}
+	// An exchange that answers a market order with a completed fill, unless the
+	// test scripts otherwise: a response with no status of its own is reported
+	// closed, and the default one fills in full.
 	id := "mock-order"
-	return ccxt.Order{Id: &id}, nil
+	resp := ccxt.Order{Id: &id}
+	if m.orderResp != nil {
+		resp = *m.orderResp
+	} else {
+		filled := amount
+		resp.Filled = &filled
+	}
+	if resp.Status == nil {
+		closed := "closed"
+		resp.Status = &closed
+	}
+	return resp, nil
 }
 
 func (m *dcaGateMock) CancelOrder(context.Context, string, string) (ccxt.Order, error) {

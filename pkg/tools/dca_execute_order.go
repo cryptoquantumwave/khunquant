@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -30,6 +32,29 @@ var (
 	dcaSaveExecutionTx = func(ctx context.Context, s *dca.Store, exec *dca.Execution, d *dca.StatsDelta) (int64, error) {
 		return s.SaveExecutionTx(ctx, exec, d)
 	}
+
+	// dcaSleep waits between order read-back attempts (tests replace it so they
+	// do not block for real seconds).
+	dcaSleep = sleepCtx
+)
+
+// Read-back policy applied when CreateOrder's response does not already show a
+// completed fill: re-fetch the order up to dcaReadBackTries times, waiting
+// dcaReadBackDelay between attempts.
+const (
+	dcaReadBackTries = 3
+	dcaReadBackDelay = time.Second
+)
+
+// Execution statuses written by this tool. "completed", "failed" and "skipped"
+// predate the read-back; "pending" and "unknown" mean an order may exist on the
+// exchange that has not (fully) filled, or whose fill could not be confirmed.
+// Both count toward the per-period cap (dca.Store.CountExecutionsInPeriodAt).
+const (
+	dcaStatusCompleted = "completed"
+	dcaStatusFailed    = "failed"
+	dcaStatusPending   = "pending"
+	dcaStatusUnknown   = "unknown"
 )
 
 // ExecuteDCAOrderTool executes one DCA order (buy or sell) for a plan.
@@ -76,6 +101,10 @@ type dcaAttempt struct {
 	plan  *dca.Plan
 	side  string
 	price float64 // last market price read; 0 until the ticker has been read
+
+	// orderID is set once the exchange has accepted an order, so a failure row
+	// written afterwards (the order then ended with nothing filled) carries it.
+	orderID string
 }
 
 // intendedQuote is the quote amount the plan meant to trade, for the row of an
@@ -107,6 +136,7 @@ func (a *dcaAttempt) record(status, reason string) {
 		Symbol:      a.plan.Symbol,
 		Provider:    a.plan.Provider,
 		Account:     a.plan.Account,
+		OrderID:     a.orderID,
 		AmountQuote: a.intendedQuote(),
 		FilledPrice: a.price,
 		Status:      status,
@@ -384,42 +414,105 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 		return a.fail(fmt.Sprintf("order placement failed: %v", err))
 	}
 
-	// Extract filled details from order response.
 	orderID := ""
 	if order.Id != nil {
 		orderID = *order.Id
 	}
+	a.orderID = orderID
+
+	// Only a create response that already shows a completed fill (or a hard
+	// terminal end) is trusted as-is. Anything else (open, queued, missing
+	// status) is read back from the exchange before recording, so the plan's
+	// stats never claim a buy that has not actually filled. The read-back runs on
+	// a context that outlives the request: the order exists either way.
+	final := order
+	state := classifyDCAOrder(order)
+	var readErr error
+	if state != dcaOrderFilled && state != dcaOrderDead {
+		rctx, rcancel := bookkeepingContext(ctx)
+		if orderID == "" {
+			state = dcaOrderUnknown
+			final = ccxt.Order{}
+			readErr = errors.New("the order response carried no order id, so it cannot be read back")
+		} else if o, ok, err := readBackDCAOrder(rctx, tp, orderID, plan.Symbol); ok {
+			final, state = o, classifyDCAOrder(o)
+		} else {
+			state = dcaOrderUnknown
+			final = ccxt.Order{}
+			readErr = err
+		}
+		rcancel()
+	}
+
+	status := ""
+	if final.Status != nil {
+		status = *final.Status
+	}
+	filledQty := dcaFilledQty(final)
 	filledPrice := currentPrice
 	// A non-finite value from an adapter is treated as missing, so it can
 	// never reach the plan's totals.
-	if order.Average != nil && dcaPositiveFinite(*order.Average) {
-		filledPrice = *order.Average
-	} else if order.Price != nil && dcaPositiveFinite(*order.Price) {
-		filledPrice = *order.Price
+	if final.Average != nil && dcaPositiveFinite(*final.Average) {
+		filledPrice = *final.Average
+	} else if final.Price != nil && dcaPositiveFinite(*final.Price) {
+		filledPrice = *final.Price
 	}
-	filledQty := baseAmount
-	if order.Filled != nil && dcaPositiveFinite(*order.Filled) {
-		filledQty = *order.Filled
+	feeQuote := 0.0
+	if final.Fee.Cost != nil && dcaPositiveFinite(*final.Fee.Cost) {
+		feeQuote = *final.Fee.Cost
+	}
+
+	// What goes on the row. Nothing is recorded as bought beyond what the
+	// exchange reports as filled, and the order is never cancelled here.
+	var (
+		execStatus string
+		note       string
+	)
+	switch {
+	case state == dcaOrderFilled:
+		execStatus = dcaStatusCompleted
+	case state == dcaOrderDead && filledQty == 0:
+		// Ended with nothing filled: no position, so a failure row (carrying the
+		// order id) and an error result.
+		return a.fail(fmt.Sprintf("order %s ended %q with nothing filled", orElse(orderID, "(no id)"), status))
+	case state == dcaOrderDead:
+		// Canceled/expired after a partial fill: final, so the filled part is a
+		// real (smaller) completed buy.
+		execStatus = dcaStatusCompleted
+		note = fmt.Sprintf("order %s ended %q after a partial fill: filled %.8g of %.8g", orderID, status, filledQty, baseAmount)
+	case state == dcaOrderOpen || filledQty > 0:
+		execStatus = dcaStatusPending
+		note = fmt.Sprintf("order %s is still %q, filled %.8g of %.8g. It was NOT cancelled; check it on the exchange. Do not re-run this plan for the same period.",
+			orderID, status, filledQty, baseAmount)
+	default:
+		execStatus = dcaStatusUnknown
+		filledQty, filledPrice, feeQuote = 0, currentPrice, 0
+		why := fmt.Sprintf("status %q is not recognised", status)
+		if readErr != nil {
+			why = fmt.Sprintf("reading it back failed: %v", readErr)
+		}
+		note = fmt.Sprintf("order %s was placed but its fill could not be confirmed (%s). Nothing was recorded as bought and the order was NOT cancelled; check it on the exchange. Do not re-run this plan for the same period.",
+			orElse(orderID, "(no id)"), why)
 	}
 	actualQuote := filledQty * filledPrice
 
 	// Report the accepted order to the perception order feed, before the bookkeeping
 	// below (which can fail without the order ceasing to exist). The USD value is the
-	// one the risk gates computed, scaled to what filled; unknown stays unknown.
+	// one the risk gates computed, scaled to what filled; unknown stays unknown, and
+	// so does the value of an order that has not filled.
 	dcaUSD, dcaUSDKnown := 0.0, false
-	if nq.USDKnown && nq.USDPerQuote > 0 {
+	if nq.USDKnown && nq.USDPerQuote > 0 && filledQty > 0 {
 		dcaUSD, dcaUSDKnown = actualQuote*nq.USDPerQuote, true
 	}
-	publishOrder(ctx, orderReport{
+	report := orderReport{
 		tool: NameExecuteDCAOrder, provider: plan.Provider, account: plan.Account, symbol: plan.Symbol,
 		side: side, kind: "market", amount: baseAmount, unit: orderfeed.UnitBase, order: order,
 		notionalUSD: dcaUSD, notionalKnown: dcaUSDKnown,
-	})
-
-	feeQuote := 0.0
-	if order.Fee.Cost != nil && !math.IsNaN(*order.Fee.Cost) && !math.IsInf(*order.Fee.Cost, 0) && *order.Fee.Cost > 0 {
-		feeQuote = *order.Fee.Cost
 	}
+	if state != dcaOrderUnknown { // an answer from the exchange: report what it says
+		report.order, report.status, report.filled, report.filledKnown = final, strings.ToLower(status), filledQty, true
+	}
+	publishOrder(ctx, report)
 
 	// The order is on the exchange. Everything from here is bookkeeping on a
 	// context that outlives the request, and nothing below may report the order
@@ -445,37 +538,138 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 		FilledPrice:    filledPrice,
 		FilledQuantity: filledQty,
 		FeeQuote:       feeQuote,
-		Status:         "completed",
+		Status:         execStatus,
+		ErrorMsg:       note,
 		Side:           side,
 		CreatedAt:      execAt,
 	}
-	delta := &dca.StatsDelta{Side: side, AmountQuote: actualQuote, Quantity: filledQty}
+	var delta *dca.StatsDelta
+	if filledQty > 0 {
+		delta = &dca.StatsDelta{Side: side, AmountQuote: actualQuote, Quantity: filledQty}
+	}
 	if err := saveDCAExecution(bctx, t.store, exec, delta); err != nil {
-		idLabel := orderID
-		if idLabel == "" {
-			idLabel = "(no id returned)"
-		}
+		idLabel := orElse(orderID, "(no id returned)")
 		logger.ErrorCF("dca", "DCA order placed but not recorded", map[string]any{
-			"order_id": orderID, "plan_id": planID, "symbol": plan.Symbol, "side": side,
+			"order_id": orderID, "plan_id": planID, "symbol": plan.Symbol, "side": side, "status": execStatus,
 			"filled_qty": filledQty, "filled_price": filledPrice, "error": err.Error(),
 		})
 		return ErrorResult(fmt.Sprintf(
-			"order %s placed but not recorded; do not retry. DCA plan %d (%s): %s %s, filled quantity %.8g at %.8g. "+
+			"order %s placed but not recorded; do not retry. DCA plan %d (%s): %s %s, %s, filled quantity %.8g at %.8g. "+
 				"The exchange accepted this order; saving its record failed after %d attempts (%v), so the plan's totals and history do not include it.",
-			idLabel, planID, plan.Name, side, plan.Symbol, filledQty, filledPrice, dcaPersistMaxAttempts, err))
+			idLabel, planID, plan.Name, side, plan.Symbol, execStatus, filledQty, filledPrice, dcaPersistMaxAttempts, err))
 	}
 
 	baseAsset := split(plan.Symbol)
-	out := fmt.Sprintf("DCA %s order executed for plan %d (%s):\n", side, planID, plan.Name)
+	var out string
+	switch execStatus {
+	case dcaStatusCompleted:
+		out = fmt.Sprintf("DCA %s order executed for plan %d (%s):\n", side, planID, plan.Name)
+	case dcaStatusPending:
+		out = fmt.Sprintf("DCA %s order PENDING for plan %d (%s):\n", side, planID, plan.Name)
+	default:
+		out = fmt.Sprintf("DCA %s order UNCONFIRMED for plan %d (%s):\n", side, planID, plan.Name)
+	}
 	out += fmt.Sprintf("  Symbol:    %s\n", plan.Symbol)
 	out += fmt.Sprintf("  Order ID:  %s\n", orderID)
-	out += fmt.Sprintf("  Price:     %.8g\n", filledPrice)
-	out += fmt.Sprintf("  Qty:       %.8g %s\n", filledQty, baseAsset)
-	out += fmt.Sprintf("  Amount:    %.4f\n", actualQuote)
+	if execStatus != dcaStatusUnknown {
+		out += fmt.Sprintf("  Price:     %.8g\n", filledPrice)
+		out += fmt.Sprintf("  Qty:       %.8g %s\n", filledQty, baseAsset)
+		out += fmt.Sprintf("  Amount:    %.4f\n", actualQuote)
+	}
 	if feeQuote > 0 {
 		out += fmt.Sprintf("  Fee:       %.6f\n", feeQuote)
 	}
+	if note != "" {
+		out += "  Note:      " + note + "\n"
+	}
 	return UserResult(out)
+}
+
+// sleepCtx waits for d or until ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// dcaOrderState is the tool's reading of an exchange order.
+type dcaOrderState int
+
+const (
+	dcaOrderUnknown dcaOrderState = iota // status missing/unrecognised and nothing filled
+	dcaOrderOpen                         // live on the book (or queued); may still fill
+	dcaOrderFilled                       // closed with a positive fill
+	dcaOrderDead                         // canceled/expired/rejected (fill may be partial)
+)
+
+// dcaFilledQty is the filled quantity an order reports, 0 when missing or
+// non-finite.
+func dcaFilledQty(o ccxt.Order) float64 {
+	if o.Filled != nil && dcaPositiveFinite(*o.Filled) {
+		return *o.Filled
+	}
+	return 0
+}
+
+// classifyDCAOrder maps a ccxt order status onto dcaOrderState. A closed or
+// filled status only counts as filled when the order also reports Filled > 0;
+// a "closed" order with no reported fill is treated as unknown rather than
+// assumed to have filled.
+func classifyDCAOrder(o ccxt.Order) dcaOrderState {
+	status := ""
+	if o.Status != nil {
+		status = strings.ToLower(strings.TrimSpace(*o.Status))
+	}
+	switch status {
+	case "closed", "filled":
+		if dcaFilledQty(o) > 0 {
+			return dcaOrderFilled
+		}
+		return dcaOrderUnknown
+	case "canceled", "cancelled", "expired", "rejected":
+		return dcaOrderDead
+	case "open", "new", "pending", "partially_filled", "partial", "queued", "accepted":
+		return dcaOrderOpen
+	}
+	return dcaOrderUnknown
+}
+
+// readBackDCAOrder re-fetches the order until it reaches a terminal state or
+// the attempts run out. It returns the last order successfully read (ok=false
+// when every read failed) and the last read error. It never cancels the order.
+func readBackDCAOrder(ctx context.Context, tp broker.TradingProvider, id, symbol string) (last ccxt.Order, ok bool, lastErr error) {
+	for i := 0; i < dcaReadBackTries; i++ {
+		if i > 0 {
+			dcaSleep(ctx, dcaReadBackDelay)
+		}
+		if ctx.Err() != nil {
+			if lastErr == nil {
+				lastErr = ctx.Err()
+			}
+			return last, ok, lastErr
+		}
+		o, err := tp.FetchOrder(ctx, id, symbol)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		last, ok = o, true
+		if st := classifyDCAOrder(o); st == dcaOrderFilled || st == dcaOrderDead {
+			break
+		}
+	}
+	return last, ok, lastErr
+}
+
+// orElse returns s, or alt when s is empty.
+func orElse(s, alt string) string {
+	if s == "" {
+		return alt
+	}
+	return s
 }
 
 // recordSellLoss feeds the daily loss tracker when a DCA sell filled below the

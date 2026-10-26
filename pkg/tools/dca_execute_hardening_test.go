@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -109,12 +110,14 @@ func TestDCAExecute_RejectsNonFiniteInputs(t *testing.T) {
 
 // TestDCAExecute_NonFiniteFillValuesAreIgnored: bad numbers in the adapter's
 // order response fall back as if missing and never reach the row or the stats.
+// The fill quantity is real here (status closed, Filled 0.002), so the buy is
+// recorded; only the non-finite price and fee fall back.
 func TestDCAExecute_NonFiniteFillValuesAreIgnored(t *testing.T) {
 	fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
 	store, mock, planID := newDCAGateFixture(t, "dca-nonfinite-fill")
-	id := "weird-fill"
+	id, closed, filled := "weird-fill", "closed", 0.002
 	nan, inf := math.NaN(), math.Inf(1)
-	mock.orderResp = &ccxt.Order{Id: &id, Average: &nan, Price: &inf, Filled: &nan, Fee: ccxt.Fee{Cost: &inf}}
+	mock.orderResp = &ccxt.Order{Id: &id, Status: &closed, Filled: &filled, Average: &nan, Price: &inf, Fee: ccxt.Fee{Cost: &inf}}
 
 	if res := runDCA(config.DefaultConfig(), store, planID); res.IsError {
 		t.Fatalf("unexpected error: %+v", res)
@@ -124,9 +127,32 @@ func TestDCAExecute_NonFiniteFillValuesAreIgnored(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 	r := rows[0]
-	// Fallback: ticker price 50000, requested quantity 100/50000.
+	// Fallback: ticker price 50000, the reported 0.002 filled.
 	if math.Abs(r.FilledPrice-50000) > 1e-9 || math.Abs(r.FilledQuantity-0.002) > 1e-12 || math.Abs(r.AmountQuote-100) > 1e-9 || r.FeeQuote != 0 {
 		t.Errorf("row not on the fallback values: %+v", r)
 	}
 	assertPlanTotals(t, store, planID, 100, 0.002, 50000)
+}
+
+// A non-finite filled quantity is no evidence of a fill: with nothing else to
+// go on the order is read back, and when that shows nothing the run is recorded
+// as unknown with no stats, rather than as a buy of the requested size.
+func TestDCAExecute_NonFiniteFilledQuantity_RecordedUnknown(t *testing.T) {
+	fixDCAClock(t, time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC))
+	prevSleep := dcaSleep
+	dcaSleep = func(context.Context, time.Duration) {}
+	t.Cleanup(func() { dcaSleep = prevSleep })
+	store, mock, planID := newDCAGateFixture(t, "dca-nonfinite-qty")
+	id, closed := "weird-qty", "closed"
+	nan := math.NaN()
+	mock.orderResp = &ccxt.Order{Id: &id, Status: &closed, Filled: &nan}
+
+	if res := runDCA(config.DefaultConfig(), store, planID); res.IsError {
+		t.Fatalf("unknown must not be an error result (a retry would double-buy): %+v", res)
+	}
+	rows := dcaRows(t, store, planID)
+	if len(rows) != 1 || rows[0].Status != "unknown" || rows[0].OrderID != "weird-qty" || rows[0].FilledQuantity != 0 || rows[0].AmountQuote != 0 {
+		t.Fatalf("rows = %+v; want one unknown row, nothing filled", rows)
+	}
+	assertPlanTotals(t, store, planID, 0, 0, 0)
 }

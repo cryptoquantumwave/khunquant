@@ -570,11 +570,13 @@ func (s *Store) LastPriceAsk(ctx context.Context, planID int64) (price float64, 
 }
 
 // LegacyRunSince reports whether a legacy (non-workflow) execution of the plan was
-// recorded at or after since: the legacy job ran this slot before the switch.
+// recorded at or after since: the legacy job ran this slot before the switch. A
+// pending or unknown row counts: the legacy job placed an order that may still be
+// live, so the workflow must not buy on top of it.
 func (s *Store) LegacyRunSince(ctx context.Context, planID int64, since time.Time) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dca_executions WHERE plan_id = ? AND workflow_id = ''
-		AND status IN ('completed') AND CAST(strftime('%s', executed_at) AS INTEGER) >= ?`, planID, since.Unix()).Scan(&n)
+		AND status IN ('completed', 'pending', 'unknown') AND CAST(strftime('%s', executed_at) AS INTEGER) >= ?`, planID, since.Unix()).Scan(&n)
 	return n > 0, err
 }
 

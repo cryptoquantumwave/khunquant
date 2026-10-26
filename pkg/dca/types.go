@@ -62,7 +62,7 @@ type Execution struct {
 	FilledPrice    float64 // execution price
 	FilledQuantity float64 // base asset amount
 	FeeQuote       float64 // fee in quote currency
-	Status         string  // "completed" | "failed" | "skipped"
+	Status         string  // "completed" | "failed" | "skipped" | "pending" (order not fully filled) | "unknown" (fill unconfirmed)
 	ErrorMsg       string  // failure reason, or the gate that produced a "skipped" row
 	Side           string  // "buy" (default) | "sell"
 	CreatedAt      time.Time

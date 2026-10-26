@@ -497,7 +497,7 @@ func (s *Store) CountExecutions(ctx context.Context, planID int64) (int, error) 
 }
 
 // CountExecutionsByStatus returns a plan's execution rows grouped by status
-// ("completed", "failed", "skipped"); statuses with no rows are absent.
+// ("completed", "failed", "skipped", "pending", "unknown"); statuses with no rows are absent.
 func (s *Store) CountExecutionsByStatus(ctx context.Context, planID int64) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT status, COUNT(*) FROM dca_executions WHERE plan_id = ? GROUP BY status`, planID)
@@ -528,9 +528,10 @@ func (s *Store) SellTotals(ctx context.Context, planID int64) (qty, proceeds flo
 	return qty, proceeds, err
 }
 
-// CountExecutionsInPeriod returns the number of completed executions for a plan
-// within the current calendar period ("hour", "day", "week"). Paper-mode runs
-// are not counted; see CountExecutionsInPeriodAt.
+// CountExecutionsInPeriod returns the number of executions for a plan within the
+// current calendar period ("hour", "day", "week") that placed, or may have
+// placed, an order. Paper-mode runs are not counted; see
+// CountExecutionsInPeriodAt.
 func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, period string) (int, error) {
 	return s.CountExecutionsInPeriodAt(ctx, planID, period, time.Now(), false)
 }
@@ -560,7 +561,9 @@ func periodStart(now time.Time, period string) (time.Time, error) {
 // CountExecutionsInPeriodAt counts a plan's executions in the calendar period
 // ("hour", "day", "week") that contains now.
 //
-// A row counts when its status is "completed", or, with includePaper, when it
+// A row counts when its status is "completed", "pending" or "unknown" (the
+// last two mean an order may be live on the exchange, so the cap must not let
+// the next run buy again blind), or, with includePaper, when it
 // is the "skipped" row a paper-mode run leaves (error_msg == PaperSkipReason).
 // Callers pass includePaper only while paper mode is on, so a simulated run
 // uses up the period cap the way a real one does, and the rows are ignored
@@ -590,7 +593,7 @@ func (s *Store) CountExecutionsInPeriodAt(ctx context.Context, planID int64, per
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, executed_at FROM dca_executions
 		 WHERE plan_id = ?
-		   AND (status = 'completed' OR (? = 1 AND status = 'skipped' AND error_msg = ?))`,
+		   AND (status IN ('completed', 'pending', 'unknown') OR (? = 1 AND status = 'skipped' AND error_msg = ?))`,
 		planID, paper, PaperSkipReason)
 	if err != nil {
 		return 0, err

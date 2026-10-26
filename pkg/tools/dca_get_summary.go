@@ -117,11 +117,11 @@ func (t *GetDCASummaryTool) Execute(ctx context.Context, args map[string]any) *T
 	return UserResult(out)
 }
 
-// nonCompletedNote renders the skipped and failed rows next to the completed
+// nonCompletedNote renders the pending, unknown, skipped and failed rows next to the completed
 // headline, e.g. " (3 skipped, 1 failed)"; empty when there are none.
 func nonCompletedNote(byStatus map[string]int) string {
 	var parts []string
-	for _, status := range []string{"skipped", "failed"} {
+	for _, status := range []string{"pending", "unknown", "skipped", "failed"} {
 		if n := byStatus[status]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, status))
 		}

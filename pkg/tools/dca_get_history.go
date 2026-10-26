@@ -83,6 +83,9 @@ func (t *GetDCAHistoryTool) Execute(ctx context.Context, args map[string]any) *T
 			statusMark = "✗"
 		case "skipped":
 			statusMark, detail = "–", "skipped"
+		case "pending", "unknown":
+			// An order may be live on the exchange; the note says what to check.
+			statusMark, detail = "?", "note"
 		}
 		status := e.Status
 		if e.Side == "sell" {

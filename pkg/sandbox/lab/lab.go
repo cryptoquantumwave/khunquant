@@ -15,6 +15,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 )
 
 // Options configures New.
@@ -35,8 +36,14 @@ type Lab struct {
 	Market *market.Book   // SimMarket: the one price per symbol (tickers, klines, fills)
 
 	Journal *labjournal.Journal // opened by the gateway under the lock
-	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
-	// Later PRs add their components here: Clock, Faults, Web, Crash, ...
+	// Clock is the instance's sim clock (nil until InitClock); Now is derived from it,
+	// and is wall time before that. Read Now per use.
+	Clock *simclock.Sim
+	Now   func() time.Time
+	// Settle, set once at start and read-only after, is what an advance waits on after
+	// each step (nil: nothing). Stopgap until the quiescence registry.
+	Settle func(context.Context) error
+	// Later PRs add their components here: Faults, Web, Crash, ...
 
 	fixturesDir string
 	token       string

@@ -592,12 +592,8 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) er
 
 	ensureManagementToken(cfg)
 	registerCronAPI(mux, s.CronService, s.DNStore, cfg.Gateway.ManagementToken)
-	registerProactiveStatsAPI(mux, d.Shared.eventBus(), cfg.Gateway.ManagementToken,
-		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
-		withCognitionStats(s.Cognition.stats), withPolicyStats())
-	registerTriggerAPIFor(mux, s, d)
+	registerProactiveRoutes(mux, s, d)
 	registerControlAPI(mux, s.Control.killSwitch(), s.Control.stopper, cfg.Gateway.ManagementToken, cfg)
-	registerManageAPI(mux, s.Control, cfg.Gateway.ManagementToken)
 
 	if cfg.Debug.DevMCP.Enabled {
 		registerDevMCP(mux, cfg, s, d.Shared, d.AgentLoop)
@@ -615,6 +611,20 @@ func registerGatewayRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) er
 		}
 	}
 	return registerSandboxLab(mux, s, d)
+}
+
+// registerProactiveRoutes puts the /api/proactive/* routes (stats, the external trigger
+// and the management API) on mux. It has two callers by design: registerGatewayRoutes,
+// for the gateway's mux, and the locked lab's private mux (registerSandboxLab), which
+// sandbox_manage calls in process. Both register through this one function so the lab
+// reaches exactly the handlers and guards the launcher does.
+func registerProactiveRoutes(mux handleMux, s *gatewayServices, d assemblyDeps) {
+	token := d.Cfg.Gateway.ManagementToken
+	registerProactiveStatsAPI(mux, d.Shared.eventBus(), token,
+		withPerceptionStats(perceptionStatsFn(s.perceptionLive)), withJournalStats(journalStatsFn(s.journalLive)),
+		withCognitionStats(s.Cognition.stats), withPolicyStats())
+	registerTriggerAPIFor(mux, s, d)
+	registerManageAPI(mux, s.Control, token)
 }
 
 // stopServices stops all services of one generation and cleans up their

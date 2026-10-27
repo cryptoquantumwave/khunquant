@@ -28,6 +28,7 @@ import (
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/onebot"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/pico"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/qq"
+	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/slack"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/teams_webhook"
 	_ "github.com/cryptoquantumwave/khunquant/pkg/channels/telegram"
@@ -193,7 +194,7 @@ func gatewayCmd(debug, locked bool) error {
 		}
 		shared.lab = l
 		shared.add("sandbox lab", l)
-		if err := registerLabGroups(l, shared); err != nil {
+		if err := registerLabGroups(l, shared, cfg); err != nil {
 			return lockFatal(fmt.Errorf("registering the lab groups: %w", err))
 		}
 	}

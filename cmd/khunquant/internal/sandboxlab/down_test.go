@@ -176,17 +176,13 @@ func TestDown_StalePidFileOfDeadProcess(t *testing.T) {
 	}
 }
 
-// TestUpDown_LocalBinary drives the real binary. KQ_SANDBOX_E2E_BIN names a prebuilt
+// TestUpDown_LocalBinary drives the real binary: a locked gateway with the simchat
+// channel starts, answers, and goes away. KQ_SANDBOX_E2E_BIN names a prebuilt
 // khunquant; the test never compiles one.
-//
-// It cannot pass yet: a locked gateway builds only the simchat channel, whose adapter
-// arrives in SBX-02, and the channel manager refuses to start with no channel, so `up`
-// fails (cleanly) with "the gateway exited before it was ready". It is kept gated
-// until then; the zero-channel check must not be worked around.
 func TestUpDown_LocalBinary(t *testing.T) {
 	bin := os.Getenv("KQ_SANDBOX_E2E_BIN")
 	if bin == "" {
-		t.Skip("set KQ_SANDBOX_E2E_BIN to a prebuilt khunquant binary to run this test (needs SBX-02's simchat)")
+		t.Skip("set KQ_SANDBOX_E2E_BIN to a prebuilt khunquant binary to run this test")
 	}
 	base := sandboxEnv(t) // private HOME and TMPDIR for the child commands
 	run := func(args ...string) ([]byte, error) {

@@ -43,12 +43,16 @@ func TestProfile_ValuesAndChannelsOff(t *testing.T) {
 		t.Error("web_is_owner enabled in the profile")
 	}
 
-	// No chat channel is enabled, pico included.
+	// simchat is the one chat channel enabled (for everyone), pico included in the rest.
 	chans := reflect.ValueOf(cfg.Channels)
 	for i := 0; i < chans.NumField(); i++ {
-		if en := chans.Field(i).FieldByName("Enabled"); en.IsValid() && en.Bool() {
-			t.Errorf("channel %s is enabled in the profile", chans.Type().Field(i).Name)
+		name := chans.Type().Field(i).Name
+		if en := chans.Field(i).FieldByName("Enabled"); en.IsValid() && en.Bool() && name != "SimChat" {
+			t.Errorf("channel %s is enabled in the profile", name)
 		}
+	}
+	if sc := cfg.Channels.SimChat; !sc.Enabled || len(sc.AllowFrom) != 1 || sc.AllowFrom[0] != "*" {
+		t.Errorf("simchat = %+v, want enabled with allow_from [*]", sc)
 	}
 	if cfg.Channels.Pico.Enabled {
 		t.Error("pico is enabled in the profile")

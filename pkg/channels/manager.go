@@ -352,9 +352,9 @@ func (m *Manager) initChannels() error {
 	}
 
 	// The simulated chat channel is the one channel a locked sandbox instance runs.
-	// Its adapter registers the "simchat" factory; until one is registered this
-	// only logs, and StartAll then reports that no channel is enabled.
-	if sandbox.Locked() {
+	// Two gates: the config enables it and the process is locked (the adapter's
+	// factory checks the lock again).
+	if m.config.Channels.SimChat.Enabled && sandbox.Locked() {
 		m.initChannel("simchat", "SimChat")
 	}
 

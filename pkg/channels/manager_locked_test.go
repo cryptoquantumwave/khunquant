@@ -52,7 +52,9 @@ func TestInitChannel_LockedOnlySimchat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := NewManager(telegramConfig(), bus.NewMessageBus(), nil)
+	cfg := telegramConfig()
+	cfg.Channels.SimChat.Enabled = true
+	m, err := NewManager(cfg, bus.NewMessageBus(), nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -68,16 +70,36 @@ func TestInitChannel_LockedOnlySimchat(t *testing.T) {
 	}
 }
 
-func TestInitChannels_UnlockedNeverBuildsSimchat(t *testing.T) {
+// The config alone never builds simchat: an unlocked process ignores channels.simchat.
+func TestInitChannelsSkipsSimChatWhenUnlocked(t *testing.T) {
 	simchatCalls := stubFactory(t, "simchat")
 	sandbox.ResetLockForTest()
 	t.Cleanup(sandbox.ResetLockForTest)
 
+	cfg := config.DefaultConfig()
+	cfg.Channels.SimChat.Enabled = true
+	m, err := NewManager(cfg, bus.NewMessageBus(), nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if simchatCalls.Load() != 0 || len(m.GetEnabledChannels()) != 0 {
+		t.Fatalf("an unlocked manager built simchat (factory calls %d, channels %v)", simchatCalls.Load(), m.GetEnabledChannels())
+	}
+}
+
+// The lock alone does not build it either: the config must enable it.
+func TestInitChannelsSkipsSimChatWhenNotEnabled(t *testing.T) {
+	simchatCalls := stubFactory(t, "simchat")
+	sandbox.ResetLockForTest()
+	t.Cleanup(sandbox.ResetLockForTest)
+	if err := sandbox.Lock(sandbox.LockOptions{Token: "t-0123456789abcdef0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := NewManager(config.DefaultConfig(), bus.NewMessageBus(), nil); err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 	if simchatCalls.Load() != 0 {
-		t.Fatal("an unlocked manager built the simchat channel")
+		t.Fatal("a locked manager built simchat although channels.simchat is not enabled")
 	}
 }
 

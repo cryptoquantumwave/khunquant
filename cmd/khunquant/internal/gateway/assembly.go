@@ -13,6 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/debugtap"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
@@ -118,6 +119,9 @@ type sharedResources struct {
 	// generation the lab groups read (sandbox_lab_wiring.go).
 	labTapped *tools.ToolRegistry
 	labGen    atomic.Pointer[gatewayServices]
+	// simWorld is the simulated chat's personas, outbox and channel state: built once
+	// with the lab groups (the lab package cannot import simchat), read-only after.
+	simWorld *simchat.World
 }
 
 // sweepState returns the process's sweep state, creating it on first use.

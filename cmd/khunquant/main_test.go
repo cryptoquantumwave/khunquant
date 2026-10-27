@@ -29,6 +29,21 @@ func TestIsReplay(t *testing.T) {
 	assert.False(t, isReplay([]string{"khunquant", "status", "replay"}))
 }
 
+// A locked gateway skips the update check (it would call GitHub before the egress guard
+// is armed), and `sandbox ... --json` prints nothing but its JSON.
+func TestStartupModes(t *testing.T) {
+	t.Setenv("KQ_SANDBOX_LOCKED", "")
+	assert.False(t, isLockedGateway([]string{"khunquant", "gateway"}))
+	assert.True(t, isLockedGateway([]string{"khunquant", "gateway", "--sandbox-locked"}))
+	assert.True(t, isLockedGateway([]string{"khunquant", "gateway", "--sandbox-locked=true"}))
+	t.Setenv("KQ_SANDBOX_LOCKED", "1")
+	assert.True(t, isLockedGateway([]string{"khunquant", "gateway"}))
+
+	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "up", "--json"}))
+	assert.False(t, isSandboxJSON([]string{"khunquant", "sandbox", "up"}))
+	assert.False(t, isSandboxJSON([]string{"khunquant", "status", "--json"}))
+}
+
 func TestNewKhunquantCommand(t *testing.T) {
 	cmd := NewKhunquantCommand()
 

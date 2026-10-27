@@ -14,8 +14,8 @@ type ProfileOptions struct {
 	Port int    // gateway port on 127.0.0.1
 }
 
-// Profile returns the config of a sandbox instance: the defaults (every chat channel
-// off) with workspace and fixtures inside Home, the gateway on 127.0.0.1:Port, sandbox
+// Profile returns the config of a sandbox instance: the defaults (every real chat
+// channel off, simchat on for everyone) with workspace and fixtures inside Home, the gateway on 127.0.0.1:Port, sandbox
 // and dev MCP on without tokens, and exec, MCP, heartbeat and the web owner route off.
 // The model is the interim "sandbox-offline" on the loopback discard port (until
 // SBX-04): it can be built but never reaches an LLM. The result already satisfies the
@@ -46,6 +46,7 @@ func Profile(o ProfileOptions) (*config.Config, error) {
 	off := false
 	cfg.Proactive.Owner.WebIsOwner = &off
 	cfg.Heartbeat.Enabled, cfg.Devices.Enabled = false, false
+	cfg.Channels.SimChat.Enabled, cfg.Channels.SimChat.AllowFrom = true, config.FlexibleStringSlice{"*"}
 	return cfg, nil
 }
 

@@ -1,13 +1,10 @@
 package gateway
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/cryptoquantumwave/khunquant/pkg/bus"
-	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
@@ -16,24 +13,6 @@ import (
 // lockTestToken is the instance token of every locked test: 32+ characters, as
 // lockOptionsFromEnv requires, and distinctive enough to grep for.
 const lockTestToken = "kq-lock-test-token-5f3a9c71d2e84b60a1c7"
-
-// stubSimchat stands in for the simchat adapter (SBX-02): a locked gateway needs one
-// channel to start, and simchat is the only one the lock lets through.
-type stubSimchat struct{ *channels.BaseChannel }
-
-func (s *stubSimchat) Start(context.Context) error { s.SetRunning(true); return nil }
-func (s *stubSimchat) Stop(context.Context) error  { s.SetRunning(false); return nil }
-func (s *stubSimchat) Send(context.Context, bus.OutboundMessage) error {
-	return nil
-}
-
-// registerStubSimchat registers the stub factory. The registry has no unregister; the
-// factory is only ever consulted by a locked manager, so leaving it is harmless.
-func registerStubSimchat() {
-	channels.RegisterFactory("simchat", func(_ *config.Config, b *bus.MessageBus) (channels.Channel, error) {
-		return &stubSimchat{BaseChannel: channels.NewBaseChannel("simchat", nil, b, nil)}, nil
-	})
-}
 
 // repoSandboxFixtures finds workspace/sandbox by walking up to go.mod.
 func repoSandboxFixtures(t *testing.T) string {

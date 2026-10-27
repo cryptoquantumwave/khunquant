@@ -194,3 +194,25 @@ func TestSimulatorBook_ConcurrentRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestSimulator_OrderTimesUseClock(t *testing.T) {
+	r := newSimRig(t, false)
+	simTime := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC) // far from the wall clock
+	r.clk.t = simTime
+	r.sim.SetClock(r.clk.Now)
+	r.binanceBuy(t)
+
+	var closed []*sandbox.Order
+	r.sim.Read("binance", func(st *sandbox.VenueState) {
+		for _, o := range st.ClosedOrders {
+			closed = append(closed, o)
+		}
+	})
+	if len(closed) != 1 || !closed[0].UpdatedAt.Equal(simTime) {
+		t.Fatalf("closed orders = %+v, want one updated at %v", closed, simTime)
+	}
+	acct := r.do(t, "GET", "/__sbx__/binance/fapi.binance.com/fapi/v1/account", "")
+	if want := `"updateTime":` + strconv.FormatInt(simTime.UnixMilli(), 10); !strings.Contains(acct, want) {
+		t.Fatalf("account response lacks %s: %s", want, acct)
+	}
+}

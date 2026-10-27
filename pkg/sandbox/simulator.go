@@ -39,6 +39,23 @@ type StatefulSimulator struct {
 	mu           sync.RWMutex // protects concurrent Respond calls
 	stateManager *StateManager
 	prices       PriceSource // optional; guarded by mu
+	now          func() time.Time // order and fill times; nil is time.Now; guarded by mu
+}
+
+// SetClock makes order, fill and account timestamps read now (the lab passes its sim
+// clock, so they match the candle times). A nil now restores time.Now.
+func (sim *StatefulSimulator) SetClock(now func() time.Time) {
+	sim.mu.Lock()
+	sim.now = now
+	sim.mu.Unlock()
+}
+
+// clock is the simulator's current time. Callers hold sim.mu.
+func (sim *StatefulSimulator) clock() time.Time {
+	if sim.now != nil {
+		return sim.now()
+	}
+	return time.Now()
 }
 
 // PriceSource supplies the price a venue's wire symbol has now (SimMarket's Book). The
@@ -256,7 +273,7 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 
 	// Create the order
 	orderID := sim.stateManager.NextOrderID("binance")
-	now := time.Now()
+	now := sim.clock()
 	order := &Order{
 		ID:        orderID,
 		Symbol:    symbol,
@@ -366,7 +383,7 @@ func (sim *StatefulSimulator) simBinanceCancelOrder(state *VenueState, r *http.R
 	// Move from open to closed
 	delete(state.OpenOrders, orderId)
 	order.Status = "CANCELED"
-	order.UpdatedAt = time.Now()
+	order.UpdatedAt = sim.clock()
 	state.ClosedOrders[orderId] = order
 
 	// Unlock the locked balance (refund the reservation)
@@ -540,7 +557,7 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 		"canTrade":                     true,
 		"canWithdraw":                  true,
 		"feeTier":                      0,
-		"updateTime":                   time.Now().UnixMilli(),
+		"updateTime":                   sim.clock().UnixMilli(),
 	}
 
 	respBody, _ := json.Marshal(resp)
@@ -807,7 +824,7 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 
 	// Create order
 	orderID := sim.stateManager.NextOrderID("okx")
-	now := time.Now()
+	now := sim.clock()
 	order := &Order{
 		ID:        orderID,
 		Symbol:    req.InstID,
@@ -918,7 +935,7 @@ func (sim *StatefulSimulator) simOKXCancelOrder(state *VenueState, r *http.Reque
 
 	delete(state.OpenOrders, req.OrdId)
 	order.Status = "canceled"
-	order.UpdatedAt = time.Now()
+	order.UpdatedAt = sim.clock()
 	state.ClosedOrders[req.OrdId] = order
 
 	// Unlock balance

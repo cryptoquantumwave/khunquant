@@ -56,6 +56,8 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The simulator stamps orders and fills with lab time, so they match the candle times.
+	l.Sim.SetClock(func() time.Time { return l.Now() })
 	// The journal is opened once per process, here, so a reload never reopens it.
 	j, err := labjournal.Open(labjournal.Options{
 		Path: filepath.Join(l.Home, "lab", "journal.db"),

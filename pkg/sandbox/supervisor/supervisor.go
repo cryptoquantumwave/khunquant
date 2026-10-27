@@ -374,7 +374,11 @@ func (s *Supervisor) lookup(name string) (*instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if name == "" {
-		if len(s.instances) != 1 {
+		switch len(s.instances) {
+		case 0:
+			return nil, errors.New("sandbox: no instance is running; start one first (sandbox_instance op=up)")
+		case 1:
+		default:
 			return nil, fmt.Errorf("sandbox: name the instance (%d are running)", len(s.instances))
 		}
 		for _, in := range s.instances {
@@ -386,6 +390,37 @@ func (s *Supervisor) lookup(name string) (*instance, error) {
 		return nil, fmt.Errorf("sandbox: no instance %q", name)
 	}
 	return in, nil
+}
+
+// Get returns the Info of one instance (an empty name is the only one).
+func (s *Supervisor) Get(name string) (Info, error) {
+	in, err := s.lookup(name)
+	if err != nil {
+		return Info{}, err
+	}
+	return in.info(), nil
+}
+
+// WaitRunning blocks while the instance is starting or restarting and returns once it is
+// running. It fails when the instance has exited or ctx ends.
+func (s *Supervisor) WaitRunning(ctx context.Context, name string) (Info, error) {
+	for {
+		i, err := s.Get(name)
+		if err != nil {
+			return Info{}, err
+		}
+		switch i.State {
+		case StateRunning:
+			return i, nil
+		case StateExited:
+			return i, fmt.Errorf("sandbox: instance %q has exited (%s)", i.Name, i.ExitReason)
+		}
+		select {
+		case <-ctx.Done():
+			return Info{}, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // List returns the instances sorted by name.

@@ -64,6 +64,9 @@ type Client struct {
 // New returns a Client for baseURL (http://127.0.0.1:port). It refuses any other host:
 // the token must never be sent beyond the local machine.
 func New(baseURL, token string) (*Client, error) {
+	if token == "" {
+		return nil, errors.New("labclient: an instance token is required")
+	}
 	u, err := url.Parse(baseURL)
 	if err != nil || u.Scheme != "http" || u.Host == "" {
 		return nil, fmt.Errorf("labclient: %q is not an http URL", baseURL)
@@ -102,13 +105,13 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
+	data = bytes.ReplaceAll(data, []byte(c.token), []byte("***")) // nothing an instance says may carry its token
 	if resp.StatusCode != http.StatusOK {
 		le := &Error{Status: resp.StatusCode, Msg: strings.TrimSpace(string(data))}
 		var eb struct{ Error, Code string }
 		if json.Unmarshal(data, &eb) == nil && eb.Error != "" {
 			le.Code, le.Msg = eb.Code, eb.Error
 		}
-		le.Msg = strings.ReplaceAll(le.Msg, c.token, "***")
 		return nil, le
 	}
 	return data, nil

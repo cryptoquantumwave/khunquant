@@ -128,9 +128,10 @@ func initTermuxSSL() {
 func isReplay(args []string) bool { return len(args) > 1 && args[1] == "replay" }
 
 // isSandboxJSON says whether the process was started as `khunquant sandbox ... --json`,
-// whose standard output must be nothing but the JSON.
+// whose standard output must be nothing but the JSON, or as `khunquant sandbox mcp`,
+// whose standard output is the MCP protocol (and which makes no update check either).
 func isSandboxJSON(args []string) bool {
-	return len(args) > 1 && args[1] == "sandbox" && slices.Contains(args, "--json")
+	return len(args) > 1 && args[1] == "sandbox" && (slices.Contains(args, "--json") || (len(args) > 2 && args[2] == "mcp"))
 }
 
 // isLockedGateway says whether the process was asked to run as a locked sandbox

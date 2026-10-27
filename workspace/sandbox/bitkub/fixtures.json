@@ -6,7 +6,7 @@
       "status": 200,
       "body": [
         {
-          "symbol": "THB_BTC",
+          "symbol": "BTC_THB",
           "last": "1234567.89",
           "lowest_ask": "1234567.90",
           "highest_bid": "1234567.88",
@@ -48,7 +48,7 @@
         "error": 0,
         "result": [
           {
-            "symbol": "THB_BTC",
+            "symbol": "BTC_THB",
             "name": "Bitcoin",
             "base_asset": "BTC",
             "quote_asset": "THB",

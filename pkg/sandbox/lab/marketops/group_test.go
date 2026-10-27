@@ -96,6 +96,42 @@ func TestGroup_DelistRelistAndReload(t *testing.T) {
 	}
 }
 
+func TestGroup_SetFundingRate(t *testing.T) {
+	b := market.NewBook(market.Options{Now: time.Now})
+	l := &lab.Lab{}
+	if err := l.AddGroup(Group(b, Options{Home: t.TempDir()})); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args string) error {
+		_, err := l.Call(context.Background(), "market", "set", json.RawMessage(args))
+		return err
+	}
+	pair := market.Pair{Base: "BTC", Quote: "USDT"}
+	if err := call(`{"symbol":"BTC/USDT","price":100,"funding_rate":0.0003}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Funding("okx", pair); got != 0.0003 {
+		t.Errorf("funding = %v, want 0.0003", got)
+	}
+	if err := call(`{"symbol":"BTC/USDT","venue":"binance","funding_rate":-0.001}`); err != nil { // the rate alone
+		t.Fatal(err)
+	}
+	if b.Funding("binance", pair) != -0.001 || b.Funding("okx", pair) != 0.0003 {
+		t.Errorf("a venue's rate leaked: binance %v okx %v", b.Funding("binance", pair), b.Funding("okx", pair))
+	}
+	if p, _ := b.Price("binance", pair, time.Now()); p != 100 {
+		t.Errorf("setting only the rate moved the price to %v", p)
+	}
+	for _, bad := range []string{`{"symbol":"BTC/USDT"}`, `{"symbol":"BTC/USDT","funding_rate":5}`} {
+		if err := call(bad); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+	if b.Funding("okx", market.Pair{Base: "ETH", Quote: "USDT"}) != market.DefaultFunding {
+		t.Error("an unset pair lost the default rate")
+	}
+}
+
 func asBadArgs(err error, le **lab.Error) bool {
 	e, ok := err.(*lab.Error)
 	*le = e

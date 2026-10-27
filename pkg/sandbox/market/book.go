@@ -46,7 +46,8 @@ type Book struct {
 	now func() time.Time
 	tls map[string]map[Pair]timeline // venue ("*" = wildcard) -> pair
 
-	delisted map[string]map[Pair]bool // venue ("*" = every venue) -> pair (delist.go)
+	delisted map[string]map[Pair]bool    // venue ("*" = every venue) -> pair (delist.go)
+	funding  map[string]map[Pair]float64 // venue ("*" = wildcard) -> rate per 8 h (render_funding.go)
 }
 
 // NewBook returns an empty book.
@@ -56,7 +57,7 @@ func NewBook(o Options) *Book {
 	}
 	return &Book{
 		now: o.Now, tls: map[string]map[Pair]timeline{},
-		delisted: map[string]map[Pair]bool{},
+		delisted: map[string]map[Pair]bool{}, funding: map[string]map[Pair]float64{},
 	}
 }
 

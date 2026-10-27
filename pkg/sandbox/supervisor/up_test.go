@@ -1,3 +1,5 @@
+//go:build !windows
+
 package supervisor
 
 import (
@@ -17,8 +19,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
 
-// repoFixtures is the repository's workspace/sandbox, found by walking up to go.mod.
-func repoFixtures(t *testing.T) string {
+// repoRoot is the repository, found by walking up to go.mod.
+func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -26,7 +28,7 @@ func repoFixtures(t *testing.T) string {
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			break
+			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -34,7 +36,12 @@ func repoFixtures(t *testing.T) string {
 		}
 		dir = parent
 	}
-	fx := filepath.Join(dir, "workspace", "sandbox")
+}
+
+// repoFixtures is the repository's workspace/sandbox, asserted non-empty.
+func repoFixtures(t *testing.T) string {
+	t.Helper()
+	fx := filepath.Join(repoRoot(t), "workspace", "sandbox")
 	files, err := listFixtures(fx)
 	if err != nil || len(files) == 0 {
 		t.Fatalf("the repository fixtures at %s are missing or empty: %v", fx, err)
@@ -60,15 +67,11 @@ func sandboxEnv(t *testing.T) string {
 	return base
 }
 
-func fakeUp(t *testing.T, base string, extra ...string) (*Instance, error) {
+func fakeUp(t *testing.T, base string, extra ...string) (Info, error) {
 	t.Helper()
-	return Up(context.Background(), UpOptions{
+	return newFake(t, base, extra...).Up(context.Background(), UpOptions{
 		Name:         "t" + strconv.Itoa(int(time.Now().UnixNano()%100000)),
 		FixturesFrom: repoFixtures(t),
-		BaseDir:      base,
-		Bin:          os.Args[0],
-		BinArgs:      fakeArgs(extra...),
-		ReadyTimeout: 30 * time.Second,
 	})
 }
 
@@ -95,15 +98,15 @@ func TestUpDown_FakeGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-	t.Cleanup(func() { _ = Down(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: time.Second}) })
+	t.Cleanup(func() { _ = DownByName(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: time.Second}) })
 
 	if inst.Home != filepath.Join(base, "kq-sbx-"+inst.Name) || inst.PID <= 0 || !processAlive(inst.PID) {
 		t.Fatalf("instance = %+v", inst)
 	}
-	if len(inst.Token) < 32 {
-		t.Fatalf("token %q is shorter than the 32 characters the lock needs", inst.Token)
+	if len(inst.RevealToken()) < 32 {
+		t.Fatalf("token %q is shorter than the 32 characters the lock needs", inst.RevealToken())
 	}
-	if inst.Log != filepath.Join(inst.Home, "gateway.log") || !strings.HasPrefix(inst.GatewayURL, "http://127.0.0.1:") {
+	if inst.LogPath != filepath.Join(inst.Home, "gateway.log") || !strings.HasPrefix(inst.GatewayURL, "http://127.0.0.1:") {
 		t.Fatalf("instance = %+v", inst)
 	}
 
@@ -111,7 +114,7 @@ func TestUpDown_FakeGateway(t *testing.T) {
 	if c := getCode(t, inst.GatewayURL+"/health", ""); c != http.StatusOK {
 		t.Errorf("/health = %d", c)
 	}
-	if c := getCode(t, inst.GatewayURL+"/api/sandbox/status", inst.Token); c != http.StatusOK {
+	if c := getCode(t, inst.GatewayURL+"/api/sandbox/status", inst.RevealToken()); c != http.StatusOK {
 		t.Errorf("/api/sandbox/status with the token = %d", c)
 	}
 	if c := getCode(t, inst.GatewayURL+"/api/sandbox/status", "wrong"); c != http.StatusUnauthorized {
@@ -129,7 +132,7 @@ func TestUpDown_FakeGateway(t *testing.T) {
 		if rerr != nil {
 			return rerr
 		}
-		if bytes.Contains(data, []byte(inst.Token)) {
+		if bytes.Contains(data, []byte(inst.RevealToken())) {
 			t.Errorf("the instance token is on disk in %s", p)
 		}
 		return nil
@@ -146,7 +149,7 @@ func TestUpDown_FakeGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ps: %v", err)
 	}
-	if strings.Contains(cmdline, inst.Token) {
+	if strings.Contains(cmdline, inst.RevealToken()) {
 		t.Errorf("the token is on the gateway's command line: %s", cmdline)
 	}
 
@@ -162,7 +165,7 @@ func TestUpDown_FakeGateway(t *testing.T) {
 		t.Errorf("gateway environment keys = %v\nwant %v", got, want)
 	}
 
-	if err := Down(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: 10 * time.Second}); err != nil {
+	if err := DownByName(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: 10 * time.Second}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
 	if _, err := os.Stat(inst.Home); !os.IsNotExist(err) {
@@ -258,17 +261,15 @@ func TestFixtureCopy_FailsWhenEmpty(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(empty, "binance"), 0o755); err != nil { // a venue dir with no fixtures.json
 		t.Fatal(err)
 	}
-	_, err := Up(context.Background(), UpOptions{
-		Name: "empty", FixturesFrom: empty, BaseDir: base,
-		Bin: "/nonexistent/khunquant", // never reached
-	})
+	sup := newFake(t, base)
+	_, err := sup.Up(context.Background(), UpOptions{Name: "empty", FixturesFrom: empty})
 	if err == nil || !strings.Contains(err.Error(), "fixtures.json") {
 		t.Fatalf("Up with empty fixtures: err = %v, want a fixtures error", err)
 	}
 	if left, _ := os.ReadDir(base); len(left) != 0 {
 		t.Errorf("a refused start left %d entries behind in the base dir", len(left))
 	}
-	if _, err := Up(context.Background(), UpOptions{Name: "missing", FixturesFrom: filepath.Join(empty, "nope"), BaseDir: base}); err == nil {
+	if _, err := sup.Up(context.Background(), UpOptions{Name: "missing", FixturesFrom: filepath.Join(empty, "nope")}); err == nil {
 		t.Error("a missing fixtures dir must fail too")
 	}
 }
@@ -353,7 +354,7 @@ func TestUp_RefusesExistingInstance(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(base, "kq-sbx-dup"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Up(context.Background(), UpOptions{Name: "dup", FixturesFrom: repoFixtures(t), BaseDir: base, Bin: os.Args[0], BinArgs: fakeArgs()})
+	_, err := newFake(t, base).Up(context.Background(), UpOptions{Name: "dup", FixturesFrom: repoFixtures(t)})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("err = %v, want already exists", err)
 	}
@@ -377,11 +378,13 @@ func TestUp_FailureCleansUp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			base := sandboxEnv(t)
 			pidOut := filepath.Join(t.TempDir(), "pid")
-			_, err := Up(context.Background(), UpOptions{
-				Name: "fail", FixturesFrom: repoFixtures(t), BaseDir: base,
-				Bin: os.Args[0], BinArgs: fakeArgs(append(tc.extra, "--pidout="+pidOut)...),
-				ReadyTimeout: 1500 * time.Millisecond,
-			})
+			cfg := fakeConfig(base, append(tc.extra, "--pidout="+pidOut)...)
+			cfg.ReadyTimeout = 1500 * time.Millisecond
+			sup, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = sup.Up(context.Background(), UpOptions{Name: "fail", FixturesFrom: repoFixtures(t)})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
 			}
@@ -406,10 +409,13 @@ func TestUp_ContextCancelStopsAndCleans(t *testing.T) {
 	base := sandboxEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
 	defer cancel()
-	_, err := Up(ctx, UpOptions{
-		Name: "cancel", FixturesFrom: repoFixtures(t), BaseDir: base,
-		Bin: os.Args[0], BinArgs: fakeArgs("--hang"), ReadyTimeout: time.Minute,
-	})
+	cfg := fakeConfig(base, "--hang")
+	cfg.ReadyTimeout = time.Minute
+	sup, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sup.Up(ctx, UpOptions{Name: "cancel", FixturesFrom: repoFixtures(t)})
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("err = %v, want interrupted", err)
 	}

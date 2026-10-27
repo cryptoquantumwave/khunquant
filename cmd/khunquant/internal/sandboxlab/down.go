@@ -21,7 +21,7 @@ func newDownCommand() *cobra.Command {
 				return supervisor.ErrUnixOnly
 			}
 			opts.Name = args[0]
-			if err := supervisor.Down(opts); err != nil {
+			if err := supervisor.DownByName(opts); err != nil {
 				return err
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Sandbox %q is down\n", opts.Name)

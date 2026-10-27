@@ -23,10 +23,10 @@ type DownOptions struct {
 	TermTimeout time.Duration // SIGTERM grace before SIGKILL; 15s when zero
 }
 
-// Down stops the gateway of the instance (SIGTERM, then SIGKILL after the grace
+// DownByName stops the gateway of the instance (SIGTERM, then SIGKILL after the grace
 // period) and removes its home. It only touches a real directory that carries the
 // instance marker, and never one that overlaps the real ~/.khunquant.
-func Down(opts DownOptions) error {
+func DownByName(opts DownOptions) error {
 	home, err := instanceHome(opts.BaseDir, opts.Name)
 	if err != nil {
 		return err

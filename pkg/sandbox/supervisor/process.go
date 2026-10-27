@@ -7,20 +7,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"maps"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 )
 
 const (
@@ -29,6 +29,7 @@ const (
 	homePrefix     = "kq-sbx-" // instance home: <base>/kq-sbx-<name>
 
 	defaultReadyTimeout = 60 * time.Second
+	logName             = "gateway.log"
 )
 
 // ErrUnixOnly is returned on platforms without process groups and POSIX signals.
@@ -36,94 +37,6 @@ var ErrUnixOnly = errors.New("khunquant sandbox up/down need a unix system (proc
 
 // nameRE keeps an instance name a single plain path element.
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
-
-// UpOptions configures Up. Only Name and FixturesFrom come from the command line.
-type UpOptions struct {
-	Name         string // random when empty
-	FixturesFrom string // dir holding <venue>/fixtures.json; ./workspace/sandbox when empty
-
-	BaseDir      string        // parent of the instance home; os.TempDir() when empty
-	Bin          string        // gateway binary; this executable when empty
-	BinArgs      []string      // "gateway --sandbox-locked" when empty
-	ReadyTimeout time.Duration // 60s when zero
-}
-
-// Instance is what `up` reports. Token is shown here and nowhere else.
-type Instance struct {
-	Name       string `json:"name"`
-	Home       string `json:"home"`
-	PID        int    `json:"pid"`
-	GatewayURL string `json:"gateway_url"`
-	Token      string `json:"token"`
-	Log        string `json:"log"`
-}
-
-// Up makes an instance home, starts a locked gateway in it and returns once the
-// gateway reports an enabled, locked sandbox. On any failure it stops the gateway and
-// removes the home it made.
-func Up(ctx context.Context, opts UpOptions) (*Instance, error) {
-	name := opts.Name
-	if name == "" {
-		name = "sbx-" + randomHex(4)
-	}
-	home, err := instanceHome(opts.BaseDir, name)
-	if err != nil {
-		return nil, err
-	}
-	// What can fail before a directory exists comes first: a refused start leaves nothing.
-	fixtures, err := listFixtures(opts.FixturesFrom)
-	if err != nil {
-		return nil, err
-	}
-	port, err := freePort()
-	if err != nil {
-		return nil, err
-	}
-	token := randomHex(32)
-	bin, args := opts.Bin, opts.BinArgs
-	if bin == "" {
-		if bin, err = os.Executable(); err != nil {
-			return nil, fmt.Errorf("sandbox up: locate the khunquant binary: %w", err)
-		}
-	}
-	if len(args) == 0 {
-		args = []string{"gateway", "--sandbox-locked"}
-	}
-
-	if err := os.Mkdir(home, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("sandbox up: instance %q already exists at %s; run `khunquant sandbox down %s`", name, home, name)
-		}
-		return nil, fmt.Errorf("sandbox up: create %s: %w", home, err)
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.RemoveAll(home)
-		}
-	}()
-	if err := prepareHome(home, name, port, fixtures); err != nil {
-		return nil, err
-	}
-
-	cmd, exited, logPath, err := spawn(home, name, token, bin, args)
-	if err != nil {
-		return nil, err
-	}
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	timeout := opts.ReadyTimeout
-	if timeout <= 0 {
-		timeout = defaultReadyTimeout
-	}
-	if err := waitReady(ctx, url, token, exited, timeout); err != nil {
-		killGroup(cmd.Process.Pid)
-		_ = cmd.Process.Kill()
-		<-exited
-		return nil, fmt.Errorf("sandbox up: %w%s", err, logTail(logPath, token))
-	}
-	ok = true
-	return &Instance{Name: name, Home: home, PID: cmd.Process.Pid, GatewayURL: url, Token: token, Log: logPath}, nil
-}
 
 // instanceHome is where the instance called name lives under base (os.TempDir() when
 // empty). It validates the name and refuses a place that overlaps the real
@@ -211,12 +124,19 @@ func copyFile(src, dst string) error {
 // ChildEnv is the whole environment of the sandbox gateway, an allowlist: the config
 // loader lets any KHUNQUANT_* variable of the developer's shell override the profile.
 // HOME is the instance home, so nothing the gateway runs sees the developer's.
-func ChildEnv(home, name, token string) []string {
+func ChildEnv(home, name, token string) []string { return childEnv(home, name, token, nil) }
+
+// childEnv is ChildEnv plus the AllowEnv-ed extras. The fixed entries come last: with a
+// duplicate key the last one wins, and validEnv has refused the fixed keys anyway.
+func childEnv(home, name, token string, extra map[string]string) []string {
 	var env []string
 	for _, k := range []string{"PATH", "TMPDIR", "LANG", "TZ"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
 		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(extra)) {
+		env = append(env, k+"="+extra[k])
 	}
 	return append(env,
 		"HOME="+home,
@@ -228,36 +148,44 @@ func ChildEnv(home, name, token string) []string {
 	)
 }
 
-// spawn starts the gateway in its own process group with ChildEnv (the token goes
-// there, never into argv) and its output in <home>/gateway.log; exited closes when it ends.
-func spawn(home, name, token, bin string, args []string) (*exec.Cmd, <-chan struct{}, string, error) {
-	logPath := filepath.Join(home, "gateway.log")
-	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+// proc is one running gateway process. exited closes when it has ended and code is
+// then valid (128+signal for a killed process).
+type proc struct {
+	cmd    *exec.Cmd
+	exited chan struct{}
+	code   int
+}
+
+// spawn starts the gateway in its own process group with the environment from childEnv
+// (the token goes there, never into argv) and its output appended to <home>/gateway.log.
+func spawn(bin string, args, env []string, home string) (*proc, error) {
+	logFile, err := os.OpenFile(filepath.Join(home, logName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("sandbox up: open log: %w", err)
+		return nil, fmt.Errorf("sandbox up: open log: %w", err)
 	}
 	defer logFile.Close() // the child keeps its own copy
 
 	cmd := exec.Command(bin, args...) //nolint:gosec // bin is this executable or a test double
-	cmd.Dir, cmd.Env = home, ChildEnv(home, name, token)
+	cmd.Dir, cmd.Env = home, env
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	setProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, nil, "", fmt.Errorf("sandbox up: start the gateway: %w", err)
+		return nil, fmt.Errorf("sandbox up: start the gateway: %w", err)
 	}
-	exited := make(chan struct{})
+	p := &proc{cmd: cmd, exited: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
-		close(exited)
+		p.code = exitCode(cmd.ProcessState)
+		close(p.exited)
 	}()
-	return cmd, exited, logPath, nil
+	return p, nil
 }
 
 // waitReady polls /api/sandbox/status with the instance token until the gateway
 // answers. Only the instance itself knows the token, so an answer from anything else
 // (a stray listener on the port) never counts; an instance that does not report an
 // enabled, locked sandbox is never handed out.
-func waitReady(ctx context.Context, url, token string, exited <-chan struct{}, timeout time.Duration) error {
+func waitReady(ctx context.Context, c *labclient.Client, exited <-chan struct{}, timeout time.Duration) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -272,34 +200,17 @@ func waitReady(ctx context.Context, url, token string, exited <-chan struct{}, t
 			return fmt.Errorf("the gateway was not ready after %s", timeout)
 		case <-tick.C:
 		}
-		code, body := get(ctx, url+"/api/sandbox/status", token)
-		if code != http.StatusOK {
-			continue
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		locked, err := c.Status(pctx)
+		cancel()
+		if err != nil {
+			continue // not listening yet, or not an instance that knows the token
 		}
-		var st struct{ Enabled, Locked bool }
-		if err := json.Unmarshal(body, &st); err != nil || !st.Locked || !st.Enabled {
-			return errors.New("the gateway answered but does not report an enabled, locked sandbox")
+		if !locked {
+			return ErrNotLocked
 		}
 		return nil
 	}
-}
-
-// get returns the status code (0 on a transport error) and body of a GET.
-func get(ctx context.Context, url, bearer string) (int, []byte) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, nil
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		return 0, nil
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-	return resp.StatusCode, body
 }
 
 // logTail is the end of the gateway log for the error of a failed start, with the

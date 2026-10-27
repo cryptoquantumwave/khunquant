@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,6 +19,9 @@ func signalProcess(pid int, sig syscall.Signal) error { return syscall.Kill(pid,
 
 func killGroup(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }
 
+// termGroup asks the whole process group to stop.
+func termGroup(pid int) { _ = syscall.Kill(-pid, syscall.SIGTERM) }
+
 func processAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
@@ -28,4 +32,16 @@ func processAlive(pid int) bool {
 func processCommand(pid int) (string, error) {
 	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// exitCode is the status of a finished process: 128+signal when a signal ended it
+// (ProcessState.ExitCode reports -1 then), the shell convention, so 137 after SIGKILL.
+func exitCode(ps *os.ProcessState) int {
+	if ps == nil {
+		return -1
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return ps.ExitCode()
 }

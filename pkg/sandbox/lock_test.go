@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -210,46 +211,26 @@ func TestCheckLockedModel(t *testing.T) {
 	// Unlocked: everything passes.
 	ResetLockForTest()
 	t.Cleanup(ResetLockForTest)
-	if err := CheckLockedModel("claude-cli", ""); err != nil {
+	if err := CheckLockedModel("claude-cli"); err != nil {
 		t.Fatalf("unlocked must allow everything: %v", err)
 	}
 
 	lockForTest(t, LockOptions{AllowHosts: []string{"llm.allowed.example"}})
 
+	if err := CheckLockedModel("sim"); err != nil {
+		t.Errorf("sim must be allowed under the lock: %v", err)
+	}
+	// Only sim: no real provider, however it is reached, and no look-alike spelling.
 	for _, p := range []string{
-		"claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot",
-		"copilot", "antigravity", "gemini-code-assist", "google-gemini",
+		"openai", "anthropic", "ollama", "azure", "litellm", "claude-cli", "claudecli", "codex-cli",
+		"codexcli", "github-copilot", "copilot", "antigravity", "gemini-code-assist", "google-gemini",
+		"", "SIM", "sim ", "CLAUDE-CLI ",
 	} {
-		if err := CheckLockedModel(p, "http://127.0.0.1:9/v1"); err == nil {
-			t.Errorf("protocol %q must be refused even with a loopback api_base", p)
+		if err := CheckLockedModel(p); err == nil {
+			t.Errorf("protocol %q must be refused under the lock", p)
 		}
 	}
-	if err := CheckLockedModel("CLAUDE-CLI ", "http://127.0.0.1:9/v1"); err == nil {
-		t.Error("protocol matching must ignore case and spaces")
-	}
-
-	for _, tc := range []struct {
-		name, proto, base string
-		ok                bool
-	}{
-		{"sim without base", "sim", "", true},
-		{"openai loopback v4", "openai", "http://127.0.0.1:9/v1", true},
-		{"openai loopback v6", "openai", "http://[::1]:9/v1", true},
-		{"openai localhost", "openai", "http://localhost:11434/v1", true},
-		{"openai bare loopback", "openai", "127.0.0.1:9/v1", true},
-		{"openai real host", "openai", "https://api.openai.com/v1", false},
-		{"empty base", "openai", "", false},
-		{"allowed host", "anthropic", "https://llm.allowed.example/v1", true},
-		{"allowed host other case", "anthropic", "https://LLM.Allowed.Example/v1", true},
-		{"lookalike host", "anthropic", "https://llm.allowed.example.evil.test/v1", false},
-		{"userinfo trick", "openai", "http://127.0.0.1@evil.test/v1", false},
-	} {
-		err := CheckLockedModel(tc.proto, tc.base)
-		if tc.ok && err != nil {
-			t.Errorf("%s: unexpected error: %v", tc.name, err)
-		}
-		if !tc.ok && err == nil {
-			t.Errorf("%s: expected a refusal", tc.name)
-		}
+	if err := CheckLockedModel("codex-cli"); err == nil || !strings.Contains(err.Error(), `"codex-cli"`) {
+		t.Errorf("the refusal must name the protocol, got %v", err)
 	}
 }

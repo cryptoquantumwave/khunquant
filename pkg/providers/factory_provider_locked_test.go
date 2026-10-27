@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -16,48 +17,55 @@ func lockSandboxForTest(t *testing.T, allow ...string) {
 	}
 }
 
-func TestCreateProviderFromConfig_LockedRefusesCLI(t *testing.T) {
-	lockSandboxForTest(t)
+// Under the lock every real provider is refused, whatever its api_base, host or auth.
+func TestLockedRefusesRealProviders(t *testing.T) {
+	lockSandboxForTest(t, "llm.allowed.example")
 
 	for _, model := range []string{
+		"openai/m", "anthropic/m", "azure/m", "ollama/m", "litellm/m", "m",
 		"claude-cli/x", "claudecli/x", "codex-cli/x", "codexcli/x",
 		"github-copilot/x", "copilot/x", "antigravity/x",
 		"gemini-code-assist/x", "google-gemini/x",
 	} {
-		p, id, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "m", Model: model, APIBase: "http://127.0.0.1:9/v1"})
-		if err == nil || p != nil || id != "" {
-			t.Errorf("%s: got (%v, %q, %v), want an error and no provider", model, p, id, err)
+		for _, base := range []string{"", "http://127.0.0.1:9/v1", "https://llm.allowed.example/v1"} {
+			p, id, err := CreateProviderFromConfig(&config.ModelConfig{
+				ModelName: "m", Model: model, APIBase: base, APIKey: *config.NewSecureString("k"),
+			})
+			if err == nil || p != nil || id != "" {
+				t.Errorf("%s (base %q): got (%v, %q, %v), want an error and no provider", model, base, p, id, err)
+			}
 		}
+	}
+	for _, am := range []string{"oauth", "token"} {
+		if _, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "m", Model: "sim/scripted", AuthMethod: am}); err == nil {
+			t.Errorf("auth_method %q must be refused under the lock", am)
+		}
+	}
+	if _, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "m", Model: "codex-cli/x"}); err == nil ||
+		!strings.Contains(err.Error(), "codex-cli") {
+		t.Errorf("the refusal must name the protocol, got %v", err)
+	}
+
+	p, id, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: "sim/scripted"})
+	if err != nil || p == nil || id != "scripted" {
+		t.Fatalf("sim/scripted must build under the lock: (%v, %q, %v)", p, id, err)
+	}
+	if _, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: "sim/replay"}); err == nil {
+		t.Error("a sim mode that does not exist yet must be refused")
 	}
 }
 
-func TestCreateProviderFromConfig_LockedHTTPRules(t *testing.T) {
-	lockSandboxForTest(t, "llm.allowed.example")
+// The sim model cannot be built outside a locked process.
+func TestSimRefusedWhenUnlocked(t *testing.T) {
+	sandbox.ResetLockForTest()
+	t.Cleanup(sandbox.ResetLockForTest)
 
-	build := func(mc config.ModelConfig) error {
-		mc.ModelName = "m"
-		_, _, err := CreateProviderFromConfig(&mc)
-		return err
+	p, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: "sim/scripted"})
+	if err == nil || p != nil {
+		t.Fatalf("sim/scripted on an unlocked process = (%v, %v), want an error", p, err)
 	}
-
-	if err := build(config.ModelConfig{Model: "openai/m", APIBase: "http://127.0.0.1:9/v1", APIKey: *config.NewSecureString("k")}); err != nil {
-		t.Errorf("loopback openai must build: %v", err)
-	}
-	if err := build(config.ModelConfig{Model: "openai/m", APIKey: *config.NewSecureString("k")}); err == nil {
-		t.Error("openai with the default (real) api_base must be refused")
-	}
-	if err := build(config.ModelConfig{Model: "openai/m", APIBase: "https://api.openai.com/v1", APIKey: *config.NewSecureString("k")}); err == nil {
-		t.Error("openai with a real api_base must be refused")
-	}
-	if err := build(config.ModelConfig{Model: "openai/m", APIBase: "https://llm.allowed.example/v1", APIKey: *config.NewSecureString("k")}); err != nil {
-		t.Errorf("an allowed host must build: %v", err)
-	}
-	// OAuth/token auth ignores api_base, so a loopback base must not let it through.
-	if err := build(config.ModelConfig{Model: "openai/m", APIBase: "http://127.0.0.1:9/v1", AuthMethod: "oauth"}); err == nil {
-		t.Error("auth_method oauth must be refused under the lock")
-	}
-	if err := build(config.ModelConfig{Model: "anthropic/m", APIBase: "http://127.0.0.1:9/v1", AuthMethod: "token"}); err == nil {
-		t.Error("auth_method token must be refused under the lock")
+	if !strings.Contains(err.Error(), "sandbox-locked") {
+		t.Errorf("error %q does not say why", err)
 	}
 }
 

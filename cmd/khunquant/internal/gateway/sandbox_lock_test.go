@@ -178,8 +178,8 @@ func TestEnforceLockedConfig(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.Agents.Defaults.Workspace = filepath.Join(home, "workspace")
 		cfg.ModelList = []config.ModelConfig{
-			{ModelName: "sandbox", Model: "openai/sandbox-offline", APIBase: "http://127.0.0.1:9/v1", Proxy: proxy},
-			{ModelName: "local", Model: "ollama/llama3", Proxy: proxy},
+			{ModelName: "sim", Model: "sim/scripted", Proxy: proxy},
+			{ModelName: "other", Model: "sim/scripted", Proxy: proxy},
 		}
 		cfg.Debug.Sandbox.Enabled = false
 		cfg.Debug.Sandbox.Token = lockTestToken // what env.Parse copies in from KQ_SANDBOX_TOKEN
@@ -363,11 +363,8 @@ func newLockedFixture(t *testing.T, mutate ...func(*config.Config)) *lockedFixtu
 // lockedBaseConfig gives a config the one model the lock allows (the defaults point
 // at real hosts, which enforceLockedConfig refuses).
 func lockedBaseConfig(c *config.Config) {
-	c.ModelList = []config.ModelConfig{{
-		ModelName: "sandbox", Model: "openai/sandbox-offline",
-		APIBase: "http://127.0.0.1:9/v1", APIKey: *config.NewSecureString("sandbox"),
-	}}
-	c.Agents.Defaults.ModelName = "sandbox"
+	c.ModelList = []config.ModelConfig{{ModelName: "sim", Model: "sim/scripted"}}
+	c.Agents.Defaults.ModelName = "sim"
 	c.Channels.SimChat.Enabled, c.Channels.SimChat.AllowFrom = true, config.FlexibleStringSlice{"*"}
 }
 

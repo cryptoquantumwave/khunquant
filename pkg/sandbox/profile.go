@@ -17,9 +17,8 @@ type ProfileOptions struct {
 // Profile returns the config of a sandbox instance: the defaults (every real chat
 // channel off, simchat on for everyone) with workspace and fixtures inside Home, the gateway on 127.0.0.1:Port, sandbox
 // and dev MCP on without tokens, and exec, MCP, heartbeat and the web owner route off.
-// The model is the interim "sandbox-offline" on the loopback discard port (until
-// SBX-04): it can be built but never reaches an LLM. The result already satisfies the
-// gateway's locked-config overlay.
+// The model is "sim/scripted": answers come from rules the lab scripts, never an LLM.
+// The result already satisfies the gateway's locked-config overlay.
 func Profile(o ProfileOptions) (*config.Config, error) {
 	if !filepath.IsAbs(o.Home) {
 		return nil, fmt.Errorf("sandbox profile: home %q is not an absolute path", o.Home)
@@ -32,13 +31,8 @@ func Profile(o ProfileOptions) (*config.Config, error) {
 	cfg := config.DefaultConfig() // reads the building process's home; only paths set below survive
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Agents.Defaults.RestrictToWorkspace = true
-	cfg.Agents.Defaults.ModelName = "sandbox"
-	cfg.ModelList = []config.ModelConfig{{
-		ModelName: "sandbox",
-		Model:     "openai/sandbox-offline",
-		APIBase:   "http://127.0.0.1:9/v1",
-		APIKey:    *config.NewSecureString("sandbox"),
-	}}
+	cfg.Agents.Defaults.ModelName = "sim"
+	cfg.ModelList = []config.ModelConfig{{ModelName: "sim", Model: "sim/scripted"}}
 	cfg.Gateway.Host, cfg.Gateway.Port = "127.0.0.1", o.Port
 	cfg.Debug.Sandbox = config.SandboxConfig{Enabled: true, FixturesDir: filepath.Join(workspace, "sandbox")}
 	cfg.Debug.DevMCP.Enabled, cfg.Debug.DevMCP.Token = true, ""

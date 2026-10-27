@@ -17,6 +17,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/account"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
@@ -92,6 +93,10 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		return err
 	}
 	if err := l.AddGroup(marketops.Group(l.Market)); err != nil {
+		return err
+	}
+	// The simulator lives as long as the lab, so the account group holds it directly.
+	if err := l.AddGroup(account.Group(l.Sim)); err != nil {
 		return err
 	}
 	// The chat group's world lives as long as the process; each generation's channel

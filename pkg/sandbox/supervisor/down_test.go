@@ -1,3 +1,5 @@
+//go:build !windows
+
 package supervisor
 
 import (
@@ -16,11 +18,11 @@ func TestDown_RefusesWhatIsNotAnInstance(t *testing.T) {
 	base := sandboxEnv(t)
 
 	for _, name := range []string{"", "../x", "a/b", "A"} {
-		if err := Down(DownOptions{Name: name, BaseDir: base}); err == nil {
+		if err := DownByName(DownOptions{Name: name, BaseDir: base}); err == nil {
 			t.Errorf("Down(%q) accepted a bad name", name)
 		}
 	}
-	if err := Down(DownOptions{Name: "ghost", BaseDir: base}); err == nil || !strings.Contains(err.Error(), "no instance") {
+	if err := DownByName(DownOptions{Name: "ghost", BaseDir: base}); err == nil || !strings.Contains(err.Error(), "no instance") {
 		t.Errorf("Down of a missing instance: err = %v", err)
 	}
 
@@ -34,7 +36,7 @@ func TestDown_RefusesWhatIsNotAnInstance(t *testing.T) {
 	if err := os.WriteFile(keep, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Down(DownOptions{Name: "foreign", BaseDir: base}); err == nil || !strings.Contains(err.Error(), "marker") {
+	if err := DownByName(DownOptions{Name: "foreign", BaseDir: base}); err == nil || !strings.Contains(err.Error(), "marker") {
 		t.Errorf("Down of an unmarked directory: err = %v, want a marker refusal", err)
 	}
 	if _, err := os.Stat(keep); err != nil {
@@ -45,7 +47,7 @@ func TestDown_RefusesWhatIsNotAnInstance(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(foreign, instanceMarker), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Down(DownOptions{Name: "foreign", BaseDir: base}); err == nil {
+	if err := DownByName(DownOptions{Name: "foreign", BaseDir: base}); err == nil {
 		t.Error("a directory named like the marker was accepted")
 	}
 	if _, err := os.Stat(keep); err != nil {
@@ -59,7 +61,7 @@ func TestDown_RefusesWhatIsNotAnInstance(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(real, instanceMarker), nil, 0o600)
 	if err := os.Symlink(real, filepath.Join(base, "kq-sbx-link")); err == nil {
-		if err := Down(DownOptions{Name: "link", BaseDir: base}); err == nil {
+		if err := DownByName(DownOptions{Name: "link", BaseDir: base}); err == nil {
 			t.Error("Down followed a symlinked home")
 		}
 		if _, err := os.Stat(real); err != nil {
@@ -74,9 +76,9 @@ func TestDown_KeepHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = Down(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: time.Second}) })
+	t.Cleanup(func() { _ = DownByName(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: time.Second}) })
 
-	if err := Down(DownOptions{Name: inst.Name, BaseDir: base, KeepHome: true, TermTimeout: 10 * time.Second}); err != nil {
+	if err := DownByName(DownOptions{Name: inst.Name, BaseDir: base, KeepHome: true, TermTimeout: 10 * time.Second}); err != nil {
 		t.Fatal(err)
 	}
 	if processAlive(inst.PID) {
@@ -88,7 +90,7 @@ func TestDown_KeepHome(t *testing.T) {
 		}
 	}
 	// Down again, now removing the home, works on the stopped instance.
-	if err := Down(DownOptions{Name: inst.Name, BaseDir: base}); err != nil {
+	if err := DownByName(DownOptions{Name: inst.Name, BaseDir: base}); err != nil {
 		t.Fatalf("second Down: %v", err)
 	}
 	if _, err := os.Stat(inst.Home); !os.IsNotExist(err) {
@@ -106,7 +108,7 @@ func TestDown_SigkillAfterGrace(t *testing.T) {
 	t.Cleanup(func() { killGroup(inst.PID) })
 
 	start := time.Now()
-	if err := Down(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: 600 * time.Millisecond}); err != nil {
+	if err := DownByName(DownOptions{Name: inst.Name, BaseDir: base, TermTimeout: 600 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(start) < 500*time.Millisecond {
@@ -140,7 +142,7 @@ func TestDown_DoesNotSignalAForeignPid(t *testing.T) {
 	if _, err := pid.WritePidFile(home, "127.0.0.1", 1); err != nil {
 		t.Fatal(err)
 	}
-	err := Down(DownOptions{Name: "stale", BaseDir: base, TermTimeout: 200 * time.Millisecond})
+	err := DownByName(DownOptions{Name: "stale", BaseDir: base, TermTimeout: 200 * time.Millisecond})
 	if err == nil || !strings.Contains(err.Error(), "not a sandbox gateway") {
 		t.Fatalf("Down with a foreign pid: err = %v", err)
 	}
@@ -165,7 +167,7 @@ func TestDown_StalePidFileOfDeadProcess(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"pid": cmd.Process.Pid, "version": "x", "port": 1, "host": "127.0.0.1"})
 	_ = os.WriteFile(filepath.Join(home, ".khunquant.pid"), raw, 0o600)
 
-	if err := Down(DownOptions{Name: "dead", BaseDir: base}); err != nil {
+	if err := DownByName(DownOptions{Name: "dead", BaseDir: base}); err != nil {
 		t.Fatalf("Down with a stale pid file: %v", err)
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {

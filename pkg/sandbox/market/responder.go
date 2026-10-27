@@ -12,13 +12,31 @@ import (
 
 // Middleware is the book's `market` stage. It answers the venues' price routes from the
 // models and calls next for everything else, including any symbol or batch the book has
-// no model for: the fixture or the router's 404 then answers, so it fails closed.
+// no model for: the fixture or the router's 404 then answers, so it fails closed. It also
+// refuses orders for, and filters the listings of, delisted symbols (delist.go).
 func (b *Book) Middleware() sandbox.Middleware {
 	return func(next sandbox.Responder) sandbox.Responder {
 		return sandbox.ResponderFunc(func(venue, method, path string, r *http.Request) (*sandbox.Response, bool) {
-			if method == http.MethodGet && r != nil && r.URL != nil {
+			if r == nil || r.URL == nil {
+				return next.Respond(venue, method, path, r)
+			}
+			answer := func(status int, body []byte) (*sandbox.Response, bool) {
+				return &sandbox.Response{Status: status, Body: body, Headers: map[string]string{"Content-Type": "application/json"}}, true
+			}
+			switch {
+			case method == http.MethodGet:
 				if status, body, ok := b.render(venue, path, r.URL.Query()); ok {
-					return &sandbox.Response{Status: status, Body: body, Headers: map[string]string{"Content-Type": "application/json"}}, true
+					return answer(status, body)
+				}
+				if _, ok := listings[venue+path]; ok {
+					if resp, ok := next.Respond(venue, method, path, r); ok {
+						return b.filterListing(venue, path, r.URL.Query(), resp), true
+					}
+					return nil, false
+				}
+			case method == http.MethodPost && b.refusesOrder(venue, path, r):
+				if status, body, ok := invalidSymbol(venue); ok {
+					return answer(status, body)
 				}
 			}
 			return next.Respond(venue, method, path, r)
@@ -27,6 +45,9 @@ func (b *Book) Middleware() sandbox.Middleware {
 }
 
 func (b *Book) render(venue, path string, q url.Values) (int, []byte, bool) {
+	if status, body, ok := b.delistedReply(venue, path, q); ok {
+		return status, body, true
+	}
 	switch venue + path {
 	case "binance/api/v3/ticker/24hr", "binance/fapi/v1/ticker/24hr":
 		return b.binanceTickers(path == "/api/v3/ticker/24hr", q)

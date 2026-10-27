@@ -20,8 +20,9 @@ import (
 // feedRig is the lab's chain in miniature: the book as the market stage, the simulator
 // as the orders stage and the repo's recorded fixtures last, behind the real router.
 type feedRig struct {
-	clk  *fakeNow
-	book *Book
+	clk   *fakeNow
+	store *sandbox.Store
+	book  *Book
 	sm   *sandbox.StateManager
 	srv  *httptest.Server
 
@@ -77,7 +78,7 @@ func newFeedRig(t *testing.T) *feedRig {
 	chain := sandbox.NewChain(store)
 	chain.Set(sandbox.StageMarket, book.Middleware())
 	chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
-	rig := &feedRig{clk: clk, book: book, sm: sm, seen: map[string]string{}}
+	rig := &feedRig{clk: clk, store: store, book: book, sm: sm, seen: map[string]string{}}
 	chain.Observe(func(i sandbox.ReqInfo) {
 		rig.mu.Lock()
 		rig.seen[i.Venue+" "+i.Path] = i.Stage
@@ -201,8 +202,15 @@ func TestRender_BinanceKlines_CCXTParses(t *testing.T) {
 func TestRender_OKXTickersAndCandles_CCXTParses(t *testing.T) {
 	r, want := pathRig(t)
 	ex := r.okx(t, nil)
-	// ccxt sees only the swap market: the simulator answers OKX's instruments route from
-	// its swap markets and shadows the recorded spot instruments (spot is checked on the wire).
+	// Spot comes from the recorded instruments (the simulator answers only SWAP), swap from
+	// the simulator: ccxt must load both markets through the lab chain.
+	spot, err := ex.FetchTicker("BTC/USDT")
+	if err != nil || spot.Last == nil || *spot.Last != want {
+		t.Fatalf("FetchTicker(BTC/USDT) = %+v (%v), want last %v", spot, err, want)
+	}
+	if bars, err := ex.FetchOHLCV("BTC/USDT", ccxt.WithFetchOHLCVTimeframe("1m"), ccxt.WithFetchOHLCVLimit(2)); err != nil || len(bars) != 2 || bars[1].Close != want {
+		t.Errorf("spot FetchOHLCV = %+v (%v)", bars, err)
+	}
 	sym := "BTC/USDT:USDT"
 	tk, err := ex.FetchTicker(sym)
 	if err != nil || tk.Last == nil || *tk.Last != want {

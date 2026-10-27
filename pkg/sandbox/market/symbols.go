@@ -60,3 +60,24 @@ func ParseWire(venue, wire string) (p Pair, swap, ok bool) {
 	}
 	return Pair{}, false, false
 }
+
+// wireVenues are the venues whose wire symbols ParseSymbol tries for the wildcard.
+var wireVenues = []string{"binance", "okx"}
+
+// ParseSymbol reads a canonical "BTC/USDT" or a venue's own wire symbol (SOLUSDT,
+// SOL-USDT-SWAP); for the wildcard venue any venue's wire form will do.
+func ParseSymbol(venue, s string) (Pair, error) {
+	if p, err := ParsePair(s); err == nil {
+		return p, nil
+	}
+	vs := wireVenues
+	if venue != "" && venue != Wildcard {
+		vs = []string{venue}
+	}
+	for _, v := range vs {
+		if p, _, ok := ParseWire(v, strings.ToUpper(strings.TrimSpace(s))); ok {
+			return p, nil
+		}
+	}
+	return Pair{}, fmt.Errorf("symbol %q is not BASE/QUOTE (for example BTC/USDT) or a wire symbol of %s", s, venue)
+}

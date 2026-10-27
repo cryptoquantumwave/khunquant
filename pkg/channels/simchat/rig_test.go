@@ -174,6 +174,7 @@ func card(chat string) bus.OutboundMessage {
 		Actions: []bus.Action{
 			{ID: "approve", Label: "Approve", Payload: "AB12.nonce1", TextCommand: "/approve AB12"},
 			{ID: "reject", Label: "Reject", Payload: "AB12.nonce1", TextCommand: "/reject AB12"},
+			{ID: "mute", Label: "Mute", Payload: "I-1", TextCommand: "/mute price_move"},
 		},
 	}
 }

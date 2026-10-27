@@ -165,13 +165,13 @@ func TestOutMsgCarriesProactiveMetadata(t *testing.T) {
 		t.Fatalf("card = %v", c)
 	}
 	btns := c["buttons"].([]any)
-	if len(btns) != 2 {
+	if len(btns) != 3 {
 		t.Fatalf("buttons = %v", btns)
 	}
-	for i, want := range []string{"approve", "reject"} {
+	for i, want := range []string{"approve", "reject", "mute"} {
 		b := btns[i].(map[string]any)
 		id, payload, err := channels.ParseCallbackData(b["data"].(string), 64)
-		if b["action"] != want || err != nil || id != want || payload != "AB12.nonce1" {
+		if b["action"] != want || err != nil || id != want || (i < 2 && payload != "AB12.nonce1") {
 			t.Errorf("button %d = %v (parsed %q %q %v)", i, b, id, payload, err)
 		}
 	}
@@ -185,7 +185,7 @@ func TestOutMsgCarriesProactiveMetadata(t *testing.T) {
 	}
 	p := payloadOf(t, es[0])
 	if p["sandbox"] != true || p["severity"] != "warning" || p["dedup_key"] != "order:BTC" || p["intervention_id"] != "I-1" ||
-		p["silent"] != true || len(p["buttons"].([]any)) != 2 {
+		p["silent"] != true || len(p["buttons"].([]any)) != 3 {
 		t.Fatalf("chat.out payload = %v", p)
 	}
 }

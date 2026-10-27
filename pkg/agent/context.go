@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -42,6 +43,28 @@ type ContextBuilder struct {
 	// background is the section only background turns carry (see
 	// background_sections.go); nil or empty adds nothing.
 	background *backgroundSections
+
+	// clock, when set (SetClock), is the time of the prompt's "Current Time" and of the
+	// prompt-cache day; nil is time.Now.
+	clock atomic.Pointer[func() time.Time]
+}
+
+// SetClock makes the prompt read now instead of the wall clock. The "Current Time"
+// section and the daily-note cache day both follow it, so they roll over at the same
+// (simulated) midnight. A nil now restores time.Now.
+func (cb *ContextBuilder) SetClock(now func() time.Time) {
+	if now == nil {
+		cb.clock.Store(nil)
+		return
+	}
+	cb.clock.Store(&now)
+}
+
+func (cb *ContextBuilder) now() time.Time {
+	if f := cb.clock.Load(); f != nil {
+		return (*f)()
+	}
+	return time.Now()
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -276,7 +299,7 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 		maxMtime = time.Unix(1, 0)
 	}
 
-	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime, day: promptDay(time.Now())}
+	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime, day: promptDay(cb.now())}
 }
 
 // errWalkStop is a sentinel error used to stop filepath.WalkDir early.
@@ -379,7 +402,7 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 // or for a light or proactive one (compact true), which tells the financial
 // context's live sections to keep to their smaller size.
 func (cb *ContextBuilder) buildDynamicContextFor(channel, chatID string, compact bool) string {
-	now :=time.Now().Format("2006-01-02 15:04 (Monday)")
+	now := cb.now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder

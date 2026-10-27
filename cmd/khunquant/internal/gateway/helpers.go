@@ -204,6 +204,7 @@ func gatewayCmd(debug, locked bool) error {
 	// Every process-global time hook reads the final shared clock: the lab's under the
 	// lock, the wall clock otherwise. Never per generation.
 	bindProcessClock(shared.clk())
+	agentLoop.SetClock(simclock.NowFunc(shared.clk())) // the prompt shows gateway time
 
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")

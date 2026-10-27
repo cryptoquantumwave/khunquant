@@ -73,6 +73,10 @@ type AgentLoop struct {
 	// whenever a registry is installed, so a reload keeps it.
 	background *backgroundSections
 
+	// clock is the time the prompts show (SetClock); nil is the wall clock. It is applied
+	// to every agent's context builder whenever a registry is installed, so a reload keeps it.
+	clock atomic.Pointer[func() time.Time]
+
 	// sched is the cognition scheduler, nil without cognition (see cognition.go).
 	sched atomic.Pointer[schedulerHolder]
 }

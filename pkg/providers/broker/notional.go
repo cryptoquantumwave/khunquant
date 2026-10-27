@@ -133,7 +133,7 @@ func newUSDRateCache(now func() time.Time) *usdRateCache {
 }
 
 // defaultUSDRates is the process-wide rate cache used by QuoteToUSD.
-var defaultUSDRates = newUSDRateCache(time.Now)
+var defaultUSDRates = newUSDRateCache(processNow)
 
 func (c *usdRateCache) lookup(key string) (usdRate, bool) {
 	c.mu.Lock()

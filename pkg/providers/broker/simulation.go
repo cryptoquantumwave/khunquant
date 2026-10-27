@@ -146,7 +146,7 @@ func (s *SimulationProvider) CreateOrder(
 		return ccxt.Order{}, errors.New("simulation: amount must be a positive, finite number")
 	}
 	seq := s.orderSeq.Add(1)
-	nowMs := time.Now().UnixMilli()
+	nowMs := processNow().UnixMilli()
 	id := fmt.Sprintf("%s%d-%d", PaperOrderIDPrefix, nowMs, seq)
 
 	md, _ := s.inner.(MarketDataProvider)
@@ -196,7 +196,7 @@ func (s *SimulationProvider) CreateOrder(
 		Cost:      &cost,
 		Status:    &status,
 		Fee:       ccxt.Fee{Cost: &zeroFee},
-		Datetime:  ptr(time.Now().UTC().Format(time.RFC3339)),
+		Datetime:  ptr(processNow().UTC().Format(time.RFC3339)),
 		Timestamp: &nowMs,
 	}
 	return order, nil
@@ -239,7 +239,7 @@ func (s *SimulationProvider) FetchMyTrades(_ context.Context, _ string, _ *int64
 // --- TransferProvider (simulated) ---
 
 func (s *SimulationProvider) Transfer(_ context.Context, asset string, amount float64, from, to string) (ccxt.TransferEntry, error) {
-	id := fmt.Sprintf("paper-transfer-%d", time.Now().UnixMilli())
+	id := fmt.Sprintf("paper-transfer-%d", processNow().UnixMilli())
 	return ccxt.TransferEntry{
 		Id:          &id,
 		Currency:    &asset,

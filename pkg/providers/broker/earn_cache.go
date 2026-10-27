@@ -40,7 +40,7 @@ func EarnRateHistoryCacheGet(exchange, asset string, since *int64) ([]EarnRatePo
 	earnRateCacheMu.RLock()
 	e, ok := earnRateCache[key]
 	earnRateCacheMu.RUnlock()
-	if !ok || time.Now().After(e.expires) {
+	if !ok || processNow().After(e.expires) {
 		return nil, false
 	}
 	return e.points, true
@@ -50,6 +50,6 @@ func EarnRateHistoryCacheGet(exchange, asset string, since *int64) ([]EarnRatePo
 func EarnRateHistoryCacheSet(exchange, asset string, since *int64, points []EarnRatePoint) {
 	key := earnRateCacheKey(exchange, asset, since)
 	earnRateCacheMu.Lock()
-	earnRateCache[key] = earnRateCacheEntry{points: points, expires: time.Now().Add(EarnRateHistoryTTL)}
+	earnRateCache[key] = earnRateCacheEntry{points: points, expires: processNow().Add(EarnRateHistoryTTL)}
 	earnRateCacheMu.Unlock()
 }

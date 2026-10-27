@@ -20,6 +20,7 @@ import (
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/marketops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -28,7 +29,7 @@ import (
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
 //
-// RULE for every lab group (inspect, chat, llm, and what SBX-03/06 add): (*lab.Lab).AddGroup
+// RULE for every lab group (inspect, market, chat, llm, and what SBX-06 adds): (*lab.Lab).AddGroup
 // is called ONCE per process, from registerLabGroups (which also attaches the sim
 // engine), right after buildLab and before the first buildServices. Never from registerSandboxLab or anything else that runs per
 // generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when
@@ -59,6 +60,11 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	}
 	l.Journal = j
 	l.OnClose(j.Close)
+	// Every request the chain sees is journaled (Append never blocks: a full queue drops).
+	l.Chain.Observe(func(i sandbox.ReqInfo) {
+		payload, _ := json.Marshal(i)
+		j.Append(labjournal.Entry{Kind: "exchange.req", Source: "sandbox", Subject: i.Venue, Payload: payload})
+	})
 	return l, nil
 }
 
@@ -83,6 +89,9 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 // rule above). Call it right after buildLab, before the first buildServices.
 func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) error {
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
+		return err
+	}
+	if err := l.AddGroup(marketops.Group(l.Market)); err != nil {
 		return err
 	}
 	// The chat group's world lives as long as the process; each generation's channel

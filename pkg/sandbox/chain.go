@@ -36,8 +36,12 @@ type Middleware func(next Responder) Responder
 
 // ReqInfo describes one request the chain saw, for the journal's exchange.req entries.
 type ReqInfo struct {
-	Venue, Host, Method, Path, Stage string
-	Status                           int
+	Venue  string `json:"venue"`
+	Host   string `json:"host"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Stage  string `json:"stage"`
+	Status int    `json:"status"`
 }
 
 // Chain is an ordered middleware chain behind the Server's single responder slot.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 )
 
 // Options configures New.
@@ -30,10 +31,12 @@ type Lab struct {
 	Store  *sandbox.Store
 	State  *sandbox.StateManager
 	Sim    *sandbox.StatefulSimulator
+	Chain  *sandbox.Chain // the server's responder: fault, market, orders, web, fixtures
+	Market *market.Book   // SimMarket: the one price per symbol (tickers, klines, fills)
 
 	Journal *labjournal.Journal // opened by the gateway under the lock
 	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
-	// Later PRs add their components here: Market, Clock, Faults, Web, Crash, ...
+	// Later PRs add their components here: Clock, Faults, Web, Crash, ...
 
 	fixturesDir string
 	token       string
@@ -70,22 +73,27 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	sim := sandbox.NewStatefulSimulator(state)
 
 	srv := sandbox.NewServer(store)
-	srv.SetResponder(sim)
-	if err := srv.Start(ctx); err != nil {
-		return nil, fmt.Errorf("lab: start sandbox server: %w", err)
-	}
-	sandbox.SetInstance(srv)
-
-	return &Lab{
+	l := &Lab{
 		Home:        opts.Home,
 		Server:      srv,
 		Store:       store,
 		State:       state,
 		Sim:         sim,
+		Chain:       sandbox.NewChain(store),
 		Now:         time.Now,
 		fixturesDir: opts.FixturesDir,
 		token:       opts.Token,
-	}, nil
+	}
+	// The book reads l.Now on every call, so the sim clock (SBX-07) needs no re-wiring.
+	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }})
+	sim.SetPriceSource(l.Market)
+	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
+	srv.SetResponder(l.Chain)
+	if err := srv.Start(ctx); err != nil {
+		return nil, fmt.Errorf("lab: start sandbox server: %w", err)
+	}
+	sandbox.SetInstance(srv)
+	return l, nil
 }
 
 // Token is the instance token.

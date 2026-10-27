@@ -6,9 +6,9 @@ package sandboxlab
 
 import "github.com/spf13/cobra"
 
-// NewSandboxCommand returns the `khunquant sandbox` command with `up` and `down`.
+// NewSandboxCommand returns the `khunquant sandbox` command with `up`, `down` and `mcp`.
 func NewSandboxCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "sandbox", Short: "Start and stop locked sandbox instances of the gateway"}
-	cmd.AddCommand(newUpCommand(), newDownCommand())
+	cmd.AddCommand(newUpCommand(), newDownCommand(), newMCPCommand())
 	return cmd
 }

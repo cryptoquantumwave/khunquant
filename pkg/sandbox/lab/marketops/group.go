@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	reload   = `"reload_markets":{"type":"boolean","description":"also drop the cached exchange clients so the next ones reload markets (default false)"}`
 	symVenue = `"symbol":{"type":"string","description":"BASE/QUOTE, e.g. BTC/USDT (a spot market and its USDT swap share it)"},` +
 		`"venue":{"type":"string","enum":["binance","okx","*"],"description":"default *: every venue without a model of its own"}`
 )
@@ -26,6 +27,9 @@ const (
 // Options are what the group needs from the instance.
 type Options struct {
 	Home string // the instance HOME: csv_path must lie inside it
+	// ResetClients drops the process's cached exchange clients (exchanges.ResetInstanceCache),
+	// so the next ones load markets afresh; nil makes reload_markets a no-op.
+	ResetClients func()
 }
 
 // Group sets the prices the simulated venues serve and fill at.
@@ -35,7 +39,7 @@ func Group(b *market.Book, o Options) lab.Group {
 		Description: "Simulated market prices: one price per symbol, shared by every venue's ticker, klines and fills. " +
 			"Ops start from the current price; history is kept.",
 		Ops: []lab.Op{
-			{Name: "get", Description: "the price now of every modelled symbol, or of one",
+			{Name: "get", Description: "the price now of every modelled symbol, or of one, and the delisted symbols",
 				Args: json.RawMessage(`{` + symVenue + `}`), Run: run(b, nil)},
 			{Name: "set", Description: "hold a constant price from now",
 				Args:     json.RawMessage(`{` + symVenue + `,"price":{"type":"number"}}`),
@@ -58,6 +62,12 @@ func Group(b *market.Book, o Options) lab.Group {
 					`"timeframe":{"type":"string","description":"the CSV bar length, e.g. 1m"},` +
 					`"start":{"type":"string","description":"RFC 3339 or unix time of the CSV bar to begin with; default the first"}}`),
 				Required: []string{"symbol", "timeframe"}, Run: run(b, replayOp(o.Home))},
+			{Name: "delist", Description: "take a symbol off a venue: market data and orders for it fail with the venue's invalid-symbol error and exchangeInfo/instruments lose it; ccxt clients that already loaded markets keep it until reload_markets",
+				Args:     json.RawMessage(`{` + symVenue + `,` + reload + `}`),
+				Required: []string{"symbol"}, Run: runWire(b, delistOp(o, true))},
+			{Name: "relist", Description: "undo delist",
+				Args:     json.RawMessage(`{` + symVenue + `,` + reload + `}`),
+				Required: []string{"symbol"}, Run: runWire(b, delistOp(o, false))},
 		},
 	}
 }
@@ -79,6 +89,7 @@ type req struct {
 	CSVInline string  `json:"csv_inline"`
 	Timeframe string  `json:"timeframe"`
 	Start     string  `json:"start"`
+	Reload    bool    `json:"reload_markets"`
 	Keyframes []struct {
 		At    string  `json:"at"`
 		Price float64 `json:"price"`
@@ -89,6 +100,15 @@ type req struct {
 // (nil for get) to the symbol and answers with the resulting prices. Every op but get
 // needs a symbol.
 func run(b *market.Book, op func(*market.Book, req, market.Pair) error) lab.OpFunc {
+	return runAs(b, op, func(_, s string) (market.Pair, error) { return market.ParsePair(s) })
+}
+
+// runWire is run for the ops that also take a venue's wire symbol (SOLUSDT, SOL-USDT-SWAP).
+func runWire(b *market.Book, op func(*market.Book, req, market.Pair) error) lab.OpFunc {
+	return runAs(b, op, market.ParseSymbol)
+}
+
+func runAs(b *market.Book, op func(*market.Book, req, market.Pair) error, parse func(venue, symbol string) (market.Pair, error)) lab.OpFunc {
 	return func(_ context.Context, args json.RawMessage) (any, error) {
 		var a req
 		dec := json.NewDecoder(bytes.NewReader(args))
@@ -98,7 +118,7 @@ func run(b *market.Book, op func(*market.Book, req, market.Pair) error) lab.OpFu
 		}
 		var only *market.Pair
 		if a.Symbol != "" || op != nil {
-			p, err := market.ParsePair(a.Symbol)
+			p, err := parse(a.Venue, a.Symbol)
 			if err != nil {
 				return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 			}
@@ -109,7 +129,7 @@ func run(b *market.Book, op func(*market.Book, req, market.Pair) error) lab.OpFu
 				return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 			}
 		}
-		return map[string]any{"prices": b.Snapshot(a.Venue, only)}, nil
+		return map[string]any{"prices": b.Snapshot(a.Venue, only), "delisted": b.Delisted(a.Venue)}, nil
 	}
 }
 
@@ -152,6 +172,23 @@ func walkOp(b *market.Book, a req, p market.Pair) error {
 		return errors.New("walk needs a seed")
 	}
 	return b.Walk(a.Venue, p, market.WalkParams{Vol: a.Vol, Drift: a.Drift, Seed: *a.Seed, Step: step})
+}
+
+// delistOp delists (or relists) the symbol and, with reload_markets, drops the cached clients.
+func delistOp(o Options, on bool) func(*market.Book, req, market.Pair) error {
+	return func(b *market.Book, a req, _ market.Pair) error {
+		do := b.Relist
+		if on {
+			do = b.Delist
+		}
+		if err := do(a.Venue, a.Symbol); err != nil {
+			return err
+		}
+		if a.Reload && o.ResetClients != nil {
+			o.ResetClients()
+		}
+		return nil
+	}
 }
 
 // replayOp reads the CSV from csv_inline or from csv_path, which must lie inside home.

@@ -1078,6 +1078,12 @@ func (sim *StatefulSimulator) simOKXFetchInstruments(state *VenueState, r *http.
 	if len(state.Markets) == 0 {
 		return nil, false
 	}
+	// The simulator's markets are the recorded swaps; spot instruments are not its to
+	// answer, so they come from the fixture. Without this the swap-only answer shadowed
+	// the recorded spot rows and ccxt could not load an OKX spot market.
+	if r.URL.Query().Get("instType") == "SPOT" {
+		return nil, false
+	}
 
 	if err := r.ParseForm(); err != nil {
 		return sim.okxErrorResponse("51000", "invalid query string"), true

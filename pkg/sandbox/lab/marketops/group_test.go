@@ -57,6 +57,45 @@ func TestGroup_OpsDriveTheBook(t *testing.T) {
 	}
 }
 
+func TestGroup_DelistRelistAndReload(t *testing.T) {
+	b := market.NewBook(market.Options{Now: time.Now})
+	resets := 0
+	l := &lab.Lab{}
+	if err := l.AddGroup(Group(b, Options{Home: t.TempDir(), ResetClients: func() { resets++ }})); err != nil {
+		t.Fatal(err)
+	}
+	call := func(op, args string) string {
+		res, err := l.Call(context.Background(), "market", op, json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("%s %s: %v", op, args, err)
+		}
+		out, _ := json.Marshal(res)
+		return string(out)
+	}
+	sol := market.Pair{Base: "SOL", Quote: "USDT"}
+	if out := call("delist", `{"symbol":"SOLUSDT","venue":"binance"}`); resets != 0 || !b.IsDelisted("binance", sol) ||
+		!strings.Contains(out, `"delisted":[{"venue":"binance","symbol":"SOL/USDT"}]`) {
+		t.Errorf("delist = %s (resets %d, delisted %v)", out, resets, b.IsDelisted("binance", sol))
+	}
+	if b.IsDelisted("okx", sol) {
+		t.Error("a binance delist reached okx")
+	}
+	if out := call("get", `{}`); !strings.Contains(out, `"delisted":[{`) {
+		t.Errorf("get does not list the delisted symbols: %s", out)
+	}
+	call("relist", `{"symbol":"SOL/USDT","venue":"binance","reload_markets":true}`)
+	if resets != 1 || b.IsDelisted("binance", sol) {
+		t.Errorf("relist with reload_markets: resets %d, delisted %v", resets, b.IsDelisted("binance", sol))
+	}
+	call("delist", `{"symbol":"SOL/USDT","reload_markets":true}`) // the wildcard: every venue
+	if resets != 2 || !b.IsDelisted("okx", sol) || !b.IsDelisted("binance", sol) {
+		t.Errorf("wildcard delist: resets %d", resets)
+	}
+	if _, err := l.Call(context.Background(), "market", "delist", json.RawMessage(`{"symbol":"SOL/USDT","venue":"kraken"}`)); err == nil {
+		t.Error("an unknown venue was accepted")
+	}
+}
+
 func asBadArgs(err error, le **lab.Error) bool {
 	e, ok := err.(*lab.Error)
 	*le = e

@@ -12,6 +12,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
@@ -92,7 +93,7 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
 		return err
 	}
-	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home})); err != nil {
+	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home, ResetClients: exchanges.ResetInstanceCache})); err != nil {
 		return err
 	}
 	// The simulator lives as long as the lab, so the account group holds it directly.

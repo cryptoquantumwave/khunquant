@@ -10,19 +10,21 @@ import (
 // tf/maxSamples), so a thousand daily bars stay cheap.
 const maxSamples = 120
 
-// Pairs lists the pairs venue has a model for (its own or the wildcard's), sorted.
+// Pairs lists the listed pairs venue has a model for (its own or the wildcard's), sorted.
 func (b *Book) Pairs(venue string) []Pair {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	seen := map[Pair]bool{}
 	for _, v := range []string{venue, Wildcard} {
 		for p := range b.tls[v] {
-			seen[p] = true
+			seen[p] = !b.delistedLocked(venue, p)
 		}
 	}
 	out := make([]Pair, 0, len(seen))
-	for p := range seen {
-		out = append(out, p)
+	for p, listed := range seen {
+		if listed {
+			out = append(out, p)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out

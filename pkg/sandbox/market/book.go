@@ -45,6 +45,8 @@ type Book struct {
 	mu  sync.RWMutex
 	now func() time.Time
 	tls map[string]map[Pair]timeline // venue ("*" = wildcard) -> pair
+
+	delisted map[string]map[Pair]bool // venue ("*" = every venue) -> pair (delist.go)
 }
 
 // NewBook returns an empty book.
@@ -52,7 +54,10 @@ func NewBook(o Options) *Book {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Book{now: o.Now, tls: map[string]map[Pair]timeline{}}
+	return &Book{
+		now: o.Now, tls: map[string]map[Pair]timeline{},
+		delisted: map[string]map[Pair]bool{},
+	}
 }
 
 // Now is the book's current time.
@@ -237,6 +242,8 @@ type Entry struct {
 	Symbol string  `json:"symbol"`
 	Price  float64 `json:"price"`
 	Model  string  `json:"model"`
+
+	Delisted bool `json:"delisted"`
 }
 
 // Snapshot lists the price now of every modelled pair on the venues (all when empty),
@@ -255,7 +262,7 @@ func (b *Book) Snapshot(venue string, only *Pair) []Entry {
 				continue
 			}
 			if px, ok := tl.price(now); ok {
-				out = append(out, Entry{v, p.String(), px, kind(tl[tl.index(now)].m)})
+				out = append(out, Entry{v, p.String(), px, kind(tl[tl.index(now)].m), b.delistedLocked(v, p)})
 			}
 		}
 	}

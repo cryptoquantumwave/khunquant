@@ -32,6 +32,9 @@ func Profile(o ProfileOptions) (*config.Config, error) {
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Agents.Defaults.RestrictToWorkspace = true
 	cfg.Agents.Defaults.ModelName = "sim"
+	// A text-only first answer would otherwise be followed by a second model call (the
+	// nudge), so one scripted answer would be two calls and eat a rule's "times".
+	cfg.Agents.Defaults.FollowUpNudge = false
 	cfg.ModelList = []config.ModelConfig{{ModelName: "sim", Model: "sim/scripted"}}
 	cfg.Gateway.Host, cfg.Gateway.Port = "127.0.0.1", o.Port
 	cfg.Debug.Sandbox = config.SandboxConfig{Enabled: true, FixturesDir: filepath.Join(workspace, "sandbox")}

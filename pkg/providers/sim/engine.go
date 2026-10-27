@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
@@ -57,9 +59,34 @@ type Engine struct {
 	callSeq   int64
 }
 
-// NewEngine builds an engine with an empty script.
+// scriptFile is what Store holds.
+type scriptFile struct {
+	Rules    []Rule `json:"rules"`
+	Fallback string `json:"fallback,omitempty"`
+}
+
+// NewEngine builds an engine. With a Store it starts from the script saved there, so a
+// restart of the instance keeps it; a Store that exists but cannot be read is an error.
 func NewEngine(o EngineOptions) (*Engine, error) {
-	return &Engine{o: o, fallback: fallbackText, hits: map[string]int{}, loops: map[string]int{}}, nil
+	e := &Engine{o: o, fallback: fallbackText, hits: map[string]int{}, loops: map[string]int{}}
+	if o.Store == "" {
+		return e, nil
+	}
+	b, err := os.ReadFile(o.Store)
+	if errors.Is(err, os.ErrNotExist) {
+		return e, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sim: reading the saved script: %w", err)
+	}
+	var f scriptFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("sim: the saved script %s is not valid: %w", o.Store, err)
+	}
+	if err := e.install(f.Rules, f.Fallback, false); err != nil {
+		return nil, fmt.Errorf("sim: the saved script %s is not valid: %w", o.Store, err)
+	}
+	return e, nil
 }
 
 // Mode is the engine's mode.
@@ -67,7 +94,8 @@ func (e *Engine) Mode() string { return ModeScripted }
 
 // Put installs a script: it replaces the rules, or appends to them when replace is
 // false. fallback ("text" or "error", "" keeps the current one) says what a call no rule
-// matches gets. Hit counts restart.
+// matches gets. Hit counts restart. The script is saved to the Store first, so what is
+// installed is what a restart finds.
 func (e *Engine) Put(rules []Rule, replace bool, fallback string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -75,18 +103,57 @@ func (e *Engine) Put(rules []Rule, replace bool, fallback string) error {
 	if !replace {
 		next = append(append([]Rule(nil), e.rules...), rules...)
 	}
-	if err := validateRules(next); err != nil {
+	return e.install(next, fallback, true)
+}
+
+// install validates and sets the script; the caller holds e.mu (or owns e).
+func (e *Engine) install(rules []Rule, fallback string, save bool) error {
+	if err := validateRules(rules); err != nil {
 		return err
 	}
 	if fallback != "" && fallback != fallbackText && fallback != fallbackError {
 		return fmt.Errorf("fallback must be %q or %q", fallbackText, fallbackError)
 	}
-	e.rules = next
-	if fallback != "" {
-		e.fallback = fallback
+	if fallback == "" {
+		fallback = e.fallback
 	}
+	if save && e.o.Store != "" {
+		b, err := json.MarshalIndent(scriptFile{Rules: rules, Fallback: fallback}, "", "  ")
+		if err == nil {
+			err = fileutil.WriteFileAtomic(e.o.Store, b, 0o600)
+		}
+		if err != nil {
+			return fmt.Errorf("saving the script: %w", err)
+		}
+	}
+	e.rules, e.fallback = rules, fallback
 	e.hits, e.unmatched = map[string]int{}, 0
 	return nil
+}
+
+// RuleStat is a rule with the number of times it has answered since the script was put.
+type RuleStat struct {
+	Rule
+	Hits int `json:"hits"`
+}
+
+// Script is the installed script and how it has been used.
+type Script struct {
+	Mode      string     `json:"mode"`
+	Fallback  string     `json:"fallback"`
+	Rules     []RuleStat `json:"rules"`
+	Unmatched int        `json:"unmatched"`
+}
+
+// Script returns the installed script with its hit counts.
+func (e *Engine) Script() Script {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := Script{Mode: ModeScripted, Fallback: e.fallback, Rules: []RuleStat{}, Unmatched: e.unmatched}
+	for _, r := range e.rules {
+		s.Rules = append(s.Rules, RuleStat{Rule: r, Hits: e.hits[r.ID]})
+	}
+	return s
 }
 
 // decision is the outcome of one call.

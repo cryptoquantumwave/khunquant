@@ -1,4 +1,4 @@
-package sandboxlab
+package supervisor
 
 import (
 	"bytes"

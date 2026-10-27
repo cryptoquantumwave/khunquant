@@ -72,6 +72,49 @@ func TestRegisterRoutesCallsAndMapsErrors(t *testing.T) {
 	}
 }
 
+func TestGroupsRoute_ListsRegistry(t *testing.T) {
+	guarded := 0
+	l := &lab.Lab{}
+	noop := func(context.Context, json.RawMessage) (any, error) { return nil, nil }
+	for _, g := range []lab.Group{
+		{Name: "zeta", Description: "last", Ops: []lab.Op{{Run: noop}}},
+		{Name: "alpha", Description: "first", Ops: []lab.Op{
+			{Name: "get", Description: "reads", Args: json.RawMessage(`{"id":{"type":"string"}}`), Required: []string{"id"}, Run: noop},
+			{Name: "list", Description: "lists", Run: noop},
+		}},
+	} {
+		if err := l.AddGroup(g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mux := http.NewServeMux()
+	Register(mux, l, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { guarded++; h.ServeHTTP(w, r) })
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/sandbox/lab", nil))
+	if rec.Code != http.StatusOK || guarded != 1 {
+		t.Fatalf("GET = %d, guard ran %d times", rec.Code, guarded)
+	}
+	var out struct {
+		Groups []groupInfo `json:"groups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.Groups) != 2 {
+		t.Fatalf("body = %s (%v)", rec.Body, err)
+	}
+	a := out.Groups[0]
+	if a.Name != "alpha" || a.Description != "first" || len(a.Ops) != 2 || a.Ops[0].Name != "get" ||
+		string(a.Ops[0].Args) != `{"id":{"type":"string"}}` || a.Ops[0].Required[0] != "id" {
+		t.Errorf("alpha = %+v, want its ops with their schemas", a)
+	}
+	if z := out.Groups[1]; z.Name != "zeta" || len(z.Ops) != 1 || z.Ops[0].Name != "" {
+		t.Errorf("zeta = %+v, want a single unnamed op", z)
+	}
+	if rec := post(mux, "/api/sandbox/lab", `{}`); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/sandbox/lab = %d, want 405", rec.Code)
+	}
+}
+
 func TestRegisterRefusesGetAndHugeBody(t *testing.T) {
 	mux := newMux(t, func(h http.Handler) http.Handler { return h })
 	rec := httptest.NewRecorder()

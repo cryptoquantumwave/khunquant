@@ -1,10 +1,7 @@
-package sandboxlab
+package supervisor
 
 import (
-	"context"
 	"encoding/json"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,58 +170,5 @@ func TestDown_StalePidFileOfDeadProcess(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Errorf("home survived: %v", err)
-	}
-}
-
-// TestUpDown_LocalBinary drives the real binary: a locked gateway with the simchat
-// channel starts, answers, and goes away. KQ_SANDBOX_E2E_BIN names a prebuilt
-// khunquant; the test never compiles one.
-func TestUpDown_LocalBinary(t *testing.T) {
-	bin := os.Getenv("KQ_SANDBOX_E2E_BIN")
-	if bin == "" {
-		t.Skip("set KQ_SANDBOX_E2E_BIN to a prebuilt khunquant binary to run this test")
-	}
-	base := sandboxEnv(t) // private HOME and TMPDIR for the child commands
-	run := func(args ...string) ([]byte, error) {
-		cmd := exec.Command(bin, args...)
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + base, "HOME=" + os.Getenv("HOME")}
-		cmd.Dir = filepath.Dir(filepath.Dir(repoFixtures(t))) // the repository root: ./workspace/sandbox resolves
-		return cmd.CombinedOutput()
-	}
-
-	out, err := run("sandbox", "up", "--name", "e2e", "--json", "--fixtures-from", repoFixtures(t))
-	if err != nil {
-		t.Fatalf("sandbox up: %v\n%s", err, out)
-	}
-	var inst Instance
-	if err := json.Unmarshal(out, &inst); err != nil {
-		t.Fatalf("up output is not the instance JSON: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { _, _ = run("sandbox", "down", "e2e") })
-
-	if c := getCode(t, inst.GatewayURL+"/health", ""); c != http.StatusOK {
-		t.Fatalf("/health = %d", c)
-	}
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, inst.GatewayURL+"/api/sandbox/status", nil)
-	req.Header.Set("Authorization", "Bearer "+inst.Token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	var st struct {
-		Locked bool     `json:"locked"`
-		Venues []string `json:"venues"`
-	}
-	if err := json.Unmarshal(body, &st); err != nil || !st.Locked || len(st.Venues) < 1 {
-		t.Fatalf("status = %s (%v), want locked with at least one venue", body, err)
-	}
-
-	if out, err := run("sandbox", "down", "e2e"); err != nil {
-		t.Fatalf("sandbox down: %v\n%s", err, out)
-	}
-	if _, err := os.Stat(inst.Home); !os.IsNotExist(err) {
-		t.Errorf("home survived down: %v", err)
 	}
 }

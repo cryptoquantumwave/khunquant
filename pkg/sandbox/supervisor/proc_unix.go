@@ -1,6 +1,6 @@
 //go:build !windows
 
-package sandboxlab
+package supervisor
 
 import (
 	"errors"

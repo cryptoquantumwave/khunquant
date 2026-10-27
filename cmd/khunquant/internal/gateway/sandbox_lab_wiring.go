@@ -97,6 +97,10 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 // registerLabGroups adds the lab's groups to the registry, once per process (see the
 // rule above). Call it right after buildLab, before the first buildServices.
 func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) error {
+	// The lab's sim clock is the process's clock: every generation's components read it.
+	if l.Clock != nil { // never a typed nil in the interface
+		shared.Clock = l.Clock
+	}
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
 		return err
 	}
@@ -221,7 +225,11 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 func settleLab(shared *sharedResources) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if s := shared.labGen.Load(); s != nil && s.Perception != nil && s.Perception.engine != nil {
-			return s.Perception.engine.Settle(ctx)
+			// An engine that is not running (starting or stopping) has nothing to wait for;
+			// only a budget that ran out is an answer.
+			if err := s.Perception.engine.Settle(ctx); err != nil && ctx.Err() != nil {
+				return err
+			}
 		}
 		return nil
 	}

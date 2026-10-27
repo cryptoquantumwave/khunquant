@@ -53,6 +53,9 @@ func (l *Lab) InitClock(getenv func(string) string) error {
 	default:
 		return err // an unreadable state is not silently replaced by wall time
 	}
+	// Set before the hook: a driven clock is already ticking and the hook runs on its goroutine.
+	l.Clock = sim
+	l.Now = simclock.NowFunc(sim)
 	var last atomic.Int64 // unix nano of the last save of a driven clock
 	sim.OnStep(func(s simclock.Step) {
 		if sim.State().Mode == simclock.ModeManual {
@@ -63,19 +66,14 @@ func (l *Lab) InitClock(getenv func(string) string) error {
 		} else if prev, n := last.Load(), time.Now().UnixNano(); n-prev < int64(saveEvery) || !last.CompareAndSwap(prev, n) {
 			return
 		}
-		l.saveClock()
+		saveClock(l.ClockPath(), sim)
 	})
-	l.Clock = sim
-	l.Now = simclock.NowFunc(sim)
-	l.OnClose(func() error { l.saveClock(); return sim.Close() })
+	l.OnClose(func() error { saveClock(l.ClockPath(), sim); return sim.Close() })
 	return nil
 }
 
-func (l *Lab) saveClock() {
-	if l.Clock == nil {
-		return
-	}
-	if err := simclock.SaveState(l.ClockPath(), l.Clock.State()); err != nil {
+func saveClock(path string, sim *simclock.Sim) {
+	if err := simclock.SaveState(path, sim.State()); err != nil {
 		logger.WarnCF("sandbox", "Saving the lab clock failed", map[string]any{"error": err.Error()})
 	}
 }

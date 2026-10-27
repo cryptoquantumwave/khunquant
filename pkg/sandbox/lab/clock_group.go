@@ -172,6 +172,6 @@ func (l *Lab) clockSetMode(_ context.Context, args json.RawMessage) (any, error)
 	if err := l.Clock.SetMode(m); err != nil {
 		return nil, fmt.Errorf("set_mode: %w", err)
 	}
-	l.saveClock()
+	saveClock(l.ClockPath(), l.Clock)
 	return l.clockState(), nil
 }

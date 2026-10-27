@@ -194,7 +194,6 @@ func gatewayCmd(debug, locked bool) error {
 			return lockFatal(fmt.Errorf("building the sandbox lab: %w", err))
 		}
 		shared.lab = l
-		shared.Clock = l.Clock // every generation's components read the lab's sim clock
 		shared.add("sandbox lab", l)
 		if err := registerLabGroups(l, shared, cfg); err != nil {
 			return lockFatal(fmt.Errorf("registering the lab groups: %w", err))

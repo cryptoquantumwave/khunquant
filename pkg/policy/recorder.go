@@ -66,6 +66,14 @@ func NewRecorder(engine Authorizer, store *Store, bus events.Bus, buffer int) *R
 	return rc
 }
 
+// SetClock replaces the clock that stamps each stored record. Call it before the
+// first Observe; a nil now keeps the current one.
+func (rc *Recorder) SetClock(now func() time.Time) {
+	if now != nil {
+		rc.now = now
+	}
+}
+
 // Observe queues the record of a call whose outcome the existing checks have
 // already decided. legacyAllowed is what they did; the engine never sees it. It
 // never blocks: a full queue, or a closed recorder, drops the record and counts it.

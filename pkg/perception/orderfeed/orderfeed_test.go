@@ -90,6 +90,32 @@ func TestPublish_DeliversInOrderAndStampsTime(t *testing.T) {
 	}
 }
 
+func TestOrderfeedStampsSetClock(t *testing.T) {
+	reset(t)
+	sim := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	SetClock(func() time.Time { return sim })
+	t.Cleanup(func() { SetClock(nil) })
+	var mu sync.Mutex
+	var got []OrderEvent
+	SetPublisher(func(ev OrderEvent) {
+		mu.Lock()
+		got = append(got, ev)
+		mu.Unlock()
+	})
+	Publish(context.Background(), OrderEvent{OrderID: "1"})
+	explicit := sim.Add(-time.Hour)
+	Publish(context.Background(), OrderEvent{OrderID: "2", At: explicit})
+	waitFor(t, "two events", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) == 2 })
+	mu.Lock()
+	defer mu.Unlock()
+	if !got[0].At.Equal(sim) {
+		t.Errorf("zero At stamped %v, want sim time %v", got[0].At, sim)
+	}
+	if !got[1].At.Equal(explicit) {
+		t.Errorf("an explicit At was overwritten: %v", got[1].At)
+	}
+}
+
 func TestPublish_BlockedPublisherDoesNotBlockTheCaller(t *testing.T) {
 	reset(t)
 	release := make(chan struct{})

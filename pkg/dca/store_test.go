@@ -486,3 +486,25 @@ func TestStore_UpdatePlanStats(t *testing.T) {
 		t.Errorf("AvgCost = %g, want 40000", got.AvgCost)
 	}
 }
+
+func TestDCAStore_PeriodCapUsesClock(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	planID, _ := s.SavePlan(ctx, minimalPlan("SimDay"))
+	ict := time.FixedZone("ICT", 7*3600)
+	cur := time.Date(2026, 10, 20, 22, 0, 0, 0, ict)
+	s.SetClock(func() time.Time { return cur })
+
+	e := minimalExecution(planID)
+	e.ExecutedAt = cur
+	if _, err := s.SaveExecution(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.CountExecutionsInPeriod(ctx, planID, "day"); err != nil || n != 1 {
+		t.Fatalf("sim day before midnight = %d, %v; want 1", n, err)
+	}
+	cur = cur.Add(3 * time.Hour) // sim midnight passes; the wall clock does not
+	if n, err := s.CountExecutionsInPeriod(ctx, planID, "day"); err != nil || n != 0 {
+		t.Fatalf("sim day after midnight = %d, %v; want 0 (the cap must reset on sim time)", n, err)
+	}
+}

@@ -79,20 +79,35 @@ func TestLockedGatewayMarketGroupPricesFillsAndJournalsRequests(t *testing.T) {
 		t.Errorf("get = %s", out)
 	}
 
+	// The same book answers the venue's ticker and klines (no fixture for either exists).
+	code, body = sandboxCall(t, f, "GET", "binance/api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
+	var tk struct {
+		LastPrice string `json:"lastPrice"`
+	}
+	if err := json.Unmarshal([]byte(body), &tk); err != nil || code != http.StatusOK || tk.LastPrice == "" {
+		t.Fatalf("ticker = %d %s (%v)", code, body, err)
+	}
+	if code, body = sandboxCall(t, f, "GET", "binance/api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=5"); code != http.StatusOK || strings.Count(body, "],[") != 4 {
+		t.Fatalf("klines = %d %s, want 5 rows", code, body)
+	}
+
 	// exchange.req: one entry per request; the stage that answered, or none.
 	if code, _ := sandboxCall(t, f, "GET", "binance/api.binance.com/api/v3/ticker/24hr?symbol=NOPE"); code != http.StatusNotFound {
 		t.Fatalf("unmatched request = %d, want the router's 404", code)
 	}
 	reqs := journalEntries(t, f.url("/api/sandbox/lab/inspect"), "exchange.req")
-	if len(reqs) != 2 {
-		t.Fatalf("exchange.req entries = %v, want the order and the unmatched request", reqs)
+	if len(reqs) != 4 {
+		t.Fatalf("exchange.req entries = %v, want the order, ticker, klines and the unmatched request", reqs)
 	}
 	if reqs[0]["stage"] != "orders" || reqs[0]["method"] != "POST" || reqs[0]["path"] != "/fapi/v1/order" ||
 		reqs[0]["venue"] != "binance" || reqs[0]["host"] != "fapi.binance.com" || reqs[0]["status"] != float64(200) {
 		t.Errorf("order entry = %v", reqs[0])
 	}
-	if reqs[1]["stage"] != "none" || reqs[1]["status"] != float64(404) {
-		t.Errorf("unmatched entry = %v", reqs[1])
+	if reqs[1]["stage"] != "market" || reqs[2]["stage"] != "market" {
+		t.Errorf("ticker/klines entries = %v %v, want the market stage", reqs[1], reqs[2])
+	}
+	if reqs[3]["stage"] != "none" || reqs[3]["status"] != float64(404) {
+		t.Errorf("unmatched entry = %v", reqs[3])
 	}
 
 	// A reload builds a new generation; the book (and the group) stay.

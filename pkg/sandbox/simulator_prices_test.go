@@ -52,7 +52,11 @@ func newSimRig(t *testing.T, withBook bool) *simRig {
 	if withBook {
 		r.sim.SetPriceSource(r.book)
 	}
-	r.srv = httptest.NewServer(sandbox.BuildRouter(sandbox.NewStore(), r.sim))
+	store := sandbox.NewStore()
+	chain := sandbox.NewChain(store)
+	chain.Set(sandbox.StageMarket, r.book.Middleware())
+	chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(r.sim))
+	r.srv = httptest.NewServer(sandbox.BuildRouter(store, chain))
 	t.Cleanup(r.srv.Close)
 	return r
 }
@@ -152,8 +156,8 @@ func TestSimulator_NoSourceUsesSeed(t *testing.T) {
 	}
 }
 
-// Orders (sim.mu -> book.mu) and price changes and reads (book.mu alone, never calling
-// back) run together: run it with -race, serially.
+// Orders (sim.mu -> book.mu), ticker and kline reads, and price changes (book.mu alone,
+// never calling back) run together through the chain: run it with -race, serially.
 func TestSimulatorBook_ConcurrentRace(t *testing.T) {
 	r := newSimRig(t, true)
 	btc := market.Pair{Base: "BTC", Quote: "USDT"}
@@ -169,6 +173,8 @@ func TestSimulatorBook_ConcurrentRace(t *testing.T) {
 			for j := 0; j < 25; j++ {
 				r.do(t, "POST", "/__sbx__/binance/fapi.binance.com/fapi/v1/order?symbol=BTCUSDT&side=BUY&type=market&quantity=1&positionSide=LONG", "")
 				r.do(t, "GET", "/__sbx__/binance/fapi.binance.com/fapi/v1/positionRisk", "")
+				r.do(t, "GET", "/__sbx__/binance/api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", "")
+				r.do(t, "GET", "/__sbx__/okx/www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1m&limit=20", "")
 			}
 		}()
 	}

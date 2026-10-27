@@ -316,8 +316,12 @@ func (s *Service) Housekeep(ctx context.Context) (int, error) {
 
 func (s *Service) housekeepLoop(ctx context.Context, done chan struct{}) {
 	defer close(done)
-	t := time.NewTicker(housekeepEvery)
-	defer t.Stop()
+	next := s.after
+	if next == nil {
+		t := time.NewTicker(housekeepEvery)
+		defer t.Stop()
+		next = func(time.Duration) <-chan time.Time { return t.C }
+	}
 	for {
 		if _, err := s.Housekeep(ctx); err != nil && ctx.Err() == nil {
 			logger.DebugCF("feedback", "Housekeeping failed", map[string]any{"error": err.Error()})
@@ -325,7 +329,7 @@ func (s *Service) housekeepLoop(ctx context.Context, done chan struct{}) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-next(housekeepEvery):
 		}
 	}
 }

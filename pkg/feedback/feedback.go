@@ -124,6 +124,8 @@ type Options struct {
 	Events Publisher
 	// Clock is the time source; nil is time.Now.
 	Clock func() time.Time
+	// After paces the 15 minute housekeeping; nil is a wall-clock ticker.
+	After func(time.Duration) <-chan time.Time
 	// Changes, when set, is read by the housekeeper for plan and intent changes that
 	// count as acting on an alert (see ObserveChange).
 	Changes ChangeSource
@@ -155,6 +157,7 @@ type Service struct {
 	db    *sql.DB
 	pub   Publisher
 	clock func() time.Time
+	after func(time.Duration) <-chan time.Time
 	since time.Time
 	// fillsSince is when the fills log began; fills before it are not in it.
 	fillsSince time.Time
@@ -184,7 +187,7 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{db: db, pub: o.Events, clock: o.Clock, since: since, fillsSince: fillsSince, changes: o.Changes,
+	s := &Service{db: db, pub: o.Events, clock: o.Clock, after: o.After, since: since, fillsSince: fillsSince, changes: o.Changes,
 		sem: make(chan struct{}, maxAsync), zone: o.Zone}
 	if s.clock == nil {
 		s.clock = time.Now

@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal/sandboxlab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
 
 // A locked gateway started exactly the way `khunquant sandbox up` starts it: the
-// environment is sandboxlab.ChildEnv (HOME is the instance home, nothing else of the
+// environment is supervisor.ChildEnv (HOME is the instance home, nothing else of the
 // developer's shell), the config is the real sandbox profile, and the fixtures are
 // the repository's. The simchat stub stands in for SBX-02's adapter, so the gateway
 // starts fully. This is what shows that up's environment passes the lock checks.
@@ -33,7 +33,7 @@ func TestLockedGateway_StartsWithUpEnvAndProfile(t *testing.T) {
 	// see it, so ChildEnv is built after pointing TMPDIR at a scanned dir.
 	childTmp := t.TempDir()
 	t.Setenv("TMPDIR", childTmp)
-	env := sandboxlab.ChildEnv(home, "upenv", lockTestToken)
+	env := supervisor.ChildEnv(home, "upenv", lockTestToken)
 	if !slices.Contains(env, "HOME="+home) {
 		t.Fatalf("ChildEnv does not set HOME to the instance home: %v", env)
 	}

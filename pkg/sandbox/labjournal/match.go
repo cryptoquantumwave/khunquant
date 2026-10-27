@@ -80,6 +80,10 @@ func parseCount(s string) (lo, hi int, err error) {
 	return n, n, nil
 }
 
+// Bounds is the range [lo, hi] of entry counts that satisfy m.Count (hi < 0: no upper
+// bound). An absence check has lo == 0 and hi >= 0: it holds only once the window is over.
+func (m Match) Bounds() (lo, hi int, err error) { return parseCount(m.Count) }
+
 // clampWait bounds a requested wait to [0, MaxWait].
 func clampWait(d time.Duration) time.Duration { return min(max(d, 0), MaxWait) }
 

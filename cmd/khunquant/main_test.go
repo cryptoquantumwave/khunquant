@@ -30,7 +30,7 @@ func TestIsReplay(t *testing.T) {
 }
 
 // A locked gateway skips the update check (it would call GitHub before the egress guard
-// is armed), and `sandbox ... --json` prints nothing but its JSON.
+// is armed), and `sandbox ... --json` prints nothing but its JSON, as `sandbox mcp` prints nothing but MCP.
 func TestStartupModes(t *testing.T) {
 	t.Setenv("KQ_SANDBOX_LOCKED", "")
 	assert.False(t, isLockedGateway([]string{"khunquant", "gateway"}))
@@ -41,6 +41,8 @@ func TestStartupModes(t *testing.T) {
 
 	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "up", "--json"}))
 	assert.False(t, isSandboxJSON([]string{"khunquant", "sandbox", "up"}))
+	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "mcp"}), "stdout is the MCP protocol")
+	assert.False(t, isSandboxJSON([]string{"khunquant", "status", "mcp"}))
 	assert.False(t, isSandboxJSON([]string{"khunquant", "status", "--json"}))
 }
 

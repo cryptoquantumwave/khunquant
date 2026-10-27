@@ -614,3 +614,41 @@ func runReplay(t *testing.T, e *obEnv, n int) {
 		e.tick()
 	}
 }
+
+// manualTimers is a timer clock whose After channel the test fires by hand.
+type manualTimers struct{ fire chan time.Time }
+
+func (m *manualTimers) After(time.Duration) <-chan time.Time { return m.fire }
+
+func TestOutbox_TicksOnInjectedClock(t *testing.T) {
+	e := newObEnv(t)
+	tc := &manualTimers{fire: make(chan time.Time)}
+	e.ob.SetTimerClock(tc)
+	e.ob.SetTickInterval(5 * time.Millisecond) // a wall ticker would flush well inside the wait below
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.ob.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	start := e.clock.Now()
+	e.submit(cand("a", notice))
+	e.clock.Set(start.Add(2 * time.Minute)) // the group window has closed
+	time.Sleep(300 * time.Millisecond)
+	if n := len(e.del.messages()); n != 0 {
+		t.Fatalf("%d messages with no timer fired: wall time ticked the outbox", n)
+	}
+	tc.fire <- e.clock.Now()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(e.del.messages()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("firing the injected timer did not flush the group")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

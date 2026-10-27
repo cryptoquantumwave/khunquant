@@ -87,6 +87,7 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	// The book reads l.Now on every call, so the sim clock (SBX-07) needs no re-wiring.
 	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }})
 	sim.SetPriceSource(l.Market)
+	l.Chain.Set(sandbox.StageMarket, l.Market.Middleware())
 	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
 	srv.SetResponder(l.Chain)
 	if err := srv.Start(ctx); err != nil {

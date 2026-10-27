@@ -216,13 +216,8 @@ func TestCallToolNoWebAuth(t *testing.T) {
 		return true
 	})
 
-	armGate(t, true) // a launcher with authentication
-	f := newLockedFixture(t, ownerConfig)
-	on := true
-	f.al.GetConfig().Proactive.Owner.WebIsOwner = &on // the live config the tool reads; as if the instance allowed it
-	if !f.al.GetConfig().WebOwnerActive() {
-		t.Fatal("setup: the web should be the owner here, or the check below proves nothing")
-	}
+	f := newLockedFixture(t, webOwnerConfig) // web_is_owner true, as an instance file may set it
+	armLikeGateway(t, f)                     // fails unless the web really is the owner here
 	if _, out := callToolVia(t, f, `{"name":"update_profile","as":"stranger","args":{"notification_budget_per_day":9}}`); out["is_error"] != true {
 		t.Fatalf("a stranger changed the profile where the web is the owner: %v", out)
 	}

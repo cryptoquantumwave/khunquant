@@ -3,13 +3,19 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
 
@@ -43,17 +49,24 @@ func innerBody(out map[string]any) map[string]any {
 	return b
 }
 
-// setWebOwner makes the web the owner on the live config. The lock forces
-// proactive.owner.web_is_owner off on every config it loads (enforceLockedConfig), so a
-// test that wants the owner-level path flips it after the build, with a launcher gate
-// that reports authentication.
-func setWebOwner(t *testing.T, f *lockedFixture) {
-	t.Helper()
-	armGate(t, true)
+// webOwnerConfig is manageConfig with the web as the owner, set in the config the way an
+// instance file would: the lock leaves an explicit web_is_owner: true alone.
+func webOwnerConfig(c *config.Config) {
+	manageConfig(c)
 	on := true
-	f.al.GetConfig().Proactive.Owner.WebIsOwner = &on
-	if !f.al.GetConfig().WebOwnerActive() {
-		t.Fatal("setup: the web should be the owner now")
+	c.Proactive.Owner.WebIsOwner = &on
+}
+
+// armLikeGateway arms condition (c) with the production probe (armWebOwner, as gatewayCmd
+// does at start) over the fixture's home, which has no launcher-config.json, and checks
+// the plan's claim: the probe's defaults pass for a loopback gateway.host.
+func armLikeGateway(t *testing.T, f *lockedFixture) {
+	t.Helper()
+	cfg := f.al.GetConfig()
+	armWebOwner(filepath.Join(filepath.Dir(f.workspace), "config.json"), cfg)
+	t.Cleanup(func() { config.SetWebLauncherGate(nil) })
+	if active, missing := cfg.WebOwnerStatus(); !active {
+		t.Fatalf("the web is not the owner in a locked instance with web_is_owner true and no launcher-config.json: %s (gateway.host %q)", missing, cfg.Gateway.Host)
 	}
 }
 
@@ -63,6 +76,7 @@ var proposalCode = regexp.MustCompile(`Proposal ([A-Z0-9]{4}) sent`)
 // propose_order as the owner.
 func makeProposal(t *testing.T, f *lockedFixture) string {
 	t.Helper()
+	broker.ResetInstanceCache() // clients cached by an earlier instance point at its dead sandbox server
 	if code, out := labPost(t, f, "market", `{"op":"set","symbol":"BTC/USDT","price":60000}`); code != http.StatusOK {
 		t.Fatalf("market set = %d %v", code, out)
 	}
@@ -156,30 +170,94 @@ func TestManageUsesGuards(t *testing.T) {
 }
 
 // Without the web as owner a risk-raising route answers the real 403, and a decision is
-// refused as not_owner; with it, resume and the decision go through.
+// refused as not_owner; with web_is_owner: true in the instance config, resume and the
+// decision go through.
 func TestManageApproveNeedsWebOwner(t *testing.T) {
-	f := newLockedFixture(t, manageConfig)
-	code := makeProposal(t, f)
+	t.Run("web_is_owner off", func(t *testing.T) {
+		f := newLockedFixture(t, manageConfig)
+		code := makeProposal(t, f)
+		_, out := manageVia(t, f, "POST", "/api/proactive/proposals/"+code+"/approve", "")
+		body := innerBody(out)
+		if innerStatus(t, out) != http.StatusForbidden || body["result"] != "not_owner" || body["web_owner_missing"] == "" || body["web_owner_missing"] == nil {
+			t.Fatalf("approve on the default profile = %v, want 403 not_owner with web_owner_missing", out)
+		}
+		_, out = manageVia(t, f, "POST", "/api/proactive/resume", "")
+		if innerStatus(t, out) != http.StatusForbidden || !strings.Contains(innerBody(out)["error"].(string), "not the owner") ||
+			innerBody(out)["web_owner_missing"] == "" || out["web_owner_active"] != false {
+			t.Fatalf("resume on the default profile = %v, want 403 with web_owner_missing", out)
+		}
+	})
+	t.Run("web_is_owner on", func(t *testing.T) {
+		f := newLockedFixture(t, webOwnerConfig)
+		if !f.al.GetConfig().Proactive.Owner.WebIsOwnerEnabled() {
+			t.Fatal("the lock overwrote an explicit web_is_owner: true")
+		}
+		armLikeGateway(t, f)
+		code := makeProposal(t, f)
+		_, out := manageVia(t, f, "POST", "/api/proactive/resume", "")
+		if innerStatus(t, out) != http.StatusOK || out["web_owner_active"] != true {
+			t.Fatalf("resume as the web owner = %v, want 200", out)
+		}
+		_, out = manageVia(t, f, "POST", "/api/proactive/proposals/"+code+"/approve", "")
+		if body := innerBody(out); innerStatus(t, out) != http.StatusOK || body["result"] != "decided" {
+			t.Fatalf("approve as the web owner = %v, want 200 decided", out)
+		}
+	})
+}
 
-	_, out := manageVia(t, f, "POST", "/api/proactive/proposals/"+code+"/approve", "")
-	body := innerBody(out)
-	if innerStatus(t, out) != http.StatusForbidden || body["result"] != "not_owner" || body["web_owner_missing"] == "" || body["web_owner_missing"] == nil {
-		t.Fatalf("approve on the default profile = %v, want 403 not_owner with web_owner_missing", out)
+// Even with web_is_owner true no real channel is built under the lock: the web-owner
+// surface is the management routes alone (ChannelAllowed itself is tested in pkg/sandbox).
+func TestLockedWebOwnerOpensNoChannel(t *testing.T) {
+	f := newLockedFixture(t, func(c *config.Config) {
+		webOwnerConfig(c)
+		c.Channels.Pico.Enabled = true
+		c.Channels.Telegram.Enabled = true
+	})
+	if got := f.services.ChannelManager.GetEnabledChannels(); !slices.Equal(got, []string{"simchat"}) {
+		t.Fatalf("channels built = %v, want only simchat", got)
 	}
-	_, out = manageVia(t, f, "POST", "/api/proactive/resume", "")
-	if innerStatus(t, out) != http.StatusForbidden || !strings.Contains(out["body"].(map[string]any)["error"].(string), "not the owner") ||
-		innerBody(out)["web_owner_missing"] == "" {
-		t.Fatalf("resume on the default profile = %v, want 403 with web_owner_missing", out)
+}
+
+// The real path: a locked gateway started from a config file that sets web_is_owner
+// true, with no launcher-config.json beside it. The probe armed at start (gatewayCmd)
+// finds the web the owner, so resume goes through and manage reports it.
+func TestLockedGatewayManageResumeAsWebOwner(t *testing.T) {
+	home := newInstanceHome(t)
+	t.Setenv("KHUNQUANT_HOME", home)
+	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(home, "config.json"))
+	t.Setenv("KQ_SANDBOX_TOKEN", "")
+	port := freePort(t)
+	cfg, err := sandbox.Profile(sandbox.ProfileOptions{Home: home, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Proactive.Enabled = true
+	on := true
+	cfg.Proactive.Owner = config.OwnerConfig{Channel: "simchat", ChatID: "dm:boss", SenderID: "simchat:boss", WebIsOwner: &on}
+	if err := config.SaveConfig(filepath.Join(home, "config.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "launcher-config.json")); err == nil {
+		t.Fatal("setup: a launcher-config.json exists")
 	}
 
-	setWebOwner(t, f)
-	_, out = manageVia(t, f, "POST", "/api/proactive/resume", "")
-	if innerStatus(t, out) != http.StatusOK || out["web_owner_active"] != true {
-		t.Fatalf("resume as the web owner = %v, want 200", out)
+	childHome, childTmp := t.TempDir(), t.TempDir()
+	env := []string{
+		"PATH=" + os.Getenv("PATH"), "TMPDIR=" + childTmp, "HOME=" + childHome,
+		"KHUNQUANT_HOME=" + home, "KHUNQUANT_CONFIG=" + home + "/config.json",
+		"KQ_SANDBOX_LOCKED=1", "KQ_SANDBOX_TOKEN=" + lockTestToken, "KQ_SANDBOX_INSTANCE=subprocess",
 	}
-	_, out = manageVia(t, f, "POST", "/api/proactive/proposals/"+code+"/approve", "")
-	if body = innerBody(out); innerStatus(t, out) != http.StatusOK || body["result"] != "decided" {
-		t.Fatalf("approve as the web owner = %v, want 200 decided", out)
+	p := launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
+	p.waitReady()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/manage", port)
+	code, body, err := postJSON(url, lockTestToken, `{"method":"POST","route":"/api/proactive/resume"}`)
+	var out struct {
+		Status         int  `json:"status"`
+		WebOwnerActive bool `json:"web_owner_active"`
+	}
+	if err != nil || code != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || out.Status != http.StatusOK || !out.WebOwnerActive {
+		t.Fatalf("resume in a locked instance with web_is_owner true = %d (%v) %s\n%s", code, err, body, p.out.String())
 	}
 }
 

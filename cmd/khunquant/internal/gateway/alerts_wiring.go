@@ -227,7 +227,10 @@ func warnInactiveAlerts(n int) {
 // storedSpecs lets the migration read and write the trigger table in a generation
 // that has no registry. Only what the hand-over needs is supported: List, a change of
 // mode and Remove.
-type storedSpecs struct{ db *sql.DB }
+type storedSpecs struct {
+	db  *sql.DB
+	now func() time.Time // the gateway clock; nil is time.Now
+}
 
 var _ migrate.Specs = storedSpecs{}
 
@@ -236,7 +239,11 @@ func (s storedSpecs) List(ctx context.Context, f triggers.ListFilter) ([]trigger
 }
 
 func (s storedSpecs) Update(ctx context.Context, sp triggers.Spec) error {
-	ok, err := triggers.SetStoredMode(ctx, s.db, sp.ID, sp.Mode)
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	ok, err := triggers.SetStoredMode(ctx, s.db, sp.ID, sp.Mode, now())
 	if err == nil && !ok {
 		err = triggers.ErrNotFound
 	}

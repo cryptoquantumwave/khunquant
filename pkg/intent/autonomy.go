@@ -113,7 +113,7 @@ func (s *Store) SetAutonomy(ctx context.Context, a map[string]string, by string)
 	if err != nil {
 		return 0, err
 	}
-	version, err := insertVersion(ctx, tx, js, by, proactive.TrustUserAuthored)
+	version, err := insertVersion(ctx, tx, js, by, proactive.TrustUserAuthored, s.clock())
 	if err != nil {
 		return 0, err
 	}
@@ -137,10 +137,10 @@ func latestProfileTx(ctx context.Context, tx *sql.Tx) (Profile, error) {
 }
 
 // insertVersion inserts one profile version and prunes, inside tx.
-func insertVersion(ctx context.Context, tx *sql.Tx, js, by string, trust proactive.Trust) (int64, error) {
+func insertVersion(ctx context.Context, tx *sql.Tx, js, by string, trust proactive.Trust, at time.Time) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO profile_versions (profile_json, updated_at_ms, updated_by, trust) VALUES (?, ?, ?, ?)`,
-		js, time.Now().UnixMilli(), by, int(trust))
+		js, at.UnixMilli(), by, int(trust))
 	if err != nil {
 		return 0, fmt.Errorf("intent: store profile: %w", err)
 	}

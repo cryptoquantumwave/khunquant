@@ -100,6 +100,11 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
 		return err
 	}
+	// An advance settles the perception engine of the current generation after each step.
+	l.Settle = settleLab(shared)
+	if err := l.AddGroup(l.ClockGroup()); err != nil {
+		return err
+	}
 	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home, ResetClients: exchanges.ResetInstanceCache})); err != nil {
 		return err
 	}
@@ -207,6 +212,18 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 			d.Policy = s.Policy.store.Recent
 		}
 		return d
+	}
+}
+
+// settleLab is Lab.Settle: it waits for the current generation's perception engine to
+// process what the step queued, and does nothing when there is none (stopgap until
+// the quiescence registry settles every component).
+func settleLab(shared *sharedResources) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if s := shared.labGen.Load(); s != nil && s.Perception != nil && s.Perception.engine != nil {
+			return s.Perception.engine.Settle(ctx)
+		}
+		return nil
 	}
 }
 

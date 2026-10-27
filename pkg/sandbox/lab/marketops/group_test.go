@@ -3,6 +3,8 @@ package marketops
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +17,7 @@ func TestGroup_OpsDriveTheBook(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	b := market.NewBook(market.Options{Now: func() time.Time { return now }})
 	l := &lab.Lab{}
-	if err := l.AddGroup(Group(b)); err != nil {
+	if err := l.AddGroup(Group(b, Options{Home: t.TempDir()})); err != nil {
 		t.Fatal(err) // names, ops and schemas are valid for the registry
 	}
 	call := func(op, args string) (string, error) {
@@ -59,4 +61,51 @@ func asBadArgs(err error, le **lab.Error) bool {
 	e, ok := err.(*lab.Error)
 	*le = e
 	return ok && e.Code == lab.CodeBadArgs
+}
+
+func TestGroup_ReplayCSVPathStaysInsideHome(t *testing.T) {
+	now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	b := market.NewBook(market.Options{Now: func() time.Time { return now }})
+	home, outside := t.TempDir(), t.TempDir()
+	l := &lab.Lab{}
+	if err := l.AddGroup(Group(b, Options{Home: home})); err != nil {
+		t.Fatal(err)
+	}
+	const csv = "ts,open,high,low,close\n1700000000,100,110,95,105\n"
+	for dir, name := range map[string]string{home: "in.csv", outside: "out.csv"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(csv), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(home, "link")); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args string) error {
+		_, err := l.Call(context.Background(), "market", "replay", json.RawMessage(args))
+		return err
+	}
+	for _, ok := range []string{
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"in.csv"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"` + filepath.Join(home, "in.csv") + `"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_inline":"1700000000,1,2,1,2"}`,
+	} {
+		if err := call(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	if p, _ := b.Price("binance", market.Pair{Base: "BTC", Quote: "USDT"}, now); p <= 0 {
+		t.Errorf("replay left no price: %v", p)
+	}
+	for _, bad := range []string{
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"` + filepath.Join(outside, "out.csv") + `"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"../x.csv"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"link/out.csv"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m"}`,
+		`{"symbol":"BTC/USDT","timeframe":"1m","csv_path":"in.csv","csv_inline":"x"}`,
+		`{"symbol":"BTC/USDT","timeframe":"soon","csv_path":"in.csv"}`,
+	} {
+		if err := call(bad); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
 }

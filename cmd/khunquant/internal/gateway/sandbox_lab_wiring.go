@@ -92,7 +92,7 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
 		return err
 	}
-	if err := l.AddGroup(marketops.Group(l.Market)); err != nil {
+	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home})); err != nil {
 		return err
 	}
 	// The simulator lives as long as the lab, so the account group holds it directly.

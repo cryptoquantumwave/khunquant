@@ -78,7 +78,7 @@ func forBoundaries(tl timeline, from, to time.Time, f func(before, after float64
 
 // Bars returns the tf bars (aligned to UTC epoch multiples of tf) that open in [from, to],
 // oldest first. The bar holding now is forming: Closed=false and its close is the price
-// now. A model with recorded bars supplies them when it is the only segment.
+// now. A model with recorded bars (replay) supplies them from the moment it took over.
 func (b *Book) Bars(venue string, p Pair, tf time.Duration, from, to time.Time) []Bar {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -86,15 +86,22 @@ func (b *Book) Bars(venue string, p Pair, tf time.Duration, from, to time.Time) 
 	if len(tl) == 0 || tf < time.Millisecond {
 		return nil
 	}
-	if bm, ok := tl[0].m.(BarModel); ok && len(tl) == 1 {
-		if bars, ok := bm.Bars(tf, from, to); ok {
-			return bars
+	now := b.now()
+	// A recorded-bar model (replay) serves its own bars from where it took over; the
+	// forming one is cut at now so a CSV never leaks the future.
+	var rec []Bar
+	var cut time.Time
+	replaying := false
+	seg := tl[tl.index(now)]
+	if bm, ok := seg.m.(BarModel); ok {
+		cut = alignDown(seg.start, tf)
+		if bars, ok := bm.Bars(tf, laterOf(from, cut), earlierOf(to, now)); ok {
+			rec, replaying = formingAt(bars, tf, now, tl), true
 		}
 	}
-	now := b.now()
 	step := max(time.Second, tf/maxSamples)
 	var out []Bar
-	for open := alignDown(from, tf); !open.After(to) && !open.After(now); open = open.Add(tf) {
+	for open := alignDown(from, tf); !open.After(to) && !open.After(now) && (!replaying || open.Before(cut)); open = open.Add(tf) {
 		end := open.Add(tf)
 		last, closed := end.Add(-time.Nanosecond), !end.After(now)
 		if !closed {
@@ -121,10 +128,42 @@ func (b *Book) Bars(venue string, p Pair, tf time.Duration, from, to time.Time) 
 			out = append(out, bar)
 		}
 	}
+	return append(out, rec...)
+}
+
+// formingAt makes recorded bars agree with the clock: the bar holding now is forming and
+// closes at the price now, and none opens after now.
+func formingAt(bars []Bar, tf time.Duration, now time.Time, tl timeline) []Bar {
+	out := bars[:0:0]
+	for _, bar := range bars {
+		if bar.Open.After(now) {
+			break
+		}
+		if bar.Closed = !bar.Open.Add(tf).After(now); !bar.Closed {
+			if px, ok := tl.price(now); ok {
+				bar.C, bar.H, bar.L = px, max(bar.H, px), min(bar.L, px)
+			}
+		}
+		out = append(out, bar)
+	}
 	return out
 }
 
 func alignDown(t time.Time, tf time.Duration) time.Time {
 	ms := t.UnixMilli()
 	return time.UnixMilli(ms - ms%tf.Milliseconds()).UTC()
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func earlierOf(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }

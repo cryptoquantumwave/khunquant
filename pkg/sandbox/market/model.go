@@ -108,6 +108,8 @@ func kind(m Model) string {
 		return "path"
 	case *walkModel:
 		return "walk"
+	case *replayModel:
+		return "replay"
 	}
 	return "custom"
 }

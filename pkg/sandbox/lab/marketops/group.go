@@ -7,9 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 )
@@ -19,8 +23,13 @@ const (
 		`"venue":{"type":"string","enum":["binance","okx","*"],"description":"default *: every venue without a model of its own"}`
 )
 
+// Options are what the group needs from the instance.
+type Options struct {
+	Home string // the instance HOME: csv_path must lie inside it
+}
+
 // Group sets the prices the simulated venues serve and fill at.
-func Group(b *market.Book) lab.Group {
+func Group(b *market.Book, o Options) lab.Group {
 	return lab.Group{
 		Name: "market",
 		Description: "Simulated market prices: one price per symbol, shared by every venue's ticker, klines and fills. " +
@@ -43,6 +52,12 @@ func Group(b *market.Book) lab.Group {
 				Args: json.RawMessage(`{` + symVenue + `,"vol":{"type":"number"},"drift":{"type":"number"},"seed":{"type":"integer"},` +
 					`"step":{"type":"string","description":"default 1m"}}`),
 				Required: []string{"symbol", "vol", "seed"}, Run: run(b, walkOp)},
+			{Name: "replay", Description: "play a candle CSV (ts,open,high,low,close[,volume]) from now; the bar holding `start` opens at the current boundary",
+				Args: json.RawMessage(`{` + symVenue + `,"csv_path":{"type":"string","description":"a file inside the instance home"},` +
+					`"csv_inline":{"type":"string","description":"the CSV text itself"},` +
+					`"timeframe":{"type":"string","description":"the CSV bar length, e.g. 1m"},` +
+					`"start":{"type":"string","description":"RFC 3339 or unix time of the CSV bar to begin with; default the first"}}`),
+				Required: []string{"symbol", "timeframe"}, Run: run(b, replayOp(o.Home))},
 		},
 	}
 }
@@ -60,6 +75,10 @@ type req struct {
 	Drift     float64 `json:"drift"`
 	Seed      *uint64 `json:"seed"`
 	Step      string  `json:"step"`
+	CSVPath   string  `json:"csv_path"`
+	CSVInline string  `json:"csv_inline"`
+	Timeframe string  `json:"timeframe"`
+	Start     string  `json:"start"`
 	Keyframes []struct {
 		At    string  `json:"at"`
 		Price float64 `json:"price"`
@@ -133,4 +152,42 @@ func walkOp(b *market.Book, a req, p market.Pair) error {
 		return errors.New("walk needs a seed")
 	}
 	return b.Walk(a.Venue, p, market.WalkParams{Vol: a.Vol, Drift: a.Drift, Seed: *a.Seed, Step: step})
+}
+
+// replayOp reads the CSV from csv_inline or from csv_path, which must lie inside home.
+func replayOp(home string) func(*market.Book, req, market.Pair) error {
+	return func(b *market.Book, a req, p market.Pair) error {
+		tf, err := offset(a.Timeframe)
+		if err != nil {
+			return err
+		}
+		var start time.Time
+		if a.Start != "" {
+			if start, err = market.ParseCSVTime(a.Start); err != nil {
+				return errors.New("start must be RFC 3339 or a unix time")
+			}
+		}
+		var rd io.Reader
+		switch {
+		case (a.CSVInline == "") == (a.CSVPath == ""):
+			return errors.New("replay needs exactly one of csv_path and csv_inline")
+		case a.CSVInline != "":
+			rd = strings.NewReader(a.CSVInline)
+		default:
+			path := a.CSVPath
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(home, path)
+			}
+			if !sandbox.PathInside(home, path) {
+				return errors.New("csv_path must be inside the instance home")
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return errors.New("cannot read csv_path")
+			}
+			defer f.Close()
+			rd = f
+		}
+		return b.Replay(a.Venue, p, rd, tf, start)
+	}
 }

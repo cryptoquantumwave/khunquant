@@ -609,6 +609,8 @@ func TestAssembly_EachServiceAndRouteHasOneCallSite(t *testing.T) {
 	for _, callee := range []string{
 		"registerCronAPI",
 		"registerProactiveStatsAPI",
+		"registerManageAPI",
+		"registerTriggerAPIFor",
 		"wireEventBus",
 		"events.NewBus",
 		"registerSandboxAPI",
@@ -624,6 +626,13 @@ func TestAssembly_EachServiceAndRouteHasOneCallSite(t *testing.T) {
 		if got := counts[callee]; got != 1 {
 			t.Errorf("%s( is called %d times in the gateway package's non-test files, want exactly 1", callee, got)
 		}
+	}
+
+	// registerProactiveRoutes has two callers by design: the gateway's mux
+	// (registerGatewayRoutes) and the locked lab's private mux for sandbox_manage
+	// (registerSandboxLab). The registrars it calls stay at one call site, in it.
+	if got := counts["registerProactiveRoutes"]; got != 2 {
+		t.Errorf("registerProactiveRoutes( is called %d times, want 2 (registerGatewayRoutes and registerSandboxLab)", got)
 	}
 
 	// buildServices has two callers by design: the first start (gatewayCmd) and the

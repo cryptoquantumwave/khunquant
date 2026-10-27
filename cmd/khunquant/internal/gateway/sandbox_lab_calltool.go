@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -12,11 +13,13 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
-// labSetup is what the lab's setup shortcuts (call_tool, and manage in SBX-06b) use of
-// the current generation. registerSandboxLab sets it before the generation is published
+// labSetup is what the lab's setup shortcuts (call_tool, manage) use of the current
+// generation. registerSandboxLab sets it before the generation is published
 // (publishLabGeneration), and the groups read it through shared.labGen.
 type labSetup struct {
-	al *agent.AgentLoop
+	al    *agent.AgentLoop
+	mux   http.Handler // manage's private mux: the real /api/proactive/* handlers, this generation's services
+	token string       // the management token that mux's guards expect; never leaves the process
 }
 
 // labSetupOf is the current generation's setup, or nil between generations.

@@ -138,8 +138,10 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	cfg.Tools.Exec.Enabled = false // also stops cron command jobs
 	cfg.Tools.MCP.Enabled = false
 	cfg.Tools.MCP.Servers = nil
-	off := false
-	cfg.Proactive.Owner.WebIsOwner = &off
+	// proactive.owner.web_is_owner is left as configured. The profile writes false; an
+	// instance that sets true (to exercise owner-level sandbox_manage) opens nothing
+	// new: pico and every other real channel are refused under the lock, so the only
+	// web-owner surface is the management routes, which need the instance token.
 
 	// Legacy providers are merged into model_list at provider creation, after this
 	// runs, and carry their own proxy. Only model_list is allowed under the lock.

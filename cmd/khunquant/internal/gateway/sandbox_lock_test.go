@@ -223,8 +223,8 @@ func TestEnforceLockedConfig(t *testing.T) {
 		if cfg.Tools.MCP.Enabled || cfg.Tools.MCP.Servers != nil {
 			t.Error("tools.mcp not forced off and emptied")
 		}
-		if cfg.Proactive.Owner.WebIsOwnerEnabled() {
-			t.Error("proactive.owner.web_is_owner not forced off")
+		if !cfg.Proactive.Owner.WebIsOwnerEnabled() {
+			t.Error("an explicit proactive.owner.web_is_owner: true was overwritten (it must survive the overlay; pico stays refused)")
 		}
 		if got, want := cfg.Debug.Sandbox.FixturesDir, filepath.Join(home, "workspace", "sandbox"); got != want {
 			t.Errorf("fixtures_dir = %q, want %q", got, want)

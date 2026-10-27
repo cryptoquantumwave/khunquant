@@ -27,7 +27,7 @@ func labPost(t *testing.T, f *lockedFixture, group, body string) (int, map[strin
 // the simulator's own state, which the exchange API then serves.
 func TestLockedGatewayAccountGroupSeedsTheSimulator(t *testing.T) {
 	f := newLockedFixture(t, func(c *config.Config) { c.Debug.DevMCP.Enabled = true })
-	for _, name := range []string{"sandbox_account", "sandbox_call_tool"} {
+	for _, name := range []string{"sandbox_account", "sandbox_call_tool", "sandbox_manage"} {
 		if !mcpTools(t, f.assemblyFixture, lockTestToken)[name] {
 			t.Fatalf("tools/list has no %s", name)
 		}
@@ -54,7 +54,7 @@ func TestLockedGatewayAccountGroupSeedsTheSimulator(t *testing.T) {
 func TestLabSetupGroupsNotRegisteredWhenUnlocked(t *testing.T) {
 	f := newAssemblyFixture(t, enableAllRoutes)
 	tools := mcpTools(t, f, testDevMCPToken)
-	for _, group := range []string{"call_tool", "account"} {
+	for _, group := range []string{"call_tool", "account", "manage"} {
 		if code, body, err := postJSON(f.url("/api/sandbox/lab/"+group), testSandboxToken, `{}`); err != nil || code != http.StatusNotFound {
 			t.Errorf("POST /api/sandbox/lab/%s = %d (%v) %s, want 404", group, code, err, body)
 		}

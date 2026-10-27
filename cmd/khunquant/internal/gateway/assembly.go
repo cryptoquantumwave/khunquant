@@ -29,8 +29,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
-	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -79,7 +79,7 @@ type sharedResources struct {
 	Events *events.EventBus
 
 	// Clock is the one clock of the process, handed to every component that takes one
-	// (see clk). It is simclock.Real() unless the process is locked, when gatewayCmd
+	// (see clk). It is simclock.Real() unless the process is locked, when registerLabGroups
 	// replaces it with the lab's *simclock.Sim before the first buildServices; per
 	// process, so a reload keeps it.
 	Clock simclock.Clock

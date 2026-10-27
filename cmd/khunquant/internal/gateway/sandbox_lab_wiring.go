@@ -32,7 +32,7 @@ import (
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
 //
-// RULE for every lab group (inspect, market, chat, llm, and what SBX-06 adds): (*lab.Lab).AddGroup
+// RULE for every lab group (inspect, market, clock, chat, llm, and what SBX-06 adds): (*lab.Lab).AddGroup
 // is called ONCE per process, from registerLabGroups (which also attaches the sim
 // engine), right after buildLab and before the first buildServices. Never from registerSandboxLab or anything else that runs per
 // generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when

@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 )
@@ -225,5 +228,47 @@ func TestClockGroup_AdvanceFiresTimersAndReportsWallBudget(t *testing.T) {
 	case <-ch:
 	default:
 		t.Fatal("the hour timer did not fire in the first step")
+	}
+}
+
+// With Options.Getenv the clock exists before the server starts: Now is the Sim's from
+// the first request, and requests served concurrently with reads of Now are race-free
+// (run with -race).
+func TestNew_ClockIsBuiltBeforeTheServerStarts(t *testing.T) {
+	home := t.TempDir()
+	fixtures := filepath.Join(home, "workspace", "sandbox")
+	copyFixtures(t, fixtures)
+	t.Cleanup(func() { sandbox.SetGlobalState(false, "") })
+	env := envOf(map[string]string{EnvClockStart: clockT0.Format(time.RFC3339), EnvClockMode: "manual"})
+	l, err := New(context.Background(), Options{Home: home, FixturesDir: fixtures, Token: testToken, Getenv: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if l.Clock == nil || !l.Now().Equal(clockT0) {
+		t.Fatalf("Lab.Now = %v, want the Sim's %v from the first request", l.Now(), clockT0)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				resp, err := http.Get(l.Server.BaseURL() + "/binance/api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = resp.Body.Close()
+				_ = l.Now()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// A bad clock environment fails New, and leaves nothing serving.
+	bad := envOf(map[string]string{EnvClockStart: "yesterday"})
+	if _, err := New(context.Background(), Options{Home: home, FixturesDir: fixtures, Token: testToken, Getenv: bad}); err == nil {
+		t.Fatal("New accepted a bad clock start")
 	}
 }

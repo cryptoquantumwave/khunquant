@@ -23,6 +23,9 @@ type Options struct {
 	Home        string // KHUNQUANT_HOME of the instance
 	FixturesDir string // must be inside Home
 	Token       string
+	// Getenv, when set, makes New build the instance clock (InitClock) before the server
+	// starts, so no request is served while Now is still the wall clock. Nil: no sim clock.
+	Getenv func(string) string
 }
 
 // Lab holds the components of one sandbox instance.
@@ -97,7 +100,15 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	l.Chain.Set(sandbox.StageMarket, l.Market.Middleware())
 	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
 	srv.SetResponder(l.Chain)
+	if opts.Getenv != nil {
+		if err := l.InitClock(opts.Getenv); err != nil {
+			return nil, err
+		}
+	}
 	if err := srv.Start(ctx); err != nil {
+		if l.Clock != nil {
+			_ = l.Clock.Close()
+		}
 		return nil, fmt.Errorf("lab: start sandbox server: %w", err)
 	}
 	sandbox.SetInstance(srv)

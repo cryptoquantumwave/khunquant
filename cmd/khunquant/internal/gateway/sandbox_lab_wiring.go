@@ -48,15 +48,12 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		Home:        config.HomeDir(),
 		FixturesDir: sandbox.ResolveFixturesDir(cfg),
 		Token:       lk.Token,
+		// The one clock of the process (clock.json, else the KQ_SANDBOX_CLOCK_* env), built
+		// inside New before the server starts: l.Now then follows it from the first request.
+		Getenv: os.Getenv,
 	})
 	if err != nil {
 		return nil, err
-	}
-	// The one clock of the process, from clock.json or the KQ_SANDBOX_CLOCK_* env. It
-	// comes first: l.Now (the journal's and SimMarket's time source) then follows it.
-	if err := l.InitClock(os.Getenv); err != nil {
-		_ = l.Close()
-		return nil, fmt.Errorf("building the lab clock: %w", err)
 	}
 	// The journal is opened once per process, here, so a reload never reopens it.
 	j, err := labjournal.Open(labjournal.Options{

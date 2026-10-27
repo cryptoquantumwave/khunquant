@@ -161,6 +161,24 @@ func (r *sharedResources) clk() simclock.Clock {
 	return r.Clock
 }
 
+// simClock is the shared clock when it is simulated, and nil when it is the wall clock. A
+// loop that waits on a ticker in production takes this: only a simulated clock replaces
+// the ticker, so an ordinary gateway keeps exactly the cadence it had.
+func (r *sharedResources) simClock() simclock.Clock {
+	if c := r.clk(); c != simclock.Real() {
+		return c
+	}
+	return nil
+}
+
+// simAfter is simClock().After, or nil on the wall clock.
+func (r *sharedResources) simAfter() func(time.Duration) <-chan time.Time {
+	if c := r.simClock(); c != nil {
+		return c.After
+	}
+	return nil
+}
+
 // add registers a resource for Close. Resources close in reverse order of
 // registration, so a resource may depend on the ones added before it.
 func (r *sharedResources) add(name string, c io.Closer) {

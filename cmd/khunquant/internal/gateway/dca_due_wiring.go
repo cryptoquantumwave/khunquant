@@ -38,12 +38,12 @@ const (
 // must survive a config reload.
 func (r *sharedResources) dcaShared() (*triggers.DCAStats, *triggers.DCAOutcomes) {
 	if r == nil {
-		return &triggers.DCAStats{}, triggers.NewDCAOutcomes(time.Now())
+		return &triggers.DCAStats{}, triggers.NewDCAOutcomes(r.clk().Now())
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.dcaStats == nil {
-		r.dcaStats, r.dcaOutcomes = &triggers.DCAStats{}, triggers.NewDCAOutcomes(time.Now())
+		r.dcaStats, r.dcaOutcomes = &triggers.DCAStats{}, triggers.NewDCAOutcomes(r.clk().Now())
 	}
 	return r.dcaStats, r.dcaOutcomes
 }
@@ -334,9 +334,10 @@ func (rt *perceptionRuntime) attachDCADue(d assemblyDeps) {
 			map[string]any{"error": err.Error()})
 		return
 	}
+	store.SetClock(d.nowFn())
 	view := rt.worldModel.store.View()
 	reader := dcaPlanReader{
-		store: store, now: time.Now,
+		store: store, now: d.nowFn(),
 		paper: func() bool { return cfg.TradingRisk.PaperTradingMode },
 	}
 	specs := dcaSpecs{reg: rt.triggers, mandate: d.Shared.promotedMandate}

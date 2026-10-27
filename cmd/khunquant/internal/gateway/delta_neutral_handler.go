@@ -162,7 +162,7 @@ func handleDeltaNeutralMonitorJob(
 		}
 	}
 	if len(silenceable) > 0 {
-		silenceUntil := time.Now().Add(parseSilenceDuration(plan.RiskPolicy.AlertCooldownDuration))
+		silenceUntil := processNow().Add(parseSilenceDuration(plan.RiskPolicy.AlertCooldownDuration))
 		if siErr := dnStore.UpsertAlertSilences(ctx, planID, silenceable, silenceUntil); siErr != nil {
 			logger.WarnCF("dn-monitor", "Failed to set alert silences", map[string]any{
 				"plan_id": planID, "error": siErr.Error(),
@@ -238,7 +238,7 @@ func refreshPlanFees(ctx context.Context, plan *deltaneutral.Plan, store *deltan
 
 	const staleness = 30 * time.Minute
 	if last, err := store.GetLatestPlanFeeSnapshot(ctx, plan.ID); err == nil && last != nil {
-		if time.Since(last.FetchedAt) < staleness {
+		if processNow().Sub(last.FetchedAt) < staleness {
 			return
 		}
 	}
@@ -259,7 +259,7 @@ func refreshPlanFees(ctx context.Context, plan *deltaneutral.Plan, store *deltan
 		if pf, pfErr := fetcher.FetchFuturesPositionFees(ctx, fees.FetchFeesRequest{
 			FuturesSymbol: plan.FuturesSymbol,
 			Since:         *plan.OpenedAt,
-			Until:         time.Now().UTC(),
+			Until:         processNow().UTC(),
 		}); pfErr == nil {
 			fundingFee = pf.FundingFeeUSDT
 		} else {
@@ -267,7 +267,7 @@ func refreshPlanFees(ctx context.Context, plan *deltaneutral.Plan, store *deltan
 		}
 	}
 
-	now := time.Now().UTC()
+	now := processNow().UTC()
 	until := now
 	if _, err := store.SavePlanFeeSnapshot(ctx, &deltaneutral.PlanFeeSnapshot{
 		PlanID:         plan.ID,

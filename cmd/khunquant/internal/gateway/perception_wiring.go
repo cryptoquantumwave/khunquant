@@ -47,7 +47,7 @@ var perceptionSources = func(d assemblyDeps) (srcs []perception.Source, devicesT
 	for _, m := range devices.SourcesFor(devices.Config{
 		Enabled: d.Cfg.Devices.Enabled, MonitorUSB: d.Cfg.Devices.MonitorUSB,
 	}) {
-		srcs = append(srcs, sources.NewDevices(m, nil))
+		srcs = append(srcs, sources.NewDevices(m, d.nowFn()))
 	}
 	return srcs, len(srcs) > 0
 }

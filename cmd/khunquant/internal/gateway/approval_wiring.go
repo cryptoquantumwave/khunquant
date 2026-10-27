@@ -93,7 +93,7 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob
 	opts := approval.Options{
 		DB: db, Cfg: d.Cfg, Backend: tools.NewApprovalOrderBackend(d.Cfg), Notifier: ns,
 		Events: d.Shared.eventBus(),
-		Locale: profileLocale(db),
+		Locale: profileLocale(d, db),
 		Clock:  d.Shared.clk(),
 	}
 	// Memory suggestions: an approved one is appended to MEMORY.md, and the suggestion
@@ -116,8 +116,9 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob
 		if st, err := dca.NewStore(d.Cfg.WorkspacePath()); err != nil {
 			logger.ErrorCF("gateway", "Mandates disabled: the DCA plan store could not be opened", map[string]any{"error": err.Error()})
 		} else {
+			st.SetClock(d.nowFn())
 			mandateStore = st
-			opts.Mandates = tools.NewMandateSink(d.Cfg, st, nil)
+			opts.Mandates = tools.NewMandateSink(d.Cfg, st, d.nowFn())
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -198,7 +199,7 @@ func (e channelCardEditor) EditCard(ctx context.Context, channel, chatID, messag
 
 // profileLocale words and times cards in the owner's language and time zone, from
 // the profile; English in Asia/Bangkok when none is set.
-func profileLocale(db *sql.DB) func(ctx context.Context) approval.Locale {
+func profileLocale(d assemblyDeps, db *sql.DB) func(ctx context.Context) approval.Locale {
 	var (
 		mu    sync.Mutex
 		store *intent.Store
@@ -208,7 +209,7 @@ func profileLocale(db *sql.DB) func(ctx context.Context) approval.Locale {
 		tz := intent.DefaultTimezone
 		mu.Lock()
 		if store == nil {
-			store, _ = intent.NewStore(ctx, db)
+			store, _ = openIntentStore(ctx, d, db)
 		}
 		st := store
 		mu.Unlock()

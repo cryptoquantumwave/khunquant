@@ -60,6 +60,8 @@ var (
 // model is built.
 type worldModelRuntime struct {
 	store *worldmodel.Store
+	// now is the gateway clock the stats age is measured on; nil is time.Now.
+	now func() time.Time
 	// detach removes the changes contributor from the agent loop.
 	detach func()
 }
@@ -89,7 +91,7 @@ func (rt *perceptionRuntime) attachWorldModel(d assemblyDeps, opts *engine.Optio
 			map[string]any{"error": err.Error()})
 		return
 	}
-	rt.worldModel = &worldModelRuntime{store: store, detach: func() {}}
+	rt.worldModel = &worldModelRuntime{store: store, now: d.nowFn(), detach: func() {}}
 	opts.WorldModel = worldModelStage{s: store}
 
 	// The window of the "changes" section starts when the model starts, not at the
@@ -165,7 +167,11 @@ func (rt *perceptionRuntime) worldModelStats() *worldModelStats {
 		Series:         s.Series, BufferedLog: s.BufferedLog, DirtyRows: s.DirtyRows,
 	}
 	if !s.LastCheckpoint.IsZero() {
-		out.SecondsSinceCheckpoint = max(int64(time.Since(s.LastCheckpoint).Seconds()), 0)
+		now := time.Now()
+		if rt.worldModel.now != nil {
+			now = rt.worldModel.now()
+		}
+		out.SecondsSinceCheckpoint = max(int64(now.Sub(s.LastCheckpoint).Seconds()), 0)
 	}
 	return out
 }

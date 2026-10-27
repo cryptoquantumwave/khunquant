@@ -89,7 +89,7 @@ func (rt *perceptionRuntime) attachNews(d assemblyDeps) {
 		skip("its tables could not be opened")
 		return
 	}
-	prof, _ := intent.NewStore(ctx, db) // nil: the watches and active hours are unavailable, news stays quiet
+	prof, _ := openIntentStore(ctx, d, db) // nil: the watches and active hours are unavailable, news stays quiet
 	ensureNewsSpec(ctx, rt.triggers)
 
 	cfg := d.Cfg.Proactive.News

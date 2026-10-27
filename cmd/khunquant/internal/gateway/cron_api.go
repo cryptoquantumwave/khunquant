@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -175,7 +174,7 @@ func registerCronAPI(mux interface {
 				// EnableJob already persists; only call UpdateJob if other fields changed.
 				if req.Name != nil || req.Message != nil {
 					target.Enabled = *req.Enabled
-					target.UpdatedAtMS = time.Now().UnixMilli()
+					target.UpdatedAtMS = processNow().UnixMilli()
 					if err := cs.UpdateJob(target); err != nil {
 						http.Error(w, fmt.Sprintf("failed to update job: %v", err), http.StatusInternalServerError)
 						return
@@ -187,7 +186,7 @@ func registerCronAPI(mux interface {
 			}
 		}
 
-		target.UpdatedAtMS = time.Now().UnixMilli()
+		target.UpdatedAtMS = processNow().UnixMilli()
 		if err := cs.UpdateJob(target); err != nil {
 			http.Error(w, fmt.Sprintf("failed to update job: %v", err), http.StatusInternalServerError)
 			return

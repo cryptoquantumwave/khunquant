@@ -28,6 +28,15 @@ type policyRuntime struct {
 	// is opened by buildApproval, which runs after perception (whose engine runs
 	// the store's housekeeper). Nil: nothing is covered.
 	mandates atomic.Pointer[dca.Store]
+	// now is the gateway clock; nil is time.Now.
+	now func() time.Time
+}
+
+func (rt *policyRuntime) clock() time.Time {
+	if rt != nil && rt.now != nil {
+		return rt.now()
+	}
+	return time.Now()
 }
 
 // policyLive is the runtime the stats route reads: the current generation's, nil
@@ -66,7 +75,7 @@ func buildPolicy(d assemblyDeps) *policyRuntime {
 			map[string]any{"error": err.Error()})
 		return nil
 	}
-	rt := &policyRuntime{store: store, mode: config.ProactiveModeShadow}
+	rt := &policyRuntime{store: store, mode: config.ProactiveModeShadow, now: d.nowFn()}
 
 	var killed func() bool
 	if d.Control != nil && d.Control.state != nil {
@@ -74,6 +83,7 @@ func buildPolicy(d assemblyDeps) *policyRuntime {
 	}
 	cfg := d.Cfg
 	eng := tools.NewPolicyEngine(func() *config.Config { return cfg }, killed, rt, nil)
+	eng.SetClock(d.nowFn())
 	// The owner's tighten-only autonomy dial, read from the profile on every decision.
 	readDial := autonomyReader(d)
 	eng.SetOwnerDial(func(ctx context.Context, t policy.Tier) (string, error) { return readDial(ctx, t.String()) })
@@ -82,6 +92,7 @@ func buildPolicy(d assemblyDeps) *policyRuntime {
 		bus = b
 	}
 	rt.rec = policy.NewRecorder(eng, store, bus, 0)
+	rt.rec.SetClock(d.nowFn())
 	tools.SetPolicyShadow(rt.rec)
 	if eff.PolicyMode == config.ProactiveModeLive {
 		if err := config.ValidateTradingRisk(d.Cfg.TradingRisk); err != nil {
@@ -109,7 +120,7 @@ func (rt *policyRuntime) Covering(ctx context.Context, r policy.ActionRequest) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	m, ok, err := st.ActiveMandateForPlan(ctx, r.PlanID, time.Now())
+	m, ok, err := st.ActiveMandateForPlan(ctx, r.PlanID, rt.clock())
 	if err != nil || !ok {
 		return "", false
 	}
@@ -173,5 +184,8 @@ func (rt *policyRuntime) stats(now time.Time) *policyStatsResponse {
 
 // withPolicyStats adds the policy engine's counters to the stats route.
 func withPolicyStats() statsPart {
-	return func(r *busStatsResponse) { r.Policy = policyLive.Load().stats(time.Now()) }
+	return func(r *busStatsResponse) {
+		rt := policyLive.Load()
+		r.Policy = rt.stats(rt.clock())
+	}
 }

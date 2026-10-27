@@ -64,13 +64,21 @@ type manageDeps struct {
 	now func() time.Time
 }
 
+// clock is the gateway clock the routes stamp "server_time" and validate with.
+func (m *manageDeps) clock() time.Time {
+	if m != nil && m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
 // attachManage gives the routes the services of this generation. Called after the
 // services exist; detach withdraws them before the stores close.
 func (rt *controlRuntime) attachManage(d assemblyDeps, p *perceptionRuntime) {
 	if rt == nil || !d.Cfg.Proactive.Enabled {
 		return
 	}
-	m := &manageDeps{cfg: d.Cfg, disp: rt.disp}
+	m := &manageDeps{cfg: d.Cfg, disp: rt.disp, now: d.nowFn()}
 	// Approvals are listed only under the rule attach applies to the dispatcher: an
 	// approval service with no engine could record a decision and execute nothing.
 	if d.Approval != nil && d.Approval.svc != nil && d.Approval.cancel != nil {
@@ -82,7 +90,7 @@ func (rt *controlRuntime) attachManage(d assemblyDeps, p *perceptionRuntime) {
 	if db, err := proactiveDB(d); err == nil {
 		m.db = db
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		st, err := intent.NewStore(ctx, db)
+		st, err := openIntentStore(ctx, d, db)
 		cancel()
 		if err != nil {
 			logger.WarnCF("gateway", "Intent and autonomy management are unavailable: the store could not be opened", map[string]any{"error": err.Error()})
@@ -258,7 +266,7 @@ func (rt *controlRuntime) handleIntentsList(w http.ResponseWriter, r *http.Reque
 		out = append(out, viewIntent(it))
 	}
 	body := ownerInfo(m.cfg)
-	body["available"], body["server_time"], body["intents"] = true, time.Now().UTC(), out
+	body["available"], body["server_time"], body["intents"] = true, m.clock().UTC(), out
 	writeManage(w, http.StatusOK, body)
 }
 
@@ -306,7 +314,7 @@ func (rt *controlRuntime) handleIntentAction(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if action == "confirm" { // a suggestion becomes active only if it can be carried out
-		if err := intents.Validate(r.Context(), m.intents, cur, time.Now()); err != nil {
+		if err := intents.Validate(r.Context(), m.intents, cur, m.clock()); err != nil {
 			manageError(w, http.StatusUnprocessableEntity, "not confirmed: "+err.Error())
 			return
 		}
@@ -452,7 +460,7 @@ func (rt *controlRuntime) handleMandatesList(w http.ResponseWriter, r *http.Requ
 	if len(list) > 50 {
 		list = list[len(list)-50:] // the newest
 	}
-	now, paper := time.Now(), broker.IsPaperMode(m.cfg)
+	now, paper := m.clock(), broker.IsPaperMode(m.cfg)
 	out := make([]mandateView, 0, len(list))
 	for _, md := range list {
 		v := mandateView{

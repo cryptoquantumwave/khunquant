@@ -119,7 +119,8 @@ func sweepHandler(
 		Reconciler: rt.manager,
 		Settler:    rt.engine,
 		World:      store,
-		Topics:     sweepTopicSource{log: s.Attention, now: time.Now},
+		Topics:     sweepTopicSource{log: s.Attention, now: d.nowFn()},
+		Now:        d.nowFn(),
 		Turn: func(ctx context.Context, prompt string) (sweep.Outcome, error) {
 			req := heartbeatTurnRequest(prompt, deadline, eff.HeartbeatModel, eff.HeartbeatTools)
 			// The prompt carries the changes from the sweep's own mark: the turn must

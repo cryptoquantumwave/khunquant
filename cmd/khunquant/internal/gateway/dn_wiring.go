@@ -207,7 +207,7 @@ func wireDNAudit(ob *attention.Outbox, d assemblyDeps) {
 	ob.SetObserver(dnAuditObserver(d.DNStore, func() (string, string) {
 		o := d.Cfg.Proactive.Effective().Owner
 		return o.Channel, o.ChatID
-	}, time.Now))
+	}, d.nowFn()))
 }
 
 // dnAuditObserver is the observer wireDNAudit installs.

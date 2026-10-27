@@ -37,6 +37,7 @@ type lossGuardSampler struct {
 	tracker  *broker.DailyLossTracker
 	collect  equityCollector
 	now      func() time.Time
+	after    func(time.Duration) <-chan time.Time // nil: a wall-clock ticker
 	interval time.Duration
 	timeout  time.Duration
 	tracked  []string
@@ -51,10 +52,26 @@ type lossGuardSampler struct {
 // (limit 0, or no exchange account configured). Call it at gateway start and
 // again on every config reload, after stopping the previous sampler.
 func startLossGuard(cfg *config.Config) *lossGuardSampler {
-	return startLossGuardWith(cfg, broker.GlobalLossTracker, snapshot.CollectFromExchanges, time.Now)
+	return startLossGuardOn(cfg, broker.GlobalLossTracker, snapshot.CollectFromExchanges,
+		func() time.Time { return processNow() }, lossGuardAfter())
+}
+
+// lossGuardAfter is the sampler's timer: processAfter when a simulated clock was bound, else
+// nil, which keeps the wall-clock ticker.
+func lossGuardAfter() func(time.Duration) <-chan time.Time {
+	if processAfter == nil {
+		return nil
+	}
+	return func(d time.Duration) <-chan time.Time { return processAfter(d) }
 }
 
 func startLossGuardWith(cfg *config.Config, tracker *broker.DailyLossTracker, collect equityCollector, now func() time.Time) *lossGuardSampler {
+	return startLossGuardOn(cfg, tracker, collect, now, nil)
+}
+
+// startLossGuardOn is startLossGuardWith with the sampling interval driven by after
+// (nil is a wall-clock ticker).
+func startLossGuardOn(cfg *config.Config, tracker *broker.DailyLossTracker, collect equityCollector, now func() time.Time, after func(time.Duration) <-chan time.Time) *lossGuardSampler {
 	applyLossDayLocation(cfg, tracker)
 
 	if cfg.TradingRisk.DailyLossLimitUSD <= 0 {
@@ -85,6 +102,7 @@ func startLossGuardWith(cfg *config.Config, tracker *broker.DailyLossTracker, co
 		tracker:  tracker,
 		collect:  collect,
 		now:      now,
+		after:    after,
 		interval: interval,
 		timeout:  interval * 4 / 5,
 		tracked:  tracked,
@@ -151,13 +169,17 @@ func (s *lossGuardSampler) Stop() {
 func (s *lossGuardSampler) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	s.sampleOnce(ctx) // first sample immediately, so the guard is armed with data
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
+	next := s.after
+	if next == nil {
+		ticker := time.NewTicker(s.interval)
+		defer ticker.Stop()
+		next = func(time.Duration) <-chan time.Time { return ticker.C }
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-next(s.interval):
 			s.sampleOnce(ctx)
 		}
 	}

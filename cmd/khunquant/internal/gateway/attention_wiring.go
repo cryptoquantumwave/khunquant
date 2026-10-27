@@ -7,7 +7,6 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
-	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
@@ -116,21 +115,22 @@ func buildAttention(d assemblyDeps, svc *notify.Service) (*attention.Outbox, *at
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	profiles, err := intent.NewStore(ctx, db)
+	profiles, err := openIntentStore(ctx, d, db)
 	if err != nil {
 		logger.ErrorCF("attention", "Attention disabled: cannot open the profile store",
 			map[string]any{"error": err.Error()})
 		return nil, nil
 	}
 	acfg := d.Cfg.Proactive.Attention
-	gov, err := attention.New(db, profiles, acfg, eff.AttentionMode, nil)
+	gov, err := attention.New(db, profiles, acfg, eff.AttentionMode, d.nowFn())
 	if err != nil {
 		logger.ErrorCF("attention", "Attention disabled: cannot build the governor",
 			map[string]any{"error": err.Error()})
 		return nil, nil
 	}
 	window := time.Duration(max(acfg.GroupWindowSeconds, 0)) * time.Second
-	ob := attention.NewOutbox(gov, attentionDeliverer{svc: svc}, window, nil)
+	ob := attention.NewOutbox(gov, attentionDeliverer{svc: svc}, window, d.nowFn())
+	ob.SetTimerClock(d.Shared.simClock()) // nil on the wall clock: the outbox keeps its ticker
 	// The composer for escalated groups exists only when the perception pipeline
 	// does (nothing else produces an escalate), and is set here, before the Run
 	// loop below starts, because the field is read by it.

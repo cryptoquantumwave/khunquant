@@ -38,6 +38,43 @@ import (
 type StatefulSimulator struct {
 	mu           sync.RWMutex // protects concurrent Respond calls
 	stateManager *StateManager
+	prices       PriceSource // optional; guarded by mu
+}
+
+// PriceSource supplies the price a venue's wire symbol has now (SimMarket's Book). The
+// simulator pulls it while holding sim.mu, so an implementation must never call back
+// into the simulator: the lock order is sim.mu then the source's own.
+type PriceSource interface {
+	MarkPrice(venue, wireSymbol string) (float64, bool)
+}
+
+// SetPriceSource makes fills and positions use src's prices where it has them; nil
+// restores the seeded state.MarkPrices alone.
+func (sim *StatefulSimulator) SetPriceSource(src PriceSource) {
+	sim.mu.Lock()
+	sim.prices = src
+	sim.mu.Unlock()
+}
+
+// markPrice is the price of symbol: the source's when it has one (written through to
+// state.MarkPrices), else state.MarkPrices. Callers hold sim.mu.
+func (sim *StatefulSimulator) markPrice(venue, symbol string, state *VenueState) float64 {
+	if sim.prices != nil {
+		if p, ok := sim.prices.MarkPrice(venue, symbol); ok && p > 0 {
+			state.MarkPrices[symbol] = p
+			return p
+		}
+	}
+	return state.MarkPrices[symbol]
+}
+
+// refreshMarks brings each open position's mark price up to date.
+func (sim *StatefulSimulator) refreshMarks(venue string, state *VenueState) {
+	for symbol, pos := range state.Positions {
+		if p := sim.markPrice(venue, symbol, state); p > 0 {
+			pos.MarkPrice = p
+		}
+	}
 }
 
 // NewStatefulSimulator creates a new stateful simulator with the given state manager.
@@ -170,7 +207,7 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 	// For market orders, use mark price
 	if orderType == "market" {
 		// Try to use configured mark price for the symbol
-		markPrice := state.MarkPrices[symbol]
+		markPrice := sim.markPrice("binance", symbol, state)
 		if markPrice > 0 {
 			price = markPrice
 		}
@@ -363,6 +400,7 @@ func (sim *StatefulSimulator) simBinanceFetchPositions(state *VenueState, r *htt
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
 
+	sim.refreshMarks("binance", state)
 	var positions []map[string]interface{}
 	for _, pos := range state.Positions {
 		if pos.Contracts > 0 {
@@ -439,6 +477,7 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 	}
 
 	// Build positions array (empty for now, but structured for completeness)
+	sim.refreshMarks("binance", state)
 	var positions []FuturesPosition
 	for _, pos := range state.Positions {
 		if pos.Contracts > 0 {
@@ -720,7 +759,7 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 
 	// For market orders, use mark price
 	if req.OrdType == "market" {
-		markPrice := state.MarkPrices[req.InstID]
+		markPrice := sim.markPrice("okx", req.InstID, state)
 		if markPrice > 0 {
 			price = markPrice
 		}
@@ -910,6 +949,7 @@ func (sim *StatefulSimulator) simOKXFetchPositions(state *VenueState, r *http.Re
 		return sim.okxErrorResponse("51000", "invalid query string"), true
 	}
 
+	sim.refreshMarks("okx", state)
 	var positions []map[string]interface{}
 	for _, pos := range state.Positions {
 		if pos.Contracts > 0 {

@@ -145,6 +145,7 @@ type CronService struct {
 	onMissed  func(job CronJob)
 	opts      Options
 	now       func() time.Time // clock seam; nil means time.Now
+	after     func(d time.Duration) <-chan time.Time // paces runLoop when set (SetClock); nil is a ticker
 	mu        sync.RWMutex
 	running   bool
 	stopped   bool   // set by Stop, cleared by Start: nothing may run or persist after it
@@ -197,6 +198,18 @@ func (cs *CronService) SetOnMissed(fn func(job CronJob)) {
 	cs.onMissed = fn
 }
 
+// SetClock makes the service read c.Now for every schedule decision and wait on
+// c.After(1s) between claims, so a simulated clock drives it: at a 1m sim resolution a
+// due job is claimed at the next minute boundary. Call it before Start.
+func (cs *CronService) SetClock(c interface {
+	Now() time.Time
+	After(d time.Duration) <-chan time.Time
+}) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.now, cs.after = c.Now, c.After
+}
+
 func (cs *CronService) clock() time.Time {
 	if cs.now != nil {
 		return cs.now()
@@ -230,7 +243,7 @@ func (cs *CronService) Start() error {
 	cs.pool = newWorkerPool(cs.opts.Workers, cs.opts.Workers*poolQueueMultiplier, cs.executeJobByID)
 	cs.running = true
 	cs.stopped = false
-	go cs.runLoop(cs.stopChan)
+	go cs.runLoop(cs.stopChan, cs.after)
 	onMissed := cs.onMissed
 	cs.mu.Unlock()
 
@@ -404,15 +417,19 @@ func (cs *CronService) Stop() {
 	cs.mu.Unlock()
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+func (cs *CronService) runLoop(stopChan chan struct{}, after func(d time.Duration) <-chan time.Time) {
+	next := after
+	if next == nil {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		next = func(time.Duration) <-chan time.Time { return ticker.C }
+	}
 
 	for {
 		select {
 		case <-stopChan:
 			return
-		case <-ticker.C:
+		case <-next(time.Second):
 			cs.checkJobs()
 		}
 	}

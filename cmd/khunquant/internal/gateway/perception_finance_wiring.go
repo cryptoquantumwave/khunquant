@@ -40,10 +40,11 @@ var financeSources = func(d assemblyDeps) (srcs []perception.Source, closers []i
 			Cfg:      d.Cfg,
 			Store:    store,
 			Interval: time.Duration(d.Cfg.Proactive.Perception.SnapshotMinutes) * time.Minute,
+			Clock:    d.Shared.clk(),
 		}))
 	}
 
-	srcs = append(srcs, sources.NewFutures(sources.FuturesOptions{Cfg: d.Cfg}))
+	srcs = append(srcs, sources.NewFutures(sources.FuturesOptions{Cfg: d.Cfg, Clock: d.Shared.clk()}))
 	return srcs, closers
 }
 

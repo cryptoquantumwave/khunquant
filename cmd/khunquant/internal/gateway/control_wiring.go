@@ -65,7 +65,7 @@ func (rt *controlRuntime) attachStop(d assemblyDeps, j *journalRuntime, ns *noti
 	if rt == nil || rt.state == nil {
 		return
 	}
-	k := &control.Kill{Flag: rt.state, Desk: control.BrokerDesk{Cfg: d.Cfg}}
+	k := &control.Kill{Flag: rt.state, Desk: control.BrokerDesk{Cfg: d.Cfg}, Clock: d.Shared.clk()}
 	if d.AgentLoop != nil {
 		k.Turns = d.AgentLoop
 	}

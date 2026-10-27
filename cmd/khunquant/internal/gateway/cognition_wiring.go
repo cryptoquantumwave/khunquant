@@ -9,7 +9,6 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cognition"
 	"github.com/cryptoquantumwave/khunquant/pkg/control"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
-	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 )
 
 const (
@@ -57,7 +56,7 @@ func buildCognition(d assemblyDeps) *cognitionRuntime {
 			"turns run as they do without it", map[string]any{"error": err.Error()})
 		return nil
 	}
-	sched, err := cognition.New(d.Cfg.Proactive.Cognition, db, perception.RealClock{}, profileZone(d))
+	sched, err := cognition.New(d.Cfg.Proactive.Cognition, db, d.Shared.clk(), profileZone(d))
 	if err != nil {
 		logger.WarnCF("cognition", "Cognition scheduler not started; turns run as they do without it",
 			map[string]any{"error": err.Error()})

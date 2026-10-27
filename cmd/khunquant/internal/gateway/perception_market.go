@@ -38,6 +38,7 @@ func marketSourcesFor(d assemblyDeps) []perception.Source {
 		sources.MarketOptions{
 			PollInterval:   time.Duration(p.MarketPollSeconds) * time.Second,
 			ReadsPerMinute: p.ReadsPerMinuteLimit,
+			Clock:          d.Shared.clk(),
 		},
 	)}
 }

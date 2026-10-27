@@ -120,6 +120,7 @@ func startReflection(d assemblyDeps, s *gatewayServices) *reflectionRuntime {
 		Proposer: s.Approval.svc,
 		AtLocal:  d.Cfg.Proactive.Reflection.AtLocal,
 		Zone:     profileZone(d),
+		Clock:    d.Shared.clk(),
 	})
 	if err != nil {
 		logger.WarnCF("reflection", "The nightly reflection is not started", map[string]any{"error": err.Error()})

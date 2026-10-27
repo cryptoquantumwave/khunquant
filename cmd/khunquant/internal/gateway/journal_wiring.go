@@ -62,7 +62,7 @@ func buildJournal(d assemblyDeps) *journalRuntime {
 	if bus := d.Shared.eventBus(); bus != nil {
 		opts = append(opts, journal.WithPublisher(journalPublisher{bus: bus}))
 	}
-	eng, err := journal.New(db, defs, journal.RealClock{}, opts...)
+	eng, err := journal.New(db, defs, d.Shared.clk(), opts...)
 	if err != nil {
 		logger.ErrorCF("gateway", "Workflow engine not started", map[string]any{"error": err.Error()})
 		return nil

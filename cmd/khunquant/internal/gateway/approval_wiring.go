@@ -94,6 +94,7 @@ func buildApproval(d assemblyDeps, ns *notify.Service, mgr *channels.Manager, ob
 		DB: db, Cfg: d.Cfg, Backend: tools.NewApprovalOrderBackend(d.Cfg), Notifier: ns,
 		Events: d.Shared.eventBus(),
 		Locale: profileLocale(db),
+		Clock:  d.Shared.clk(),
 	}
 	// Memory suggestions: an approved one is appended to MEMORY.md, and the suggestion
 	// reaches the owner in the daily digest, so they need the live digest.

@@ -77,6 +77,31 @@ func (sim *StatefulSimulator) refreshMarks(venue string, state *VenueState) {
 	}
 }
 
+// Mutate runs fn on the venue's state under the lock Respond takes, so a lab shortcut
+// never races an order in flight. It looks the state up on every call (Reset swaps it),
+// and fn must neither keep the *VenueState nor call back into the simulator.
+func (sim *StatefulSimulator) Mutate(venue string, fn func(*VenueState) error) error {
+	sim.mu.Lock()
+	defer sim.mu.Unlock()
+	return fn(sim.stateManager.GetState(venue))
+}
+
+// Read runs fn on the venue's state under the read lock. fn must copy what it keeps:
+// the maps hold pointers Respond mutates once the lock is released.
+func (sim *StatefulSimulator) Read(venue string, fn func(*VenueState)) {
+	sim.mu.RLock()
+	defer sim.mu.RUnlock()
+	fn(sim.stateManager.GetState(venue))
+}
+
+// Rebaseline makes the venue's current state the one a reset returns to. It holds the
+// simulator lock because SnapshotAsSeed copies the maps Respond writes under it.
+func (sim *StatefulSimulator) Rebaseline(venue string) {
+	sim.mu.Lock()
+	defer sim.mu.Unlock()
+	sim.stateManager.SnapshotAsSeed(venue)
+}
+
 // NewStatefulSimulator creates a new stateful simulator with the given state manager.
 func NewStatefulSimulator(stateManager *StateManager) *StatefulSimulator {
 	return &StatefulSimulator{stateManager: stateManager}

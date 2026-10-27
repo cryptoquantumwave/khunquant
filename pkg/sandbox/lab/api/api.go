@@ -21,12 +21,39 @@ var statusOf = map[string]int{
 	lab.CodeFailed:       http.StatusInternalServerError,
 }
 
-// Register mounts the lab route on mux. guard wraps the handler: the caller supplies
-// the loopback and instance-token checks, so this package knows no secret. A call
-// runs under lab.CallTimeout and a body is capped at 1 MiB.
+// groupInfo and opInfo are the JSON view of a lab.Group (a lab.Op carries a func, which
+// does not marshal): what GET /api/sandbox/lab returns.
+type groupInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Ops         []opInfo `json:"ops"`
+}
+
+type opInfo struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Args        json.RawMessage `json:"args,omitempty"` // JSON Schema "properties" of the op
+	Required    []string        `json:"required,omitempty"`
+}
+
+// Register mounts the lab routes on mux: POST /api/sandbox/lab/<group> and GET
+// /api/sandbox/lab, the list of groups with their ops and argument schemas. guard wraps
+// both handlers: the caller supplies the loopback and instance-token checks, so this
+// package knows no secret. A call runs under lab.CallTimeout and a body is capped at 1 MiB.
 func Register(mux interface {
 	Handle(pattern string, h http.Handler)
 }, l *lab.Lab, guard func(http.Handler) http.Handler) {
+	mux.Handle("GET /api/sandbox/lab", guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		groups := []groupInfo{}
+		for _, g := range l.Groups() {
+			gi := groupInfo{Name: g.Name, Description: g.Description, Ops: []opInfo{}}
+			for _, o := range g.Ops {
+				gi.Ops = append(gi.Ops, opInfo{Name: o.Name, Description: o.Description, Args: o.Args, Required: o.Required})
+			}
+			groups = append(groups, gi)
+		}
+		reply(w, http.StatusOK, map[string]any{"groups": groups})
+	})))
 	mux.Handle("POST /api/sandbox/lab/{group}", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		if err != nil {

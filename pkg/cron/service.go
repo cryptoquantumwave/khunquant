@@ -144,7 +144,7 @@ type CronService struct {
 	onJob     JobHandlerCtx
 	onMissed  func(job CronJob)
 	opts      Options
-	now       func() time.Time // clock seam; nil means time.Now
+	now       func() time.Time                       // clock seam; nil means time.Now
 	after     func(d time.Duration) <-chan time.Time // paces runLoop when set (SetClock); nil is a ticker
 	mu        sync.RWMutex
 	running   bool
@@ -160,7 +160,8 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
 		storePath: storePath,
 		opts:      DefaultOptions(),
-		now:       time.Now,
+		//simclock:wall the default when no clock is injected
+		now: time.Now,
 	}
 	cs.onJob = wrapHandler(onJob)
 	// Initialize and load store on creation
@@ -214,6 +215,7 @@ func (cs *CronService) clock() time.Time {
 	if cs.now != nil {
 		return cs.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 
@@ -420,6 +422,7 @@ func (cs *CronService) Stop() {
 func (cs *CronService) runLoop(stopChan chan struct{}, after func(d time.Duration) <-chan time.Time) {
 	next := after
 	if next == nil {
+		//simclock:wall no clock was set: the wall ticker
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		next = func(time.Duration) <-chan time.Time { return ticker.C }
@@ -1187,6 +1190,7 @@ func generateID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback to time-based if crypto/rand fails
+		//simclock:wall an identifier, not a domain time
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)

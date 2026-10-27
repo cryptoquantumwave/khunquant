@@ -88,6 +88,7 @@ func (p *workerPool) shutdown(timeout time.Duration) bool {
 		<-done
 		return true
 	}
+	//simclock:wall a job timeout, bounded in wall time
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {

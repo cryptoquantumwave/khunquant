@@ -345,6 +345,7 @@ const settlePoll = 2 * time.Millisecond
 // pipeline goroutine: it only reads counters, on the caller's goroutine, with real
 // time (the engine's own Clock is not consulted).
 func (e *Engine) Settle(ctx context.Context) error {
+	//simclock:wall the settle poll: bounded in wall time
 	t := time.NewTimer(settlePoll)
 	defer t.Stop()
 	for {

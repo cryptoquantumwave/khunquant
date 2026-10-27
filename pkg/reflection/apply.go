@@ -161,6 +161,7 @@ func (a *Applier) cleanUpIntent(ctx context.Context, p approval.Proposal, v appr
 }
 
 func (a *Applier) muteKind(ctx context.Context, p approval.Proposal, v approval.MuteParams) error {
+	//simclock:wall the default when no clock is injected
 	now := time.Now
 	if a.Now != nil {
 		now = a.Now

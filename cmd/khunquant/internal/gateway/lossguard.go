@@ -160,6 +160,7 @@ func (s *lossGuardSampler) Stop() {
 	cancel()
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(samplerStopWait):
 		logger.WarnCF("lossguard", "Equity sampler did not stop in time; abandoning the in-flight sample", nil)
 	}
@@ -171,6 +172,7 @@ func (s *lossGuardSampler) run(ctx context.Context, done chan struct{}) {
 	s.sampleOnce(ctx) // first sample immediately, so the guard is armed with data
 	next := s.after
 	if next == nil {
+		//simclock:wall no After was given (a test): the wall ticker
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 		next = func(time.Duration) <-chan time.Time { return ticker.C }

@@ -170,6 +170,7 @@ func New(
 		return nil, errors.New("notify: nil database")
 	}
 	if clock == nil {
+		//simclock:wall the default when no clock is injected
 		clock = time.Now
 	}
 
@@ -500,6 +501,7 @@ func (s *Service) Close(ctx context.Context) error {
 	s.runStop()
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(2 * time.Second):
 		logger.WarnCF("notify", "Write-back worker did not stop after cancellation", nil)
 	}

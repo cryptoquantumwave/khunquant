@@ -139,7 +139,9 @@ type Hindsight struct {
 
 type svcClock struct{ s *Service }
 
-func (c svcClock) Now() time.Time                       { return c.s.clock() }
+func (c svcClock) Now() time.Time { return c.s.clock() }
+
+//simclock:wall no Clock was given: the wall clock
 func (svcClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // NewHindsight builds the job. It returns nil without a service or a price source, and

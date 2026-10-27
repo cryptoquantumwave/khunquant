@@ -91,6 +91,7 @@ func NewState(ctx context.Context, db *sql.DB, opts ...StateOption) (*State, err
 	if err := sqlitex.Migrate(ctx, db, migrations...); err != nil {
 		return nil, fmt.Errorf("control: migrate: %w", err)
 	}
+	//simclock:wall the default when no clock is injected
 	s := &State{db: db, now: time.Now, refresh: DefaultRefresh}
 	for _, o := range opts {
 		o(s)

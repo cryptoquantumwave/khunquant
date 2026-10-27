@@ -38,7 +38,7 @@ import (
 type StatefulSimulator struct {
 	mu           sync.RWMutex // protects concurrent Respond calls
 	stateManager *StateManager
-	prices       PriceSource // optional; guarded by mu
+	prices       PriceSource      // optional; guarded by mu
 	now          func() time.Time // order and fill times; nil is time.Now; guarded by mu
 }
 
@@ -55,6 +55,7 @@ func (sim *StatefulSimulator) clock() time.Time {
 	if sim.now != nil {
 		return sim.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

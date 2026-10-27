@@ -59,6 +59,7 @@ func NewRecorder(engine Authorizer, store *Store, bus events.Bus, buffer int) *R
 		buffer = DefaultBuffer
 	}
 	rc := &Recorder{
+		//simclock:wall the default when no clock is injected
 		engine: engine, store: store, events: bus, now: time.Now,
 		q: make(chan job, buffer), stop: make(chan struct{}), done: make(chan struct{}),
 	}
@@ -109,11 +110,14 @@ func (rc *Recorder) Dropped() int64 { return rc.dropped.Load() }
 // Flush waits until every queued record has been processed, or the timeout
 // passes; it reports whether the queue emptied. For tests and shutdown.
 func (rc *Recorder) Flush(timeout time.Duration) bool {
+	//simclock:wall the queue drain on shutdown: bounded in wall time
 	end := time.Now().Add(timeout)
 	for rc.pending.Load() > 0 {
+		//simclock:wall the queue drain on shutdown: bounded in wall time
 		if time.Now().After(end) {
 			return false
 		}
+		//simclock:wall the queue drain on shutdown: bounded in wall time
 		time.Sleep(time.Millisecond)
 	}
 	return true
@@ -128,11 +132,13 @@ func (rc *Recorder) Close(timeout time.Duration) {
 		return
 	}
 	if rc.closed.CompareAndSwap(false, true) {
+		//simclock:wall the queue drain on shutdown: bounded in wall time
 		rc.deadln.Store(time.Now().Add(timeout).UnixNano())
 		close(rc.stop)
 	}
 	select {
 	case <-rc.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(timeout):
 	}
 }
@@ -144,6 +150,7 @@ func (rc *Recorder) run() {
 		case j := <-rc.q:
 			rc.process(j)
 		case <-rc.stop:
+			//simclock:wall the queue drain on shutdown: bounded in wall time
 			for time.Now().UnixNano() < rc.deadln.Load() {
 				select {
 				case j := <-rc.q:

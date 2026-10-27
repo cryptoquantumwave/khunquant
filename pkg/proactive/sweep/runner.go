@@ -159,6 +159,7 @@ type Runner struct {
 // New returns a Runner over cfg.
 func New(cfg Config) *Runner {
 	if cfg.Now == nil {
+		//simclock:wall the default when no clock is injected
 		cfg.Now = time.Now
 	}
 	if cfg.ReconcileBudget <= 0 {

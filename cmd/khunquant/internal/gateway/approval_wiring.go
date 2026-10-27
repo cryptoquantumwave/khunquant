@@ -177,6 +177,7 @@ func (rt *approvalRuntime) stop() {
 	rt.cancel()
 	select {
 	case <-rt.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(10 * time.Second):
 		logger.WarnCF("gateway", "The approval sweeper did not stop in time", nil)
 	}

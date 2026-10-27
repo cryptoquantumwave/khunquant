@@ -63,6 +63,7 @@ func newTriggerLimiter(perMinute, burst int, now func() time.Time) *triggerLimit
 
 func newTriggerLimiterWithHourly(perMinute, burst, perHour int, now func() time.Time) *triggerLimiter {
 	if now == nil {
+		//simclock:wall the external trigger rate limiter bounds requests in wall time
 		now = time.Now
 	}
 	return &triggerLimiter{now: now, b: [2]bucket{

@@ -190,6 +190,7 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 	s := &Service{db: db, pub: o.Events, clock: o.Clock, after: o.After, since: since, fillsSince: fillsSince, changes: o.Changes,
 		sem: make(chan struct{}, maxAsync), zone: o.Zone}
 	if s.clock == nil {
+		//simclock:wall the default when no clock is injected
 		s.clock = time.Now
 	}
 	s.polled = s.clock()

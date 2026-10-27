@@ -116,6 +116,7 @@ func (a outboxAlerts) clock() time.Time {
 	if a.now != nil {
 		return a.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

@@ -75,6 +75,7 @@ func (r *attentionRunner) stop() {
 	r.cancel()
 	select {
 	case <-r.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(attentionStopTimeout):
 		logger.WarnCF("attention", "Outbox did not stop in time", nil)
 	}

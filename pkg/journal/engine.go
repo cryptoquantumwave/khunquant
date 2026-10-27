@@ -142,6 +142,7 @@ func randHex(n int) string {
 	if _, err := rand.Read(b); err != nil {
 		// crypto/rand does not fail on supported platforms; a clock-derived id
 		// is still unique enough to tell two runners apart.
+		//simclock:wall an identifier, not a domain time
 		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
@@ -305,6 +306,7 @@ func (e *Engine) Wait(ctx context.Context, id string) (Workflow, error) {
 		if w.Status.Terminal() {
 			return w, nil
 		}
+		//simclock:wall the Wait poll: bounded in wall time
 		t := time.NewTimer(e.opt.waitPoll)
 		select {
 		case <-ctx.Done():
@@ -441,10 +443,12 @@ func (e *Engine) Run(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(e.opt.shutdownWait):
 		stepsStop() // ask the steps still running to return
 		select {
 		case <-done:
+		//simclock:wall a shutdown wait, bounded in wall time
 		case <-time.After(e.opt.shutdownWait/2 + time.Millisecond):
 			logger.WarnCF(logComponent, "Workflows did not stop in time; they stay claimed until their lease runs out", nil)
 		}

@@ -197,6 +197,7 @@ type Outbox struct {
 // decisions in flight. A nil clock means time.Now.
 func NewOutbox(g Gate, d Deliverer, groupWindow time.Duration, clock func() time.Time) *Outbox {
 	if clock == nil {
+		//simclock:wall the default when no clock is injected
 		clock = time.Now
 	}
 	return &Outbox{
@@ -332,6 +333,7 @@ func (o *Outbox) Run(ctx context.Context) {
 	if timers != nil {
 		next = func() <-chan time.Time { return timers.After(every) }
 	} else {
+		//simclock:wall no timer clock was set: the wall ticker
 		t := time.NewTicker(every)
 		defer t.Stop()
 		next = func() <-chan time.Time { return t.C }

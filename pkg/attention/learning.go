@@ -120,6 +120,7 @@ func CryptoRand() func() float64 {
 	if _, err := crand.Read(seed[:]); err == nil {
 		s1, s2 = binary.LittleEndian.Uint64(seed[:8]), binary.LittleEndian.Uint64(seed[8:])
 	} else {
+		//simclock:wall a PRNG seed, not a domain time
 		s1, s2 = uint64(time.Now().UnixNano()), 0x9e3779b97f4a7c15
 	}
 	var mu sync.Mutex

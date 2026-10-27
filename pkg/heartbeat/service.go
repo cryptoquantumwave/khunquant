@@ -72,8 +72,10 @@ type (
 
 type realClock struct{}
 
+//simclock:wall the wall clock itself
 func (realClock) Now() time.Time { return time.Now() }
 
+//simclock:wall the wall clock itself
 func (realClock) NewTimer(d time.Duration) timer { return realTimer{time.NewTimer(d)} }
 
 type realTimer struct{ t *time.Timer }
@@ -325,6 +327,7 @@ func (hs *HeartbeatService) Stop() {
 	}
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(stopWait):
 		logger.WarnC("heartbeat", "A heartbeat run did not stop in time; its decisions will be dropped")
 	}

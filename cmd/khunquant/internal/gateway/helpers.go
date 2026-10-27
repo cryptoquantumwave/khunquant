@@ -555,6 +555,7 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
+		//simclock:wall the config file watcher polls in wall time
 		ticker := time.NewTicker(2 * time.Second) // Check every 2 seconds
 		defer ticker.Stop()
 
@@ -571,6 +572,7 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 					}
 
 					// Debounce - wait a bit to ensure file write is complete
+					//simclock:wall the config file watcher debounces in wall time
 					time.Sleep(500 * time.Millisecond)
 
 					// Validate and load new config

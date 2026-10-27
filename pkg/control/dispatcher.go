@@ -118,7 +118,8 @@ func New(deps Deps, opts ...Option) *Dispatcher {
 		handlers: map[string]*entry{},
 		limiter:  newLimiter(DefaultRateLimit, DefaultRateWindow),
 		secLog:   newOnceEvery(time.Minute),
-		now:      time.Now,
+		//simclock:wall the default when no clock is injected
+		now: time.Now,
 	}
 	for _, o := range opts {
 		o(d)

@@ -339,6 +339,7 @@ func (rt *dcaFlowRuntime) stop() {
 	rt.cancel()
 	select {
 	case <-rt.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(dcaSyncTimeout):
 		logger.WarnCF("gateway", "The mandate sync did not stop in time", nil)
 	}

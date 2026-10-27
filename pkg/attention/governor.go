@@ -156,6 +156,7 @@ func New(db *sql.DB, p ProfileSource, cfg config.AttentionConfig, effectiveMode 
 		return nil, fmt.Errorf("attention: unknown mode %q (want off, shadow or live)", effectiveMode)
 	}
 	if clock == nil {
+		//simclock:wall the default when no clock is injected
 		clock = time.Now
 	}
 	if err := sqlitex.Migrate(context.Background(), db, migrations...); err != nil {

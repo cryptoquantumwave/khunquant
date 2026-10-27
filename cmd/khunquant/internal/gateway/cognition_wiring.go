@@ -93,13 +93,17 @@ func (rt *cognitionRuntime) stop(timeout time.Duration) {
 	if rt == nil {
 		return
 	}
+	//simclock:wall the stop drain: bounded in wall time
 	drain := time.Now().Add(timeout / time.Duration(cognitionDrainShare))
+	//simclock:wall the stop drain: bounded in wall time
 	for rt.sched.Pending() > 0 && time.Now().Before(drain) {
+		//simclock:wall the stop drain: bounded in wall time
 		time.Sleep(cognitionPoll)
 	}
 	rt.cancel()
 	select {
 	case <-rt.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(timeout):
 		logger.WarnCF("cognition", "Scheduler did not stop in time", nil)
 	}
@@ -141,6 +145,7 @@ func (rt *cognitionRuntime) stats() *cognitionStatsResponse {
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	//simclock:wall a diagnostic stats cache, not a domain decision
 	if rt.cached != nil && time.Since(rt.cachedAt) < cognitionStatsTTL {
 		return rt.cached
 	}
@@ -153,6 +158,7 @@ func (rt *cognitionRuntime) stats() *cognitionStatsResponse {
 	for k, u := range st.Budget {
 		out.Budget[k] = cognitionBudgetUse{Wakes: u.Wakes, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}
 	}
+	//simclock:wall a diagnostic stats cache, not a domain decision
 	rt.cached, rt.cachedAt = out, time.Now()
 	return out
 }

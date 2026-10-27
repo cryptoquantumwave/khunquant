@@ -55,6 +55,7 @@ func (l *TokenBucketLimiter) Allow(providerID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	//simclock:wall provider rate limiting is a wall-time bound
 	now := time.Now()
 	b, ok := l.buckets[providerID]
 	if !ok {
@@ -80,6 +81,7 @@ func (l *TokenBucketLimiter) Status() map[string]RateLimitStatus {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	//simclock:wall provider rate limiting is a wall-time bound
 	now := time.Now()
 	out := make(map[string]RateLimitStatus, len(l.buckets))
 	for id, b := range l.buckets {

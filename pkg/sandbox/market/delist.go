@@ -96,7 +96,10 @@ func requestedWires(venue, path string, q url.Values) []string {
 			return nil
 		}
 		return append(many, q.Get("symbol"))
-	case "okx/api/v5/market/ticker", "okx/api/v5/market/candles", "okx/api/v5/market/history-candles":
+	case "binance/fapi/v1/premiumIndex":
+		return []string{q.Get("symbol")}
+	case "okx/api/v5/market/ticker", "okx/api/v5/market/candles", "okx/api/v5/market/history-candles",
+		"okx/api/v5/public/mark-price", "okx/api/v5/public/funding-rate":
 		return []string{q.Get("instId")}
 	}
 	return nil
@@ -171,6 +174,32 @@ var listings = map[string]struct{ list, field string }{
 	"binance/fapi/v1/exchangeInfo":  {"symbols", "symbol"},
 	"binance/fapi/v3/exchangeInfo":  {"symbols", "symbol"},
 	"okx/api/v5/public/instruments": {"data", "instId"},
+	"bitkub/api/v3/market/symbols":  {"result", "symbol"},
+}
+
+// filterTickerArray drops delisted symbols from a plain-array Bitkub ticker next produced.
+func (b *Book) filterTickerArray(resp *sandbox.Response) *sandbox.Response {
+	var rows []json.RawMessage
+	if resp.Status != http.StatusOK || json.Unmarshal(resp.Body, &rows) != nil {
+		return resp
+	}
+	kept := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		var f struct {
+			Symbol string `json:"symbol"`
+		}
+		if json.Unmarshal(row, &f) == nil && b.symDelisted("bitkub", f.Symbol) {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	body, err := json.Marshal(kept)
+	if err != nil {
+		return resp
+	}
+	out := *resp
+	out.Body = body
+	return &out
 }
 
 // filterListing drops delisted symbols from a listing next produced and, for OKX, the rows

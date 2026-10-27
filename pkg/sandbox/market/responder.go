@@ -28,6 +28,12 @@ func (b *Book) Middleware() sandbox.Middleware {
 				if status, body, ok := b.render(venue, path, r.URL.Query()); ok {
 					return answer(status, body)
 				}
+				if venue+path == "bitkub/api/v3/market/ticker" {
+					if resp, ok := next.Respond(venue, method, path, r); ok {
+						return b.filterTickerArray(resp), true
+					}
+					return nil, false
+				}
 				if _, ok := listings[venue+path]; ok {
 					if resp, ok := next.Respond(venue, method, path, r); ok {
 						return b.filterListing(venue, path, r.URL.Query(), resp), true
@@ -57,6 +63,16 @@ func (b *Book) render(venue, path string, q url.Values) (int, []byte, bool) {
 		return b.okxTickers(path == "/api/v5/market/tickers", q)
 	case "okx/api/v5/market/candles", "okx/api/v5/market/history-candles":
 		return b.okxCandles(q)
+	case "binance/fapi/v1/premiumIndex":
+		return b.binancePremium(q)
+	case "okx/api/v5/public/mark-price":
+		return b.okxMarkPrice(q)
+	case "okx/api/v5/public/funding-rate":
+		return b.okxFundingRate(q)
+	case "bitkub/api/v3/market/ticker":
+		return b.bitkubTickers(q)
+	case "bitkub/tradingview/history":
+		return b.bitkubHistory(q)
 	}
 	return 0, nil, false
 }

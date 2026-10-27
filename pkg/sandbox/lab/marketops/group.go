@@ -21,7 +21,7 @@ import (
 const (
 	reload   = `"reload_markets":{"type":"boolean","description":"also drop the cached exchange clients so the next ones reload markets (default false)"}`
 	symVenue = `"symbol":{"type":"string","description":"BASE/QUOTE, e.g. BTC/USDT (a spot market and its USDT swap share it)"},` +
-		`"venue":{"type":"string","enum":["binance","okx","*"],"description":"default *: every venue without a model of its own"}`
+		`"venue":{"type":"string","enum":["binance","okx","bitkub","*"],"description":"default *: every venue without a model of its own"}`
 )
 
 // Options are what the group needs from the instance.
@@ -41,9 +41,9 @@ func Group(b *market.Book, o Options) lab.Group {
 		Ops: []lab.Op{
 			{Name: "get", Description: "the price now of every modelled symbol, or of one, and the delisted symbols",
 				Args: json.RawMessage(`{` + symVenue + `}`), Run: run(b, nil)},
-			{Name: "set", Description: "hold a constant price from now",
-				Args:     json.RawMessage(`{` + symVenue + `,"price":{"type":"number"}}`),
-				Required: []string{"symbol", "price"}, Run: run(b, setOp)},
+			{Name: "set", Description: "hold a constant price from now and/or set the perpetual's funding rate (per 8 h, default 0.0001); give at least one",
+				Args:     json.RawMessage(`{` + symVenue + `,"price":{"type":"number"},"funding_rate":{"type":"number","description":"fraction per 8 h, e.g. 0.0003"}}`),
+				Required: []string{"symbol"}, Run: run(b, setOp)},
 			{Name: "path", Description: "move from the current price to `to` over `over`, then hold; keyframes pass prices on the way",
 				Args: json.RawMessage(`{` + symVenue + `,"to":{"type":"number"},"over":{"type":"string","description":"duration, e.g. 3m"},` +
 					`"shape":{"type":"string","enum":["linear","step"]},` +
@@ -73,23 +73,24 @@ func Group(b *market.Book, o Options) lab.Group {
 }
 
 type req struct {
-	Op        string  `json:"op"`
-	Symbol    string  `json:"symbol"`
-	Venue     string  `json:"venue"`
-	Price     float64 `json:"price"`
-	To        float64 `json:"to"`
-	Over      string  `json:"over"`
-	Shape     string  `json:"shape"`
-	Pct       float64 `json:"pct"`
-	Vol       float64 `json:"vol"`
-	Drift     float64 `json:"drift"`
-	Seed      *uint64 `json:"seed"`
-	Step      string  `json:"step"`
-	CSVPath   string  `json:"csv_path"`
-	CSVInline string  `json:"csv_inline"`
-	Timeframe string  `json:"timeframe"`
-	Start     string  `json:"start"`
-	Reload    bool    `json:"reload_markets"`
+	Op        string   `json:"op"`
+	Symbol    string   `json:"symbol"`
+	Venue     string   `json:"venue"`
+	Price     *float64 `json:"price"`
+	Funding   *float64 `json:"funding_rate"`
+	To        float64  `json:"to"`
+	Over      string   `json:"over"`
+	Shape     string   `json:"shape"`
+	Pct       float64  `json:"pct"`
+	Vol       float64  `json:"vol"`
+	Drift     float64  `json:"drift"`
+	Seed      *uint64  `json:"seed"`
+	Step      string   `json:"step"`
+	CSVPath   string   `json:"csv_path"`
+	CSVInline string   `json:"csv_inline"`
+	Timeframe string   `json:"timeframe"`
+	Start     string   `json:"start"`
+	Reload    bool     `json:"reload_markets"`
 	Keyframes []struct {
 		At    string  `json:"at"`
 		Price float64 `json:"price"`
@@ -133,7 +134,20 @@ func runAs(b *market.Book, op func(*market.Book, req, market.Pair) error, parse 
 	}
 }
 
-func setOp(b *market.Book, a req, p market.Pair) error { return b.Set(a.Venue, p, a.Price) }
+func setOp(b *market.Book, a req, p market.Pair) error {
+	if a.Price == nil && a.Funding == nil {
+		return errors.New("set needs a price, a funding_rate or both")
+	}
+	if a.Funding != nil {
+		if err := b.SetFunding(a.Venue, p, *a.Funding); err != nil {
+			return err
+		}
+	}
+	if a.Price != nil {
+		return b.Set(a.Venue, p, *a.Price)
+	}
+	return nil
+}
 
 func shockOp(b *market.Book, a req, p market.Pair) error { return b.Shock(a.Venue, p, a.Pct) }
 

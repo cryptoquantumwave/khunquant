@@ -23,13 +23,13 @@ func ParsePair(s string) (Pair, error) {
 // Venues the book models. "*" is the wildcard a venue falls back to.
 const Wildcard = "*"
 
-func knownVenue(v string) bool { return v == Wildcard || v == "binance" || v == "okx" }
+func knownVenue(v string) bool { return v == Wildcard || v == "binance" || v == "okx" || v == "bitkub" }
 
 // binanceQuotes are the quote assets ParseWire recognises (the longest suffix wins).
 var binanceQuotes = []string{"FDUSD", "USDT", "USDC", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR"}
 
 // Wire is the venue's symbol for p: Binance BTCUSDT (spot and futures alike), OKX
-// BTC-USDT or, for the swap, BTC-USDT-SWAP.
+// BTC-USDT or, for the swap, BTC-USDT-SWAP, Bitkub BTC_THB.
 func Wire(venue string, p Pair, swap bool) string {
 	switch venue {
 	case "binance":
@@ -39,6 +39,8 @@ func Wire(venue string, p Pair, swap bool) string {
 			return p.Base + "-" + p.Quote + "-SWAP"
 		}
 		return p.Base + "-" + p.Quote
+	case "bitkub":
+		return p.Base + "_" + p.Quote
 	}
 	return ""
 }
@@ -57,12 +59,16 @@ func ParseWire(venue, wire string) (p Pair, swap, ok bool) {
 		if parts := strings.Split(w, "-"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
 			return Pair{parts[0], parts[1]}, isSwap, true
 		}
+	case "bitkub":
+		if parts := strings.Split(strings.ToUpper(wire), "_"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			return Pair{parts[0], parts[1]}, false, true
+		}
 	}
 	return Pair{}, false, false
 }
 
 // wireVenues are the venues whose wire symbols ParseSymbol tries for the wildcard.
-var wireVenues = []string{"binance", "okx"}
+var wireVenues = []string{"binance", "okx", "bitkub"}
 
 // ParseSymbol reads a canonical "BTC/USDT" or a venue's own wire symbol (SOLUSDT,
 // SOL-USDT-SWAP); for the wildcard venue any venue's wire form will do.

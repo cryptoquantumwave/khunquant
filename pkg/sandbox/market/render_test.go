@@ -23,8 +23,8 @@ type feedRig struct {
 	clk   *fakeNow
 	store *sandbox.Store
 	book  *Book
-	sm   *sandbox.StateManager
-	srv  *httptest.Server
+	sm    *sandbox.StateManager
+	srv   *httptest.Server
 
 	mu   sync.Mutex
 	seen map[string]string // "venue path" -> the stage that answered it
@@ -287,6 +287,12 @@ func TestPricesAgreeAcrossFeeds(t *testing.T) {
 	if tk.Last == nil || otk.Last == nil || len(bars) != 1 || len(obars) != 1 {
 		t.Fatalf("feeds: %+v %+v %v %v", tk, otk, bars, obars)
 	}
+	swap := r.binance(t, map[string]any{"defaultType": "future"})
+	frate, err := swap.FetchFundingRate("BTC/USDT:USDT")
+	omark, err2 := okx.FetchMarkPrice("BTC/USDT:USDT")
+	if err != nil || err2 != nil || frate.MarkPrice == nil || frate.IndexPrice == nil || omark.MarkPrice == nil {
+		t.Fatalf("mark feeds: %+v (%v) %+v (%v)", frate, err, omark, err2)
+	}
 
 	req, _ := http.NewRequest("POST", r.srv.URL+"/__sbx__/binance/fapi.binance.com/fapi/v1/order?symbol=BTCUSDT&side=BUY&type=market&quantity=1&positionSide=LONG", nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -300,7 +306,7 @@ func TestPricesAgreeAcrossFeeds(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&fill)
 
 	for name, got := range map[string]string{
-		"binance ticker": num(*tk.Last), "binance kline close": num(bars[0].Close), "okx swap ticker": num(*otk.Last),
+		"binance ticker": num(*tk.Last), "binance mark": num(*frate.MarkPrice), "binance index": num(*frate.IndexPrice), "okx mark": num(*omark.MarkPrice), "binance kline close": num(bars[0].Close), "okx swap ticker": num(*otk.Last),
 		"okx kline close": num(obars[0].Close), "binance fill": fill.AvgPrice, "state mark": num(r.sm.GetState("binance").MarkPrices["BTCUSDT"]),
 	} {
 		if got != num(want) {

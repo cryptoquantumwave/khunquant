@@ -27,8 +27,10 @@ func labPost(t *testing.T, f *lockedFixture, group, body string) (int, map[strin
 // the simulator's own state, which the exchange API then serves.
 func TestLockedGatewayAccountGroupSeedsTheSimulator(t *testing.T) {
 	f := newLockedFixture(t, func(c *config.Config) { c.Debug.DevMCP.Enabled = true })
-	if !mcpTools(t, f.assemblyFixture, lockTestToken)["sandbox_account"] {
-		t.Fatal("tools/list has no sandbox_account")
+	for _, name := range []string{"sandbox_account", "sandbox_call_tool"} {
+		if !mcpTools(t, f.assemblyFixture, lockTestToken)[name] {
+			t.Fatalf("tools/list has no %s", name)
+		}
 	}
 	if code, out := labPost(t, f, "account", `{"op":"seed","venue":"binance","balances":{"USDT":10000}}`); code != http.StatusOK {
 		t.Fatalf("seed = %d %v", code, out)
@@ -45,5 +47,19 @@ func TestLockedGatewayAccountGroupSeedsTheSimulator(t *testing.T) {
 	}
 	if code, _ := labPost(t, f, "account", `{"op":"seed","venue":"bitkub","balances":{"USDT":1}}`); code != http.StatusServiceUnavailable {
 		t.Errorf("seed on bitkub = %d, want 503 (unavailable)", code)
+	}
+}
+
+// An ordinary gateway has none of the setup groups: no route, no MCP tool.
+func TestLabSetupGroupsNotRegisteredWhenUnlocked(t *testing.T) {
+	f := newAssemblyFixture(t, enableAllRoutes)
+	tools := mcpTools(t, f, testDevMCPToken)
+	for _, group := range []string{"call_tool", "account"} {
+		if code, body, err := postJSON(f.url("/api/sandbox/lab/"+group), testSandboxToken, `{}`); err != nil || code != http.StatusNotFound {
+			t.Errorf("POST /api/sandbox/lab/%s = %d (%v) %s, want 404", group, code, err, body)
+		}
+		if tools["sandbox_"+group] {
+			t.Errorf("an unlocked gateway lists sandbox_%s", group)
+		}
 	}
 }

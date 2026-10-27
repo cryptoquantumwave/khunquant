@@ -99,6 +99,10 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(account.Group(l.Sim)); err != nil {
 		return err
 	}
+	// call_tool needs the current generation's agent loop: it reads it at call time.
+	if err := l.AddGroup(callToolGroup(shared)); err != nil {
+		return err
+	}
 	// The chat group's world lives as long as the process; each generation's channel
 	// attaches to it (attachSimChat). The personas are those of the first config.
 	var j simchat.Journal
@@ -234,6 +238,7 @@ func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error
 			attachLabTap(d.Shared, inst.Tools)
 		}
 	}
+	s.labSetup = &labSetup{al: d.AgentLoop} // before buildServices publishes s
 	attachSimChat(d.Shared, s.ChannelManager)
 	if err := startLabObserver(s.lab, d.Shared); err != nil {
 		return fmt.Errorf("starting the lab observer: %w", err)

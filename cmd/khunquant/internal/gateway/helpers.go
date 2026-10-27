@@ -95,6 +95,7 @@ type gatewayServices struct {
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
 	lab              *lab.Lab                        // the process-lifetime lab; non-nil only when locked (set from sharedResources)
+	labSetup         *labSetup                       // what the lab's setup shortcuts read of this generation; set by registerSandboxLab before it is published
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
 	SimulatorReseter interface{ ResetState() error } // non-nil when sandbox is enabled; wraps StateManager for reset-state endpoint

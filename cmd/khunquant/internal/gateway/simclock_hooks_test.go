@@ -298,7 +298,7 @@ func TestGatewayHooks_NoWallClockConstructors(t *testing.T) {
 			t.Errorf("no %s call found in the gateway: the guard (or the wiring) is out of date", key)
 		}
 	}
-	for _, key := range []string{"sweep.Config.Now", "feedback.Options.Clock", "feedback.Options.After", "SetTimerClock"} {
+	for _, key := range []string{"sweep.Config.Now", "feedback.Options.Clock", "feedback.Options.After", "SetTimerClock", "cronHooks.Clock"} {
 		if seen[key] == 0 {
 			t.Errorf("no %s literal found in the gateway: the guard (or the wiring) is out of date", key)
 		}

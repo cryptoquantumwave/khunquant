@@ -58,6 +58,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
@@ -641,6 +642,8 @@ type cronHooks struct {
 	// DNSync asks for a (debounced) pass of the delta-neutral hand-over after a plan
 	// tool changed a plan's cron job.
 	DNSync tools.DNSyncFunc
+	// Clock drives the cron service's schedule decisions and job loop; nil is the wall clock.
+	Clock simclock.Clock
 }
 
 func setupCronTool(
@@ -656,6 +659,9 @@ func setupCronTool(
 
 	// Create cron service
 	cronService := cron.NewCronService(cronStorePath, nil)
+	if len(hooks) > 0 && hooks[0].Clock != nil {
+		cronService.SetClock(hooks[0].Clock)
+	}
 	cronService.SetOptions(cronOptionsFromConfig(cfg))
 	cronService.SetOnMissed(missedJobNotifier(msgBus))
 	if msgBus != nil {

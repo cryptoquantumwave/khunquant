@@ -136,6 +136,7 @@ type Portfolio struct {
 	// mutex so that a Reconcile that waits can be given up by its context. The
 	// three fields below are touched only while it is held.
 	run      chan struct{}
+	inflight perception.InFlight
 	lastPrun time.Time // when the old snapshots were last pruned
 	// lastDone and lastErr are when the last collection that was not cut short
 	// ended, and what it returned.
@@ -258,6 +259,10 @@ func (p *Portfolio) fail(msg string) error {
 	return fmt.Errorf("portfolio: %s", msg)
 }
 
+// Idle is true when no collection is running (perception.Idler). The next scheduled
+// collection is a timer, not busy.
+func (p *Portfolio) Idle() bool { return p.inflight.Idle() }
+
 // cycle runs one collection of the schedule, after any collection in flight. It
 // returns an error for a failed or partial one.
 func (p *Portfolio) cycle(ctx context.Context, out perception.Emitter) error {
@@ -273,6 +278,7 @@ func (p *Portfolio) cycle(ctx context.Context, out perception.Emitter) error {
 // collectLocked runs one collection and remembers how it ended. The caller holds
 // p.run.
 func (p *Portfolio) collectLocked(ctx context.Context, out perception.Emitter) error {
+	defer p.inflight.Enter()()
 	err := p.collectOnce(ctx, out)
 	if ctx.Err() == nil {
 		p.lastDone, p.lastErr = p.clock.Now(), err

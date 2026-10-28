@@ -123,7 +123,8 @@ type DCAPlansSource struct {
 
 	// plans is touched only by the goroutine that runs Start (and by tests that call
 	// step directly).
-	plans map[int64]*dcaPlanState
+	plans    map[int64]*dcaPlanState
+	inflight perception.InFlight // a step is running (for Idle)
 
 	plansSeen                              atomic.Int64
 	dueEvents, lateEvents, missed, resumed atomic.Uint64
@@ -158,6 +159,10 @@ func NewDCAPlansSource(o DCAPlansOptions) *DCAPlansSource {
 
 // Name implements perception.Source.
 func (s *DCAPlansSource) Name() string { return dcaSourceName }
+
+// Idle is true when no step is running: the plan read, the promotion hook and the emits
+// (perception.Idler). The wait for the next poll is a timer, not busy.
+func (s *DCAPlansSource) Idle() bool { return s.inflight.Idle() }
 
 // Stats snapshots the counters.
 func (s *DCAPlansSource) Stats() DCAPlansStats {
@@ -204,6 +209,7 @@ func (s *DCAPlansSource) Start(ctx context.Context, out perception.Emitter) erro
 // It is the whole behaviour of the source apart from the waiting, so a test drives it
 // with a chosen now and no goroutine.
 func (s *DCAPlansSource) step(ctx context.Context, out perception.Emitter, now time.Time) (wake time.Time) {
+	defer s.inflight.Enter()()
 	wake = now.Add(s.poll)
 	rctx, cancel := context.WithTimeout(ctx, dcaReadTimeout)
 	plans, err := s.rd.Plans(rctx)

@@ -256,7 +256,8 @@ type MarketSource struct {
 	backoff time.Duration
 	limiter *readLimiter
 
-	pollMu sync.Mutex // one poll at a time
+	pollMu   sync.Mutex // one poll at a time
+	inflight perception.InFlight
 
 	mu        sync.Mutex // everything below
 	series    map[seriesKey]*seriesState
@@ -304,6 +305,10 @@ func NewMarketSource(readers MarketReaders, d perception.DemandSource, opts Mark
 
 // Name is "market".
 func (s *MarketSource) Name() string { return sourceName }
+
+// Idle is true when no poll is running (perception.Idler). The next scheduled poll is a
+// timer, not busy.
+func (s *MarketSource) Idle() bool { return s.inflight.Idle() }
 
 // Start polls until ctx is done. It returns nil then. Failed reads are the
 // source's to back off from and report; they never make Start fail.
@@ -370,6 +375,7 @@ func (s *MarketSource) Stats() MarketStats {
 
 // pollOnce runs one poll. force reads every demanded series even if it is not due.
 func (s *MarketSource) pollOnce(ctx context.Context, out perception.Emitter, force bool) error {
+	defer s.inflight.Enter()()
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
 	if err := ctx.Err(); err != nil {

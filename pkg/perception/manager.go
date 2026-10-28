@@ -331,6 +331,24 @@ func (m *Manager) Stats() ManagerStats {
 	return ManagerStats{Sources: n, Restarts: m.restarts.Load(), Panics: m.panics.Load(), Errors: m.errCount.Load()}
 }
 
+// Idle is true when no source is reconciling and every source that can tell (Idler) is
+// idle. A source waiting out a restart backoff or for its next poll is a timer, not
+// busy. It changes nothing; only the sandbox lab's settle calls it.
+func (m *Manager) Idle() bool {
+	m.mu.Lock()
+	all := append([]*managed(nil), m.sources...)
+	m.mu.Unlock()
+	for _, ms := range all {
+		if ms.reconciling.Load() {
+			return false
+		}
+		if i, ok := ms.src.(Idler); ok && !i.Idle() {
+			return false
+		}
+	}
+	return true
+}
+
 func (ms *managed) noteOK() {
 	ms.mu.Lock()
 	ms.consecutive = 0

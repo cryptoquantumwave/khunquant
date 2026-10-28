@@ -175,6 +175,7 @@ type ClockSource struct {
 	fired     map[string]firedMark
 	timerWake chan struct{}
 	loadOnce  sync.Once
+	inflight  perception.InFlight // a pass is running (for Idle)
 
 	mu       sync.Mutex
 	lastWake time.Time
@@ -242,19 +243,14 @@ func (c *ClockSource) Health() perception.SourceHealth {
 // Start runs the clock until ctx is done. It blocks, which the Manager allows, and
 // never returns an error: there is nothing in it that fails and is worth a restart.
 func (c *ClockSource) Start(ctx context.Context, out perception.Emitter) error {
+	done := c.inflight.Enter()
 	c.arm(c.clk.Now())
 	c.loadTimers(ctx)
+	done()
 	for {
-		now := c.clk.Now()
-		evs := c.step(now)
-		tevs, ops := c.stepTimers(now)
-		for _, ev := range append(evs, tevs...) {
-			if ctx.Err() != nil {
-				return nil
-			}
-			out.Emit(ev)
+		if !c.pass(ctx, out) {
+			return nil
 		}
-		c.applyTimerOps(ops)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -263,6 +259,28 @@ func (c *ClockSource) Start(ctx context.Context, out perception.Emitter) error {
 		}
 	}
 }
+
+// pass is one wake: the boundaries and timers due, their emits and the timer store
+// writes. It is in flight for Idle from its start to its end; the wait that follows is a
+// timer. It reports false when ctx ended before everything was emitted.
+func (c *ClockSource) pass(ctx context.Context, out perception.Emitter) bool {
+	defer c.inflight.Enter()()
+	now := c.clk.Now()
+	evs := c.step(now)
+	tevs, ops := c.stepTimers(now)
+	for _, ev := range append(evs, tevs...) {
+		if ctx.Err() != nil {
+			return false
+		}
+		out.Emit(ev)
+	}
+	c.applyTimerOps(ops)
+	return true
+}
+
+// Idle is true when no pass is running and no timer is waiting to be looked at
+// (perception.Idler). The wait for the next boundary is a timer, not busy.
+func (c *ClockSource) Idle() bool { return c.inflight.Idle() && len(c.timerWake) == 0 }
 
 // Reconcile re-emits the current phase of each market, flagged Reconcile. It does
 // not emit day_start: a re-emit must not move a daily baseline.

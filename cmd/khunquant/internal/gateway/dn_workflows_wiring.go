@@ -53,6 +53,7 @@ func buildDNFlow(d assemblyDeps, outbox *attention.Outbox, ns *notify.Service) *
 	deps := &deltaneutral.Deps{
 		Store:    d.DNStore,
 		Exchange: tools.NewDNExchange(d.Cfg, nil),
+		Clock:    d.Shared.clk(),
 		Tag: func(ctx context.Context, origin, sender string) context.Context {
 			return tools.WithToolSender(tools.WithToolOrigin(ctx, origin), sender)
 		},

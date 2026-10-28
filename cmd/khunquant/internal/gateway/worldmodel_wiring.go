@@ -6,7 +6,6 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
-	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
 	"github.com/cryptoquantumwave/khunquant/pkg/worldmodel"
 )
@@ -84,7 +83,7 @@ func (rt *perceptionRuntime) attachWorldModel(d assemblyDeps, opts *engine.Optio
 	if zone := profileZone(d); zone != nil {
 		zoneOpt = append(zoneOpt, worldmodel.WithZone(zone))
 	}
-	store, err := worldmodel.NewStore(ctx, db, perception.RealClock{}, zoneOpt...)
+	store, err := worldmodel.NewStore(ctx, db, d.Shared.clk(), zoneOpt...)
 	if err != nil {
 		logger.WarnCF("perception", "World model disabled: it could not be opened",
 			map[string]any{"error": err.Error()})

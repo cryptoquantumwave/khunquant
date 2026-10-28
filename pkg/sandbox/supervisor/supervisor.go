@@ -170,11 +170,15 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err := validEnv(o.Env); err != nil {
 		return Info{}, err
 	}
+	env, err := o.childEnvOf()
+	if err != nil {
+		return Info{}, err
+	}
 	home, err := instanceHome(s.cfg.TmpDir, name)
 	if err != nil {
 		return Info{}, err
 	}
-	in := &instance{name: name, home: home, env: o.Env, logPath: filepath.Join(home, logName), state: StateStarting}
+	in := &instance{name: name, home: home, env: env, logPath: filepath.Join(home, logName), state: StateStarting}
 	in.opMu.Lock() // before it is visible: a Restart or Down must wait for the start
 	defer in.opMu.Unlock()
 	if err := s.register(in); err != nil {

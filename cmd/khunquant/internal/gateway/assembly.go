@@ -30,6 +30,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/state"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -76,6 +77,12 @@ type sharedResources struct {
 	// Events is the gateway's one event bus (see event_bus.go). It is made with
 	// the resources and closed by Close, never by a reload.
 	Events *events.EventBus
+
+	// Clock is the one clock of the process, handed to every component that takes one
+	// (see clk). It is simclock.Real() unless the process is locked, when registerLabGroups
+	// replaces it with the lab's *simclock.Sim before the first buildServices; per
+	// process, so a reload keeps it.
+	Clock simclock.Clock
 
 	mu      sync.Mutex
 	closers []namedCloser
@@ -140,9 +147,18 @@ type namedCloser struct {
 }
 
 func newSharedResources() *sharedResources {
-	r := &sharedResources{Events: events.NewBus()}
+	r := &sharedResources{Events: events.NewBus(), Clock: simclock.Real()}
 	r.add(eventBusResource, r.Events)
 	return r
+}
+
+// clk is the shared clock: the wall clock when none was set, and for a nil receiver, so
+// that a component given a hand-built sharedResources never holds a nil Clock.
+func (r *sharedResources) clk() simclock.Clock {
+	if r == nil || r.Clock == nil {
+		return simclock.Real()
+	}
+	return r.Clock
 }
 
 // add registers a resource for Close. Resources close in reverse order of

@@ -32,6 +32,7 @@ func clockSourcesFor(d assemblyDeps) []perception.Source {
 	return []perception.Source{sources.NewClockSource(sources.ClockOptions{
 		Location: profileZone(d),
 		Timers:   clockTimerStore(d),
+		Clock:    d.Shared.clk(),
 	})}
 }
 

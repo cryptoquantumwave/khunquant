@@ -180,7 +180,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 
 	// A live execute_dca candidate (a plan with a mandate) goes to the dca.execute
 	// workflow; every other candidate goes to the outbox as before.
-	opts := engine.Options{Attention: ob, Dispatcher: dcaDispatcher{next: rt.dispatch, shared: d.Shared}}
+	opts := engine.Options{Attention: ob, Dispatcher: dcaDispatcher{next: rt.dispatch, shared: d.Shared}, Clock: d.Shared.clk()}
 	if bus := d.Shared.eventBus(); bus != nil {
 		opts.Bus = bus
 	}
@@ -202,7 +202,7 @@ func buildPerception(d assemblyDeps, ob *attention.Outbox) *perceptionRuntime {
 		}
 	}
 	rt.engine = engine.New(opts)
-	rt.manager = perception.NewManager(rt.engine.Emitter())
+	rt.manager = perception.NewManager(rt.engine.Emitter(), perception.WithClock(d.Shared.clk()))
 
 	srcs, taken := perceptionSources(d)
 	rt.devicesTakenOver = taken

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -31,7 +32,7 @@ import (
 // components. The lab exists only in a locked process; it is built once at start
 // (buildLab), held on sharedResources, and never rebuilt by a reload.
 //
-// RULE for every lab group (inspect, market, chat, llm, and what SBX-06 adds): (*lab.Lab).AddGroup
+// RULE for every lab group (inspect, market, clock, chat, llm, and what SBX-06 adds): (*lab.Lab).AddGroup
 // is called ONCE per process, from registerLabGroups (which also attaches the sim
 // engine), right after buildLab and before the first buildServices. Never from registerSandboxLab or anything else that runs per
 // generation: the dev-MCP server builds its sandbox_<group> tools from Lab.Groups() when
@@ -47,6 +48,9 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		Home:        config.HomeDir(),
 		FixturesDir: sandbox.ResolveFixturesDir(cfg),
 		Token:       lk.Token,
+		// The one clock of the process (clock.json, else the KQ_SANDBOX_CLOCK_* env), built
+		// inside New before the server starts: l.Now then follows it from the first request.
+		Getenv: os.Getenv,
 	})
 	if err != nil {
 		return nil, err
@@ -90,7 +94,16 @@ func startLabObserver(l *lab.Lab, shared *sharedResources) error {
 // registerLabGroups adds the lab's groups to the registry, once per process (see the
 // rule above). Call it right after buildLab, before the first buildServices.
 func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) error {
+	// The lab's sim clock is the process's clock: every generation's components read it.
+	if l.Clock != nil { // never a typed nil in the interface
+		shared.Clock = l.Clock
+	}
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
+		return err
+	}
+	// An advance settles the perception engine of the current generation after each step.
+	l.Settle = settleLab(shared)
+	if err := l.AddGroup(l.ClockGroup()); err != nil {
 		return err
 	}
 	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home, ResetClients: exchanges.ResetInstanceCache})); err != nil {
@@ -200,6 +213,22 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 			d.Policy = s.Policy.store.Recent
 		}
 		return d
+	}
+}
+
+// settleLab is Lab.Settle: it waits for the current generation's perception engine to
+// process what the step queued, and does nothing when there is none (stopgap until
+// the quiescence registry settles every component).
+func settleLab(shared *sharedResources) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if s := shared.labGen.Load(); s != nil && s.Perception != nil && s.Perception.engine != nil {
+			// An engine that is not running (starting or stopping) has nothing to wait for;
+			// only a budget that ran out is an answer.
+			if err := s.Perception.engine.Settle(ctx); err != nil && ctx.Err() != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
 

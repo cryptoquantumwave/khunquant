@@ -156,6 +156,7 @@ func (rt *perceptionRuntime) attachDNPlans(d assemblyDeps) {
 		SaveSnapshots:  func() bool { return reg.GlobalMode() == triggers.ModeLive },
 		AfterCheck:     func(ctx context.Context, p deltaneutral.Plan) { refreshPlanFees(ctx, &p, store, cfg) },
 		ReadsPerMinute: cfg.Proactive.Perception.ReadsPerMinuteLimit,
+		Clock:          d.Shared.clk(),
 	})
 	rt.dnPlans = src
 	rt.manager.Add(src)

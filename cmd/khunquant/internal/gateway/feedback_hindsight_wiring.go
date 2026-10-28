@@ -26,7 +26,7 @@ func (rt *feedbackRuntime) startHindsight(d assemblyDeps, pr *perceptionRuntime)
 		return
 	}
 	accounts := broker.ListConfiguredAccounts(d.Cfg)
-	opts := feedback.HindsightOptions{Prices: marketPrices{src: pr.market, accounts: accounts}}
+	opts := feedback.HindsightOptions{Prices: marketPrices{src: pr.market, accounts: accounts}, Clock: d.Shared.clk()}
 	if len(accounts) > 0 {
 		if store, err := snapshot.NewStore(agent.DefaultAgentWorkspace(d.Cfg)); err != nil {
 			logger.WarnCF("feedback", "Hindsight will not measure the portfolio: the snapshot store could not be opened",

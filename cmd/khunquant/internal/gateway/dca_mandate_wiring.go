@@ -251,7 +251,8 @@ func buildDCAFlow(d assemblyDeps, ns *notify.Service) *dcaFlowRuntime {
 		Tag: func(ctx context.Context, origin, sender string) context.Context {
 			return tools.WithToolSender(tools.WithToolOrigin(ctx, origin), sender)
 		},
-		Tell: dcaTeller(ns),
+		Tell:  dcaTeller(ns),
+		Clock: d.Shared.clk(),
 	}
 	// The owner's autonomy setting for mandated buys (T2) is checked by the workflow
 	// itself, whatever proactive.policy.mode is: a mandated run is not a tool call.

@@ -101,6 +101,7 @@ func (rt *perceptionRuntime) attachNews(d assemblyDeps) {
 		Assets:   rt.newsAssets(prof),
 		Active:   newsActive(prof),
 		Location: profileZone(d),
+		Clock:    d.Shared.clk(),
 
 		Interval:        time.Duration(cfg.IntervalMinutes) * time.Minute,
 		RunLimit:        time.Duration(cfg.RunSeconds) * time.Second,

@@ -15,6 +15,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 )
 
 // Options configures New.
@@ -22,6 +23,9 @@ type Options struct {
 	Home        string // KHUNQUANT_HOME of the instance
 	FixturesDir string // must be inside Home
 	Token       string
+	// Getenv, when set, makes New build the instance clock (InitClock) before the server
+	// starts, so no request is served while Now is still the wall clock. Nil: no sim clock.
+	Getenv func(string) string
 }
 
 // Lab holds the components of one sandbox instance.
@@ -35,8 +39,14 @@ type Lab struct {
 	Market *market.Book   // SimMarket: the one price per symbol (tickers, klines, fills)
 
 	Journal *labjournal.Journal // opened by the gateway under the lock
-	Now     func() time.Time    // sim-time source (wall time until the sim clock); read it per use
-	// Later PRs add their components here: Clock, Faults, Web, Crash, ...
+	// Clock is the instance's sim clock (nil until InitClock); Now is derived from it,
+	// and is wall time before that. Read Now per use.
+	Clock *simclock.Sim
+	Now   func() time.Time
+	// Settle, set once at start and read-only after, is what an advance waits on after
+	// each step (nil: nothing). Stopgap until the quiescence registry.
+	Settle func(context.Context) error
+	// Later PRs add their components here: Faults, Web, Crash, ...
 
 	fixturesDir string
 	token       string
@@ -90,7 +100,15 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	l.Chain.Set(sandbox.StageMarket, l.Market.Middleware())
 	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
 	srv.SetResponder(l.Chain)
+	if opts.Getenv != nil {
+		if err := l.InitClock(opts.Getenv); err != nil {
+			return nil, err
+		}
+	}
 	if err := srv.Start(ctx); err != nil {
+		if l.Clock != nil {
+			_ = l.Clock.Close()
+		}
 		return nil, fmt.Errorf("lab: start sandbox server: %w", err)
 	}
 	sandbox.SetInstance(srv)

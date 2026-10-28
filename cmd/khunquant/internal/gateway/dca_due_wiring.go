@@ -343,6 +343,7 @@ func (rt *perceptionRuntime) attachDCADue(d assemblyDeps) {
 	src := sources.NewDCAPlansSource(sources.DCAPlansOptions{
 		Reader:       reader,
 		MisfireGrace: cronOptionsFromConfig(cfg).MisfireGrace,
+		Clock:        d.Shared.clk(),
 		Resume:       dcaResume(view),
 		OnPlans:      specs.sync,
 	})
@@ -355,7 +356,7 @@ func (rt *perceptionRuntime) attachDCADue(d assemblyDeps) {
 	zone := profileZone(d)
 	go func() {
 		defer close(run.done)
-		cmp.loop(ctx, perception.RealClock{}, zone)
+		cmp.loop(ctx, d.Shared.clk(), zone)
 	}()
 	rt.dca = run
 }

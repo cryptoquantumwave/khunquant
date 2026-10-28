@@ -638,6 +638,25 @@ func (o *Outbox) idle() bool {
 	return len(h.ord) == 0 && len(h.prot) == 0 && len(h.protRetry) == 0 && len(h.deferred) == 0 && h.inflight == 0
 }
 
+// Idle is true when no message is queued on a lane, waiting to be deferred, being
+// delivered or reported to the observer, no tick pass is running, no digest is being
+// sent, and the group buffer is empty or its window is still open. An open window, and a
+// message waiting for its retry time, are timers, not work. It changes nothing; only
+// the sandbox lab's settle calls it.
+func (o *Outbox) Idle() bool {
+	if o.ticking.Load() != 0 || len(o.obs.sem) != 0 {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	h := o.hand
+	if len(h.ord) != 0 || len(h.prot) != 0 || len(h.protRetry) != 0 || len(h.deferred) != 0 || h.inflight != 0 || o.digestBusy {
+		return false
+	}
+	// With no grouping (window <= 0) the next tick takes the buffer: a timer.
+	return len(o.buf) == 0 || o.window <= 0 || o.clock().Before(o.windowStart.Add(o.window))
+}
+
 // ordinaryStep delivers one queued ordinary job. It reports whether there was one.
 func (o *Outbox) ordinaryStep(ctx context.Context) bool {
 	j, ok := o.popOrdinary()

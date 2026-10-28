@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -180,6 +181,7 @@ type Outbox struct {
 	lastDigestMin int64
 	digestBusy    bool
 	lastTickWarn  time.Time
+	ticking       atomic.Int32 // tick passes running, for Idle: a due group is in no queue between its take and its hand-over
 
 	// The hand-over side (Accept and the delivery lanes; see handoff.go). All of
 	// it is guarded by mu.
@@ -275,6 +277,8 @@ func (o *Outbox) Tick(ctx context.Context) error { return o.tick(ctx, false) }
 // tick is Tick, or with handOver its non-blocking form: a due group and the
 // digest are queued for the delivery lanes instead of being delivered here.
 func (o *Outbox) tick(ctx context.Context, handOver bool) error {
+	o.ticking.Add(1)
+	defer o.ticking.Add(-1)
 	now := o.clock()
 	var out []buffered
 	o.mu.Lock()

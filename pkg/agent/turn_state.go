@@ -124,6 +124,14 @@ func (al *AgentLoop) GetActiveTurn(sessionKey string) *TurnInfo {
 	return ts.Info()
 }
 
+// Idle is true when Run holds no message it has taken but not yet handed on or answered,
+// and no root turn (running or waiting for its session lock) or sub-turn is registered.
+// An async sub-turn that outlives its root is counted. Cognition jobs are the
+// scheduler's to report. It changes nothing; only the sandbox lab calls it.
+func (al *AgentLoop) Idle() bool {
+	return al.handling.Load() == 0 && al.activeTurnStates.idle()
+}
+
 // ====================== Turn Registry ======================
 
 // turnRegistry tracks the root turns that are running or waiting for their
@@ -144,6 +152,13 @@ type turnRegistry struct {
 	// depth. A root turn unregisters when it returns, but its async sub-turns
 	// may run on; this is how a cancel still finds them.
 	subTurns map[*turnState]struct{}
+}
+
+// idle is true when no root turn is registered and no sub-turn is running.
+func (r *turnRegistry) idle() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byID) == 0 && len(r.subTurns) == 0
 }
 
 // addSubTurn records a running sub-turn; removeSubTurn forgets it when it returns.

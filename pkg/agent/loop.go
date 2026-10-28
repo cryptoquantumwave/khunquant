@@ -58,6 +58,7 @@ type AgentLoop struct {
 	steering         *steeringQueue
 	activeTurnStates turnRegistry // Root turns running or waiting for their session lock, by turn ID
 	sessionLocks     sessionLocks // One holder per session key; see sessionlock.go
+	handling         atomic.Int32 // inbound messages Run has taken and not yet handed on or answered, for Idle
 	subTurnCounter   atomic.Int64 // Counter for generating unique SubTurn IDs
 	mu               sync.RWMutex
 	// Track active requests for safe provider cleanup
@@ -466,9 +467,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			// With cognition on, the message becomes a job (its route and session
 			// are resolved first) and Run goes on reading; otherwise it is handled
 			// right here, as it always was.
+			al.handling.Add(1)
 			if !al.dispatchInbound(ctx, msg) {
 				al.handleInbound(ctx, msg)
 			}
+			al.handling.Add(-1)
 		}
 	}
 }

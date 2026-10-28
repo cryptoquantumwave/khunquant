@@ -101,6 +101,8 @@ type Manager struct {
 	// controlEnabled is false until the control-command dispatcher exists.
 	// While false, message actions are stripped before sending.
 	controlEnabled atomic.Bool
+	// working counts the messages being routed to a worker or sent, for Idle.
+	working atomic.Int32
 }
 
 type asyncTask struct {
@@ -638,7 +640,9 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
+			m.working.Add(1)
 			m.deliver(ctx, name, w, msg, true)
+			m.working.Add(-1)
 		case <-ctx.Done():
 			return
 		}
@@ -743,6 +747,35 @@ func dispatchLoop[M any](
 ) {
 	logger.InfoC("channels", startMsg)
 
+	// route sends one message to its worker; false means the dispatcher must stop.
+	// working covers the gap between the bus and the worker queue (see Idle).
+	route := func(msg M) bool {
+		m.working.Add(1)
+		defer m.working.Add(-1)
+		channel := getChannel(msg)
+
+		// Silently skip internal channels
+		if constants.IsInternalChannel(channel) {
+			return true
+		}
+
+		m.mu.RLock()
+		_, exists := m.channels[channel]
+		w, wExists := m.workers[channel]
+		m.mu.RUnlock()
+
+		if !exists {
+			logger.WarnCF("channels", unknownMsg, map[string]any{"channel": channel})
+			return true
+		}
+
+		if wExists && w != nil {
+			return enqueue(ctx, w, msg)
+		}
+		logger.WarnCF("channels", noWorkerMsg, map[string]any{"channel": channel})
+		return true
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -754,33 +787,28 @@ func dispatchLoop[M any](
 				logger.InfoC("channels", stopMsg)
 				return
 			}
-
-			channel := getChannel(msg)
-
-			// Silently skip internal channels
-			if constants.IsInternalChannel(channel) {
-				continue
-			}
-
-			m.mu.RLock()
-			_, exists := m.channels[channel]
-			w, wExists := m.workers[channel]
-			m.mu.RUnlock()
-
-			if !exists {
-				logger.WarnCF("channels", unknownMsg, map[string]any{"channel": channel})
-				continue
-			}
-
-			if wExists && w != nil {
-				if !enqueue(ctx, w, msg) {
-					return
-				}
-			} else if exists {
-				logger.WarnCF("channels", noWorkerMsg, map[string]any{"channel": channel})
+			if !route(msg) {
+				return
 			}
 		}
 	}
+}
+
+// Idle is true when no outbound message waits in a channel worker's queue (text or
+// media) and none is being routed to a worker or sent. A send waiting out a rate limit
+// or a retry is still in flight. It changes nothing; only the sandbox lab calls it.
+func (m *Manager) Idle() bool {
+	if m.working.Load() != 0 {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, w := range m.workers {
+		if len(w.queue) != 0 || len(w.mediaQueue) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) dispatchOutbound(ctx context.Context) {
@@ -832,7 +860,9 @@ func (m *Manager) runMediaWorker(ctx context.Context, name string, w *channelWor
 			if !ok {
 				return
 			}
+			m.working.Add(1)
 			_ = m.sendMediaWithRetry(ctx, name, w, msg)
+			m.working.Add(-1)
 		case <-ctx.Done():
 			return
 		}

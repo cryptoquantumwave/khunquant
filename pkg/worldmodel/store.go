@@ -66,6 +66,7 @@ type Store struct {
 	lifeCtx  context.Context
 	lifeStop context.CancelFunc
 	ckBusy   atomic.Bool
+	ckActive atomic.Int32 // Checkpoint calls in progress, those waiting on ckMu included (for Idle)
 	// noteDropped and noteEvicted carry a warning out of a locked section: the log
 	// line is written after the lock is released.
 	noteDropped atomic.Bool
@@ -184,6 +185,10 @@ func (s *Store) Housekeep(_ context.Context, now time.Time) {
 		}
 	}()
 }
+
+// Idle is true when no checkpoint is running or waiting to run. The next one, five
+// minutes away, is a timer. It changes nothing; only the sandbox lab calls it.
+func (s *Store) Idle() bool { return !s.ckBusy.Load() && s.ckActive.Load() == 0 }
 
 // Stats returns the counters.
 func (s *Store) Stats() Stats {

@@ -131,6 +131,9 @@ type Compiler struct {
 
 	lastBackstop atomic.Int64
 	running      atomic.Bool
+	debouncing   atomic.Bool  // a debounce timer is pending (for Idle)
+	requested    atomic.Bool  // set by Request, cleared once Run has started the debounce: no gap for Idle
+	working      atomic.Int32 // processFires and Reconcile calls in progress (for Idle)
 	st           struct {
 		passes, created, repaired, removed, failures atomic.Uint64
 		fires, benign, retries, dropped, missed      atomic.Uint64
@@ -187,6 +190,7 @@ func (c *Compiler) Request() {
 	if c == nil {
 		return
 	}
+	c.requested.Store(true)
 	select {
 	case c.wake <- struct{}{}:
 	default:
@@ -285,21 +289,44 @@ func (c *Compiler) Run(ctx context.Context) {
 			c.Reconcile(ctx)
 		case <-c.wake:
 			if timerC == nil {
-				//simclock:wall the debounce window: the settle waits for it (SBX-09 counts it busy)
+				//simclock:wall the debounce window: the settle waits for it (Idle counts it busy)
 				timer = time.NewTimer(c.debounce)
 				timerC = timer.C
+				c.debouncing.Store(true)
 			}
+			c.requested.Store(false)
 		case <-timerC:
+			c.working.Add(1) // before debouncing clears: the timer's work is never unseen
 			timer, timerC = nil, nil
+			c.debouncing.Store(false)
 			c.processFires(ctx) // retries
 			c.Reconcile(ctx)
+			c.working.Add(-1)
 		}
 	}
+}
+
+// Idle is true when no pass or firing is being processed and none is waiting: no request
+// pending, no firing queued, and no debounce timer running. The debounce is wall time
+// (3 s by default), so a settle waits for it. A compiler that is not running is idle. It
+// changes nothing; only the sandbox lab calls it.
+func (c *Compiler) Idle() bool {
+	if c == nil || !c.running.Load() {
+		return true
+	}
+	if c.working.Load() != 0 || c.debouncing.Load() || c.requested.Load() || len(c.wake) != 0 || len(c.fireWake) != 0 {
+		return false
+	}
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	return len(c.queue) == 0
 }
 
 // ---- firings ------------------------------------------------------------------
 
 func (c *Compiler) processFires(ctx context.Context) {
+	c.working.Add(1)
+	defer c.working.Add(-1)
 	c.qmu.Lock()
 	batch := append(c.retry, c.queue...)
 	c.retry, c.queue = nil, nil
@@ -401,6 +428,8 @@ type Report struct {
 // spec of another origin. A failure on one intent is logged, counted, noted on the
 // intent and does not stop the others.
 func (c *Compiler) Reconcile(ctx context.Context) Report {
+	c.working.Add(1)
+	defer c.working.Add(-1)
 	c.passMu.Lock()
 	defer c.passMu.Unlock()
 	c.st.passes.Add(1)

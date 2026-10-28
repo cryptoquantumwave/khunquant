@@ -117,6 +117,7 @@ type Recorder struct {
 	done chan struct{}
 
 	written, skipped, dropped, failed atomic.Uint64
+	pending                           atomic.Int32 // lines queued or being written (for Idle)
 
 	closeOnce sync.Once
 	mu        sync.RWMutex // guards closed against Record sending on ch
@@ -155,12 +156,18 @@ func (r *Recorder) Record(ev events.Event, at time.Time) {
 		r.dropped.Add(1)
 		return
 	}
+	r.pending.Add(1) // before the send: a line the writer has taken is still counted
 	select {
 	case r.ch <- Line{Clock: at, Event: out}:
 	default:
+		r.pending.Add(-1)
 		r.dropped.Add(1)
 	}
 }
+
+// Idle is true when no line is queued or being written. It changes nothing; only the
+// sandbox lab calls it.
+func (r *Recorder) Idle() bool { return r == nil || r.pending.Load() == 0 }
 
 // Stats returns the counters.
 func (r *Recorder) Stats() Stats {
@@ -185,7 +192,9 @@ func (r *Recorder) Close() {
 func (r *Recorder) run() {
 	defer close(r.done)
 	for l := range r.ch {
-		if err := r.write(l); err != nil {
+		err := r.write(l)
+		r.pending.Add(-1)
+		if err != nil {
 			r.failed.Add(1)
 			r.warn(err)
 			continue

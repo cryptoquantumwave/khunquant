@@ -110,10 +110,11 @@ func SetClock(now func() time.Time) {
 
 // feed is one publisher with its queue and the goroutine that drains it.
 type feed struct {
-	fn   func(OrderEvent)
-	ch   chan OrderEvent
-	stop chan struct{}
-	once sync.Once
+	fn      func(OrderEvent)
+	ch      chan OrderEvent
+	stop    chan struct{}
+	once    sync.Once
+	calling atomic.Int32 // publisher calls in progress (for Idle)
 }
 
 // close stops the feed and counts as dropped every event still waiting in it.
@@ -163,6 +164,8 @@ func (f *feed) run() {
 }
 
 func (f *feed) call(ev OrderEvent) {
+	f.calling.Add(1)
+	defer f.calling.Add(-1)
 	delivered.Add(1)
 	defer func() {
 		if recover() != nil {
@@ -232,6 +235,13 @@ func Publish(_ context.Context, ev OrderEvent) {
 	default:
 		dropped.Add(1)
 	}
+}
+
+// Idle is true when no event waits in the queue and the publisher is not running. With
+// no publisher set it is true. It changes nothing; only the sandbox lab calls it.
+func Idle() bool {
+	f := cur.Load()
+	return f == nil || (len(f.ch) == 0 && f.calling.Load() == 0)
 }
 
 // NoteDropped counts an event that the publisher could not hand on (the pipeline's

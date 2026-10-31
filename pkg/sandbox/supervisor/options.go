@@ -26,6 +26,13 @@ type UpOptions struct {
 
 	// Env is extra child environment; only keys that AllowEnv has allowed pass.
 	Env map[string]string `json:"-"`
+
+	// ConfigPatch is merged into config.json and Workspace is written under
+	// <home>/workspace before the gateway starts (the scenario runner's instance block).
+	// Both are for Go callers: no flag and no JSON name, so neither `up` nor
+	// sandbox_instance can carry them. CheckConfigPatch and CheckWorkspacePath apply.
+	ConfigPatch map[string]any    `json:"-"`
+	Workspace   map[string]string `json:"-"`
 }
 
 // OptionField describes one generated option of UpOptions.

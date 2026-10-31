@@ -75,6 +75,8 @@ func (w *World) Group() lab.Group {
 // sendOp is one inbound message. The sender and chat come from the persona; nothing the
 // caller passes can name another sender except spoof_as, for an unauthenticated persona.
 func (w *World) sendOp(ctx context.Context, args json.RawMessage) (any, error) {
+	w.busy.Add(1)
+	defer w.busy.Add(-1)
 	var a struct {
 		As, Chat, Text, Quote string
 		SpoofAs               string `json:"spoof_as"`

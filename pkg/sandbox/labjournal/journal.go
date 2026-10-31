@@ -54,6 +54,7 @@ type Journal struct {
 	done      chan struct{}
 	closeOnce sync.Once
 	drops     atomic.Uint64
+	pending   atomic.Int32 // entries queued or being written (for Idle)
 
 	mu      sync.Mutex
 	sources []func() uint64
@@ -106,12 +107,18 @@ func (j *Journal) Append(e Entry) {
 	} else if !json.Valid(e.Payload) {
 		e.Payload, _ = json.Marshal(string(e.Payload))
 	}
+	j.pending.Add(1) // before the send: an entry the writer has taken is still counted
 	select {
 	case j.q <- item{e: e}:
 	default:
+		j.pending.Add(-1)
 		j.drops.Add(1)
 	}
 }
+
+// Idle is true when no entry is queued or being written. It changes nothing; only the
+// lab's settle calls it.
+func (j *Journal) Idle() bool { return j.pending.Load() == 0 }
 
 // Drops counts the entries lost to a full queue or a failed write, plus whatever the
 // registered sources report (the observer adds its subscription's dropped events).
@@ -200,7 +207,9 @@ func (j *Journal) write(batch []item) {
 			es = append(es, it.e)
 		}
 	}
-	if err := j.insert(es); err != nil {
+	err := j.insert(es)
+	j.pending.Add(-int32(len(es)))
+	if err != nil {
 		j.drops.Add(uint64(len(es)))
 		logger.WarnCF("labjournal", "Could not write journal entries", map[string]any{"err": err.Error()})
 	}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
@@ -21,6 +22,7 @@ type Server struct {
 	store     *Store
 	respMu    sync.RWMutex
 	responder Responder
+	inflight  atomic.Int32 // requests being served (for Idle)
 
 	// Global state accessor (singleton pattern for accessing current sandbox state).
 	// Guarded by instanceMu.
@@ -140,7 +142,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build the router with the live responder adapter.
 	// This allows SetResponder to be called before or after Start().
-	handler := BuildRouter(s.store, liveResponder{s})
+	router := BuildRouter(s.store, liveResponder{s})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.inflight.Add(1)
+		defer s.inflight.Add(-1)
+		router.ServeHTTP(w, r)
+	})
 
 	// Create and start the HTTP server.
 	s.server = &http.Server{
@@ -162,6 +169,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 	return nil
 }
+
+// Idle is true when no request is being served. It changes nothing; only the sandbox
+// lab calls it.
+func (s *Server) Idle() bool { return s.inflight.Load() == 0 }
 
 // Stop gracefully shuts down the server. It is safe to call multiple times;
 // if not running, Stop returns nil without error.

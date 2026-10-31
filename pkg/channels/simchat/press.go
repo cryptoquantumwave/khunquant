@@ -86,6 +86,8 @@ func (w *World) actor(as string, m OutMsg) (bus.SenderInfo, string, error) {
 // pressOp taps a button as a client would: the callback data the message was sent with
 // goes through the allow-list and then only to the control router, never to the agent.
 func (w *World) pressOp(ctx context.Context, args json.RawMessage) (any, error) {
+	w.busy.Add(1)
+	defer w.busy.Add(-1)
 	var a struct {
 		Message, Action, As string
 		On                  *onSpec
@@ -148,6 +150,8 @@ func (w *World) pressOp(ctx context.Context, args json.RawMessage) (any, error) 
 // reactOp reacts to a message as a persona: the allow-list applies as for a message,
 // then the control router's feedback side is told, as the Telegram adapter does.
 func (w *World) reactOp(ctx context.Context, args json.RawMessage) (any, error) {
+	w.busy.Add(1)
+	defer w.busy.Add(-1)
 	var a struct {
 		Message, Emoji, As string
 		On                 *onSpec

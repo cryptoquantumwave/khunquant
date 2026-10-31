@@ -38,6 +38,14 @@ func StartObserver(ctx context.Context, bus *events.EventBus, j *Journal) (*Obse
 	})
 }
 
+// Idle is true when the subscription has handled, failed, panicked on or dropped every
+// event it received (see events.SubscriberStats: a timeout is counted with Failed). It
+// changes nothing; only the lab's settle calls it.
+func (o *Observer) Idle() bool {
+	st := o.Stats()
+	return st.Received <= st.Handled+st.Failed+st.Panicked+st.Dropped
+}
+
 func startObserver(ctx context.Context, bus *events.EventBus, j *Journal, h events.Handler) (*Observer, error) {
 	sub, err := bus.Channel().Subscribe(ctx, observerOpts, h)
 	if err != nil {

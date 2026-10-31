@@ -1,0 +1,47 @@
+version: 1
+scenario: mute-on-warning-keeps-protective-critical
+covers: [S116A-1, A106-1]
+llm: scripted
+level: wire
+base: stack-head
+clock: { start: "2026-10-26T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers:
+        mode: live
+        params:
+          move_vs_vol: { floor_crypto_pct: 3 }   # tier 3 from a 9% move
+      learning: { enabled: true }               # adds [Useful] [Not useful] [Snooze 1h] [Mute]
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance/main: { balances: { USDT: 10000, BTC: 0.1 } }   # BTC weight about 50%
+llm_script:
+  - match: { turn: proactive }          # weight >= 10%: the Warning is composed by the model
+    respond: { tool: respond_proactive, args: { decision: notify, text: "BTC fell about 10% in the last hour." } }
+timeline:
+  - run_until: "+75m"                   # flat: the 1h window needs a reference price
+  - market.path: { symbol: BTC/USDT, to: 88200, over: 30m, shape: linear }    # -10%: tier-3 Warning
+  - run_until: "+115m"
+  - chat.press:
+      on: { to: owner, severity: warning, contains: ["BTC"] }
+      action: mute
+  - market.path: { symbol: BTC/USDT, to: 82300, over: 10m, shape: linear }    # -16% inside the hour: protective
+  - run_until: "+150m"
+expect:
+  - id: warning-sent-with-buttons
+    message: { to: owner, severity: warning, contains: ["BTC"], buttons: [mute], count: 1 }
+    within: { from: "+75m", to: "+115m" }
+  - id: critical-still-delivered
+    message: { to: owner, severity: critical, contains: ["BTC"], count: ">= 1" }
+    within: { from: "+115m", to: "+150m" }
+  - id: not-dropped-as-muted
+    decision: { trigger: move_vs_vol, severity: critical, reason: "!muted" }

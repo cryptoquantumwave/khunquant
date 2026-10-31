@@ -132,7 +132,7 @@ func TestClockGroup_Ops(t *testing.T) {
 	}
 
 	got, err = call(t, l, `{"op":"advance","by":"30m"}`)
-	if err != nil || got["done"] != true || got["reached"] != "2026-03-10T09:30:00Z" || got["settle"] != "engine-only" {
+	if err != nil || got["done"] != true || got["reached"] != "2026-03-10T09:30:00Z" || got["settle"] != nil {
 		t.Fatalf("advance by = %v, %v", got, err)
 	}
 	got, err = call(t, l, `{"op":"advance","to":"2026-03-10T12:00:00Z"}`)

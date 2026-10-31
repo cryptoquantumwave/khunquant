@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -18,6 +19,7 @@ import (
 // (publishLabGeneration), and the groups read it through shared.labGen.
 type labSetup struct {
 	al    *agent.AgentLoop
+	bus   *bus.MessageBus // the process's message bus (for the bus quiescer)
 	mux   http.Handler // manage's private mux: the real /api/proactive/* handlers, this generation's services
 	token string       // the management token that mux's guards expect; never leaves the process
 }

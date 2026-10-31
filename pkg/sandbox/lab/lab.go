@@ -15,6 +15,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 )
 
@@ -43,9 +44,11 @@ type Lab struct {
 	// and is wall time before that. Read Now per use.
 	Clock *simclock.Sim
 	Now   func() time.Time
-	// Settle, set once at start and read-only after, is what an advance waits on after
-	// each step (nil: nothing). Stopgap until the quiescence registry.
-	Settle func(context.Context) error
+	// Quiesce is the registry of components that can hold work in flight; the gateway
+	// registers them once (sandbox_lab_quiesce.go). Settle, which an advance waits on
+	// after each step (nil: nothing), is a settle over it unless a test replaces it.
+	Quiesce *quiesce.Registry
+	Settle  func(context.Context) error
 	// Later PRs add their components here: Faults, Web, Crash, ...
 
 	fixturesDir string
@@ -93,7 +96,9 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 		Now:         time.Now,
 		fixturesDir: opts.FixturesDir,
 		token:       opts.Token,
+		Quiesce:     quiesce.NewRegistry(),
 	}
+	l.Settle = l.settleStep
 	// The book reads l.Now on every call, so the sim clock (SBX-07) needs no re-wiring.
 	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }})
 	sim.SetPriceSource(l.Market)

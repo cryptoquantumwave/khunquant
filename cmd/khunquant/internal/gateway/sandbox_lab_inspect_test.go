@@ -79,10 +79,16 @@ func TestLabInspectOnTheFirstGeneration(t *testing.T) {
 
 	// The services behind the other ops are the current generation's: with proactive
 	// off there is no workflow engine, no approvals and no policy record.
-	for _, op := range []string{"workflows", "proposals", "policy", "settle"} {
+	for _, op := range []string{"workflows", "proposals", "policy"} {
 		if code, body, _ := postJSON(f.url("/api/sandbox/lab/inspect"), lockTestToken, `{"op":"`+op+`"}`); code != http.StatusServiceUnavailable {
 			t.Errorf("inspect %s = %d %s, want 503 unavailable", op, code, body)
 		}
+	}
+	// settle is no longer one of them (SBX-09): it waits on the quiescence registry, which
+	// every locked instance has.
+	if code, body, _ := postJSON(f.url("/api/sandbox/lab/inspect"), lockTestToken, `{"op":"settle"}`); code != http.StatusOK ||
+		!strings.Contains(body, `"settled":true`) {
+		t.Errorf("inspect settle = %d %s, want settled:true", code, body)
 	}
 
 	for i := 0; i < 2; i++ {

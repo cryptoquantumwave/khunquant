@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
@@ -65,6 +66,8 @@ type World struct {
 	now      func() time.Time
 	personas map[string]config.SimChatPersona
 	groups   map[string][]string
+
+	busy atomic.Int32 // sends and lab ops in progress (for Idle)
 
 	mu     sync.Mutex
 	ch     *Channel
@@ -125,6 +128,10 @@ func resumeCounter(j Journal) int64 {
 	}
 	return top
 }
+
+// Idle is true when no message is being injected (send, press, react) and no send to a
+// chat is in progress. It changes nothing; only the sandbox lab calls it.
+func (w *World) Idle() bool { return w.busy.Load() == 0 }
 
 func (w *World) attach(c *Channel) {
 	w.mu.Lock()
@@ -191,6 +198,8 @@ func (w *World) route(as, chat string) (p config.SimChatPersona, chatID, peerKin
 
 // deliver is the channel's send: refuse as the state says, else capture the message.
 func (w *World) deliver(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+	w.busy.Add(1)
+	defer w.busy.Add(-1)
 	w.mu.Lock()
 	wait, gateErr := w.st.gate(w.now())
 	w.mu.Unlock()

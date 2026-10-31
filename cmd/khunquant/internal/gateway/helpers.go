@@ -343,6 +343,10 @@ func handleConfigReload(
 	shared *sharedResources,
 	msgBus *bus.MessageBus,
 ) error {
+	if shared != nil {
+		shared.reloading.Add(1)
+		defer shared.reloading.Add(-1)
+	}
 	logger.Info("🔄 Config file changed, reloading...")
 
 	// Locked: force the invariants onto the new config before anything stops, so a

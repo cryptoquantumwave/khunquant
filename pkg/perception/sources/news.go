@@ -150,7 +150,8 @@ type News struct {
 	mu     sync.Mutex // recent
 	recent map[newsGroup][]newsReport
 
-	runMu sync.Mutex // one run at a time
+	runMu    sync.Mutex // one run at a time
+	inflight perception.InFlight
 
 	runs, searched, searchFailed, seen, fetched, fetchFailed, parsed, discarded atomic.Uint64
 	irrelevant, emitted, budgetSkipped, dayLimited, runLimited, rejectedURL     atomic.Uint64
@@ -192,6 +193,10 @@ func (n *News) Name() string { return NewsName }
 
 // Health reports the failure streak and the last failure.
 func (n *News) Health() perception.SourceHealth { return n.health.report() }
+
+// Idle is true when no run is in progress (perception.Idler). The next run, an Interval
+// away, is a timer, not busy.
+func (n *News) Idle() bool { return n.inflight.Idle() }
 
 // Reconcile does nothing: news is not state to re-read.
 func (n *News) Reconcile(context.Context, perception.Emitter) error { return nil }
@@ -275,6 +280,7 @@ type runBudget struct {
 // Run does one pass: search, fetch, parse, validate, emit. It is bounded by RunLimit
 // of wall time, by the parse limits and by NewsFetchPerAsset fetches per asset.
 func (n *News) Run(parent context.Context, out perception.Emitter) {
+	defer n.inflight.Enter()()
 	n.runMu.Lock()
 	defer n.runMu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, n.o.RunLimit)

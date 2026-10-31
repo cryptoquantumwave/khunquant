@@ -36,6 +36,7 @@ type Engine struct {
 	mu        sync.Mutex
 	running   bool
 	stopping  atomic.Bool
+	scanning  atomic.Bool // the run loop is inside a housekeeping or dispatch pass (for Idle)
 	stepsCtx  context.Context
 	stepsStop context.CancelFunc
 	renewHalt chan struct{}
@@ -419,11 +420,13 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	var nextHousekeeping time.Time
 	for ctx.Err() == nil {
+		e.scanning.Store(true)
 		if now := e.clock.Now(); !now.Before(nextHousekeeping) {
 			e.housekeeping(ctx, now)
 			nextHousekeeping = now.Add(e.opt.housekeepingEvery)
 		}
 		e.dispatch(ctx, work)
+		e.scanning.Store(false)
 		select {
 		case <-ctx.Done():
 		case <-e.kick:
@@ -497,6 +500,19 @@ func (e *Engine) safeExecute(ctx context.Context, id string) {
 		}
 	}()
 	e.execute(ctx, id)
+}
+
+// Idle is true when no workflow is claimed by a worker (marked before it is queued), no
+// scan is pending or running, and the engine is not running at all, or runs with
+// nothing to do. A workflow that is due but not yet scanned, or in backoff, is a timer:
+// the engine finds it on its tick. It changes nothing; only the sandbox lab calls it.
+func (e *Engine) Idle() bool {
+	if e.scanning.Load() {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.running || (len(e.inflight) == 0 && len(e.kick) == 0)
 }
 
 func (e *Engine) mark(id string) bool {

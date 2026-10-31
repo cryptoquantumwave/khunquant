@@ -47,6 +47,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -166,8 +167,9 @@ type Service struct {
 	post       *Store
 	zone       func(ctx context.Context) *time.Location
 
-	sem chan struct{}
-	wg  sync.WaitGroup
+	sem          chan struct{}
+	wg           sync.WaitGroup
+	housekeeping atomic.Int32 // Housekeep calls in progress (for Idle)
 
 	mu      sync.Mutex
 	sub     events.Subscription
@@ -263,6 +265,40 @@ func (s *Service) Async(f func(ctx context.Context)) {
 		defer cancel()
 		f(ctx)
 	}()
+}
+
+// Idle is true when the bus subscription has handled everything it received, no Async
+// recording is in flight and no housekeeping pass is running. Every event the
+// subscription received ends as handled, failed, panicked or dropped; a timeout is a
+// failure and is also counted in TimedOut, so TimedOut is not added. Received is
+// counted as the event is accepted, before it is queued, so a dequeued event is still
+// pending. It changes nothing; only the sandbox lab calls it.
+func (s *Service) Idle() bool {
+	if s == nil {
+		return true
+	}
+	if len(s.sem) != 0 || s.housekeeping.Load() != 0 {
+		return false
+	}
+	s.mu.Lock()
+	sub := s.sub
+	s.mu.Unlock()
+	if sub == nil {
+		return true
+	}
+	st := sub.Stats()
+	return st.Received <= st.Handled+st.Failed+st.Panicked+st.Dropped
+}
+
+// HindsightIdle is Idle for the daily hindsight job.
+func (s *Service) HindsightIdle() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	h := s.hind
+	s.mu.Unlock()
+	return h.Idle()
 }
 
 // Wait blocks until the recordings started by Async are done.

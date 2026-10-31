@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -80,7 +81,14 @@ type Service struct {
 
 	pruneMu   sync.Mutex
 	lastPrune time.Time
+
+	busy atomic.Int32 // Decide, sweep and Recover calls in progress (for Idle)
 }
+
+// Idle is true when no decision, sweep or recovery is in progress. An approved row left
+// by a failed start is picked up by the next sweep, which is a timer. Card edits run
+// inside Decide. It changes nothing; only the sandbox lab calls it.
+func (s *Service) Idle() bool { return s.busy.Load() == 0 }
 
 // New builds a Service and migrates its table.
 func New(ctx context.Context, o Options) (*Service, error) {
@@ -339,6 +347,8 @@ func (s *Service) ByCode(ctx context.Context, code string) (Proposal, error) {
 //
 // Approving starts the approval.order workflow; the proposal is then executing.
 func (s *Service) Decide(ctx context.Context, code, nonce string, approve bool, senderID string) (Proposal, error) {
+	s.busy.Add(1)
+	defer s.busy.Add(-1)
 	ownerID, ok := s.owner()
 	canonical := identity.CanonicalSender(senderID, "")
 	if ok && !identity.SameSender(canonical, ownerID) && IsWebDecider(ctx) && s.o.Cfg.WebOwnerActive() {
@@ -553,6 +563,8 @@ func (s *Service) startExecution(ctx context.Context, p Proposal) error {
 // has ended gets its final status. Safe to call at any time, from any number of
 // goroutines; the gateway calls it at start and the sweeper on every pass.
 func (s *Service) Recover(ctx context.Context) error {
+	s.busy.Add(1)
+	defer s.busy.Add(-1)
 	var errs []error
 	approved, err := s.st.list(ctx, `status = 'approved' LIMIT 50`)
 	if err != nil {
@@ -622,6 +634,8 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) sweep(ctx context.Context) {
+	s.busy.Add(1)
+	defer s.busy.Add(-1)
 	if ctx.Err() != nil {
 		return
 	}

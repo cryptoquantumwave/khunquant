@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
@@ -97,9 +98,14 @@ type Options struct {
 
 // Service runs the daily reflection.
 type Service struct {
-	o  Options
-	at int // minutes after local midnight
+	o       Options
+	at      int          // minutes after local midnight
+	running atomic.Int32 // RunDay calls in progress (for Idle)
 }
+
+// Idle is true when no daily reflection is running. The next one is a timer. It changes
+// nothing; only the sandbox lab calls it.
+func (s *Service) Idle() bool { return s == nil || s.running.Load() == 0 }
 
 type realClock struct{}
 
@@ -191,6 +197,8 @@ type Result struct {
 // row is not run again (a reload after the hour does not repeat it). It returns an error
 // only when it could not even read the stores; every other end is an Outcome.
 func (s *Service) RunDay(ctx context.Context) (Result, error) {
+	s.running.Add(1)
+	defer s.running.Add(-1)
 	now := s.o.Clock.Now()
 	loc := s.zone()
 	local := now.In(loc)

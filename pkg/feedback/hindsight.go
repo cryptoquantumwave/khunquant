@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
@@ -132,10 +133,16 @@ type HindsightOptions struct {
 
 // Hindsight is the daily job.
 type Hindsight struct {
-	s     *Service
-	o     HindsightOptions
-	clock Clock
+	s      *Service
+	o      HindsightOptions
+	clock  Clock
+	active atomic.Int32 // RunOnce calls in progress, the waits between symbols excepted (for Idle)
 }
+
+// Idle is true when no run is reading prices or storing rows. The wait between two
+// symbols' reads (a timer) and the next daily run are not work. A nil job is idle. It
+// changes nothing; only the sandbox lab calls it.
+func (h *Hindsight) Idle() bool { return h == nil || h.active.Load() == 0 }
 
 type svcClock struct{ s *Service }
 
@@ -249,6 +256,8 @@ func (h *Hindsight) RunOnce(ctx context.Context) (HindsightResult, error) {
 	if h == nil {
 		return res, nil
 	}
+	h.active.Add(1)
+	defer h.active.Add(-1)
 	ctx, cancel := context.WithTimeout(ctx, RunDeadline)
 	defer cancel()
 	now := h.clock.Now()
@@ -265,10 +274,12 @@ func (h *Hindsight) RunOnce(ctx context.Context) (HindsightResult, error) {
 	for n, sym := range symbols {
 		group := bySymbol[sym]
 		if n > 0 {
+			h.active.Add(-1) // the pace wait is a timer, not work
 			select {
 			case <-ctx.Done():
 			case <-h.clock.After(h.o.Pace):
 			}
+			h.active.Add(1)
 		}
 		bars, ferr := h.o.Prices.HourlyBars(ctx, group[0].provider, group[0].account, sym, barsAsked)
 		if errors.Is(ferr, ErrDeferred) || ctx.Err() != nil {

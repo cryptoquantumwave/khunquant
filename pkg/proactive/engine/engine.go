@@ -208,6 +208,8 @@ type Engine struct {
 	in     *inbox
 	c       *counters
 	running atomic.Bool
+	// housekeeping is true while a housekeeping pass runs (for Idle).
+	housekeeping atomic.Bool
 
 	// popMu makes "take an event from the inbox" and "count it as taken" one step
 	// for Settle, which must not see an event that has left the inbox and is not yet
@@ -273,6 +275,8 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	hk := e.clk.After(housekeepEvery)
 	housekeep := func() {
+		e.housekeeping.Store(true)
+		defer e.housekeeping.Store(false)
 		e.housekeep(ctx)
 		hk = e.clk.After(housekeepEvery)
 	}
@@ -368,6 +372,23 @@ func (e *Engine) Settle(ctx context.Context) error {
 			t.Reset(settlePoll)
 		}
 	}
+}
+
+// Idle is true when nothing is queued, every event taken has been processed and no
+// housekeeping pass is running; a stopped engine is idle (nothing will process what is
+// queued, so waiting would never end). The next housekeeping tick is a timer. It is
+// Settle's test without the wait and changes nothing; only the sandbox lab calls it.
+func (e *Engine) Idle() bool {
+	if !e.running.Load() || e.in.closed() {
+		return true
+	}
+	if e.housekeeping.Load() {
+		return false
+	}
+	e.popMu.Lock()
+	depth, popped := e.in.depth(), e.popped
+	e.popMu.Unlock()
+	return depth == 0 && e.c.processed.Load() >= popped
 }
 
 // Step runs one event through the stages on the caller's goroutine, exactly as Run

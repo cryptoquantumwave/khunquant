@@ -438,6 +438,23 @@ func (cs *CronService) runLoop(stopChan chan struct{}, after func(d time.Duratio
 	}
 }
 
+// Idle is true when no job is claimed (queued or executing: State.Running) and the
+// worker queue is empty. A job that is due but not yet claimed is a timer: the next
+// tick claims it. It changes nothing; only the sandbox lab calls it.
+func (cs *CronService) Idle() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.pool != nil && len(cs.pool.queue) != 0 {
+		return false
+	}
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].State.Running {
+			return false
+		}
+	}
+	return true
+}
+
 // checkJobs claims due jobs and hands them to the worker pool. It never runs a
 // job itself, so a slow job cannot delay the ticker or other jobs.
 func (cs *CronService) checkJobs() {

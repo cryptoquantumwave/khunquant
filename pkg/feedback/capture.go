@@ -258,6 +258,8 @@ func (s *Service) Housekeep(ctx context.Context) (int, error) {
 	if s == nil {
 		return 0, nil
 	}
+	s.housekeeping.Add(1)
+	defer s.housekeeping.Add(-1)
 	ctx, cancel := context.WithTimeout(ctx, 4*dbTimeout)
 	defer cancel()
 	s.pollChanges(ctx)

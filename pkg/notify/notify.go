@@ -133,7 +133,8 @@ type Service struct {
 	ownerKey string
 
 	queue    chan writeBack
-	mu       sync.Mutex // guards closed and sends on queue
+	pending  atomic.Int32 // write-backs queued, taken or being applied and not yet finished (for Idle)
+	mu       sync.Mutex   // guards closed and sends on queue
 	closed   bool
 	runCtx   context.Context
 	runStop  context.CancelFunc
@@ -437,9 +438,11 @@ func (s *Service) enqueueWriteBack(w writeBack) {
 	if s.closed {
 		return
 	}
+	s.pending.Add(1) // before the send: a write the worker has taken is still counted
 	select {
 	case s.queue <- w:
 	default:
+		s.pending.Add(-1)
 		n := s.droppedWrite.Add(1)
 		logger.WarnCF("notify", "Session write-back queue full; message delivered but not added to the session",
 			map[string]any{"dropped_total": n})
@@ -453,9 +456,12 @@ func (s *Service) writeBackWorker() {
 	for w := range s.queue {
 		if s.runCtx.Err() != nil {
 			s.failedWrite.Add(1)
+			s.pending.Add(-1)
 			continue
 		}
-		if err := s.appender.AppendAssistantMessage(s.runCtx, w.sessionKey, w.content); err != nil {
+		err := s.appender.AppendAssistantMessage(s.runCtx, w.sessionKey, w.content)
+		s.pending.Add(-1)
+		if err != nil {
 			s.failedWrite.Add(1)
 			// The error can carry the session file path, which embeds the
 			// owner's peer ID: only a class goes above DEBUG.
@@ -470,6 +476,10 @@ func (s *Service) writeBackWorker() {
 		}
 	}
 }
+
+// Idle is true when no session write-back is queued, taken by the worker or being
+// applied. It changes nothing; only the sandbox lab calls it.
+func (s *Service) Idle() bool { return s == nil || s.pending.Load() == 0 }
 
 // Close stops accepting work and lets the write-back worker finish what is
 // queued, for as long as ctx allows. When ctx ends first, pending writes are

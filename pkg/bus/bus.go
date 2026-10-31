@@ -89,6 +89,13 @@ func (mb *MessageBus) OutboundMediaChan() <-chan OutboundMediaMessage {
 	return mb.outboundMedia
 }
 
+// Idle is true when no message waits in the inbound, outbound or outbound-media queue.
+// A message a consumer has already taken is not seen here: the agent loop and the
+// channel manager count their own work. It changes nothing; only the sandbox lab calls it.
+func (mb *MessageBus) Idle() bool {
+	return len(mb.inbound) == 0 && len(mb.outbound) == 0 && len(mb.outboundMedia) == 0
+}
+
 func (mb *MessageBus) Close() {
 	mb.closeOnce.Do(func() {
 		// notify all blocked publishers to exit

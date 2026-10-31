@@ -154,8 +154,9 @@ type Futures struct {
 
 	health healthTracker
 
-	mu    sync.Mutex // serialises polls: Start's loop and Reconcile
-	state []*futuresAccount
+	mu       sync.Mutex // serialises polls: Start's loop and Reconcile
+	state    []*futuresAccount
+	inflight perception.InFlight
 
 	polls, emitted, failed, dropped, skipped, degraded atomic.Uint64
 }
@@ -256,6 +257,10 @@ func (f *Futures) Start(ctx context.Context, out perception.Emitter) error {
 	}
 }
 
+// Idle is true when no account is being polled (perception.Idler). The next due poll is
+// a timer, not busy.
+func (f *Futures) Idle() bool { return f.inflight.Idle() }
+
 // Reconcile reads every account now.
 func (f *Futures) Reconcile(ctx context.Context, out perception.Emitter) error {
 	f.mu.Lock()
@@ -331,6 +336,7 @@ func (f *Futures) admit(ctx context.Context, a *futuresAccount) bool {
 
 // poll reads one account and schedules its next read.
 func (f *Futures) poll(ctx context.Context, out perception.Emitter, a *futuresAccount) error {
+	defer f.inflight.Enter()()
 	f.polls.Add(1)
 	now := f.clock.Now()
 

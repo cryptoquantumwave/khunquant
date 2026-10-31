@@ -146,7 +146,8 @@ type DNPlans struct {
 	limiter *readLimiter
 	health  healthTracker
 
-	pollMu sync.Mutex // one pass at a time: Start's loop and Reconcile
+	pollMu   sync.Mutex // one pass at a time: Start's loop and Reconcile
+	inflight perception.InFlight
 
 	mu     sync.Mutex // state
 	state  map[int64]*dnPlanState
@@ -193,6 +194,10 @@ func (s *DNPlans) Name() string { return DNPlansName }
 
 // Health reports the failure streak and the last failure.
 func (s *DNPlans) Health() perception.SourceHealth { return s.health.report() }
+
+// Idle is true when no poll is running (perception.Idler). The next scheduled poll is a
+// timer, not busy.
+func (s *DNPlans) Idle() bool { return s.inflight.Idle() }
 
 // Stats returns the counters.
 func (s *DNPlans) Stats() DNPlansStats {
@@ -251,6 +256,7 @@ func (s *DNPlans) planIDs() []int64 {
 }
 
 func (s *DNPlans) pass(ctx context.Context, out perception.Emitter, force bool) {
+	defer s.inflight.Enter()()
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
 

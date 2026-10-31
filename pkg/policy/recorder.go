@@ -104,6 +104,10 @@ func (rc *Recorder) Record(ctx context.Context, r ActionRequest, v Verdict) {
 	rc.enqueue(job{ctx: context.WithoutCancel(ctx), req: r, allowed: true, decided: &v})
 }
 
+// Idle is true when no record is queued, being evaluated or being stored. It changes
+// nothing; only the sandbox lab calls it.
+func (rc *Recorder) Idle() bool { return rc == nil || rc.pending.Load() == 0 }
+
 // Dropped is how many records were dropped because the queue was full.
 func (rc *Recorder) Dropped() int64 { return rc.dropped.Load() }
 

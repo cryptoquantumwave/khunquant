@@ -640,6 +640,8 @@ func (s *Store) Checkpoint(ctx context.Context) error {
 	if s.db == nil {
 		return nil
 	}
+	s.ckActive.Add(1)
+	defer s.ckActive.Add(-1)
 	s.ckMu.Lock()
 	defer s.ckMu.Unlock()
 	now := s.clock.Now()

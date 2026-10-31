@@ -1,0 +1,52 @@
+name: Sandbox Scenarios
+
+# The known-bug set of the Sandbox Lab, run daily and on demand. A known_bug scenario
+# documents a defect that is still open and stays red until the change that fixes it flips
+# it to active, so a red scenario here is expected: this workflow reports which are still
+# red (and which now pass, because a fix forgot to flip its status). The PR job "Scenarios"
+# in pr.yml gates the active set.
+#
+# Kept apart from nightly.yml: that workflow's release job holds contents: write,
+# packages: write and the registry secrets. This one reads the repository and nothing else.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: { }
+
+permissions:
+  contents: read
+
+jobs:
+  known-bugs:
+    name: Known-bug scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build once
+        run: make build
+
+      - name: Validate every scenario
+        run: ./build/khunquant sandbox run --validate-only testdata/scenarios
+
+      # Same namespace as the PR job. Exit 1 (an expectation failed) is what an open known
+      # bug does and is not an error here; 2 (an invalid scenario) and 3 (infrastructure)
+      # are, and fail the job. The report goes to the job summary.
+      - name: Run all scenarios, known bugs included, without network
+        env:
+          KQ_SCENARIO_KNOWN_BUGS: "1"
+        run: |
+          code=0
+          sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)" || code=$?
+          if [ -f scenarios-report.md ]; then cat scenarios-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$code" -ge 2 ]; then exit "$code"; fi

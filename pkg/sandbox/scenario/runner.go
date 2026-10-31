@@ -80,6 +80,7 @@ type runState struct {
 	res   *Result
 	start time.Time
 	loc   *time.Location
+	env   *env
 }
 
 func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
@@ -113,6 +114,8 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 		res.Infra = err.Error()
 		return res
 	}
+	st.env = newEnv(st.c, st.start, st.loc)
+	st.env.logs = func() ([]string, error) { return r.Sup.Logs(info.Name, 2000, "") }
 	if locked, err := st.c.Status(ctx); err != nil || !locked {
 		res.Infra = fmt.Sprintf("instance %s did not report locked:true (%v): a scenario runs only on a locked instance", info.Name, err)
 		return res
@@ -261,6 +264,14 @@ func (s *runState) evaluate(ctx context.Context) {
 	s.res.Expect = append(s.res.Expect, d)
 
 	for i := range s.f.Expect {
-		s.res.Expect = append(s.res.Expect, s.expect(ctx, i, &s.f.Expect[i]))
+		r, _ := s.env.eval(ctx, i, &s.f.Expect[i])
+		s.res.Expect = append(s.res.Expect, r)
+	}
+	if !allOK(s.res.Expect) { // the model's side of the story, newest 20 calls
+		if calls, err := s.env.entriesOf(ctx, []string{"llm.call", "llm.complete"}); err == nil {
+			for _, c := range calls[max(0, len(calls)-20):] {
+				s.res.LLMCalls = append(s.res.LLMCalls, c.Payload)
+			}
+		}
 	}
 }

@@ -360,7 +360,7 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 		}
 	case "order":
 		journal = OrderJournalKind(e.Fields)
-		for _, f := range []string{"reduce_only", "client_id", "status"} {
+		for _, f := range []string{"symbol", "side", "reduce_only", "client_id", "status"} {
 			if _, ok := e.Fields[f]; ok {
 				v.needKind(kp+"/"+f, "order."+f, "exchange.order")
 			}
@@ -374,8 +374,10 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 			}
 		}
 		if _, ok := e.Fields["equals"]; n != 1 || !ok {
-			v.addf(kp, "a probe takes one of trigger_state, mandate_status, dn_plan_status, alert_job_exists, and equals")
+			v.addf(kp, "a probe takes one of mandate_status, dn_plan_status, alert_job_exists, and equals")
 		}
+	case "workflow":
+		v.need(kp, "workflow", stepSpec{Group: "inspect", Op: "workflows", PR: "SBX-05"})
 	case "logs":
 		if lvl, ok := e.Fields["level"].(string); ok && !slices.Contains([]string{"ERROR", "WARN", "INFO"}, lvl) {
 			v.addf(kp+"/level", "must be ERROR, WARN or INFO")

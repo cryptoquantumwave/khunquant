@@ -57,10 +57,11 @@ var PayloadPaths = map[string]map[string]string{
 }
 
 // OrderJournalKind is the kind an order expectation reads: exchange.order when it asks
-// about anything only the order ledger knows, else the request log.
+// for anything beyond the venue (the request log has no symbol, side or order ids),
+// else the request log.
 func OrderJournalKind(fields map[string]any) string {
-	for _, k := range []string{"reduce_only", "client_id", "status"} {
-		if _, ok := fields[k]; ok {
+	for k := range fields {
+		if k != "venue" {
 			return "exchange.order"
 		}
 	}

@@ -74,10 +74,10 @@ var expectSpec = map[string]struct {
 	"event":    {[]string{"kind", "fields", "subject", "trigger", "severity", "disposition", "reason"}, ""},
 	"decision": {[]string{"trigger", "severity", "disposition", "reason"}, "event.attention.decision"},
 	"order":    {[]string{"venue", "symbol", "side", "reduce_only", "client_id", "status"}, ""},
-	"workflow": {[]string{"kind", "state", "step"}, "workflow.step"},
+	"workflow": {[]string{"kind", "state"}, ""}, // read from inspect workflows, which lists no steps
 	"proposal": {[]string{"kind", "status"}, "proposal"},
 	"policy":   {[]string{"verdict", "gate"}, "policy.decision"},
-	"probe":    {[]string{"trigger_state", "mandate_status", "dn_plan_status", "alert_job_exists", "equals"}, ""},
+	"probe":    {[]string{"mandate_status", "dn_plan_status", "alert_job_exists", "equals"}, ""},
 	"llm":      {[]string{"turn"}, "llm.call"},
 	"web":      {[]string{"host"}, "web.req"},
 	"logs":     {[]string{"level", "allow"}, ""},
@@ -85,6 +85,6 @@ var expectSpec = map[string]struct {
 
 // probeGroup is the lab group a probe is read through.
 var probeGroup = map[string]struct{ group, pr string }{
-	"trigger_state": {"inspect", "SBX-05"}, "mandate_status": {"manage", "SBX-06"},
+	"mandate_status": {"manage", "SBX-06"},
 	"dn_plan_status": {"call_tool", "SBX-06"}, "alert_job_exists": {"call_tool", "SBX-06"},
 }

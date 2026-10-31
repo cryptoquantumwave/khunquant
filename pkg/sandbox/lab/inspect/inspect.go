@@ -67,8 +67,9 @@ func Group(j *labjournal.Journal, deps func() Deps) lab.Group {
 	}
 	ops := []lab.Op{
 		{Name: "journal", Description: "journal entries and the drop count",
-			Args: schema(argKinds, argSince, argUntil, argSubject, argAfterSeq, argLimit),
-			Run:  entriesOp(j, nil, "")},
+			Args: schema(argKinds, argSince, argUntil, argSubject, argAfterSeq, argLimit,
+				`"from_start":{"type":"boolean","description":"oldest entries first even without after_seq; continue from next_seq"}`),
+			Run: entriesOp(j, nil, "")},
 		{Name: "decisions", Description: "attention decisions",
 			Args: schema(argSince, argAfterSeq, argLimit), Run: entriesOp(j, kindsOf(events.KindAttentionDecision), "")},
 		{Name: "triggers", Description: "trigger candidates",
@@ -118,6 +119,9 @@ type readArgs struct {
 	To       string    `json:"to"`
 	AfterSeq int64     `json:"after_seq"`
 	Limit    int       `json:"limit"`
+	// FromStart reads the oldest matches even with no cursor (after_seq 0), so a reader
+	// can page through the whole journal: the cursor then continues from next_seq.
+	FromStart bool `json:"from_start"`
 }
 
 type entriesOut struct {
@@ -126,10 +130,10 @@ type entriesOut struct {
 	Drops   uint64             `json:"drops"`
 }
 
-// read runs q. With a cursor it returns the oldest matches after it; without one the
-// newest matches, in seq order.
-func read(ctx context.Context, j *labjournal.Journal, q labjournal.Query) (entriesOut, error) {
-	q.Desc = q.AfterSeq == 0
+// read runs q. With a cursor (or fromStart) it returns the oldest matches after it;
+// without one the newest matches, in seq order.
+func read(ctx context.Context, j *labjournal.Journal, q labjournal.Query, fromStart bool) (entriesOut, error) {
+	q.Desc = q.AfterSeq == 0 && !fromStart
 	es, err := j.Query(ctx, q)
 	if err != nil {
 		return entriesOut{}, err
@@ -165,7 +169,7 @@ func entriesOp(j *labjournal.Journal, kinds []string, subjectArg string) lab.OpF
 			a.Subject = a.To
 		}
 		return read(ctx, j, labjournal.Query{Kinds: a.Kinds, Since: a.Since, Until: a.Until,
-			Subject: a.Subject, AfterSeq: a.AfterSeq, Limit: cmp.Or(a.Limit, defaultLimit)})
+			Subject: a.Subject, AfterSeq: a.AfterSeq, Limit: cmp.Or(a.Limit, defaultLimit)}, a.FromStart)
 	}
 }
 
@@ -218,7 +222,7 @@ func proposalsOp(j *labjournal.Journal, deps func() Deps) lab.OpFunc {
 		if err != nil {
 			return nil, err
 		}
-		journaled, err := read(ctx, j, labjournal.Query{Kinds: []string{"proposal"}, Limit: cmp.Or(a.Limit, defaultLimit)})
+		journaled, err := read(ctx, j, labjournal.Query{Kinds: []string{"proposal"}, Limit: cmp.Or(a.Limit, defaultLimit)}, false)
 		if err != nil {
 			return nil, err
 		}

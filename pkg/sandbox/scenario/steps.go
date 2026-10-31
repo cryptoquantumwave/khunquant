@@ -183,7 +183,9 @@ func (s *runState) runUntil(ctx context.Context, step *Step) error {
 			return err
 		}
 		o.Target = t.Resolve(s.start, now, s.loc)
-	} else if err := s.untilOptions(step, &o); err != nil {
+	} else if args, err := step.Map(); err != nil {
+		return err
+	} else if o, err = s.env.untilOptions(args); err != nil {
 		return err
 	}
 	res, err := RunUntil(ctx, s.c, o)

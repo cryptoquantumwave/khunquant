@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -124,6 +125,21 @@ func (l *Lab) clockAdvance(ctx context.Context, args json.RawMessage) (any, erro
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	// The previous call may have ended inside a step's settle (its wall budget ran out):
+	// that step never finished settling. Settle before moving, in this call's budget, so
+	// no caller (the runner, an agent looping on done:false) fires the next timer over it.
+	// An idle instance passes in two polls. A budget that ends here moves nothing.
+	if st := l.Clock.State(); l.Settle != nil && st.Mode == simclock.ModeManual && st.Now.Before(target) {
+		if err := l.Settle(ctx); err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return struct {
+					simclock.AdvanceSummary
+					Wall string `json:"wall"`
+				}{simclock.AdvanceSummary{From: st.Now, Target: target, Reached: st.Now}, "0s"}, nil
+			}
+			return nil, fmt.Errorf("advance: settle before moving: %w", err)
+		}
+	}
 	sum, err := l.Clock.Advance(ctx, target, l.Settle)
 	if err != nil {
 		return nil, fmt.Errorf("advance: %w", err)

@@ -3,13 +3,17 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
 )
 
-// KindSettle is the journal kind of one settle: {ok, wall_ms, polls, busy}.
+// KindSettle is the journal kind of one settle: {ok, cut, wall_ms, polls, busy}. cut is
+// true when the caller's context ended the wait (an advance's wall budget, a client that
+// went away) before the wall cap: the settle did not pass, but nothing was found stuck
+// either, so a reader counts it as interrupted, not as failed.
 const KindSettle = "settle"
 
 // Wall caps of a settle (design 5.3: wall time). A step of an advance uses the default;
@@ -32,13 +36,20 @@ func (l *Lab) SettleWait(ctx context.Context, wallCap time.Duration) (quiesce.Re
 		}
 		payload, _ := json.Marshal(struct {
 			OK     bool     `json:"ok"`
+			Cut    bool     `json:"cut"`
 			WallMS int64    `json:"wall_ms"`
 			Polls  int      `json:"polls"`
 			Busy   []string `json:"busy"`
-		}{err == nil, rep.Wall.Milliseconds(), rep.Polls, busy})
+		}{err == nil, IsCut(err), rep.Wall.Milliseconds(), rep.Polls, busy})
 		l.Journal.Append(labjournal.Entry{Kind: KindSettle, Source: "quiesce", Payload: payload})
 	}
 	return rep, err
+}
+
+// IsCut says whether err is a settle that the caller's context ended before its wall cap.
+func IsCut(err error) bool {
+	var be *quiesce.BusyError
+	return errors.As(err, &be) && be.Cause != nil
 }
 
 // settleStep is what an advance waits on after each step: every registered component.

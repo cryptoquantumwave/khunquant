@@ -89,9 +89,11 @@ func clockNow(ctx context.Context, c *labclient.Client) (time.Time, error) {
 }
 
 // failedSettle reports a settle after seq that did not pass (the lab journals every
-// settle, the ones inside an advance as well) and the components it found busy.
+// settle, the ones inside an advance as well) and the components it found busy. A settle
+// the caller's own context cut (an advance's wall budget) is not a failure: the next
+// advance call settles again before it moves.
 func failedSettle(ctx context.Context, c *labclient.Client, since int64) (*SettleError, error) {
-	res, err := c.WaitFor(ctx, labjournal.Match{Kind: "settle", Fields: map[string]any{"ok": false}, Count: ">= 1"}, since, time.Millisecond)
+	res, err := c.WaitFor(ctx, labjournal.Match{Kind: "settle", Fields: map[string]any{"ok": false, "cut": false}, Count: ">= 1"}, since, time.Millisecond)
 	if err != nil || !res.Matched {
 		return nil, err
 	}
@@ -99,8 +101,7 @@ func failedSettle(ctx context.Context, c *labclient.Client, since int64) (*Settl
 	var names []string
 	for _, e := range res.Entries {
 		var p struct {
-			Busy   []string `json:"busy"`
-			WallMS int64    `json:"wall_ms"`
+			Busy []string `json:"busy"`
 		}
 		_ = json.Unmarshal(e.Payload, &p)
 		for _, b := range p.Busy {

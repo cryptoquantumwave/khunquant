@@ -109,7 +109,7 @@ func (h *mcpHarness) tools() map[string]*mcp.Tool {
 func TestMCP_ToolsListedWithoutInstance(t *testing.T) {
 	h := newHarness(t)
 	tools := h.tools()
-	want := []string{"sandbox_instance", "sandbox_wait_for"}
+	want := []string{"sandbox_instance", "sandbox_wait_for", "sandbox_scenario"}
 	for _, g := range []string{"clock", "market", "account", "fault", "chat", "llm", "web", "call_tool", "manage", "inspect", "snapshot", "crash"} {
 		want = append(want, "sandbox_"+g)
 	}

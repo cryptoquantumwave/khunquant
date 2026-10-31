@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
@@ -104,8 +103,6 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(inspect.Group(l.Journal, labDeps(shared))); err != nil {
 		return err
 	}
-	// An advance settles the perception engine of the current generation after each step.
-	l.Settle = settleLab(shared)
 	if err := l.AddGroup(l.ClockGroup()); err != nil {
 		return err
 	}
@@ -130,6 +127,9 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		j = l.Journal
 	}
 	shared.simWorld = simchat.NewWorld(j, func() time.Time { return l.Now() }, cfg.Channels.SimChat)
+	// Every component that can hold work in flight, once per process. An advance (l.Settle,
+	// set by lab.New) and inspect settle wait for all of them.
+	registerQuiescers(l.Quiesce, shared, l)
 	if err := l.AddGroup(shared.simWorld.Group()); err != nil {
 		return err
 	}
@@ -206,6 +206,9 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 			return inspect.Deps{}
 		}
 		var d inspect.Deps
+		if shared.lab != nil && shared.lab.Quiesce != nil {
+			d.SettleWait, d.Snapshot = shared.lab.SettleWait, shared.lab.Quiesce.Snapshot
+		}
 		if rt := s.journalLive.Load(); rt != nil {
 			d.Workflows = rt.engine.List
 		}
@@ -218,35 +221,6 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 		return d
 	}
 }
-
-// settleLab is Lab.Settle: it waits for the current generation's perception engine to
-// process what the step queued, and does nothing when there is none (stopgap until
-// the quiescence registry settles every component).
-func settleLab(shared *sharedResources) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if s := shared.labGen.Load(); s != nil && s.Perception != nil && s.Perception.engine != nil {
-			// An engine that is not running (starting or stopping) has nothing to wait for;
-			// only a budget that ran out is an answer.
-			if err := s.Perception.engine.Settle(ctx); err != nil && ctx.Err() != nil {
-				return err
-			}
-		}
-		// Stopgap until the quiescence registry (SBX-09) settles every component. The step
-		// that just fired woke loops waiting on the clock (the outbox, cron, the alert and
-		// DCA loops); each re-arms its After only once it runs. Sim.step rereads the timer
-		// heap right after this returns, and on a loaded or single CPU the woken loops
-		// have not run yet, so the heap looks empty and the advance jumps to its target:
-		// a periodic job fires once instead of once per step. Yield and give them a
-		// moment, a few ms of wall time per step.
-		runtime.Gosched()
-		time.Sleep(settleYield) //simclock:wall let the loops the step woke re-arm their timers before the next step
-		return nil
-	}
-}
-
-// settleYield is the wall gap settleLab leaves after each step; a 2 h advance at the
-// 1 m resolution is 120 steps, so it costs about 120 ms.
-const settleYield = time.Millisecond
 
 // publishLabGeneration makes s the generation the lab groups read. It runs once s has
 // its approval service, workflow engine and policy record, so no group sees a half-built
@@ -291,7 +265,7 @@ func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error
 	// generation's services, called in process. Set before buildServices publishes s.
 	priv := http.NewServeMux()
 	registerProactiveRoutes(priv, s, d)
-	s.labSetup = &labSetup{al: d.AgentLoop, mux: priv, token: d.Cfg.Gateway.ManagementToken}
+	s.labSetup = &labSetup{al: d.AgentLoop, bus: d.Bus, mux: priv, token: d.Cfg.Gateway.ManagementToken}
 	attachSimChat(d.Shared, s.ChannelManager)
 	if err := startLabObserver(s.lab, d.Shared); err != nil {
 		return fmt.Errorf("starting the lab observer: %w", err)

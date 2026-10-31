@@ -130,9 +130,8 @@ func (l *Lab) clockAdvance(ctx context.Context, args json.RawMessage) (any, erro
 	}
 	return struct {
 		simclock.AdvanceSummary
-		Wall   string `json:"wall"`
-		Settle string `json:"settle"`
-	}{sum, sum.Wall.Round(time.Millisecond).String(), "engine-only"}, nil
+		Wall string `json:"wall"`
+	}{sum, sum.Wall.Round(time.Millisecond).String()}, nil
 }
 
 func (l *Lab) clockSetMode(_ context.Context, args json.RawMessage) (any, error) {

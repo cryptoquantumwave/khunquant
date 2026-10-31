@@ -19,6 +19,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/policy"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
 )
 
 // Deps are the generation-scoped services behind four ops. The gateway fills what the
@@ -27,7 +28,11 @@ type Deps struct {
 	Workflows func(ctx context.Context, f journal.ListFilter) ([]journal.Workflow, error) // (*journal.Engine).List
 	Pending   func(ctx context.Context) ([]approval.PendingView, time.Time, error)       // (*approval.Service).ListPending
 	Policy    func(ctx context.Context, n int) ([]policy.Decision, error)                // (*policy.Store).Recent
-	Settle    func(ctx context.Context) error                                            // SBX-09
+	Settle    func(ctx context.Context) error                                            // a settle with the default cap, no report
+	// SettleWait is Settle with a wall cap and a report (lab.Lab.SettleWait); the op uses
+	// it when set. Snapshot lists every quiescer and its state, without waiting (the idle op).
+	SettleWait func(ctx context.Context, wallCap time.Duration) (quiesce.Report, error)
+	Snapshot   func() []quiesce.Status
 }
 
 const (
@@ -80,7 +85,9 @@ func Group(j *labjournal.Journal, deps func() Deps) lab.Group {
 			Args: schema(argLimit), Run: proposalsOp(j, d)},
 		{Name: "policy", Description: "the newest policy decisions, newest first",
 			Args: schema(argLimit), Run: policyOp(d)},
-		{Name: "settle", Description: "run until the instance is quiet (needs the sim clock)", Run: settleOp(d)},
+		{Name: "settle", Description: "wait until every component is idle: {settled, wall_ms, busy}",
+			Args: schema(`"wall_cap":{"type":"string","description":"Go duration, default 10s, clamped to 25s"}`), Run: settleOp(d)},
+		{Name: "idle", Description: "every quiescer and whether it is idle now, without waiting", Run: idleOp(d)},
 		{Name: "wait_for", Description: "block until journal entries match; at most 25 s per call, loop on next_seq",
 			Args: schema(`"match":{"type":"object","description":"{kind, subject, fields (dotted paths into the payload), count (\"1\", \">= 2\", \"0\" = absence)}"}`,
 				argAfterSeq, `"timeout_wall":{"type":"string","description":"Go duration, default 10s, clamped to 25s"}`),
@@ -245,16 +252,66 @@ func policyOp(deps func() Deps) lab.OpFunc {
 	}
 }
 
+const (
+	defaultSettleCap = 10 * time.Second
+	maxSettleCap     = 25 * time.Second
+)
+
+// settleOp waits for every component to be idle. A settle that does not pass is an
+// answer, not an error: {settled:false, busy:[names]}.
 func settleOp(deps func() Deps) lab.OpFunc {
-	return func(ctx context.Context, _ json.RawMessage) (any, error) {
-		settle := deps().Settle
-		if settle == nil {
-			return nil, lab.Errorf(lab.CodeUnavailable, "settle needs the sim clock, which this instance does not have yet")
+	return func(ctx context.Context, args json.RawMessage) (any, error) {
+		d := deps()
+		var a struct {
+			WallCap string `json:"wall_cap"`
 		}
-		if err := settle(ctx); err != nil {
+		if len(args) > 0 {
+			if err := decode(args, &a); err != nil {
+				return nil, err
+			}
+		}
+		wallCap := defaultSettleCap
+		if a.WallCap != "" {
+			var err error
+			if wallCap, err = time.ParseDuration(a.WallCap); err != nil || wallCap <= 0 {
+				return nil, lab.Errorf(lab.CodeBadArgs, "wall_cap %q is not a positive Go duration", a.WallCap)
+			}
+		}
+		wallCap = min(wallCap, maxSettleCap)
+		if d.SettleWait == nil {
+			if d.Settle == nil {
+				return nil, lab.Errorf(lab.CodeUnavailable, "settle is not available in this instance")
+			}
+			if err := d.Settle(ctx); err != nil {
+				return nil, err
+			}
+			return map[string]bool{"settled": true}, nil
+		}
+		rep, err := d.SettleWait(ctx, wallCap)
+		var busy *quiesce.BusyError
+		if err != nil && !errors.As(err, &busy) {
 			return nil, err
 		}
-		return map[string]bool{"settled": true}, nil
+		names := []string{}
+		if busy != nil {
+			names = append(names, busy.Names...)
+		}
+		return map[string]any{"settled": err == nil, "wall_ms": rep.Wall.Milliseconds(), "busy": names}, nil
+	}
+}
+
+// idleOp lists every quiescer and its state now.
+func idleOp(deps func() Deps) lab.OpFunc {
+	return func(context.Context, json.RawMessage) (any, error) {
+		snapshot := deps().Snapshot
+		if snapshot == nil {
+			return nil, unavailable("the quiescence registry")
+		}
+		st := snapshot()
+		if st == nil {
+			st = []quiesce.Status{}
+		}
+		return map[string]any{"quiescers": st}, nil
 	}
 }
 

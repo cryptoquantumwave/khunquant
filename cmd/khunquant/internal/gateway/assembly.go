@@ -129,6 +129,9 @@ type sharedResources struct {
 	// simWorld is the simulated chat's personas, outbox and channel state: built once
 	// with the lab groups (the lab package cannot import simchat), read-only after.
 	simWorld *simchat.World
+	// reloading counts config reloads in progress (the gateway.reload quiescer): between
+	// retiring a generation and publishing the next, no component is visible.
+	reloading atomic.Int32
 }
 
 // sweepState returns the process's sweep state, creating it on first use.

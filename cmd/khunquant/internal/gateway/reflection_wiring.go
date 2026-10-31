@@ -61,6 +61,7 @@ func reflectionSinkFor(d assemblyDeps, db *sql.DB, ob *attention.Outbox, reg *tr
 
 // reflectionRuntime is the daily reflection loop of one generation of services.
 type reflectionRuntime struct {
+	svc    *reflection.Service // for the lab's quiescer
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -127,7 +128,7 @@ func startReflection(d assemblyDeps, s *gatewayServices) *reflectionRuntime {
 		return nil
 	}
 	runCtx, runCancel := context.WithCancel(context.Background())
-	rt := &reflectionRuntime{cancel: runCancel, done: make(chan struct{})}
+	rt := &reflectionRuntime{svc: svc, cancel: runCancel, done: make(chan struct{})}
 	go func() {
 		defer close(rt.done)
 		svc.Run(runCtx)

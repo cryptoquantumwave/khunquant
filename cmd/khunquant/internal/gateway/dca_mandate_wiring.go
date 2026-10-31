@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
@@ -385,7 +386,12 @@ type dcaMandateSync struct {
 	thai      func() bool
 
 	mu sync.Mutex
+
+	ticking atomic.Int32 // tick calls in progress, those waiting on mu included (lab settle)
 }
+
+// idle is true when no sync pass is running. The next pass is a timer.
+func (y *dcaMandateSync) idle() bool { return y.ticking.Load() == 0 }
 
 func (y *dcaMandateSync) loop(ctx context.Context) {
 	clk := y.shared.clk()
@@ -400,6 +406,8 @@ func (y *dcaMandateSync) loop(ctx context.Context) {
 }
 
 func (y *dcaMandateSync) tick(ctx context.Context) {
+	y.ticking.Add(1)
+	defer y.ticking.Add(-1)
 	y.mu.Lock()
 	defer y.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, dcaSyncTimeout)

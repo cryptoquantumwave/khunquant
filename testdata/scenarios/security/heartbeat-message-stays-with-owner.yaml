@@ -4,8 +4,6 @@
 version: 1
 scenario: heartbeat-message-stays-with-owner
 covers: [H5]
-status: known_bug
-known_bug: H5
 llm: scripted
 level: wire
 clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }

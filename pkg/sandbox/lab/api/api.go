@@ -37,7 +37,8 @@ type opInfo struct {
 }
 
 // Register mounts the lab routes on mux: POST /api/sandbox/lab/<group> and GET
-// /api/sandbox/lab, the list of groups with their ops and argument schemas. guard wraps
+// /api/sandbox/lab, the list of groups with their ops and argument schemas and the
+// journal kinds the instance declares. guard wraps
 // both handlers: the caller supplies the loopback and instance-token checks, so this
 // package knows no secret. A call runs under lab.CallTimeout and a body is capped at 1 MiB.
 func Register(mux interface {
@@ -52,7 +53,7 @@ func Register(mux interface {
 			}
 			groups = append(groups, gi)
 		}
-		reply(w, http.StatusOK, map[string]any{"groups": groups})
+		reply(w, http.StatusOK, map[string]any{"groups": groups, "kinds": l.Kinds()})
 	})))
 	mux.Handle("POST /api/sandbox/lab/{group}", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))

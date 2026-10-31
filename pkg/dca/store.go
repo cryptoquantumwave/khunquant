@@ -78,7 +78,19 @@ var migrations = []string{
 
 // Store persists DCA plans and executions in SQLite.
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	now func() time.Time // SetClock; nil is time.Now
+}
+
+// SetClock makes the store stamp rows and count the current period from now. A nil
+// now restores time.Now.
+func (s *Store) SetClock(now func() time.Time) { s.now = now }
+
+func (s *Store) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // NewStore opens (or creates) the DCA database under {workspacePath}/memory/dca/dca.db.
@@ -182,7 +194,7 @@ func (s *Store) UpdatePlan(ctx context.Context, plan *Plan) error {
 	if unit == "" {
 		unit = "quote"
 	}
-	plan.UpdatedAt = time.Now()
+	plan.UpdatedAt = s.clock()
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE dca_plans
 		 SET name=?, provider=?, account=?, symbol=?, amount_per_order=?, amount_unit=?,
@@ -281,7 +293,7 @@ func (s *Store) UpdatePlanStats(ctx context.Context, planID int64, amountQuote, 
 		}
 		return fmt.Errorf("dca: update plan %d stats: %w", planID, err)
 	}
-	if err := applyStats(ctx, tx, planID, StatsDelta{Side: side, AmountQuote: amountQuote, Quantity: filledQty}); err != nil {
+	if err := applyStats(ctx, tx, planID, StatsDelta{Side: side, AmountQuote: amountQuote, Quantity: filledQty}, s.clock()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -289,13 +301,13 @@ func (s *Store) UpdatePlanStats(ctx context.Context, planID int64, amountQuote, 
 
 // applyStats applies a StatsDelta to a plan's totals with a single UPDATE, so
 // every column is computed from the row as it was before the change.
-func applyStats(ctx context.Context, db sqlExecer, planID int64, d StatsDelta) error {
+func applyStats(ctx context.Context, db sqlExecer, planID int64, d StatsDelta, at time.Time) error {
 	invalid := func(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) || v < 0 }
 	if invalid(d.AmountQuote) || invalid(d.Quantity) {
 		return fmt.Errorf("dca: plan %d stats delta must be finite and non-negative (quote %v, quantity %v)",
 			planID, d.AmountQuote, d.Quantity)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := at.UTC().Format(time.RFC3339)
 
 	var res sql.Result
 	var err error
@@ -387,7 +399,7 @@ func (s *Store) SaveExecutionTx(ctx context.Context, exec *Execution, delta *Sta
 		if d.Side == "" {
 			d.Side = exec.Side
 		}
-		if err := applyStats(ctx, tx, exec.PlanID, d); err != nil {
+		if err := applyStats(ctx, tx, exec.PlanID, d, s.clock()); err != nil {
 			return 0, err
 		}
 	}
@@ -533,7 +545,7 @@ func (s *Store) SellTotals(ctx context.Context, planID int64) (qty, proceeds flo
 // placed, an order. Paper-mode runs are not counted; see
 // CountExecutionsInPeriodAt.
 func (s *Store) CountExecutionsInPeriod(ctx context.Context, planID int64, period string) (int, error) {
-	return s.CountExecutionsInPeriodAt(ctx, planID, period, time.Now(), false)
+	return s.CountExecutionsInPeriodAt(ctx, planID, period, s.clock(), false)
 }
 
 // periodStart returns the start of the calendar period containing now, in

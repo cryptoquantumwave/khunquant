@@ -540,3 +540,19 @@ func TestPermissionDenied_SkipsValuation(t *testing.T) {
 		t.Fatalf("the order was valued %d times after the permission failed", cv.calls)
 	}
 }
+
+func TestPolicyEngine_RateWindowOnSetClock(t *testing.T) {
+	r := newRig(t, func(_ *rig, d *Deps) { d.Now = nil }) // as the gateway builds it: no clock of its own
+	cur := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	r.e.SetClock(func() time.Time { return cur })
+	r.cfg.TradingRisk.MaxOrdersPer10Min = 1
+	q := buy(owner(ClassTrade, "create_order"))
+	r.e.Note(q)
+	if v := r.auth(q); v.Mode != ModeDeny || !strings.Contains(v.Reasons[0], "rate") {
+		t.Fatalf("second order inside the window: %s %v", v.Mode, v.Reasons)
+	}
+	cur = cur.Add(11 * time.Minute) // sim time moves; the wall clock does not
+	if v := r.auth(q); v.Mode != ModeAct {
+		t.Fatalf("after the window on the injected clock: %s %v", v.Mode, v.Reasons)
+	}
+}

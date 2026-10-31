@@ -72,7 +72,7 @@ func (rt *controlRuntime) dashboardRead(w http.ResponseWriter, fn func(r *dashbo
 		manageError(w, http.StatusInternalServerError, "the dashboard could not be read")
 		return
 	}
-	body["available"], body["server_time"] = true, time.Now().UTC()
+	body["available"], body["server_time"] = true, m.clock().UTC()
 	writeManage(w, http.StatusOK, body)
 }
 
@@ -146,7 +146,7 @@ func (rt *controlRuntime) handleState(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	body := ownerInfo(m.cfg)
-	body["available"], body["killed"], body["server_time"] = true, m.disp.Deps().Kill.Killed(), time.Now().UTC()
+	body["available"], body["killed"], body["server_time"] = true, m.disp.Deps().Kill.Killed(), m.clock().UTC()
 	writeManage(w, http.StatusOK, body)
 }
 

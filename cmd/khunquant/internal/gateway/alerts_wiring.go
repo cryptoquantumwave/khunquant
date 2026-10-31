@@ -13,6 +13,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers/migrate"
@@ -49,6 +50,7 @@ var legacyAlertFired atomic.Uint64
 type alertRuntime struct {
 	cfg   *config.Config
 	db    func() (*sql.DB, error)
+	clk   simclock.Clock // the gateway clock; nil is the wall clock (a hand-built runtime)
 	stats *triggers.CrossStats
 	// dn is the delta-neutral side of the same runtime (dn_wiring.go).
 	dn dnRuntime
@@ -66,8 +68,16 @@ func newAlertRuntime(d assemblyDeps) *alertRuntime {
 	return &alertRuntime{
 		cfg:   d.Cfg,
 		db:    func() (*sql.DB, error) { return proactiveDB(d) },
+		clk:   d.Shared.clk(),
 		stats: &triggers.CrossStats{},
 	}
+}
+
+func (a *alertRuntime) clock() simclock.Clock {
+	if a == nil || a.clk == nil {
+		return simclock.Real()
+	}
+	return a.clk
 }
 
 // resolver is what the alert tools are given. It never returns nil: the backend
@@ -140,7 +150,7 @@ func ownerLanguage(d assemblyDeps) func() string {
 		if db, err := proactiveDB(d); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), alertProfileTimeout)
 			defer cancel()
-			if store, err := intent.NewStore(ctx, db); err == nil {
+			if store, err := openIntentStore(ctx, d, db); err == nil {
 				if p, err := store.Profile(ctx); err == nil && p.Language == intent.LanguageThai {
 					lang = intent.LanguageThai
 				}
@@ -209,7 +219,7 @@ func (a *alertRuntime) migrateOptions() []migrate.Option {
 		}
 		r, ok := a.cfg.Proactive.OwnerRoute()
 		return r.Channel, r.ChatID, ok
-	})}
+	}), migrate.WithClock(a.clock().Now)}
 }
 
 // warnInactiveAlerts says, once per start, that alerts the owner made while triggers
@@ -227,7 +237,10 @@ func warnInactiveAlerts(n int) {
 // storedSpecs lets the migration read and write the trigger table in a generation
 // that has no registry. Only what the hand-over needs is supported: List, a change of
 // mode and Remove.
-type storedSpecs struct{ db *sql.DB }
+type storedSpecs struct {
+	db  *sql.DB
+	now func() time.Time // the gateway clock; nil is time.Now
+}
 
 var _ migrate.Specs = storedSpecs{}
 
@@ -236,7 +249,11 @@ func (s storedSpecs) List(ctx context.Context, f triggers.ListFilter) ([]trigger
 }
 
 func (s storedSpecs) Update(ctx context.Context, sp triggers.Spec) error {
-	ok, err := triggers.SetStoredMode(ctx, s.db, sp.ID, sp.Mode)
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	ok, err := triggers.SetStoredMode(ctx, s.db, sp.ID, sp.Mode, now())
 	if err == nil && !ok {
 		err = triggers.ErrNotFound
 	}
@@ -289,9 +306,9 @@ func (a *alertRuntime) sync(ctx context.Context, reg *triggers.Registry, cs *cro
 // loop re-syncs now and then and, while the cron alerts still deliver (shadow), logs
 // the daily comparison. It returns when ctx is cancelled.
 func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cron.CronService) {
-	syncT := time.NewTicker(alertSyncEvery)
+	syncT := newClockTick(a.clock(), alertSyncEvery)
 	defer syncT.Stop()
-	cmpT := time.NewTicker(alertCompareEvery)
+	cmpT := newClockTick(a.clock(), alertCompareEvery)
 	defer cmpT.Stop()
 
 	// A plan tool's request starts one debounce window; the pass at its end reads the
@@ -307,9 +324,11 @@ func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cro
 		select {
 		case <-ctx.Done():
 			return
-		case <-syncT.C:
+		case <-syncT.C():
+			syncT.Rearm()
 			a.sync(ctx, reg, cs, false)
-		case <-cmpT.C:
+		case <-cmpT.C():
+			cmpT.Rearm()
 			a.compare(reg)
 		case <-a.dn.wake: // nil channel (no plan store) blocks forever
 			if dnPass == nil {
@@ -414,7 +433,7 @@ func (a *alertRuntime) handOverWithoutRegistry(cs *cron.CronService) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), alertSyncTimeout)
 	defer cancel()
-	m := migrate.New(migrate.AlertFamily(), cs, storedSpecs{db: db}, a.migrateOptions()...)
+	m := migrate.New(migrate.AlertFamily(), cs, storedSpecs{db: db, now: a.clock().Now}, a.migrateOptions()...)
 	rep, err := m.HandOver(ctx)
 	warnInactiveAlerts(rep.Inactive)
 	if err != nil {

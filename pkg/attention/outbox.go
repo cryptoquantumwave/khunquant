@@ -168,6 +168,10 @@ type Outbox struct {
 	d      Deliverer
 	window time.Duration
 	clock  func() time.Time
+	// timers, when set (SetTimerClock), paces Run instead of a wall ticker.
+	timers interface {
+		After(d time.Duration) <-chan time.Time
+	}
 
 	mu            sync.Mutex
 	buf           []buffered
@@ -302,6 +306,17 @@ func (o *Outbox) tick(ctx context.Context, handOver bool) error {
 	return errors.Join(errs...)
 }
 
+// SetTimerClock makes Run wait on c.After(tick interval) instead of a wall-clock
+// ticker, so a simulated clock paces the outbox. Call it before Run; never calling
+// it keeps the ticker.
+func (o *Outbox) SetTimerClock(c interface {
+	After(d time.Duration) <-chan time.Time
+}) {
+	o.mu.Lock()
+	o.timers = c
+	o.mu.Unlock()
+}
+
 // Run drives the outbox until ctx ends: it starts the delivery lanes (one
 // ordinary worker, one protective worker), calls tick every tick interval (one
 // second unless SetTickInterval changed it) and, when ctx ends, delivers what is
@@ -310,17 +325,23 @@ func (o *Outbox) tick(ctx context.Context, handOver bool) error {
 // its context, after a bounded wait).
 func (o *Outbox) Run(ctx context.Context) {
 	o.mu.Lock()
-	every := o.tickEvery
+	every, timers := o.tickEvery, o.timers
 	o.mu.Unlock()
 	lanes := o.startLanes()
-	t := time.NewTicker(every)
-	defer t.Stop()
+	var next func() <-chan time.Time
+	if timers != nil {
+		next = func() <-chan time.Time { return timers.After(every) }
+	} else {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		next = func() <-chan time.Time { return t.C }
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			o.shutdown(ctx, lanes)
 			return
-		case <-t.C:
+		case <-next():
 			if err := o.tick(ctx, true); err != nil && ctx.Err() == nil {
 				o.warnTick(err)
 			}

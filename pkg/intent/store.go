@@ -299,7 +299,7 @@ func (s *Store) PutProfile(ctx context.Context, p Profile, by string, trust proa
 	if err != nil {
 		return 0, err
 	}
-	version, err := insertVersion(ctx, tx, js, by, trust)
+	version, err := insertVersion(ctx, tx, js, by, trust, s.clock())
 	if err != nil {
 		return 0, err
 	}
@@ -393,7 +393,7 @@ func (s *Store) ImportIfEmpty(ctx context.Context, userMDPath string) (imported 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO profile_versions (profile_json, updated_at_ms, updated_by, trust)
 		 SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM profile_versions)`,
-		js, time.Now().UnixMilli(), by, int(proactive.TrustUserAuthored))
+		js, s.clock().UnixMilli(), by, int(proactive.TrustUserAuthored))
 	if err != nil {
 		return false, fmt.Errorf("intent: import USER.md: %w", err)
 	}

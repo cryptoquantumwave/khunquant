@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
@@ -133,5 +134,43 @@ func TestCachedMarketDataProvider_FetchOHLCV_DifferentTimeframesSeparate(t *test
 
 	if got := atomic.LoadInt32(&cp.ohlcvCalls); got != 2 {
 		t.Errorf("expected 2 inner calls for different timeframes, got %d", got)
+	}
+}
+
+func TestBrokerTickerCacheExpiresOnSetClock(t *testing.T) {
+	cur := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	broker.SetClock(func() time.Time { return cur })
+	t.Cleanup(func() { broker.SetClock(nil) })
+
+	cp := newCountingProvider("BTC/USDT", 50000)
+	cached := broker.NewCachedMarketDataProvider(cp)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := cached.FetchTicker(ctx, "BTC/USDT"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := atomic.LoadInt32(&cp.tickerCalls); n != 1 {
+		t.Fatalf("calls inside the TTL = %d, want 1", n)
+	}
+	cur = cur.Add(broker.TickerCacheTTL + time.Second) // sim time moves 11 s; the wall clock does not
+	if _, err := cached.FetchTicker(ctx, "BTC/USDT"); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&cp.tickerCalls); n != 2 {
+		t.Fatalf("calls after the TTL on the injected clock = %d, want 2 (a stale price was served)", n)
+	}
+}
+
+func TestBrokerSetClock_NilRestoresWallTime(t *testing.T) {
+	frozen := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	broker.SetClock(func() time.Time { return frozen })
+	broker.SetClock(nil)
+	cp := newCountingProvider("BTC/USDT", 50000)
+	cached := broker.NewCachedMarketDataProvider(cp)
+	_, _ = cached.FetchTicker(context.Background(), "BTC/USDT")
+	_, _ = cached.FetchTicker(context.Background(), "BTC/USDT")
+	if n := atomic.LoadInt32(&cp.tickerCalls); n != 1 {
+		t.Fatalf("calls = %d, want 1 on wall time", n)
 	}
 }

@@ -140,7 +140,7 @@ func handleDCAAutoJob(
 		return "plan disabled", nil
 	}
 
-	if plan.EndDate != nil && time.Now().After(*plan.EndDate) {
+	if plan.EndDate != nil && processNow().After(*plan.EndDate) {
 		logger.DebugCF("dca-gate", "Plan expired, skipping", map[string]any{
 			"plan_id": planID, "end_date": plan.EndDate.Format("2006-01-02"),
 		})

@@ -30,7 +30,7 @@ func buildNotifyService(d assemblyDeps, mgr *channels.Manager) *notify.Service {
 			map[string]any{"error": err.Error()})
 		return nil
 	}
-	svc, err := notify.New(d.Cfg, mgr, d.AgentLoop, db, routing.NewRouteResolver(d.Cfg).DefaultAgentID(), nil)
+	svc, err := notify.New(d.Cfg, mgr, d.AgentLoop, db, routing.NewRouteResolver(d.Cfg).DefaultAgentID(), d.nowFn())
 	if err != nil {
 		logger.ErrorCF("notify", "Owner delivery disabled: cannot build the notify service",
 			map[string]any{"error": err.Error()})

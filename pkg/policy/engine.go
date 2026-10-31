@@ -106,6 +106,17 @@ func New(d Deps) *Engine {
 	return &Engine{d: d}
 }
 
+// SetClock replaces the clock the rate window reads (Deps.Now). A nil now keeps the
+// current one.
+func (e *Engine) SetClock(now func() time.Time) {
+	if now == nil {
+		return
+	}
+	e.mu.Lock()
+	e.d.Now = now
+	e.mu.Unlock()
+}
+
 // Ceiling answers whether the turn ctx describes may call the tool at all. It is
 // today's ceiling (the same predicate ExecuteWithContext enforces), asked through
 // the engine. A ceiling depends on the context - origin, sub-turn, DCA job scope,

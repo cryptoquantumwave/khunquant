@@ -48,7 +48,7 @@ func reflectionSinkFor(d assemblyDeps, db *sql.DB, ob *attention.Outbox, reg *tr
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		var err error
-		if store, err = intent.NewStore(ctx, db); err != nil {
+		if store, err = openIntentStore(ctx, d, db); err != nil {
 			missing = "the intent ledger"
 		}
 	}
@@ -106,7 +106,7 @@ func startReflection(d assemblyDeps, s *gatewayServices) *reflectionRuntime {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := intent.NewStore(ctx, db)
+	store, err := openIntentStore(ctx, d, db)
 	if err != nil {
 		return nil
 	}

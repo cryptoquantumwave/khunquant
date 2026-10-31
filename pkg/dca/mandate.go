@@ -415,7 +415,7 @@ func (s *Store) RecordMandateRun(ctx context.Context, exec *Execution, delta *St
 		if d.Side == "" {
 			d.Side = exec.Side
 		}
-		if err := applyStats(ctx, tx, exec.PlanID, d); err != nil {
+		if err := applyStats(ctx, tx, exec.PlanID, d, s.clock()); err != nil {
 			return false, err
 		}
 	}

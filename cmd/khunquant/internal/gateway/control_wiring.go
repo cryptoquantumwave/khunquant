@@ -137,7 +137,7 @@ func buildControl(d assemblyDeps, mgr *channels.Manager) *controlRuntime {
 				map[string]any{"error": err.Error()})
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			st, err := control.NewState(ctx, db)
+			st, err := control.NewState(ctx, db, control.WithStateClock(d.nowFn()))
 			cancel()
 			if err != nil {
 				logger.ErrorCF("gateway", "The kill switch is unavailable", map[string]any{"error": err.Error()})
@@ -156,7 +156,7 @@ func buildControl(d assemblyDeps, mgr *channels.Manager) *controlRuntime {
 		tools.SetKillFlag(nil)
 	}
 
-	rt.disp = control.New(deps)
+	rt.disp = control.New(deps, control.WithClock(d.nowFn()))
 	if mgr != nil {
 		mgr.SetControlRouter(rt.disp)
 	}

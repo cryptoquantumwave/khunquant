@@ -40,7 +40,7 @@ func (rt *perceptionRuntime) attachIntents(d assemblyDeps, opts *engine.Options)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := intent.NewStore(ctx, db)
+	store, err := openIntentStore(ctx, d, db)
 	if err != nil {
 		logger.WarnCF("perception", "Intent expiry sweeper disabled: the intent store could not be opened",
 			map[string]any{"error": err.Error()})
@@ -51,7 +51,7 @@ func (rt *perceptionRuntime) attachIntents(d assemblyDeps, opts *engine.Options)
 	if rt.triggers == nil {
 		return
 	}
-	comp := intents.New(store, rt.triggers, intentCompilerOptions()...)
+	comp := intents.New(store, rt.triggers, append(intentCompilerOptions(), intents.WithClock(d.nowFn()))...)
 	rt.triggers.SetFireObserver(comp.NoteFire)
 	rt.intentComp = comp
 	opts.Housekeepers = append(opts.Housekeepers, comp)

@@ -519,8 +519,8 @@ func (r *Registry) GlobalMode() string {
 // SetStoredMode switches the stored spec id to mode without a registry: for a
 // generation that has none and must still stop an earlier one's spec from being
 // taken for active (see migrate). It changes the mode and the stamp and nothing else,
-// reports whether a row was written, and never creates a table.
-func SetStoredMode(ctx context.Context, db *sql.DB, id, mode string) (bool, error) {
+// reports whether a row was written, and never creates a table. now is the stamp.
+func SetStoredMode(ctx context.Context, db *sql.DB, id, mode string, now time.Time) (bool, error) {
 	if _, ok := modeRank(mode); !ok {
 		return false, fmt.Errorf("%w: mode %q", ErrInvalidSpec, mode)
 	}
@@ -528,7 +528,7 @@ func SetStoredMode(ctx context.Context, db *sql.DB, id, mode string) (bool, erro
 		return false, nil
 	}
 	res, err := db.ExecContext(ctx, `UPDATE triggers SET mode = ?, updated_ms = max(updated_ms + 1, ?) WHERE id = ?`,
-		mode, time.Now().UnixMilli(), id)
+		mode, now.UnixMilli(), id)
 	if err != nil {
 		return false, fmt.Errorf("triggers: set mode: %w", err)
 	}

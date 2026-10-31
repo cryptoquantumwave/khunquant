@@ -200,6 +200,10 @@ func gatewayCmd(debug, locked bool) error {
 		}
 	}
 
+	// Every process-global time hook reads the final shared clock: the lab's under the
+	// lock, the wall clock otherwise. Never per generation.
+	bindProcessClock(shared.clk())
+
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
@@ -677,6 +681,7 @@ func setupCronTool(
 		logger.ErrorCF("gateway", "Failed to open DCA store; DCA cron gate and tools disabled",
 			map[string]any{"error": storeErr.Error()})
 	} else {
+		store.SetClock(func() time.Time { return processNow() })
 		dcaStore = store
 	}
 

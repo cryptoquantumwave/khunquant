@@ -44,7 +44,7 @@ func autonomyReader(d assemblyDeps) func(ctx context.Context, tier string) (stri
 	var openErr error = errors.New("the proactive database is unavailable")
 	if db, err := proactiveDB(d); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		store, openErr = intent.NewStore(ctx, db)
+		store, openErr = openIntentStore(ctx, d, db)
 		cancel()
 	}
 	return func(ctx context.Context, tier string) (string, error) {
@@ -287,7 +287,7 @@ func (rt *controlRuntime) handleMutesList(w http.ResponseWriter, r *http.Request
 		}
 		out = append(out, muteView{base64.RawURLEncoding.EncodeToString([]byte(mi.Key)), kind, key, mi.Reason, mi.Until, mi.Created})
 	}
-	writeManage(w, http.StatusOK, map[string]any{"available": true, "server_time": time.Now().UTC(), "mutes": out})
+	writeManage(w, http.StatusOK, map[string]any{"available": true, "server_time": m.clock().UTC(), "mutes": out})
 }
 
 // handleMuteDelete unmutes. It only lets more messages through, so the dashboard's

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
-	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/calendar"
@@ -69,7 +68,7 @@ func profileZone(d assemblyDeps) func() *time.Location {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), clockProfileTimeout)
 	defer cancel()
-	store, err := intent.NewStore(ctx, db)
+	store, err := openIntentStore(ctx, d, db)
 	if err != nil {
 		logger.WarnCF("perception", "Clock source cannot open the profile store; day_start uses the default time zone",
 			map[string]any{"error": err.Error()})

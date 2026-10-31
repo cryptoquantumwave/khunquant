@@ -71,10 +71,11 @@ func cachedZone(d assemblyDeps) func() *time.Location {
 	return func() *time.Location {
 		mu.Lock()
 		defer mu.Unlock()
-		if now := time.Now(); !at.IsZero() && now.Sub(at) < goalZoneTTL {
+		now := d.nowFn()()
+		if !at.IsZero() && now.Sub(at) < goalZoneTTL {
 			return cached
 		}
-		at = time.Now()
+		at = now
 		if !opened {
 			opened = true
 			read = profileZone(d)
@@ -150,7 +151,7 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 	reg, err := triggers.NewRegistry(ctx, db,
 		// Read on every evaluation and every poll of the demands.
 		func() string { return cfg.Proactive.Effective().TriggersMode },
-		triggerFactories(*d))
+		triggerFactories(*d), triggers.WithClock(d.nowFn()))
 	if err != nil {
 		logger.WarnCF("perception", "Triggers disabled: the registry could not be opened",
 			map[string]any{"error": err.Error()})

@@ -52,7 +52,7 @@ func buildDNFlow(d assemblyDeps, outbox *attention.Outbox, ns *notify.Service) *
 	}
 	deps := &deltaneutral.Deps{
 		Store:    d.DNStore,
-		Exchange: tools.NewDNExchange(d.Cfg, nil),
+		Exchange: tools.NewDNExchange(d.Cfg, d.nowFn()),
 		Clock:    d.Shared.clk(),
 		Tag: func(ctx context.Context, origin, sender string) context.Context {
 			return tools.WithToolSender(tools.WithToolOrigin(ctx, origin), sender)
@@ -62,7 +62,7 @@ func buildDNFlow(d assemblyDeps, outbox *attention.Outbox, ns *notify.Service) *
 		deps.Killed = k.Killed
 	}
 	if outbox != nil {
-		deps.Alerts = outboxAlerts{ob: outbox}
+		deps.Alerts = outboxAlerts{ob: outbox, now: d.nowFn()}
 	}
 	if d.Approval != nil && d.Approval.svc != nil {
 		deps.Proposer = tools.NewApprovalCloser(d.Approval.svc)
@@ -107,7 +107,17 @@ func (rt *dnFlowRuntime) stop() {
 // is woken. The decision it returns is what a proposal for the same situation is
 // bound to (a background process may only propose on a candidate attention decided
 // to deliver now).
-type outboxAlerts struct{ ob *attention.Outbox }
+type outboxAlerts struct {
+	ob  *attention.Outbox
+	now func() time.Time // the gateway clock; nil is time.Now
+}
+
+func (a outboxAlerts) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
 
 func (a outboxAlerts) Alert(ctx context.Context, al deltaneutral.RecoveryAlert) (deltaneutral.AlertResult, error) {
 	c := proactive.Candidate{
@@ -121,7 +131,7 @@ func (a outboxAlerts) Alert(ctx context.Context, al deltaneutral.RecoveryAlert) 
 		Detail:     al.Detail,
 		Trust:      proactive.TrustSystem,
 		Compose:    proactive.ComposeTemplate,
-		At:         time.Now(),
+		At:         a.clock(),
 	}
 	dec, err := a.ob.Submit(ctx, attention.Item{Candidate: c})
 	if err != nil {

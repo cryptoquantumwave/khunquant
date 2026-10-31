@@ -37,7 +37,7 @@ var _ approval.OrderBackend = (*ApprovalOrderBackend)(nil)
 // NewApprovalOrderBackend builds the backend over cfg. A config reload builds a
 // new one (the approval service is rebuilt with it).
 func NewApprovalOrderBackend(cfg *config.Config) *ApprovalOrderBackend {
-	return &ApprovalOrderBackend{cfg: cfg, now: time.Now}
+	return &ApprovalOrderBackend{cfg: cfg, now: func() time.Time { return dcaNow() }}
 }
 
 // orderSpec is an order as the gates see it: after validation, with the amount

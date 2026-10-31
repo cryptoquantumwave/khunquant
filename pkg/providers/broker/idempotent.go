@@ -87,7 +87,7 @@ const (
 // are injected here, not held in package variables.
 type PlaceOption func(*placer)
 
-// WithClock sets the time source used for the settle delay (default time.Now).
+// WithClock sets the time source used for the settle delay (default: the SetClock hook, else time.Now).
 func WithClock(now func() time.Time) PlaceOption {
 	return func(p *placer) {
 		if now != nil {
@@ -121,7 +121,7 @@ type placer struct {
 }
 
 func newPlacer(opts []PlaceOption) *placer {
-	p := &placer{now: time.Now, settle: ReconcileSettleDelay, slack: ReconcileWindowSlack, limit: reconcileListLimit}
+	p := &placer{now: processNow, settle: ReconcileSettleDelay, slack: ReconcileWindowSlack, limit: reconcileListLimit}
 	for _, o := range opts {
 		o(p)
 	}

@@ -106,7 +106,7 @@ func ownerTargets(d assemblyDeps) func() map[string]float64 {
 	return func() map[string]float64 {
 		mu.Lock()
 		defer mu.Unlock()
-		now := time.Now()
+		now := d.nowFn()()
 		if !at.IsZero() && now.Sub(at) < portfolioTargetsTTL {
 			return cached
 		}
@@ -120,7 +120,7 @@ func ownerTargets(d assemblyDeps) func() map[string]float64 {
 		if !opened {
 			opened = true
 			if db, err := proactiveDB(d); err == nil {
-				store, _ = intent.NewStore(ctx, db)
+				store, _ = openIntentStore(ctx, d, db)
 			}
 		}
 		if store == nil {

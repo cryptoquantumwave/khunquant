@@ -244,7 +244,7 @@ func buildDCAFlow(d assemblyDeps, ns *notify.Service) *dcaFlowRuntime {
 	lang := ownerLanguage(d)
 	deps := &dca.Deps{
 		Store:        store,
-		Exchange:     tools.NewDCAExchange(d.Cfg, store, nil),
+		Exchange:     tools.NewDCAExchange(d.Cfg, store, d.nowFn()),
 		Asker:        tools.NewDCAAsker(d.Cfg, lang),
 		Lang:         lang,
 		PriceMovePct: func() float64 { return d.Cfg.Proactive.Mandates.PriceMovePct },
@@ -299,10 +299,10 @@ func (rt *dcaFlowRuntime) attach(d assemblyDeps, j *journalRuntime, p *perceptio
 	}
 	rt.shared.setDCAStarter(j.engine)
 	if rt.deps.Tell != nil {
-		rt.shared.dcaMute.Store(&dcaMuteNotifier{store: rt.store, tell: rt.deps.Tell, now: time.Now,
+		rt.shared.dcaMute.Store(&dcaMuteNotifier{store: rt.store, tell: rt.deps.Tell, now: d.nowFn(),
 			thai: func() bool { return rt.deps.Lang != nil && rt.deps.Lang() == "th" }})
 	}
-	y := &dcaMandateSync{store: rt.store, jobs: jobs, shared: d.Shared, now: time.Now, tell: rt.deps.Tell, killed: rt.deps.Killed,
+	y := &dcaMandateSync{store: rt.store, jobs: jobs, shared: d.Shared, now: d.nowFn(), tell: rt.deps.Tell, killed: rt.deps.Killed,
 		canPromote: func() bool {
 			e := d.Cfg.Proactive.Effective()
 			return e.Mandates && e.TriggersMode == config.ProactiveModeLive && e.AttentionMode == config.ProactiveModeLive
@@ -387,12 +387,13 @@ type dcaMandateSync struct {
 }
 
 func (y *dcaMandateSync) loop(ctx context.Context) {
+	clk := y.shared.clk()
 	for {
 		y.tick(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(dcaSyncEvery):
+		case <-clk.After(dcaSyncEvery):
 		}
 	}
 }
@@ -517,6 +518,7 @@ func restoreDCALegacyJobs(d assemblyDeps, jobs dcaJobs) {
 		return
 	}
 	defer store.Close()
+	store.SetClock(d.nowFn())
 	ctx, cancel := context.WithTimeout(context.Background(), dcaSyncTimeout)
 	defer cancel()
 	ms, err := store.ListMandates(ctx, "")

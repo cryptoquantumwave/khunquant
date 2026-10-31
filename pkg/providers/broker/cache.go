@@ -75,7 +75,7 @@ func newTTLLRU[V any](maxEntries int, now func() time.Time) *ttlLRU[V] {
 		maxEntries = CacheMaxEntries
 	}
 	if now == nil {
-		now = time.Now
+		now = processNow
 	}
 	return &ttlLRU[V]{max: maxEntries, now: now, items: map[string]*list.Element{}, order: list.New(), lastSweep: now()}
 }

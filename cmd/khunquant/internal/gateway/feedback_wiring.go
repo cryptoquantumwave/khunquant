@@ -56,8 +56,8 @@ func buildFeedback(d assemblyDeps, ns *notify.Service, ob *attention.Outbox, pr 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	opts := feedback.Options{Changes: intentChanges{db: db}}
-	if profiles, err := intent.NewStore(ctx, db); err == nil {
+	opts := feedback.Options{Changes: intentChanges{db: db}, Clock: d.nowFn(), After: d.Shared.simAfter()}
+	if profiles, err := openIntentStore(ctx, d, db); err == nil {
 		opts.Zone = ownerZone(profiles)
 	} else {
 		logger.WarnCF("feedback", "Posteriors will use UTC hour buckets: cannot open the profile store",

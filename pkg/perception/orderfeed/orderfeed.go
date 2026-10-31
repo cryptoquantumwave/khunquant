@@ -94,7 +94,19 @@ var (
 	delivered atomic.Uint64
 	dropped   atomic.Uint64
 	panics    atomic.Uint64
+
+	clock atomic.Pointer[func() time.Time] // SetClock; nil is time.Now
 )
+
+// SetClock makes Publish stamp events that carry no time from now. It is process-wide,
+// set once by the gateway at start-up; a nil now restores time.Now.
+func SetClock(now func() time.Time) {
+	if now == nil {
+		clock.Store(nil)
+		return
+	}
+	clock.Store(&now)
+}
 
 // feed is one publisher with its queue and the goroutine that drains it.
 type feed struct {
@@ -205,6 +217,9 @@ func Publish(_ context.Context, ev OrderEvent) {
 	}
 	if ev.At.IsZero() {
 		ev.At = time.Now()
+		if f := clock.Load(); f != nil {
+			ev.At = (*f)()
+		}
 	}
 	select {
 	case f.ch <- ev:

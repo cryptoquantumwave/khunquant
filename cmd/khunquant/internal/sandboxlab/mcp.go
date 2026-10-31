@@ -89,6 +89,7 @@ func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 			"timeout_wall":{"type":"string","description":"Go duration, default 60s, at most 10m"}}}`),
 	}, m.waitForHandler)
 	m.registerProxies()
+	m.registerScenarioTools()
 	return m.srv
 }
 

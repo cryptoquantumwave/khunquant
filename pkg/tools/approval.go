@@ -92,7 +92,7 @@ func NewApprovalStore(ttl time.Duration) *ApprovalStore {
 	}
 	return &ApprovalStore{
 		ttl:     ttl,
-		now:     time.Now,
+		now:     func() time.Time { return dcaNow() }, // the injected clock, read at call time
 		entries: make(map[string]*approvalEntry),
 	}
 }

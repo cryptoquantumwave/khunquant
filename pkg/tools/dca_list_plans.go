@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/dca"
 )
@@ -66,7 +65,7 @@ func (t *ListDCAPlansTool) Execute(ctx context.Context, args map[string]any) *To
 		if p.Trigger != nil {
 			sb.WriteString(fmt.Sprintf("      Trigger:       %s @ %s\n", p.Trigger.Expression, p.Trigger.Timeframe))
 		}
-		if ms, err := t.store.MandateStatus(ctx, p.ID, time.Now()); err == nil && ms != "" {
+		if ms, err := t.store.MandateStatus(ctx, p.ID, dcaNow()); err == nil && ms != "" {
 			if reason, _ := t.store.Unproven(ctx, p.ID); reason != "" {
 				ms += " (blocked: an earlier run could not be proven - check the exchange)"
 			}

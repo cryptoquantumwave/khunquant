@@ -98,6 +98,7 @@ type stamp struct {
 // New builds an engine.
 func New(d Deps) *Engine {
 	if d.Now == nil {
+		//simclock:wall the default when no clock is injected
 		d.Now = time.Now
 	}
 	if d.LossCheck == nil {

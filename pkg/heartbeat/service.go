@@ -50,23 +50,32 @@ type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
 // always empty: a governed heartbeat is not addressed to the last active chat.
 type ContextHandler func(ctx context.Context, prompt, channel, chatID string) *tools.ToolResult
 
-// clock is the service's view of time, so that scheduling can be tested without
-// real waiting.
-type clock interface {
-	Now() time.Time
-	NewTimer(d time.Duration) timer
-}
-
-// timer is the part of *time.Timer the schedule uses.
-type timer interface {
+// Timer is the part of *time.Timer the schedule uses. It is an alias of an unnamed
+// interface so a clock built elsewhere (simclock.ForHeartbeat) satisfies Clock without
+// importing this package.
+type Timer = interface {
 	C() <-chan time.Time
 	Stop() bool
 }
 
+// Clock is the service's view of time, so that scheduling can be tested without real
+// waiting and a simulated clock can drive it.
+type Clock interface {
+	Now() time.Time
+	NewTimer(d time.Duration) Timer
+}
+
+type (
+	clock = Clock
+	timer = Timer
+)
+
 type realClock struct{}
 
+//simclock:wall the wall clock itself
 func (realClock) Now() time.Time { return time.Now() }
 
+//simclock:wall the wall clock itself
 func (realClock) NewTimer(d time.Duration) timer { return realTimer{time.NewTimer(d)} }
 
 type realTimer struct{ t *time.Timer }
@@ -101,6 +110,17 @@ type HeartbeatService struct {
 	// the file: it reconciles the sources and looks at what changed, and the file
 	// only tells the model what the owner cares about.
 	runWithoutTasks bool
+}
+
+// SetClock makes the schedule and the log timestamps read c. Call it before Start; a nil
+// c keeps the current clock (the wall clock by default).
+func (hs *HeartbeatService) SetClock(c Clock) {
+	if c == nil {
+		return
+	}
+	hs.mu.Lock()
+	hs.clock = c
+	hs.mu.Unlock()
 }
 
 // normalizeInterval applies the minimum and the default to a configured
@@ -307,6 +327,7 @@ func (hs *HeartbeatService) Stop() {
 	}
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(stopWait):
 		logger.WarnC("heartbeat", "A heartbeat run did not stop in time; its decisions will be dropped")
 	}
@@ -749,6 +770,6 @@ func (hs *HeartbeatService) logf(level, format string, args ...any) {
 	}
 	defer f.Close()
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	timestamp := hs.clock.Now().Format("2006-01-02 15:04:05")
 	fmt.Fprintf(f, "[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))
 }

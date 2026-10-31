@@ -573,6 +573,7 @@ func (o *Outbox) shutdown(ctx context.Context, l *lanes) {
 	}()
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(shutdownFlushTimeout + laneStopGrace):
 		logger.WarnCF("attention", "delivery lanes did not stop in time; a deliverer is ignoring its context", nil)
 	}

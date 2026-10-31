@@ -108,6 +108,7 @@ func (rt *controlRuntime) attachStop(d assemblyDeps, j *journalRuntime, ns *noti
 		k.Followup = func(ctx context.Context, text string) {
 			res, err := ns.Deliver(context.WithoutCancel(ctx), notify.Notification{
 				Severity: proactive.SeverityWarning, Title: "Stop: update", Body: text,
+				//simclock:wall a unique dedup key, not a domain time
 				DedupKey: "kill-stop:" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			})
 			if err != nil || !res.Delivered {

@@ -144,7 +144,8 @@ type CronService struct {
 	onJob     JobHandlerCtx
 	onMissed  func(job CronJob)
 	opts      Options
-	now       func() time.Time // clock seam; nil means time.Now
+	now       func() time.Time                       // clock seam; nil means time.Now
+	after     func(d time.Duration) <-chan time.Time // paces runLoop when set (SetClock); nil is a ticker
 	mu        sync.RWMutex
 	running   bool
 	stopped   bool   // set by Stop, cleared by Start: nothing may run or persist after it
@@ -159,7 +160,8 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
 		storePath: storePath,
 		opts:      DefaultOptions(),
-		now:       time.Now,
+		//simclock:wall the default when no clock is injected
+		now: time.Now,
 	}
 	cs.onJob = wrapHandler(onJob)
 	// Initialize and load store on creation
@@ -197,10 +199,23 @@ func (cs *CronService) SetOnMissed(fn func(job CronJob)) {
 	cs.onMissed = fn
 }
 
+// SetClock makes the service read c.Now for every schedule decision and wait on
+// c.After(1s) between claims, so a simulated clock drives it: at a 1m sim resolution a
+// due job is claimed at the next minute boundary. Call it before Start.
+func (cs *CronService) SetClock(c interface {
+	Now() time.Time
+	After(d time.Duration) <-chan time.Time
+}) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.now, cs.after = c.Now, c.After
+}
+
 func (cs *CronService) clock() time.Time {
 	if cs.now != nil {
 		return cs.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 
@@ -230,7 +245,7 @@ func (cs *CronService) Start() error {
 	cs.pool = newWorkerPool(cs.opts.Workers, cs.opts.Workers*poolQueueMultiplier, cs.executeJobByID)
 	cs.running = true
 	cs.stopped = false
-	go cs.runLoop(cs.stopChan)
+	go cs.runLoop(cs.stopChan, cs.after)
 	onMissed := cs.onMissed
 	cs.mu.Unlock()
 
@@ -404,15 +419,20 @@ func (cs *CronService) Stop() {
 	cs.mu.Unlock()
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+func (cs *CronService) runLoop(stopChan chan struct{}, after func(d time.Duration) <-chan time.Time) {
+	next := after
+	if next == nil {
+		//simclock:wall no clock was set: the wall ticker
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		next = func(time.Duration) <-chan time.Time { return ticker.C }
+	}
 
 	for {
 		select {
 		case <-stopChan:
 			return
-		case <-ticker.C:
+		case <-next(time.Second):
 			cs.checkJobs()
 		}
 	}
@@ -1170,6 +1190,7 @@ func generateID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback to time-based if crypto/rand fails
+		//simclock:wall an identifier, not a domain time
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)

@@ -421,7 +421,7 @@ func (cb *ContextBuilder) entryStaleLocked(e *promptCacheEntry) bool {
 	}
 
 	// The daily-note window ("today and the two days before") moved.
-	if e.day != promptDay(time.Now()) {
+	if e.day != promptDay(cb.now()) {
 		return true
 	}
 

@@ -103,7 +103,10 @@ type Service struct {
 
 type realClock struct{}
 
-func (realClock) Now() time.Time                         { return time.Now() }
+//simclock:wall the wall clock itself
+func (realClock) Now() time.Time { return time.Now() }
+
+//simclock:wall the wall clock itself
 func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // New builds a Service and migrates its table.

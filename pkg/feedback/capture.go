@@ -318,6 +318,7 @@ func (s *Service) housekeepLoop(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	next := s.after
 	if next == nil {
+		//simclock:wall no After was given: the wall ticker
 		t := time.NewTicker(housekeepEvery)
 		defer t.Stop()
 		next = func(time.Duration) <-chan time.Time { return t.C }

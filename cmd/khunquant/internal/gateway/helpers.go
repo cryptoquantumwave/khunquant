@@ -58,6 +58,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
@@ -203,6 +204,7 @@ func gatewayCmd(debug, locked bool) error {
 	// Every process-global time hook reads the final shared clock: the lab's under the
 	// lock, the wall clock otherwise. Never per generation.
 	bindProcessClock(shared.clk())
+	agentLoop.SetClock(simclock.NowFunc(shared.clk())) // the prompt shows gateway time
 
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")
@@ -553,6 +555,7 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 		lastModTime := getFileModTime(configPath)
 		lastSize := getFileSize(configPath)
 
+		//simclock:wall the config file watcher polls in wall time
 		ticker := time.NewTicker(2 * time.Second) // Check every 2 seconds
 		defer ticker.Stop()
 
@@ -569,6 +572,7 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 					}
 
 					// Debounce - wait a bit to ensure file write is complete
+					//simclock:wall the config file watcher debounces in wall time
 					time.Sleep(500 * time.Millisecond)
 
 					// Validate and load new config
@@ -641,6 +645,8 @@ type cronHooks struct {
 	// DNSync asks for a (debounced) pass of the delta-neutral hand-over after a plan
 	// tool changed a plan's cron job.
 	DNSync tools.DNSyncFunc
+	// Clock drives the cron service's schedule decisions and job loop; nil is the wall clock.
+	Clock simclock.Clock
 }
 
 func setupCronTool(
@@ -656,6 +662,9 @@ func setupCronTool(
 
 	// Create cron service
 	cronService := cron.NewCronService(cronStorePath, nil)
+	if len(hooks) > 0 && hooks[0].Clock != nil {
+		cronService.SetClock(hooks[0].Clock)
+	}
 	cronService.SetOptions(cronOptionsFromConfig(cfg))
 	cronService.SetOnMissed(missedJobNotifier(msgBus))
 	if msgBus != nil {

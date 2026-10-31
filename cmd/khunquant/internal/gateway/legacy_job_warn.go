@@ -43,6 +43,8 @@ type legacyJobWarner struct {
 
 // legacyJobs is the process's warner: a config reload rebuilds the cron service but
 // the day's warnings stand.
+//
+//simclock:wall the default when no clock is injected
 var legacyJobs = &legacyJobWarner{now: time.Now}
 
 // check warns when job is of a legacy family and live reports that triggers are

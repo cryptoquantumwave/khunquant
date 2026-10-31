@@ -216,9 +216,11 @@ func Publish(_ context.Context, ev OrderEvent) {
 		return
 	}
 	if ev.At.IsZero() {
-		ev.At = time.Now()
 		if f := clock.Load(); f != nil {
 			ev.At = (*f)()
+		} else {
+			//simclock:wall the default when no clock is injected
+			ev.At = time.Now()
 		}
 	}
 	select {

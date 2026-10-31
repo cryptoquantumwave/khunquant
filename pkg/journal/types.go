@@ -91,9 +91,13 @@ type Clock interface {
 type RealClock struct{}
 
 // Now returns the current time.
+//
+//simclock:wall the wall clock itself
 func (RealClock) Now() time.Time { return time.Now() }
 
 // After is time.After.
+//
+//simclock:wall the wall clock itself
 func (RealClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // EventScope says what a published Event is about.

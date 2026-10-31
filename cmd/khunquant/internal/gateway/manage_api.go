@@ -69,6 +69,7 @@ func (m *manageDeps) clock() time.Time {
 	if m != nil && m.now != nil {
 		return m.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

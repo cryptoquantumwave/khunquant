@@ -478,6 +478,7 @@ func (t *DailyLossTracker) now() time.Time {
 	if t.nowFn != nil {
 		return t.nowFn()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

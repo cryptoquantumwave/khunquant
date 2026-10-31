@@ -24,5 +24,6 @@ func processNow() time.Time {
 	if f := processClock.Load(); f != nil {
 		return (*f)()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }

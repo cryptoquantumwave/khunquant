@@ -104,6 +104,7 @@ func (rt *perceptionRuntime) stopIntentCompiler() {
 		rt.intentCancel()
 		select {
 		case <-rt.intentDone:
+		//simclock:wall a shutdown wait, bounded in wall time
 		case <-time.After(intentStopTimeout):
 			logger.WarnCF("perception", "The intent compiler did not stop in time", nil)
 		}

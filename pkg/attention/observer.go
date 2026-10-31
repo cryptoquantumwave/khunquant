@@ -110,6 +110,7 @@ func (o *Outbox) stopObservers() {
 	}()
 	select {
 	case <-done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(observerStopWait):
 	}
 }

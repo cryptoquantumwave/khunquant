@@ -347,7 +347,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		cfg.Agents.Defaults.RestrictToWorkspace,
 		execTimeout,
 		cfg,
-		cronHooks{Alerts: s.Alerts.resolver(), DNSync: s.Alerts.requestDNSync},
+		cronHooks{Alerts: s.Alerts.resolver(), DNSync: s.Alerts.requestDNSync, Clock: d.Shared.simClock()},
 	)
 	d.DNStore = s.DNStore
 	s.Alerts.dn.configure(s.DNStore)
@@ -514,6 +514,7 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		cfg.Heartbeat.Enabled,
 		d.State,
 	)
+	s.HeartbeatService.SetClock(simclock.ForHeartbeat(d.Shared.clk()))
 	if contract := heartbeatContract(cfg, s); contract == heartbeat.ContractGoverned {
 		// No bus: a governed heartbeat publishes nothing itself.
 		s.HeartbeatService.SetContract(contract)

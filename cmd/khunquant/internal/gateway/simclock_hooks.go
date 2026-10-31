@@ -27,6 +27,8 @@ var processClockSetters = []func(now func() time.Time){
 
 // processNow is the clock of the gateway's free functions that have no deps to carry one
 // (the legacy cron handlers, the cron routes): time.Now until bindProcessClock.
+//
+//simclock:wall the default when no clock is injected
 var processNow = time.Now
 
 // processAfter is processNow's timer: nil (the callers keep their wall-clock ticker) until

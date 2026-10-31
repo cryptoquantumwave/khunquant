@@ -155,6 +155,7 @@ type Clock interface{ Now() time.Time }
 
 type realClock struct{}
 
+//simclock:wall the wall clock itself
 func (realClock) Now() time.Time { return time.Now() }
 
 // item is a Job in the scheduler. ctx, base and cancel are set while it runs.
@@ -314,6 +315,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
+	//simclock:wall a shutdown wait, bounded in wall time
 	t := time.NewTimer(stopGrace)
 	defer t.Stop()
 	select {

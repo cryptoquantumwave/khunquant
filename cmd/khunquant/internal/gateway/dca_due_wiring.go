@@ -383,6 +383,7 @@ func (rt *perceptionRuntime) stopDCADue() {
 	rt.dca.cancel()
 	select {
 	case <-rt.dca.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(dcaCompareTimeout):
 		logger.WarnCF("perception", "DCA comparison did not stop in time", nil)
 	}

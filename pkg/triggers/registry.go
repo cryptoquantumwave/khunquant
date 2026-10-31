@@ -147,9 +147,10 @@ func NewRegistry(ctx context.Context, db *sql.DB, globalMode func() string, f ma
 		db:         db,
 		globalMode: globalMode,
 		factories:  make(map[string]Factory, len(f)),
-		now:        time.Now,
-		newID:      proactive.NewID,
-		warned:     map[string]time.Time{},
+		//simclock:wall the default when no clock is injected
+		now:    time.Now,
+		newID:  proactive.NewID,
+		warned: map[string]time.Time{},
 	}
 	if r.globalMode == nil {
 		r.globalMode = func() string { return ModeOff }

@@ -143,6 +143,7 @@ func (rt *reflectionRuntime) stop() {
 	rt.cancel()
 	select {
 	case <-rt.done:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(reflectionStopTimeout):
 		logger.WarnCF("reflection", "The nightly reflection did not stop in time", nil)
 	}

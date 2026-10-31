@@ -33,6 +33,7 @@ const (
 func (s *Store) SetClock(now func() time.Time) { s.now = now }
 
 func (s *Store) clock() time.Time {
+	//simclock:wall the default when no clock is injected
 	t := time.Now
 	if s.now != nil {
 		t = s.now

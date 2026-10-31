@@ -54,6 +54,7 @@ type Devices struct {
 // NewDevices wraps src. now may be nil (time.Now).
 func NewDevices(src devevents.EventSource, now func() time.Time) *Devices {
 	if now == nil {
+		//simclock:wall the default when no clock is injected
 		now = time.Now
 	}
 	return &Devices{src: src, now: now}

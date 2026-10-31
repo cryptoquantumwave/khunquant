@@ -204,6 +204,7 @@ type Migrator struct {
 
 // New builds a Migrator.
 func New(f Family, jobs Jobs, specs Specs, opts ...Option) *Migrator {
+	//simclock:wall the default when no clock is injected
 	m := &Migrator{fam: f, jobs: jobs, specs: specs, now: time.Now, grace: DefaultGrace}
 	for _, o := range opts {
 		o(m)

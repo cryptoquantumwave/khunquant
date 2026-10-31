@@ -36,6 +36,7 @@ func (rt *policyRuntime) clock() time.Time {
 	if rt != nil && rt.now != nil {
 		return rt.now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

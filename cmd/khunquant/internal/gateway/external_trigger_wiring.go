@@ -23,7 +23,8 @@ func registerTriggerAPIFor(mux handleMux, s *gatewayServices, d assemblyDeps) {
 		runtime: s.perceptionLive.Load,
 		mode:    func() string { return cfg.Proactive.Effective().TriggersMode },
 		limiter: d.Shared.triggerLimiter(),
-		now:     time.Now,
+		//simclock:wall the external trigger rate limiter bounds requests in wall time
+		now: time.Now,
 	})
 }
 

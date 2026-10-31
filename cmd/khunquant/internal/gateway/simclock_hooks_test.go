@@ -18,6 +18,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
 )
@@ -298,7 +299,7 @@ func TestGatewayHooks_NoWallClockConstructors(t *testing.T) {
 			t.Errorf("no %s call found in the gateway: the guard (or the wiring) is out of date", key)
 		}
 	}
-	for _, key := range []string{"sweep.Config.Now", "feedback.Options.Clock", "feedback.Options.After", "SetTimerClock"} {
+	for _, key := range []string{"sweep.Config.Now", "feedback.Options.Clock", "feedback.Options.After", "SetTimerClock", "cronHooks.Clock"} {
 		if seen[key] == 0 {
 			t.Errorf("no %s literal found in the gateway: the guard (or the wiring) is out of date", key)
 		}
@@ -338,5 +339,23 @@ func TestClockHooks_NotRegisteredWhenUnlocked(t *testing.T) {
 	}
 	if mcpTools(t, f, testDevMCPToken)["sandbox_clock"] {
 		t.Fatal("sandbox_clock is a tool of an unlocked gateway")
+	}
+}
+
+// The lab's simulator stamps orders with lab time, so its times follow the Sim.
+func TestLabSimulator_UsesLabClock(t *testing.T) {
+	t.Setenv(lab.EnvClockStart, "2031-05-06T07:08:09Z")
+	t.Setenv(lab.EnvClockMode, "manual")
+	f := newLockedFixture(t)
+	id := placeBinanceOrder(t, f.lab)
+	var at time.Time
+	f.lab.Sim.Read("binance", func(st *sandbox.VenueState) {
+		if o := st.ClosedOrders[id]; o != nil {
+			at = o.UpdatedAt
+		}
+	})
+	want := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC)
+	if !at.Equal(want) {
+		t.Fatalf("order %s stamped %v, want lab time %v", id, at, want)
 	}
 }

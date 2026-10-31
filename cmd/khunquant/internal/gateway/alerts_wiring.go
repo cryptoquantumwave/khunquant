@@ -249,6 +249,7 @@ func (s storedSpecs) List(ctx context.Context, f triggers.ListFilter) ([]trigger
 }
 
 func (s storedSpecs) Update(ctx context.Context, sp triggers.Spec) error {
+	//simclock:wall a runtime built without a clock reads the wall clock
 	now := time.Now
 	if s.now != nil {
 		now = s.now
@@ -332,6 +333,7 @@ func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cro
 			a.compare(reg)
 		case <-a.dn.wake: // nil channel (no plan store) blocks forever
 			if dnPass == nil {
+				//simclock:wall a plan-tool debounce window: the settle waits for it (SBX-09 counts it busy)
 				dnTimer = time.NewTimer(a.dn.debounce)
 				dnPass = dnTimer.C
 			}

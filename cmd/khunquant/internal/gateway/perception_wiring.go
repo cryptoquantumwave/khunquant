@@ -392,6 +392,7 @@ func (rt *perceptionRuntime) stop() {
 	rt.engCancel()
 	select {
 	case <-rt.engDone:
+	//simclock:wall a shutdown wait, bounded in wall time
 	case <-time.After(perceptionEngineStopTimeout):
 		logger.WarnCF("perception", "Pipeline engine did not stop in time", nil)
 	}

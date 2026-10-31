@@ -167,6 +167,7 @@ func (rt *perceptionRuntime) worldModelStats() *worldModelStats {
 		Series:         s.Series, BufferedLog: s.BufferedLog, DirtyRows: s.DirtyRows,
 	}
 	if !s.LastCheckpoint.IsZero() {
+		//simclock:wall the default when no clock is injected
 		now := time.Now()
 		if rt.worldModel.now != nil {
 			now = rt.worldModel.now()

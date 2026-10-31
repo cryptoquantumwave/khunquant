@@ -124,15 +124,43 @@ func (al *AgentLoop) SetBackgroundSection(s FinancialContributor) (detach func()
 	return func() { al.background.cur.CompareAndSwap(h, nil) }
 }
 
+// SetClock makes the prompt of every agent read now (see ContextBuilder.SetClock) and
+// keeps it for the registries a reload installs. A nil now restores the wall clock.
+func (al *AgentLoop) SetClock(now func() time.Time) {
+	if al == nil {
+		return
+	}
+	if now == nil {
+		al.clock.Store(nil)
+	} else {
+		al.clock.Store(&now)
+	}
+	al.mu.RLock()
+	reg := al.registry
+	al.mu.RUnlock()
+	if reg == nil {
+		return
+	}
+	for _, id := range reg.ListAgentIDs() {
+		if a, ok := reg.GetAgent(id); ok && a != nil && a.ContextBuilder != nil {
+			a.ContextBuilder.SetClock(now)
+		}
+	}
+}
+
 // attachBackgroundSections gives the loop's holder to every agent's context
 // builder in registry. It runs wherever a registry is installed.
 func (al *AgentLoop) attachBackgroundSections(registry *AgentRegistry) {
 	if al == nil || al.background == nil || registry == nil {
 		return
 	}
+	clk := al.clock.Load()
 	for _, id := range registry.ListAgentIDs() {
 		if a, ok := registry.GetAgent(id); ok && a != nil && a.ContextBuilder != nil {
 			a.ContextBuilder.WithBackgroundSections(al.background)
+			if clk != nil { // a reload builds new instances: they take the loop's clock too
+				a.ContextBuilder.SetClock(*clk)
+			}
 		}
 	}
 }

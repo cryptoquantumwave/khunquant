@@ -34,6 +34,7 @@ func NewID() string {
 	idGen.mu.Lock()
 	defer idGen.mu.Unlock()
 
+	//simclock:wall an identifier, not a domain time
 	now := uint64(time.Now().UnixMilli())
 	if now > idGen.ms {
 		idGen.ms = now

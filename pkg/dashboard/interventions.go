@@ -106,6 +106,7 @@ func (r *Reader) now() time.Time {
 	if r.Now != nil {
 		return r.Now()
 	}
+	//simclock:wall the default when no clock is injected
 	return time.Now()
 }
 

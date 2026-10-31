@@ -146,6 +146,7 @@ type queuedFire struct {
 // New returns a compiler over the ledger and the registry. It starts nothing.
 func New(store *intent.Store, specs Specs, opts ...Option) *Compiler {
 	c := &Compiler{
+		//simclock:wall the default when no clock is injected
 		store: store, specs: specs, now: time.Now, debounce: DefaultDebounce,
 		wake: make(chan struct{}, 1), fireWake: make(chan struct{}, 1),
 		notes: map[string]string{}, activated: map[string]time.Time{},
@@ -284,6 +285,7 @@ func (c *Compiler) Run(ctx context.Context) {
 			c.Reconcile(ctx)
 		case <-c.wake:
 			if timerC == nil {
+				//simclock:wall the debounce window: the settle waits for it (SBX-09 counts it busy)
 				timer = time.NewTimer(c.debounce)
 				timerC = timer.C
 			}

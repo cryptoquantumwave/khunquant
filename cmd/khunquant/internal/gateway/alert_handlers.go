@@ -30,6 +30,8 @@ const (
 )
 
 // alertNow is the clock used for recurring-alert cooldowns. Tests replace it.
+//
+//simclock:wall the default when no clock is injected
 var alertNow = time.Now
 
 // updateAlertPayload re-reads the job right before writing, decodes its payload

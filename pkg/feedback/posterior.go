@@ -119,6 +119,7 @@ func prior(now time.Time) Posterior {
 // prior when nothing was recorded.
 func (s *Store) Posterior(ctx context.Context, kind string, hourBucket int) (Posterior, error) {
 	if s == nil {
+		//simclock:wall a nil store has no clock
 		return prior(time.Now()), nil
 	}
 	return readPosterior(ctx, s.db, kind, hourBucket, s.clock())

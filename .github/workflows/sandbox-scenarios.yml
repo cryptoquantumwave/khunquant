@@ -41,12 +41,23 @@ jobs:
 
       # Same namespace as the PR job. Exit 1 (an expectation failed) is what an open known
       # bug does and is not an error here; 2 (an invalid scenario) and 3 (infrastructure)
-      # are, and fail the job. The report goes to the job summary.
+      # are, and fail the job. The report goes to the job summary. A known bug whose scenario
+      # now passes means a fix landed without flipping the status to active: each one is
+      # named in a warning (the report's heading for a scenario is "# Scenario <id>: pass").
+      # The warning does not fail the job.
       - name: Run all scenarios, known bugs included, without network
         env:
           KQ_SCENARIO_KNOWN_BUGS: "1"
         run: |
           code=0
           sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)" || code=$?
-          if [ -f scenarios-report.md ]; then cat scenarios-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f scenarios-report.md ]; then
+            cat scenarios-report.md >> "$GITHUB_STEP_SUMMARY"
+            { grep -rl '^status: known_bug' testdata/scenarios || true; } | sort | while read -r f; do
+              id=$(sed -n 's/^scenario: *//p' "$f" | head -n 1)
+              if grep -qx "# Scenario $id: pass" scenarios-report.md; then
+                echo "::warning file=$f::known-bug scenario $id passed; the defect looks fixed, so flip its status to active and drop known_bug"
+              fi
+            done
+          fi
           if [ "$code" -ge 2 ]; then exit "$code"; fi

@@ -107,6 +107,13 @@ jobs:
         run: |
           sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)"
 
+      # The report says which expectation failed, with the journal around it. Without this
+      # step a red run could not be read after the log scrolled away.
+      - name: Scenario report
+        if: always()
+        run: |
+          if [ -f scenarios-report.md ]; then cat scenarios-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
   frontend:
     name: Frontend Build
     runs-on: ubuntu-latest

@@ -11,8 +11,8 @@
 # wording ("mandate"); the approval confirmation at +0 carries the word, so the matcher can
 # see it.
 #
-# The timeline is 17 steps of 48 h on purpose: one advance call has a 20 s wall budget and a
-# settle in flight at its end was seen journaled as failed, which fails the run (see the PR).
+# One long advance (816 h, 34 days) on purpose: it takes several wall-budget calls and each
+# one must settle before it moves.
 # Red today: the mandate expires after one month (mandate_months: 1) and the next slots are
 # bought by the cron job; the owner hears nothing about it.
 version: 1
@@ -57,23 +57,7 @@ setup:
       on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
       action: approve
 timeline:
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
-  - advance: 48h
+  - advance: 816h
 expect:
   - id: asked
     message: { to: owner, contains: ["mandate"], count: ">= 1" }

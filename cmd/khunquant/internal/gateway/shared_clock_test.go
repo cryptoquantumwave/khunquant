@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -343,7 +344,19 @@ func TestClockGroup_NotRegisteredWhenUnlocked(t *testing.T) {
 // A locked gateway: the lab's Sim is the process clock, the group is a route and a tool,
 // and two sim hours pass in well under 10 s of wall time with perception on, with a
 // clock.step journal entry per step.
-func TestLockedGateway_ClockAdvanceTwoHours(t *testing.T) {
+func TestLockedGateway_ClockAdvanceTwoHours(t *testing.T) { lockedClockAdvanceTwoHours(t) }
+
+// The same on one CPU, as on a starved CI runner: a loop the step just woke must re-arm
+// its timer before the clock reads the heap again, or the advance jumps to the target and
+// a periodic job fires once instead of about 120 times.
+func TestLockedGateway_ClockAdvanceTwoHours_SingleCPU(t *testing.T) {
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+	lockedClockAdvanceTwoHours(t)
+}
+
+func lockedClockAdvanceTwoHours(t *testing.T) {
+	t.Helper()
 	t.Setenv(lab.EnvClockStart, "2026-03-10T09:00:00Z")
 	t.Setenv(lab.EnvClockMode, "manual")
 	f := newLockedFixture(t, liveWithPerception(), func(c *config.Config) { c.Debug.DevMCP.Enabled = true })

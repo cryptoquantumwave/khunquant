@@ -112,3 +112,6 @@ func RunUntil(ctx context.Context, c *labclient.Client, o UntilOptions) (UntilRe
 		}
 	}
 }
+
+// ClockNow reads the instance's sim time.
+func ClockNow(ctx context.Context, c *labclient.Client) (time.Time, error) { return clockNow(ctx, c) }

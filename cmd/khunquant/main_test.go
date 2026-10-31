@@ -42,6 +42,7 @@ func TestStartupModes(t *testing.T) {
 	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "up", "--json"}))
 	assert.False(t, isSandboxJSON([]string{"khunquant", "sandbox", "up"}))
 	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "mcp"}), "stdout is the MCP protocol")
+	assert.True(t, isSandboxJSON([]string{"khunquant", "sandbox", "run"}), "a report: no banner, no update check")
 	assert.False(t, isSandboxJSON([]string{"khunquant", "status", "mcp"}))
 	assert.False(t, isSandboxJSON([]string{"khunquant", "status", "--json"}))
 }

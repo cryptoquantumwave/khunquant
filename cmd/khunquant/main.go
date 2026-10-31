@@ -129,9 +129,11 @@ func isReplay(args []string) bool { return len(args) > 1 && args[1] == "replay" 
 
 // isSandboxJSON says whether the process was started as `khunquant sandbox ... --json`,
 // whose standard output must be nothing but the JSON, or as `khunquant sandbox mcp`,
-// whose standard output is the MCP protocol (and which makes no update check either).
+// whose standard output is the MCP protocol (and which makes no update check either), or
+// as `khunquant sandbox run`, whose output is a report and which touches nothing of the
+// developer's: no banner, no update check, no cache under their home.
 func isSandboxJSON(args []string) bool {
-	return len(args) > 1 && args[1] == "sandbox" && (slices.Contains(args, "--json") || (len(args) > 2 && args[2] == "mcp"))
+	return len(args) > 1 && args[1] == "sandbox" && (slices.Contains(args, "--json") || (len(args) > 2 && (args[2] == "mcp" || args[2] == "run")))
 }
 
 // isLockedGateway says whether the process was asked to run as a locked sandbox

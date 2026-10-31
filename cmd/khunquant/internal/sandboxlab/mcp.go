@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
 
@@ -33,6 +35,9 @@ const (
 type mcpServer struct {
 	sup *supervisor.Supervisor
 	srv *mcp.Server
+
+	mu      sync.Mutex
+	reports map[string]*scenario.Report // the last report of each scenario run through sandbox_scenario
 }
 
 func newMCPCommand() *cobra.Command {

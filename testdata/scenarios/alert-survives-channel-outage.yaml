@@ -1,0 +1,51 @@
+# H8: a one-shot price alert must survive the chat channel being down when it fires.
+# A minimal copy for the runner's end-to-end test; SBX-12 owns the scenario set and
+# re-derives this file's status against main.
+version: 1
+scenario: alert-survives-channel-outage
+covers: [H8]
+llm: scripted
+level: wire
+clock:
+  start: "2026-10-20T09:00:00+07:00"
+  mode: manual
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance/main: { balances: { USDT: 10000, BTC: 0.1 } }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 100000, recurring: false }
+timeline:
+  - at: "+5m"
+    chat.channel: { state: down }
+  - at: "+6m"
+    market.path: { symbol: BTC/USDT, to: 100500, over: 3m, shape: linear }
+  - at: "+30m"
+    chat.channel: { state: up }
+  - run_until: "+2h"
+expect:
+  - id: crossed
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    within: { from: "+6m", to: "+10m" }
+  - id: delivered-after-recovery
+    message: { to: owner, contains: ["BTC", "100"], count: 1 }
+    within: { from: "+30m", to: "+35m" }
+  - id: no-leak
+    message: { to: [stranger, "group:*"], count: 0 }
+  - id: no-duplicate-later
+    message: { to: owner, contains: ["BTC"], count: 0 }
+    within: { from: "+35m", to: "+2h" }

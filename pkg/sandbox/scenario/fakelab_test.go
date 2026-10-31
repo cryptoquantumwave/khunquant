@@ -218,5 +218,8 @@ func (f *fakeSup) exit(in *fakeInstance, code int, reason supervisor.ExitReason)
 // scenarioOf parses a scenario made of the standard head and body.
 func scenarioOf(t *testing.T, body string) *File {
 	t.Helper()
+	if !strings.Contains(body, "expect:") { // a scenario must expect something; "no error log" does not depend on the fake
+		body += "expect:\n  - id: quiet\n    logs: {}\n"
+	}
 	return parseString(t, "version: 1\nscenario: t\nclock: {start: \"2026-10-20T09:00:00+07:00\"}\n"+body)
 }

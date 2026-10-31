@@ -1,0 +1,22 @@
+version: 1
+scenario: legacy-heartbeat-no-repeat
+covers: [H9, S110B-1]
+llm: live                 # real model, budgeted
+runs: 5
+pass_rate: 0.8
+base: stack-head
+matrix:
+  template: ["template:v1", "template:v2"]
+clock: { start: "2026-10-20T09:30:00+07:00", mode: manual }
+instance:
+  config: { heartbeat: { enabled: true, interval: 30 } }    # proactive off: legacy path
+  workspace: { HEARTBEAT.md: "${template}" }
+market:
+  SOL/USDT: { venue: binance, model: set, price: 180 }
+timeline:
+  - at: "+0m"
+    market.path: { symbol: SOL/USDT, to: 165.6, over: 30m, shape: linear }   # -8%, then flat
+  - run_until: "next 08:00"
+expect:
+  - message: { to: owner, during: "22:00-07:00", count: 0 }
+  - message: { to: owner, contains: ["SOL"], count: "<= 2" }

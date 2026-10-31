@@ -65,12 +65,12 @@ func (m *mcpServer) capsOf(ctx context.Context, instance string) *scenario.Caps 
 	if err != nil {
 		return nil
 	}
-	groups, err := c.Groups(ctx)
+	info, err := c.Lab(ctx)
 	if err != nil {
 		return nil
 	}
-	caps := &scenario.Caps{Groups: map[string][]string{}}
-	for _, g := range groups {
+	caps := &scenario.Caps{Groups: map[string][]string{}, Kinds: info.Kinds}
+	for _, g := range info.Groups {
 		ops := []string{}
 		for _, o := range g.Ops {
 			ops = append(ops, o.Name)

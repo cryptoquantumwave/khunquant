@@ -4,14 +4,17 @@ package sandboxlab
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
 
 const goodScenario = `version: 1
@@ -123,5 +126,35 @@ func TestScenarioTool_Validate(t *testing.T) {
 	p := writeScenario(t, t.TempDir(), "f.yaml", "from-file", "")
 	if out := h.must("sandbox_scenario", map[string]any{"op": "validate", "file": p}); !strings.Contains(out, `"valid":true`) {
 		t.Errorf("file: %s", out)
+	}
+}
+
+// neverUp is a lab whose instances never come up: Up waits for the caller to give up.
+type neverUp struct{ scenario.Instances }
+
+func (neverUp) Up(ctx context.Context, _ supervisor.UpOptions) (supervisor.Info, error) {
+	<-ctx.Done()
+	return supervisor.Info{}, ctx.Err()
+}
+
+// --timeout caps one scenario in wall time and a scenario over the cap is an
+// infrastructure failure, exit 3 (not 1: it says nothing about the code under test).
+func TestRun_TimeoutIsInfraFailure(t *testing.T) {
+	old := newInstances
+	t.Cleanup(func() { newInstances = old })
+	newInstances = func(string) (scenario.Instances, func(context.Context) error, error) {
+		return neverUp{}, func(context.Context) error { return nil }, nil
+	}
+	p := writeScenario(t, t.TempDir(), "slow.yaml", "slow", "")
+	began := time.Now()
+	out, code := runCLI(t, "--timeout", "1s", p)
+	if code != exitInfra || time.Since(began) > 30*time.Second {
+		t.Fatalf("exit %d after %s, want 3 after about 1s\n%s", code, time.Since(began), out)
+	}
+	if !strings.Contains(out, "infra") || !strings.Contains(out, "--timeout") {
+		t.Errorf("the report must name the cap:\n%s", out)
+	}
+	if out, code := runCLI(t, "--timeout", "-1s", p); code != exitInvalid {
+		t.Errorf("a negative --timeout is invalid, exit %d\n%s", code, out)
 	}
 }

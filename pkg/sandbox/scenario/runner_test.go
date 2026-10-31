@@ -312,3 +312,40 @@ func journalPayloads(t *testing.T, in *fakeInstance, kinds string) []string {
 	}
 	return out
 }
+
+// A scenario that runs past the wall cap ends as infrastructure (exit 3) whatever it was
+// doing, its remaining runs do not start, and the next scenario is not affected.
+func TestRunner_TimeoutIsInfraFailure(t *testing.T) {
+	sup := newFakeSup(t)
+	sup.onUp = func(n int, in *fakeInstance) { in.busy.set(n == 1) } // the first instance never settles
+	r := &Runner{Sup: sup, SettleCap: time.Minute, Timeout: 500 * time.Millisecond}
+	began := time.Now()
+	rep, err := r.Run(context.Background(), scenarioOf(t, "runs: 3\ntimeline:\n  - advance: 5m\n"))
+	if err != nil {
+		t.Fatalf("Run: %v (a scenario that times out is a result, not an error)", err)
+	}
+	if took := time.Since(began); took > 20*time.Second {
+		t.Errorf("took %s, want about the 500ms cap", took)
+	}
+	if rep.Pass || rep.ExitCode() != ExitInfra || len(rep.Runs) != 3 || sup.ups() != 1 {
+		t.Fatalf("pass=%v exit=%d runs=%d instances=%d, want infra over 3 results from 1 instance", rep.Pass, rep.ExitCode(), len(rep.Runs), sup.ups())
+	}
+	for _, res := range rep.Runs {
+		if res.Pass || !strings.Contains(res.Infra, "--timeout") {
+			t.Errorf("run %d = %+v, want Infra naming --timeout", res.Run, res)
+		}
+	}
+
+	// The same Runner runs the next scenario on a fresh cap.
+	rep, err = r.Run(context.Background(), scenarioOf(t, "timeline:\n  - advance: 5m\n"))
+	if err != nil || !rep.Pass || rep.ExitCode() != 0 {
+		t.Fatalf("next scenario: %+v (%v)", rep, err)
+	}
+
+	// A cancelled parent is not a timeout: Run returns the error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Run(ctx, scenarioOf(t, "timeline:\n  - advance: 5m\n")); err == nil {
+		t.Error("a cancelled context must end Run with an error")
+	}
+}

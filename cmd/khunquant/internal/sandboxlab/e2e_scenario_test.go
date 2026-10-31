@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 )
 
 // The scenario end-to-end tests drive the real binary (KQ_SANDBOX_E2E_BIN names a
@@ -33,9 +36,15 @@ func e2eBinary(t *testing.T) string {
 // HOME and TMPDIR, and returns its output and exit status.
 func runBinary(t *testing.T, bin string, args ...string) (string, int, time.Duration) {
 	t.Helper()
+	return runBinaryEnv(t, bin, nil, args...)
+}
+
+// runBinaryEnv is runBinary with extra environment entries (KQ_SCENARIO_KNOWN_BUGS=1).
+func runBinaryEnv(t *testing.T, bin string, env []string, args ...string) (string, int, time.Duration) {
+	t.Helper()
 	base := sandboxEnv(t)
 	cmd := exec.Command(bin, append([]string{"sandbox", "run", "--binary", bin}, args...)...)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + base, "HOME=" + os.Getenv("HOME")}
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + base, "HOME=" + os.Getenv("HOME")}, env...)
 	cmd.Dir = repoRoot(t)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -52,11 +61,18 @@ func runBinary(t *testing.T, bin string, args ...string) (string, int, time.Dura
 	return string(out), code, took
 }
 
-// scenarioDir is the repository's testdata/scenarios, asserted non-empty.
+// scenarioDir lists the *.yaml files anywhere under the repository's testdata/scenarios,
+// asserted non-empty.
 func scenarioDir(t *testing.T) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "testdata", "scenarios")
-	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".yaml") {
+			files = append(files, path)
+		}
+		return err
+	})
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no scenario files under %s: %v", dir, err)
 	}
@@ -90,31 +106,58 @@ func TestE2E_ValidateOnly(t *testing.T) {
 }
 
 // H8 end to end on a real locked gateway: the runner starts it, sets it up, walks two sim
-// hours and evaluates the journal in well under a minute of wall time. H8 is a defect the
-// proactive stack had open (the design's H8): a red result is the finding, not a runner
-// failure, so the test requires only that the run reached its verdict (exit 0 or 1, never
-// 2 or 3) and that a failing expectation is explained with want, got and journal entries.
+// hours and evaluates the journal in well under a minute of wall time. The rule for the
+// file's status (SBX-12): green while H8 is active; while it is a known bug, skipped with
+// exit 0 by default and, with KQ_SCENARIO_KNOWN_BUGS=1, red with exit 1 on exactly the
+// recovery expectation and a report that explains it (want, got, journal entries).
 func TestE2E_H8(t *testing.T) {
 	bin := e2eBinary(t)
-	files := scenarioDir(t)
 	var h8 string
-	for _, f := range files {
+	for _, f := range scenarioDir(t) {
 		if strings.HasSuffix(f, "alert-survives-channel-outage.yaml") {
 			h8 = f
 		}
 	}
 	if h8 == "" {
-		t.Fatalf("H8 is not among %v", files)
+		t.Fatal("H8 is not among the committed scenarios")
 	}
+	data, err := os.ReadFile(h8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := scenario.Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	out, code, took := runBinary(t, bin, h8)
-	if code != 0 && code != 1 {
-		t.Fatalf("exit %d: the run must reach a verdict\n%s", code, out)
+	if code != 0 {
+		t.Fatalf("exit %d: H8 must be green (active) or skipped (known_bug), never red by default\n%s", code, out)
+	}
+	if !f.IsKnownBug() {
+		if !strings.Contains(out, "pass     alert-survives-channel-outage") || took > time.Minute {
+			t.Fatalf("H8 is active: want a pass in under 60s, took %s\n%s", took, out)
+		}
+		return
+	}
+	if !strings.Contains(out, "skipped") || took > 10*time.Second {
+		t.Fatalf("H8 is a known bug (%s): want it skipped without starting an instance, took %s\n%s", f.KnownBug, took, out)
+	}
+
+	out, code, took = runBinaryEnv(t, bin, []string{knownBugsEnv + "=1"}, h8)
+	if code != exitFailed {
+		t.Fatalf("with %s=1 a known bug runs and is red: exit %d, want 1\n%s", knownBugsEnv, code, out)
 	}
 	if took > time.Minute {
 		t.Errorf("H8 took %s of wall time, want under 60s", took)
 	}
-	if code == 1 && (!strings.Contains(out, "want:") || !strings.Contains(out, "got:") || !strings.Contains(out, "Journal around it")) {
-		t.Errorf("a failing expectation must show want, got and a journal excerpt:\n%s", out)
+	for _, want := range []string{"`delivered-after-recovery` (message): FAILED", "want:", "got:", "Journal around it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a failing expectation must show %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "): FAILED") != 1 {
+		t.Errorf("only the recovery expectation may fail:\n%s", out)
 	}
 }
 

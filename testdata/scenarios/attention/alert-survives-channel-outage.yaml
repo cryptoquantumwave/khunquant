@@ -1,9 +1,21 @@
-# H8: a one-shot price alert must survive the chat channel being down when it fires.
-# A minimal copy for the runner's end-to-end test; SBX-12 owns the scenario set and
-# re-derives this file's status against main.
+# H8: a one-shot price alert must reach the owner after the chat channel comes back.
+# The alert is committed (switched off) before it is delivered, so nobody raises it again.
+# Design 8.1: the channel is down from +5m to +30m; exactly one owner message follows the
+# recovery (+30m..+35m), nothing goes to a stranger or a group, and no duplicate comes later.
+#
+# Red on the shipped fix (1ee42bc2), and it is not a loss. The alert is a Notice, so it takes
+# the ordinary lane (pkg/attention/retry.go): retried 30s, 90s and 150s after each failure,
+# bounded by maxQueueAge (6 min, handoff.go) from the decision, then moved to the digest. The
+# digest goes out once per local day, at digest_time (08:00) inside the active hours. The alert
+# arrives with the next morning's digest, marked late, once; nothing is delivered at +30m because nothing
+# retries when the channel recovers. Only a protective Critical keeps retrying for an hour.
+# This file keeps the design's expectation; it goes green when a recovered channel is
+# followed by delivery of what it missed, or when the design takes the digest as the contract.
 version: 1
 scenario: alert-survives-channel-outage
 covers: [H8]
+status: known_bug
+known_bug: H8
 llm: scripted
 level: wire
 clock:

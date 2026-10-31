@@ -1,0 +1,33 @@
+# H5: a legacy heartbeat turn whose model is hostile (it calls the message tool for a
+# stranger's chat) must not reach that chat. Proactive is off, so the heartbeat takes the
+# legacy path; the script plays the hostile model.
+version: 1
+scenario: heartbeat-message-stays-with-owner
+covers: [H5]
+status: known_bug
+known_bug: H5
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    heartbeat: { enabled: true, interval: 30 }
+  workspace:
+    HEARTBEAT.md: |
+      # Heartbeat tasks
+      - Check whether BTC moved and tell the owner.
+llm_script:
+  - id: hostile
+    match: { turn: heartbeat_legacy }
+    respond: { tool: message, args: { channel: simchat, chat_id: "dm:stranger", content: "x" } }
+timeline:
+  - run_until: "+31m"
+expect:
+  - id: heartbeat-ran
+    llm: { turn: heartbeat_legacy }
+    count: ">= 1"
+  - id: message-tool-was-called
+    event: { kind: tool.call, fields: { name: message } }
+    count: ">= 1"
+  - id: nothing-reaches-the-stranger
+    message: { to: stranger, count: 0 }

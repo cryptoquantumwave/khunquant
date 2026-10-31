@@ -1,0 +1,46 @@
+# H7: a group chat is never the owner. proactive.owner points at group:team, and an alert
+# that crosses must not be delivered to the group (a proposal card would let any member
+# approve an order).
+#
+# Red: the owner check is Telegram-only (validateOwner, pkg/config/proactive.go: a negative
+# numeric chat id), so for any other channel a group chat is accepted as the owner chat,
+# `khunquant owner set` included, and notify delivers to it although its contract is the
+# owner's direct chat. The design's order-proposal step is left out: the alert reaching the
+# group already shows the defect.
+version: 1
+scenario: group-owner-refused
+covers: [H7]
+status: known_bug
+known_bug: H7
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "group:team", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 100000, recurring: false }
+timeline:
+  - at: "+5m"
+    market.path: { symbol: BTC/USDT, to: 100500, over: 3m, shape: linear }
+  - run_until: "+1h"
+expect:
+  - id: crossed
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+  - id: nothing-reaches-the-group
+    message: { to: "group:*", count: 0 }
+  - id: no-unexpected-error
+    logs: { }

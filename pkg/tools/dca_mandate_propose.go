@@ -144,7 +144,7 @@ func proposeMandateFor(ctx context.Context, cfg *config.Config, store *dca.Store
 	case strings.Contains(plan.Symbol, ":"):
 		return "\nNo mandate was proposed: mandates cover spot symbols only. The plan keeps running on its scheduled job."
 	}
-	params, err := buildMandateParams(ctx, cfg, plan, ask, time.Now())
+	params, err := buildMandateParams(ctx, cfg, plan, ask, dcaNow())
 	if err != nil {
 		return "\nNo mandate was proposed (" + err.Error() + "). The plan keeps running on its scheduled job."
 	}
@@ -152,7 +152,7 @@ func proposeMandateFor(ctx context.Context, cfg *config.Config, store *dca.Store
 	if err != nil {
 		return "\nNo mandate was proposed (" + refusalMessage(err) + "). The plan keeps running on its scheduled job."
 	}
-	if err := store.SetMandatePending(ctx, plan.ID, p.ID, time.Now()); err != nil {
+	if err := store.SetMandatePending(ctx, plan.ID, p.ID, dcaNow()); err != nil {
 		return "\nA mandate card was sent (" + p.Code + ") but could not be recorded against the plan: " + err.Error()
 	}
 	return fmt.Sprintf("\nStatus: awaiting_mandate. A mandate card (%s) was sent to the owner; until they approve it the plan keeps running on its scheduled job, "+

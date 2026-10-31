@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
@@ -228,9 +229,22 @@ func settleLab(shared *sharedResources) func(context.Context) error {
 				return err
 			}
 		}
+		// Stopgap until the quiescence registry (SBX-09) settles every component. The step
+		// that just fired woke loops waiting on the clock (the outbox, cron, the alert and
+		// DCA loops); each re-arms its After only once it runs. Sim.step rereads the timer
+		// heap right after this returns, and on a loaded or single CPU the woken loops
+		// have not run yet, so the heap looks empty and the advance jumps to its target:
+		// a periodic job fires once instead of once per step. Yield and give them a
+		// moment, a few ms of wall time per step.
+		runtime.Gosched()
+		time.Sleep(settleYield) //simclock:wall let the loops the step woke re-arm their timers before the next step
 		return nil
 	}
 }
+
+// settleYield is the wall gap settleLab leaves after each step; a 2 h advance at the
+// 1 m resolution is 120 steps, so it costs about 120 ms.
+const settleYield = time.Millisecond
 
 // publishLabGeneration makes s the generation the lab groups read. It runs once s has
 // its approval service, workflow engine and policy record, so no group sees a half-built

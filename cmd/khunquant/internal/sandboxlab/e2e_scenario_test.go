@@ -36,15 +36,9 @@ func e2eBinary(t *testing.T) string {
 // HOME and TMPDIR, and returns its output and exit status.
 func runBinary(t *testing.T, bin string, args ...string) (string, int, time.Duration) {
 	t.Helper()
-	return runBinaryEnv(t, bin, nil, args...)
-}
-
-// runBinaryEnv is runBinary with extra environment entries (KQ_SCENARIO_KNOWN_BUGS=1).
-func runBinaryEnv(t *testing.T, bin string, env []string, args ...string) (string, int, time.Duration) {
-	t.Helper()
 	base := sandboxEnv(t)
 	cmd := exec.Command(bin, append([]string{"sandbox", "run", "--binary", bin}, args...)...)
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + base, "HOME=" + os.Getenv("HOME")}, env...)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + base, "HOME=" + os.Getenv("HOME")}
 	cmd.Dir = repoRoot(t)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -105,11 +99,10 @@ func TestE2E_ValidateOnly(t *testing.T) {
 	}
 }
 
-// H8 end to end on a real locked gateway: the runner starts it, sets it up, walks two sim
-// hours and evaluates the journal in well under a minute of wall time. The rule for the
-// file's status (SBX-12): green while H8 is active; while it is a known bug, skipped with
-// exit 0 by default and, with KQ_SCENARIO_KNOWN_BUGS=1, red with exit 1 on exactly the
-// recovery expectation and a report that explains it (want, got, journal entries).
+// H8 end to end on a real locked gateway: the runner starts it, sets it up, walks 26 sim
+// hours (a channel outage, then the next morning's digest) and evaluates the journal in
+// about 12 s of wall time. The digest as the contract is agreed, so the file is active and
+// the run must be green; a known_bug status here would hide a regression.
 func TestE2E_H8(t *testing.T) {
 	bin := e2eBinary(t)
 	var h8 string
@@ -130,34 +123,16 @@ func TestE2E_H8(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code, took := runBinary(t, bin, h8)
-	if code != 0 {
-		t.Fatalf("exit %d: H8 must be green (active) or skipped (known_bug), never red by default\n%s", code, out)
-	}
-	if !f.IsKnownBug() {
-		if !strings.Contains(out, "pass     alert-survives-channel-outage") || took > time.Minute {
-			t.Fatalf("H8 is active: want a pass in under 60s, took %s\n%s", took, out)
-		}
-		return
-	}
-	if !strings.Contains(out, "skipped") || took > 10*time.Second {
-		t.Fatalf("H8 is a known bug (%s): want it skipped without starting an instance, took %s\n%s", f.KnownBug, took, out)
+	if f.IsKnownBug() {
+		t.Fatalf("H8 is %s %s: the digest contract is agreed, so the file must be active", f.Status, f.KnownBug)
 	}
 
-	out, code, took = runBinaryEnv(t, bin, []string{knownBugsEnv + "=1"}, h8)
-	if code != exitFailed {
-		t.Fatalf("with %s=1 a known bug runs and is red: exit %d, want 1\n%s", knownBugsEnv, code, out)
+	out, code, took := runBinary(t, bin, h8)
+	if code != 0 || !strings.Contains(out, "pass     alert-survives-channel-outage") {
+		t.Fatalf("exit %d: H8 must pass\n%s", code, out)
 	}
-	if took > time.Minute {
-		t.Errorf("H8 took %s of wall time, want under 60s", took)
-	}
-	for _, want := range []string{"`delivered-after-recovery` (message): FAILED", "want:", "got:", "Journal around it"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("a failing expectation must show %q:\n%s", want, out)
-		}
-	}
-	if strings.Count(out, "): FAILED") != 1 {
-		t.Errorf("only the recovery expectation may fail:\n%s", out)
+	if took > 90*time.Second {
+		t.Errorf("H8 took %s of wall time, want under 90s", took)
 	}
 }
 

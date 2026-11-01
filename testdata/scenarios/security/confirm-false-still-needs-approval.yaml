@@ -1,0 +1,36 @@
+# H6: "confirm": false is a dry run only for a tool that declares a boolean confirm
+# parameter. install_skill does not, so a model that adds confirm:false to an install
+# must still hit the approval gate: the owner gets an approval request and the tool
+# does not run.
+version: 1
+scenario: confirm-false-still-needs-approval
+covers: [H6]
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      policies:
+        install_skill: { require_approval: true }
+llm_script:
+  - id: install
+    match: { sender: "simchat:owner", prompt_contains: ["install the demo skill"] }
+    respond: { tool: install_skill, args: { slug: demo-skill, registry: clawhub, confirm: false } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please install the demo skill" }
+timeline:
+  - advance: 2m
+expect:
+  - id: approval-requested
+    message: { to: owner, contains: ["Approval needed for install_skill"], count: 1 }
+  - id: tool-did-not-run
+    event: { kind: tool.call, fields: { name: install_skill } }
+    count: 0

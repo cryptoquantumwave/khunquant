@@ -284,7 +284,7 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("guardrails.period is required when max_executions_per_period > 0 (use 'hour', 'day', or 'week')")
 	}
 
-	startDate := time.Now().UTC()
+	startDate := dcaNow().UTC()
 	if startDateStr != "" {
 		parsed, err := time.Parse("2006-01-02", startDateStr)
 		if err != nil {
@@ -308,7 +308,7 @@ func (t *CreateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		endDate = &parsed
 	}
 
-	now := time.Now().UTC()
+	now := dcaNow().UTC()
 	plan := &dca.Plan{
 		Name:             planName,
 		Provider:         providerID,

@@ -32,10 +32,14 @@ type Runner struct {
 	KnownBugs    bool          // KQ_SCENARIO_KNOWN_BUGS=1: run a known_bug scenario
 	SettleCap    time.Duration // wall cap of a settle between steps; default 10 s
 	StepWall     time.Duration // wall budget of one advance call; default 20 s
+	Timeout      time.Duration // wall cap of one scenario, all its runs; over it is infrastructure (exit 3); 0: none
 	Keep         bool          // keep the home of a run that did not pass
 	FixturesFrom string        // passed to Up (default: the supervisor's)
 	Log          io.Writer     // progress lines; nil: none
 }
+
+// errTimeout is why a scenario's context ended when it ran past Runner.Timeout.
+var errTimeout = errors.New("the scenario ran past its wall cap (--timeout)")
 
 func (r *Runner) logf(format string, a ...any) {
 	if r.Log != nil {
@@ -55,12 +59,22 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	sctx := ctx
+	if r.Timeout > 0 {
+		var cancel context.CancelFunc
+		sctx, cancel = context.WithTimeoutCause(ctx, r.Timeout, errTimeout)
+		defer cancel()
+	}
 	for _, g := range files {
 		for i := 1; i <= g.RunCount(); i++ {
 			if err := ctx.Err(); err != nil {
 				return rep, err
 			}
-			res := r.runOnce(ctx, g, i)
+			if sctx.Err() != nil { // the cap ended an earlier run: the rest do not start
+				rep.Runs = append(rep.Runs, &Result{Scenario: g.Scenario, Matrix: g.MatrixRow, Run: i, StartSim: g.StartTime(), Infra: errTimeout.Error()})
+				continue
+			}
+			res := r.runOnce(sctx, g, i)
 			if res.Pass {
 				rep.Passed++
 			}
@@ -87,6 +101,16 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 	began := time.Now()
 	res = &Result{Scenario: f.Scenario, Matrix: f.MatrixRow, Run: run, StartSim: f.StartTime()}
 	defer func() { res.Wall = time.Since(began) }()
+	defer func() { // a run the wall cap cut short says nothing about the code
+		if ctx.Err() != nil && errors.Is(context.Cause(ctx), errTimeout) {
+			res.Pass = false
+			if res.Infra != "" { // what it was doing when the cap hit is a consequence of the cap
+				res.Infra = errTimeout.Error() + ": " + res.Infra
+			} else {
+				res.Infra = errTimeout.Error()
+			}
+		}
+	}()
 	r.logf("%s run %d%s: starting an instance", f.Scenario, run, matrixLabel(f.MatrixRow))
 
 	info, err := r.Sup.Up(ctx, supervisor.UpOptions{
@@ -218,7 +242,7 @@ func (s *runState) fail(ctx context.Context, where string, err error) {
 		}
 		s.res.Infra = fmt.Sprintf("%s: %v", where, se)
 	case ctx.Err() != nil:
-		s.res.Infra = "interrupted: " + ctx.Err().Error()
+		s.res.Infra = "interrupted: " + context.Cause(ctx).Error()
 	default:
 		if info, gerr := s.r.Sup.Get(s.name); gerr == nil && info.State == supervisor.StateExited {
 			s.res.Infra = fmt.Sprintf("%s: %v; the instance exited (%s, %s)%s", where, err, info.ExitReason, exitCode(info), s.lockLog())

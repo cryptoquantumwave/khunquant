@@ -289,7 +289,7 @@ func (t *UpdateDCAPlanTool) Execute(ctx context.Context, args map[string]any) *T
 		return UserResult("No changes specified.")
 	}
 
-	plan.UpdatedAt = time.Now().UTC()
+	plan.UpdatedAt = dcaNow().UTC()
 
 	// A new schedule means a new cron job. The gateway runs a "dca:" job only if
 	// its ID is the one the plan records, so the swap must never leave the stored

@@ -218,7 +218,13 @@ func TestClockGroup_AdvanceFiresTimersAndReportsWallBudget(t *testing.T) {
 		t.Fatalf("get = %v, %v", got, err)
 	}
 	settleErr := errors.New("engine: stuck")
-	l.Settle = func(context.Context) error { return settleErr }
+	calls := 0
+	l.Settle = func(context.Context) error { // the first settle is the one before the clock moves
+		if calls++; calls == 1 {
+			return nil
+		}
+		return settleErr
+	}
 	_, err := call(t, l, `{"op":"advance","by":"2h"}`)
 	wantCode(t, err, CodeFailed)
 	if !strings.Contains(err.Error(), "stuck") {

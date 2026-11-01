@@ -1,0 +1,72 @@
+# H8: a one-shot price alert survives the chat channel being down when it fires. The alert is
+# committed (switched off) before it is delivered, so nobody raises it again; losing the
+# delivery would lose the alert.
+#
+# The contract this file asserts (agreed): the owner gets the alert once, late, in the next
+# morning's digest. It is not delivered when the channel comes back, and it is not lost.
+#
+# Mechanism. A price alert is a Notice, so it takes the ordinary delivery lane
+# (pkg/attention/retry.go): tried again 30 s, 90 s and 150 s after each failure, as long as
+# the next try stays inside maxQueueAge (6 min, handoff.go) of the decision. Then it moves to
+# the digest, which goes out once per local day at digest_time (08:00 by default) inside the
+# active hours, with the item marked "(delayed: raised at HH:MM, could not be delivered on
+# time)". Only a protective Critical keeps retrying for an hour instead. The channel here is
+# down from +5m to +30m, far longer than the retries last, so the digest is the only way
+# the alert arrives.
+#
+# Timeline: start 09:00 +07:00, the alert crosses about +8m, the channel is back at +30m, the
+# next 08:00 local is +23h.
+version: 1
+scenario: alert-survives-channel-outage
+covers: [H8]
+llm: scripted
+level: wire
+clock:
+  start: "2026-10-20T09:00:00+07:00"
+  mode: manual
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance/main: { balances: { USDT: 10000, BTC: 0.1 } }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 100000, recurring: false }
+timeline:
+  - at: "+5m"
+    chat.channel: { state: down }
+  - at: "+6m"
+    market.path: { symbol: BTC/USDT, to: 100500, over: 3m, shape: linear }
+  - at: "+30m"
+    chat.channel: { state: up }
+  - run_until: "+12h"
+  - run_until: "+26h"
+expect:
+  - id: crossed
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    within: { from: "+6m", to: "+10m" }
+  - id: nothing-reaches-the-owner-during-the-outage
+    message: { to: owner, count: 0 }
+    within: { from: "0m", to: "+30m" }
+  - id: nothing-on-recovery-before-the-digest
+    message: { to: owner, count: 0 }
+    within: { from: "+30m", to: "22h59m" }
+  - id: digest-carries-the-late-alert-once
+    message: { to: owner, contains: ["BTC", "delayed: raised at 09:", "could not be delivered on time"], count: 1 }
+    within: { from: "22h59m", to: "23h15m" }
+  - id: one-alert-message-in-all
+    message: { to: owner, contains: ["BTC"], count: 1 }
+  - id: nothing-to-others
+    message: { to: [stranger, "group:*"], count: 0 }

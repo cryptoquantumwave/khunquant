@@ -1,0 +1,50 @@
+# P2A-1: price alerts on two Binance symbols (BTC, ETH), then ETH is delisted. The market
+# source must go on reading BTC: one symbol the venue rejects must not stop the ticks of
+# the others. The Binance fixtures know BTC/USDT and ETH/USDT only (a third symbol, such as
+# SOL/USDT, is unknown to the venue from the start and already stops the other ticks), so
+# the scenario has one watched symbol left. Market ticks are not in the lab journal, so it
+# reads their consequence: after the delist BTC crosses its line and the crossing is seen.
+# Without the delist step the same scenario passes. Red: providerRun.tickers reads
+# several symbols of a provider with one FetchTickers call and, when it fails, fails the
+# whole batch without trying the symbols one by one (pkg/perception/sources/market.go).
+version: 1
+scenario: delist-keeps-other-tickers
+covers: [P2A-1]
+status: known_bug
+known_bug: P2A-1
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+  ETH/USDT: { venue: binance, model: set, price: 3500 }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 99000, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: ETH/USDT, condition: above, threshold: 3550, recurring: false }
+timeline:
+  - advance: 10m
+  - market.delist: { symbol: ETH/USDT, venue: binance }
+  - advance: 5m
+  - market.path: { symbol: BTC/USDT, to: 99500, over: 5m, shape: linear }
+  - run_until: "+40m"
+expect:
+  - id: btc-still-watched
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    within: { from: "+15m", to: "+40m" }

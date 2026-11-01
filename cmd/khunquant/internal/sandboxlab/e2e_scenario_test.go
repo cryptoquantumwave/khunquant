@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 )
 
 // The scenario end-to-end tests drive the real binary (KQ_SANDBOX_E2E_BIN names a
@@ -52,11 +55,18 @@ func runBinary(t *testing.T, bin string, args ...string) (string, int, time.Dura
 	return string(out), code, took
 }
 
-// scenarioDir is the repository's testdata/scenarios, asserted non-empty.
+// scenarioDir lists the *.yaml files anywhere under the repository's testdata/scenarios,
+// asserted non-empty.
 func scenarioDir(t *testing.T) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "testdata", "scenarios")
-	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".yaml") {
+			files = append(files, path)
+		}
+		return err
+	})
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no scenario files under %s: %v", dir, err)
 	}
@@ -89,32 +99,40 @@ func TestE2E_ValidateOnly(t *testing.T) {
 	}
 }
 
-// H8 end to end on a real locked gateway: the runner starts it, sets it up, walks two sim
-// hours and evaluates the journal in well under a minute of wall time. H8 is a defect the
-// proactive stack had open (the design's H8): a red result is the finding, not a runner
-// failure, so the test requires only that the run reached its verdict (exit 0 or 1, never
-// 2 or 3) and that a failing expectation is explained with want, got and journal entries.
+// H8 end to end on a real locked gateway: the runner starts it, sets it up, walks 26 sim
+// hours (a channel outage, then the next morning's digest) and evaluates the journal in
+// about 12 s of wall time. The digest as the contract is agreed, so the file is active and
+// the run must be green; a known_bug status here would hide a regression.
 func TestE2E_H8(t *testing.T) {
 	bin := e2eBinary(t)
-	files := scenarioDir(t)
 	var h8 string
-	for _, f := range files {
+	for _, f := range scenarioDir(t) {
 		if strings.HasSuffix(f, "alert-survives-channel-outage.yaml") {
 			h8 = f
 		}
 	}
 	if h8 == "" {
-		t.Fatalf("H8 is not among %v", files)
+		t.Fatal("H8 is not among the committed scenarios")
 	}
+	data, err := os.ReadFile(h8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := scenario.Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if f.IsKnownBug() {
+		t.Fatalf("H8 is %s %s: the digest contract is agreed, so the file must be active", f.Status, f.KnownBug)
+	}
+
 	out, code, took := runBinary(t, bin, h8)
-	if code != 0 && code != 1 {
-		t.Fatalf("exit %d: the run must reach a verdict\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "pass     alert-survives-channel-outage") {
+		t.Fatalf("exit %d: H8 must pass\n%s", code, out)
 	}
-	if took > time.Minute {
-		t.Errorf("H8 took %s of wall time, want under 60s", took)
-	}
-	if code == 1 && (!strings.Contains(out, "want:") || !strings.Contains(out, "got:") || !strings.Contains(out, "Journal around it")) {
-		t.Errorf("a failing expectation must show want, got and a journal excerpt:\n%s", out)
+	if took > 90*time.Second {
+		t.Errorf("H8 took %s of wall time, want under 90s", took)
 	}
 }
 

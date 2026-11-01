@@ -23,6 +23,18 @@ import (
 // knownBugsEnv lets a known_bug scenario run (it is skipped and reported otherwise).
 const knownBugsEnv = "KQ_SCENARIO_KNOWN_BUGS"
 
+// defaultTimeout is the default --timeout: the wall cap of one scenario.
+const defaultTimeout = 5 * time.Minute
+
+// newInstances starts the supervisor a run takes its instances from (a test replaces it).
+var newInstances = func(binary string) (scenario.Instances, func(context.Context) error, error) {
+	sup, err := supervisor.New(supervisor.Config{Binary: binary})
+	if err != nil {
+		return nil, nil, err
+	}
+	return sup, sup.Close, nil
+}
+
 // Exit codes of `khunquant sandbox run` (the scenario package's).
 const (
 	exitFailed  = scenario.ExitFailed
@@ -123,7 +135,7 @@ type runOptions struct {
 	runs                                  int
 	report, binary, llm, fixtures, budget string
 	seed                                  int
-	settleCap                             time.Duration
+	settleCap, timeout                    time.Duration
 }
 
 func newRunCommand() *cobra.Command {
@@ -155,6 +167,7 @@ func newRunCommand() *cobra.Command {
 	f.StringVar(&o.llm, "llm", "scripted", "Run the files whose llm is scripted, replay, live or all")
 	f.StringVar(&o.fixtures, "fixtures-from", "", "Directory holding <venue>/fixtures.json (default: ./workspace/sandbox)")
 	f.DurationVar(&o.settleCap, "settle-cap", 0, "Wall time a settle between steps may take before the run fails (default 10s)")
+	f.DurationVar(&o.timeout, "timeout", defaultTimeout, "Wall cap of one scenario, all its runs; over it is an infrastructure failure, exit 3 (0: none)")
 	f.StringVar(&o.budget, "llm-budget", "", "Budget of a live run (SBX-16)")
 	f.IntVar(&o.seed, "seed", 0, "Seed of a live run (SBX-16)")
 	return cmd
@@ -221,12 +234,15 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	sup, err := supervisor.New(supervisor.Config{Binary: o.binary})
+	if o.timeout < 0 {
+		return &exitError{exitInvalid, "--timeout must not be negative"}
+	}
+	sup, closeSup, err := newInstances(o.binary)
 	if err != nil {
 		return &exitError{exitInfra, err.Error()}
 	}
-	defer func() { _ = sup.Close(context.WithoutCancel(ctx)) }()
-	runner := &scenario.Runner{Sup: sup, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr()}
+	defer func() { _ = closeSup(context.WithoutCancel(ctx)) }()
+	runner := &scenario.Runner{Sup: sup, Timeout: o.timeout, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr()}
 
 	var reports []*scenario.Report
 	var md strings.Builder

@@ -34,7 +34,7 @@ func simRig(t *testing.T, minutes int) (*HeartbeatService, *simclock.Sim, chan t
 	if err := hs.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(hs.Stop)
+	t.Cleanup(func() { stopAndWait(t, hs) })
 	for deadline := time.Now().Add(3 * time.Second); sim.Pending() == 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the schedule never armed its first timer")

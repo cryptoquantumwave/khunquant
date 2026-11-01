@@ -336,7 +336,9 @@ func TestRunner_TimeoutIsInfraFailure(t *testing.T) {
 		}
 	}
 
-	// The same Runner runs the next scenario on a fresh cap.
+	// The same Runner runs the next scenario on a fresh cap (a roomy one: this half is about
+	// nothing of the first leaking into it, not about how fast a busy machine is).
+	r.Timeout = time.Minute
 	rep, err = r.Run(context.Background(), scenarioOf(t, "timeline:\n  - advance: 5m\n"))
 	if err != nil || !rep.Pass || rep.ExitCode() != 0 {
 		t.Fatalf("next scenario: %+v (%v)", rep, err)

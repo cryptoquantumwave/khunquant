@@ -49,6 +49,18 @@ func jsonable(v any) any {
 	return v
 }
 
+// servicesWait is how long a call waits for the instance's services: call_tool and manage
+// answer "unavailable: no generation of services is running" until the first generation is
+// published, which can be later than /health when the machine is busy, and between
+// generations of a reload. The wall time is the runner's own.
+const servicesWait = 30 * time.Second
+
+// noServices says whether err is that answer.
+func noServices(err error) bool {
+	var le *labclient.Error
+	return errors.As(err, &le) && le.Code == "unavailable" && strings.Contains(le.Msg, "no generation of services")
+}
+
 // call runs one op of a lab group with args (op "" for a single-op group) and returns the
 // JSON result.
 func call(ctx context.Context, c *labclient.Client, group, op string, args map[string]any) (json.RawMessage, error) {
@@ -64,6 +76,14 @@ func call(ctx context.Context, c *labclient.Client, group, op string, args map[s
 		return nil, fmt.Errorf("%s %s: %w", group, op, err)
 	}
 	out, err := c.Call(ctx, group, raw)
+	for end := time.Now().Add(servicesWait); noServices(err) && time.Now().Before(end); {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		out, err = c.Call(ctx, group, raw)
+	}
 	if err == nil && group == "call_tool" { // a tool that failed is still an answer to the lab
 		var r struct {
 			IsError bool   `json:"is_error"`

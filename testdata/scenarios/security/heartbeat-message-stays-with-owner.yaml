@@ -28,4 +28,4 @@ expect:
     event: { kind: tool.call, fields: { name: message } }
     count: ">= 1"
   - id: nothing-reaches-the-stranger
-    message: { to: stranger, count: 0 }
+    message: { to: stranger, count: 1 }

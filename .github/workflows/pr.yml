@@ -103,6 +103,10 @@ jobs:
       # Two layers keep a scenario off the network: the egress guard in the binary, and an
       # empty network namespace here (only loopback, which the instances talk over). The
       # namespace needs root; the run itself goes back to the runner user.
+      - name: PROBE curl must fail in the namespace
+        run: |
+          sudo -E unshare --net -- sh -c 'ip link set lo up; ip addr; if curl -sS --max-time 8 https://example.com >/dev/null; then echo "PROBE: REACHED THE NETWORK"; exit 1; else echo "PROBE: curl failed as expected"; fi'
+
       - name: Run active scenarios without network
         run: |
           sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)"

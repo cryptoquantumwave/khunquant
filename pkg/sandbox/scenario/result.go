@@ -16,6 +16,8 @@ type ExpectResult struct {
 	Want, Got   string
 	MatchedSeqs []int64            // journal seqs that matched (SBX-21 reads them)
 	Excerpt     []labjournal.Entry // entries around the window, at most 20
+
+	err error // the journal could not be read (OK is false then)
 }
 
 // StepMark is where a step ran: the sim time after it and the newest journal seq.

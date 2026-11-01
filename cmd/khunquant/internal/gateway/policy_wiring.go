@@ -164,6 +164,9 @@ type policyStatsResponse struct {
 	DecisionsToday map[string]int `json:"decisions_today"`
 	// Dropped is how many records the recorder dropped because its queue was full.
 	Dropped int64 `json:"dropped"`
+	// StoreFailed is how many writes the store reported as failed. DecisionsToday
+	// normally does not count those records; a stalled commit can land and still report.
+	StoreFailed int64 `json:"store_failed"`
 }
 
 // stats snapshots the counters. Safe on a nil runtime (nil).
@@ -171,7 +174,7 @@ func (rt *policyRuntime) stats(now time.Time) *policyStatsResponse {
 	if rt == nil {
 		return nil
 	}
-	out := &policyStatsResponse{Mode: rt.mode, DecisionsToday: map[string]int{}, Dropped: rt.rec.Dropped()}
+	out := &policyStatsResponse{Mode: rt.mode, DecisionsToday: map[string]int{}, Dropped: rt.rec.Dropped(), StoreFailed: rt.rec.StoreFailed()}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())

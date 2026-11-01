@@ -3,6 +3,7 @@ package policy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -100,6 +101,39 @@ func TestPolicyDecisions_Bounded(t *testing.T) {
 	s.Housekeep(ctx, now.Add(11*time.Minute))
 	if n, _ = s.Count(ctx); n != MaxRows {
 		t.Fatalf("housekeeping did not run after its interval: %d rows", n)
+	}
+}
+
+// The table shares a database with every proactive store, so another writer can hold
+// the lock. The write waits and is kept: on the production budget the record survives
+// a hold longer than the 250 ms that used to lose it.
+func TestStore_AddOutlastsAHeldWriteLock(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the write lock
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(350*time.Millisecond, func() { _ = tx.Commit() })
+	if err := s.Add(ctx, Decision{At: time.Now(), Tool: "t", Mode: ModeAct}); err != nil {
+		t.Fatalf("a write behind another writer was lost: %v", err)
+	}
+	if n, err := s.Count(ctx); err != nil || n != 1 {
+		t.Fatalf("Count = %d, %v", n, err)
+	}
+}
+
+// A write out of budget is reported, not swallowed: an already spent budget needs no
+// timing to get there.
+func TestStore_AddReportsASpentBudget(t *testing.T) {
+	s := newStore(t)
+	s.writeBudget = 0
+	ctx := context.Background()
+	if err := s.Add(ctx, Decision{At: time.Now(), Tool: "t", Mode: ModeAct}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Add = %v, want a deadline error", err)
+	}
+	if n, err := s.Count(ctx); err != nil || n != 0 {
+		t.Fatalf("Count = %d, %v", n, err)
 	}
 }
 

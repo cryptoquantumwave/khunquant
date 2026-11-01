@@ -1,11 +1,14 @@
 package policy
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
@@ -107,6 +110,35 @@ func TestRecorder_FullQueueDropsAndCounts(t *testing.T) {
 	defer ga.mu.Unlock()
 	if int64(ga.calls)+rc.Dropped() != 50 {
 		t.Fatalf("%d processed + %d dropped, want 50", ga.calls, rc.Dropped())
+	}
+}
+
+// A record the store could not write is counted apart from a full queue, and the log
+// keeps what the row would have said.
+func TestRecorder_CountsAWriteTheStoreFailed(t *testing.T) {
+	var buf bytes.Buffer
+	prev := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	logger.SetAdditionalWriter(&buf)
+	t.Cleanup(func() { logger.SetAdditionalWriter(nil); logger.SetLevel(prev) })
+
+	store := newStore(t)
+	store.writeBudget = 0
+	rc := NewRecorder(&spyAuthorizer{}, store, nil, 0)
+	t.Cleanup(func() { rc.Close(time.Second) })
+
+	rc.Record(context.Background(), ActionRequest{Tool: "create_order"}, Verdict{Mode: ModeDeny, Tier: T3Discretionary})
+	if !rc.Flush(5 * time.Second) {
+		t.Fatal("the queue did not drain")
+	}
+	if rc.StoreFailed() != 1 || rc.Dropped() != 0 {
+		t.Fatalf("failed = %d, dropped = %d, want 1 and 0", rc.StoreFailed(), rc.Dropped())
+	}
+	if n, _ := store.Count(context.Background()); n != 0 {
+		t.Fatalf("%d rows", n)
+	}
+	if out := buf.String(); !strings.Contains(out, "create_order") || !strings.Contains(out, "deny") || !strings.Contains(out, "T3") {
+		t.Fatalf("the log lost the record: %q", out)
 	}
 }
 

@@ -41,6 +41,42 @@ import (
 // current generation it reads at call time through a closure over sharedResources (see
 // labDeps), never by capturing a generation's services.
 
+// kindConfigReload is journaled once a locked gateway has finished a config reload.
+const kindConfigReload = "config.reload"
+
+// labJournalKinds are the journal kinds the components of this binary write, declared
+// so a scenario that reads one this build lacks is refused by name. A PR that adds a
+// producer adds its kinds here (TestDeclaredKinds_CoverMergedProducers scans the source
+// for kinds nobody declared). event.* covers every bus event, whose kind is
+// event.<events.Kind>; the observer also files workflow, approval and policy events as
+// workflow.step, proposal and policy.decision.
+var labJournalKinds = []string{
+	"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", // simchat
+	"exchange.req",                // the sandbox server's request log
+	"llm.call", "llm.complete",    // the simulated model
+	"event.*", "workflow.step", "proposal", "policy.decision", // the bus observer
+	"tool.call",   // the tool tap
+	"manage.call", // sandbox_manage
+	"clock.step",  // the sim clock
+	"settle",      // quiescence
+	kindConfigReload,
+}
+
+// journalConfigReload appends config.reload {ok, error} once a reload has finished or been
+// refused. The journal outlives every generation, so the entry is written after the
+// services were rebuilt. A refused reload ends the process with exit 3 soon after.
+func journalConfigReload(shared *sharedResources, errp *error) {
+	if shared == nil || shared.lab == nil || shared.lab.Journal == nil {
+		return
+	}
+	p := map[string]any{"ok": *errp == nil}
+	if *errp != nil {
+		p["error"] = (*errp).Error()
+	}
+	b, _ := json.Marshal(p)
+	shared.lab.Journal.Append(labjournal.Entry{Kind: kindConfigReload, Source: "gateway", Payload: b})
+}
+
 // buildLab builds the process-lifetime lab from the enforced config. It starts the
 // sandbox server (which publishes its base URL) and fails when there are no venues.
 func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
@@ -67,6 +103,7 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		return nil, fmt.Errorf("opening the lab journal: %w", err)
 	}
 	l.Journal = j
+	l.DeclareKinds(labJournalKinds...)
 	l.OnClose(j.Close)
 	// Every request the chain sees is journaled (Append never blocks: a full queue drops).
 	l.Chain.Observe(func(i sandbox.ReqInfo) {

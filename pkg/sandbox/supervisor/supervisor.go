@@ -174,6 +174,9 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	if err := checkOverlay(o.ConfigPatch, o.Workspace); err != nil {
+		return Info{}, err
+	}
 	home, err := instanceHome(s.cfg.TmpDir, name)
 	if err != nil {
 		return Info{}, err
@@ -224,6 +227,14 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	}()
 	if err := prepareHome(home, name, port, fixtures); err != nil {
 		return Info{}, err
+	}
+	if len(o.ConfigPatch) > 0 {
+		if _, err := patchConfigFile(home, o.ConfigPatch); err != nil {
+			return Info{}, fmt.Errorf("sandbox up: config patch: %w", err)
+		}
+	}
+	if err := writeWorkspace(home, o.Workspace); err != nil {
+		return Info{}, fmt.Errorf("sandbox up: workspace: %w", err)
 	}
 	if err := in.start(ctx, s.cfg); err != nil {
 		return Info{}, err

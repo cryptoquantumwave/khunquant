@@ -139,19 +139,29 @@ func (c *Client) Status(ctx context.Context) (locked bool, err error) {
 	return st.Enabled && st.Locked, nil
 }
 
-// Groups lists the lab groups of the instance.
-func (c *Client) Groups(ctx context.Context) ([]GroupInfo, error) {
+// LabInfo is what GET /api/sandbox/lab says: the groups and the declared journal kinds.
+type LabInfo struct {
+	Groups []GroupInfo `json:"groups"`
+	Kinds  []string    `json:"kinds"`
+}
+
+// Lab lists the lab groups and the journal kinds of the instance.
+func (c *Client) Lab(ctx context.Context) (LabInfo, error) {
 	data, err := c.do(ctx, http.MethodGet, "/api/sandbox/lab", nil)
 	if err != nil {
-		return nil, err
+		return LabInfo{}, err
 	}
-	var out struct {
-		Groups []GroupInfo `json:"groups"`
-	}
+	var out LabInfo
 	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("labclient: groups: %w", err)
+		return LabInfo{}, fmt.Errorf("labclient: lab: %w", err)
 	}
-	return out.Groups, nil
+	return out, nil
+}
+
+// Groups lists the lab groups of the instance.
+func (c *Client) Groups(ctx context.Context) ([]GroupInfo, error) {
+	info, err := c.Lab(ctx)
+	return info.Groups, err
 }
 
 // Call posts body ({"op": ..., ...args}) to a lab group and returns the JSON result. A

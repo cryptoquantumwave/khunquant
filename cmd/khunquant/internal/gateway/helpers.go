@@ -342,7 +342,7 @@ func handleConfigReload(
 	services *gatewayServices,
 	shared *sharedResources,
 	msgBus *bus.MessageBus,
-) error {
+) (err error) {
 	if shared != nil {
 		shared.reloading.Add(1)
 		defer shared.reloading.Add(-1)
@@ -354,6 +354,7 @@ func handleConfigReload(
 	// recovery paths below reuse al.GetConfig(), which was enforced when adopted.
 	locked := sandbox.Locked()
 	if locked {
+		defer journalConfigReload(shared, &err) // the scenario runner waits for this entry
 		lk, _ := sandbox.LockInfo()
 		if err := enforceLockedConfig(newCfg, lk); err != nil {
 			return fmt.Errorf("config refused under the sandbox lock: %w", err)

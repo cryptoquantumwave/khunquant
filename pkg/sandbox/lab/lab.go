@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +62,9 @@ type Lab struct {
 
 	gmu    sync.RWMutex // guards groups (group.go)
 	groups map[string]Group
+
+	kmu   sync.RWMutex // guards kinds
+	kinds map[string]bool
 }
 
 // New loads the fixtures, seeds the simulator and starts the sandbox server. It
@@ -118,6 +123,27 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	}
 	sandbox.SetInstance(srv)
 	return l, nil
+}
+
+// DeclareKinds records the journal kinds this instance writes, so a scenario that reads
+// one that is not declared can be refused by name. A name is exact, or "prefix.*" for
+// every kind under it (event.* covers event.<kind>). Declaring twice is harmless.
+func (l *Lab) DeclareKinds(kinds ...string) {
+	l.kmu.Lock()
+	defer l.kmu.Unlock()
+	if l.kinds == nil {
+		l.kinds = map[string]bool{}
+	}
+	for _, k := range kinds {
+		l.kinds[k] = true
+	}
+}
+
+// Kinds returns the declared journal kinds, sorted.
+func (l *Lab) Kinds() []string {
+	l.kmu.RLock()
+	defer l.kmu.RUnlock()
+	return append([]string{}, slices.Sorted(maps.Keys(l.kinds))...)
 }
 
 // Token is the instance token.

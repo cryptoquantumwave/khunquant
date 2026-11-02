@@ -84,7 +84,7 @@ func (r *httpRig) get(venue, host, path string) (int, string, error) {
 func (r *httpRig) place(t *testing.T) error {
 	t.Helper()
 	cfg := &config.Config{}
-	cfg.Exchanges.Binance.Accounts = []config.ExchangeAccount{{Name: "t", APIKey: *config.NewSecureString("k"), Secret: *config.NewSecureString("s")}}
+	cfg.Exchanges.Binance.Accounts = []config.ExchangeAccount{{Name: "t", APIKey: *config.NewSecureString("sbx-test-api-key-0001"), Secret: *config.NewSecureString("sbx-test-secret-0001")}}
 	p, err := broker.CreateProviderForAccount("binance", "t", cfg)
 	if err != nil {
 		t.Fatal(err)

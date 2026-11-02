@@ -25,11 +25,17 @@ func TestFaultGroup_NotRegisteredUnlocked(t *testing.T) {
 	if mcpTools(t, f, testDevMCPToken)["sandbox_fault"] {
 		t.Fatal("an unlocked gateway lists sandbox_fault")
 	}
-	if srv := sandbox.GetInstance(); srv != nil && srv.HasHandlerWrap() {
-		t.Fatal("an unlocked process holds a sandbox server with a handler wrap")
+	// The ordinary sandbox server this gateway runs (the one behind /api/sandbox/*): it must
+	// exist for the check to mean anything, and it has no handler wrap.
+	srv := f.services.SandboxServer
+	if srv == nil || !srv.IsRunning() {
+		t.Fatal("the unlocked fixture runs no sandbox server, so there is nothing to check")
 	}
-	if srv := sandbox.NewServer(sandbox.NewStore()); srv.HasHandlerWrap() {
-		t.Fatal("a new server starts with a handler wrap")
+	if srv.HasHandlerWrap() {
+		t.Fatal("an unlocked gateway's sandbox server has a handler wrap")
+	}
+	if got := sandbox.GetInstance(); got != srv {
+		t.Fatalf("GetInstance = %v, want the gateway's own server", got)
 	}
 }
 
@@ -167,7 +173,7 @@ func TestWrittenThenTimeout_ThroughTheFuturesTool(t *testing.T) {
 	t.Cleanup(broker.ResetInstanceCache)
 	f := newLockedFixture(t, ownerConfig, func(c *config.Config) {
 		c.Tools.FuturesOpenPosition.Enabled = true
-		c.Exchanges.Binance.Accounts = []config.ExchangeAccount{{Name: "main", APIKey: *config.NewSecureString("k"), Secret: *config.NewSecureString("s")}}
+		c.Exchanges.Binance.Accounts = []config.ExchangeAccount{{Name: "main", APIKey: *config.NewSecureString("sbx-test-api-key-0001"), Secret: *config.NewSecureString("sbx-test-secret-0001")}}
 	})
 	if code, out := labPost(t, f, "market", `{"op":"set","venue":"binance","symbol":"BTC/USDT","price":98000}`); code != http.StatusOK {
 		t.Fatalf("market set = %d %v", code, out)

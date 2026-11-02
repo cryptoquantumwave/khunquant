@@ -86,6 +86,24 @@ func ReminderNotice(thai bool, planID int64, code string) Notice {
 		Body:  "The plan keeps running the old way (its scheduled job) until you approve the mandate with code " + code + ". Reply /approve " + code + " to approve it."}
 }
 
+// MandateExpiredNotice tells the owner, once per mandate, that a plan's mandate ran out
+// and the plan is back on its scheduled job. It is a template over ids, a symbol and a
+// time: no model text and no text a person typed. ended is in the mandate's zone.
+func MandateExpiredNotice(thai bool, planID int64, symbol, mandateID string, ended time.Time, zone string) Notice {
+	at := ended.Format("2006-01-02 15:04") + " (" + zone + ")"
+	key := "dca-mandate-expired:" + mandateID
+	if thai {
+		return Notice{Severity: "notice", DedupKey: key,
+			Title: fmt.Sprintf("แผน DCA %d: วงเงิน (mandate) หมดอายุ กลับไปใช้งานตามเวลา", planID),
+			Body: fmt.Sprintf("วงเงิน (mandate) ของแผน DCA %d (%s) หมดอายุเมื่อ %s แผนนี้กลับไปทำงานผ่านงานตามเวลา รอบถัดไปจึงไม่อยู่ภายใต้ขีดจำกัดของวงเงินนั้นอีก "+
+				"หากต้องการใช้วงเงินต่อ ให้ขอ mandate ใหม่สำหรับแผนนี้ หากต้องการหยุดซื้อ ให้ปิดแผน", planID, symbol, at)}
+	}
+	return Notice{Severity: "notice", DedupKey: key,
+		Title: fmt.Sprintf("DCA plan %d: mandate expired, back on its scheduled job", planID),
+		Body: fmt.Sprintf("The mandate of DCA plan %d (%s) ended on %s. The plan is back on its scheduled job, so its next runs are not held to the mandate's limits. "+
+			"To keep those limits, ask me to propose a new mandate for the plan. To stop buying, ask me to disable the plan.", planID, symbol, at)}
+}
+
 // MutedSkipNotice tells the owner that a mute stopped a mandated buy. It is a template
 // over ids, a symbol and times: no model text. slot is the skipped slot in the
 // mandate's zone; earlier is how many other slots were skipped and not reported yet.

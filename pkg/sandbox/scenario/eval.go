@@ -330,11 +330,20 @@ func (v *env) planOf(e *Expectation) (*plan, error) {
 	case "order":
 		venue, _ := f["venue"].(string)
 		if OrderJournalKind(f) == "exchange.order" {
+			// An order is journaled once per transition (create, fill, cancel). Asked for by
+			// what it is, it counts once, at its creation; asked for by status, it counts
+			// the transitions into that status.
 			rest := map[string]any{}
 			for k, v := range f {
 				rest[k] = v
 			}
-			return &plan{[]string{"exchange.order"}, pathsKeep(rest), describe("order", f)}, nil
+			if _, ok := f["status"]; !ok {
+				rest["event"] = "create"
+			}
+			keep := pathsKeep(rest)
+			return &plan{[]string{"exchange.order"}, func(en *labjournal.Entry, doc map[string]any) bool {
+				return doc["event"] != "effect" && keep(en, doc) // an effect marks a create already counted
+			}, describe("order", f)}, nil
 		}
 		return &plan{[]string{"exchange.req"}, func(en *labjournal.Entry, doc map[string]any) bool {
 			status, _ := doc["status"].(float64)

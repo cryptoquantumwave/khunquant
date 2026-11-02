@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
@@ -12,6 +13,37 @@ import (
 type ProfileOptions struct {
 	Home string // absolute path of the instance home (KHUNQUANT_HOME)
 	Port int    // gateway port on 127.0.0.1
+	// Accounts are the venues that get a placeholder account (see PlaceholderAccount):
+	// without one the tools find the venue unconfigured and never reach the simulator.
+	// Only a venue with a simulator may be named.
+	Accounts []string
+}
+
+// The placeholder account of a simulated venue. The values are constants that cannot be a
+// real credential (a venue issues keys of its own shape), so a gateway that did reach a
+// real exchange with them would be refused, and the profile — the lock's own — is the only
+// writer: a scenario or a config patch cannot carry a credential (supervisor.CheckConfigPatch).
+const (
+	PlaceholderAccountName = "main"
+	PlaceholderKey         = "sbx-placeholder-NOT-A-REAL-KEY"
+	PlaceholderSecret      = "sbx-placeholder-NOT-A-REAL-SECRET"
+	PlaceholderPassphrase  = "sbx-placeholder-NOT-A-REAL-PASSPHRASE"
+)
+
+// AccountVenues are the venues a placeholder account can be asked for: those the
+// simulator serves.
+var AccountVenues = []string{"binance", "okx"}
+
+// placeholderAccount is the account every placeholder venue gets. Permissions are the
+// narrowest a scenario's orders need: market data and trading, never transfers (an empty
+// list would mean every scope).
+func placeholderAccount() config.ExchangeAccount {
+	return config.ExchangeAccount{
+		Name:        PlaceholderAccountName,
+		APIKey:      *config.NewSecureString(PlaceholderKey),
+		Secret:      *config.NewSecureString(PlaceholderSecret),
+		Permissions: []config.PermissionScope{config.ScopeMarketData, config.ScopeTrade},
+	}
 }
 
 // Profile returns the config of a sandbox instance: the defaults (every real chat
@@ -44,6 +76,18 @@ func Profile(o ProfileOptions) (*config.Config, error) {
 	cfg.Proactive.Owner.WebIsOwner = &off
 	cfg.Heartbeat.Enabled, cfg.Devices.Enabled = false, false
 	cfg.Channels.SimChat.Enabled, cfg.Channels.SimChat.AllowFrom = true, config.FlexibleStringSlice{"*"}
+	for _, v := range o.Accounts {
+		switch v {
+		case "binance":
+			cfg.Exchanges.Binance.Enabled = true
+			cfg.Exchanges.Binance.Accounts = []config.ExchangeAccount{placeholderAccount()}
+		case "okx":
+			cfg.Exchanges.OKX.Enabled = true
+			cfg.Exchanges.OKX.Accounts = []config.OKXExchangeAccount{{ExchangeAccount: placeholderAccount(), Passphrase: *config.NewSecureString(PlaceholderPassphrase)}}
+		default:
+			return nil, fmt.Errorf("sandbox profile: no placeholder account for %q (only %s have a simulator)", v, strings.Join(AccountVenues, ", "))
+		}
+	}
 	return cfg, nil
 }
 

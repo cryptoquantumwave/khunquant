@@ -135,5 +135,12 @@ func (s *Supervisor) PatchConfig(_ context.Context, name string, patch map[strin
 	if st := in.info().State; st == StateExited {
 		return false, errors.New("sandbox: the instance has exited")
 	}
+	venues, err := readAccounts(in.home)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: read the instance's accounts: %w", err)
+	}
+	if err := CheckAccountPatch(patch, venues); err != nil {
+		return false, err
+	}
 	return patchConfigFile(in.home, patch)
 }

@@ -687,22 +687,31 @@ func (sim *StatefulSimulator) simBinanceFetchExchangeInfo(state *VenueState, r *
 
 // -- OKX Perpetuals Endpoints (/api/v5/) --
 
+// okxOrderNotFound is the code ccxt maps to OrderNotFound (broker.IsOrderNotFound); the
+// 51014 this used to answer is no such class.
+const okxOrderNotFound = "51603"
+
 func (sim *StatefulSimulator) respondOKX(method, path string, r *http.Request) (*Response, bool) {
 	state := sim.stateManager.GetState("okx")
 
 	// OKX uses query params for GET and body for POST.
 	switch {
+	// The order routes match the whole path: a prefix match also took orders-pending,
+	// orders-history and order-algo.
 	// Create futures order (single or batch)
-	case method == "POST" && (strings.HasPrefix(path, "/api/v5/trade/order") || strings.HasPrefix(path, "/api/v5/trade/batch-orders")):
+	case method == "POST" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/batch-orders"):
 		return sim.simOKXCreateOrder(state, r)
+	// Conditional orders are not simulated: the venue's own refusal, not a fixture miss.
+	case method == "POST" && path == "/api/v5/trade/order-algo":
+		return sim.okxErrorResponse("51000", "Conditional (algo) orders are not supported by the sandbox"), true
 	// Fetch order
-	case method == "GET" && strings.HasPrefix(path, "/api/v5/trade/order"):
+	case method == "GET" && path == "/api/v5/trade/order":
 		return sim.simOKXFetchOrder(state, r)
 	// Cancel order
-	case method == "POST" && strings.HasPrefix(path, "/api/v5/trade/cancel-order"):
+	case method == "POST" && path == "/api/v5/trade/cancel-order":
 		return sim.simOKXCancelOrder(state, r)
 	// Fetch open orders
-	case method == "GET" && strings.HasPrefix(path, "/api/v5/trade/orders-pending"):
+	case method == "GET" && path == "/api/v5/trade/orders-pending":
 		return sim.simOKXFetchOpenOrders(state, r)
 	// Fetch positions (exact match: /api/v5/account/positions, not /api/v5/account/positions-history)
 	case method == "GET" && path == "/api/v5/account/positions":
@@ -899,10 +908,13 @@ func (sim *StatefulSimulator) simOKXFetchOrder(state *VenueState, r *http.Reques
 		order, ok = state.ClosedOrders[ordId]
 	}
 	if !ok {
-		return sim.okxErrorResponse("51014", "order not found"), true
+		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
 	}
 
-	posSide := order.Params["posSide"].(string)
+	posSide, _ := order.Params["posSide"].(string)
+	if posSide == "" {
+		posSide = "net"
+	}
 	respBody := sim.buildOKXOrderResponseBody(ordId, order.Symbol, order.Side, posSide, order.Amount, order.Average)
 	return &Response{
 		Status: 200,
@@ -931,7 +943,7 @@ func (sim *StatefulSimulator) simOKXCancelOrder(state *VenueState, r *http.Reque
 
 	order, ok := state.OpenOrders[req.OrdId]
 	if !ok {
-		return sim.okxErrorResponse("51014", "order not found"), true
+		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
 	}
 
 	delete(state.OpenOrders, req.OrdId)
@@ -1186,13 +1198,22 @@ func (sim *StatefulSimulator) binanceOrderToWireFormat(order *Order) map[string]
 		"origQty":      formatNumber(order.Amount),
 		"executedQty":  formatNumber(order.Filled),
 		"avgPrice":     formatNumber(order.Average),
-		"positionSide": strings.ToUpper(order.Params["positionSide"].(string)),
+		"positionSide": positionSideOf(order),
 		"side":         strings.ToUpper(order.Side),      // "BUY" or "SELL"
 		"type":         strings.ToUpper(order.OrderType), // "MARKET" or "LIMIT"
 		"timeInForce":  "GTC",
 		"time":         order.CreatedAt.UnixMilli(),
 		"updateTime":   order.UpdatedAt.UnixMilli(),
 	}
+}
+
+// positionSideOf is the order's Binance positionSide: what the request carried, BOTH
+// (one-way mode) when it carried none. A stored order may have no params at all.
+func positionSideOf(order *Order) string {
+	if s, _ := order.Params["positionSide"].(string); s != "" {
+		return strings.ToUpper(s)
+	}
+	return "BOTH"
 }
 
 // binancePositionToWireFormat converts a Position to Binance wire format.
@@ -1358,17 +1379,12 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 	case "okx":
 		// OKX perpetuals endpoints: /api/v5/
 		switch {
-		// Create order
-		case method == "POST" && (strings.HasPrefix(path, "/api/v5/trade/order") || strings.HasPrefix(path, "/api/v5/trade/batch-orders")):
+		// The order routes, by exact path (as respondOKX matches them)
+		case method == "POST" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/batch-orders" || path == "/api/v5/trade/order-algo"):
 			return true
-		// Fetch order
-		case method == "GET" && strings.HasPrefix(path, "/api/v5/trade/order"):
+		case method == "GET" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/orders-pending"):
 			return true
-		// Cancel order
-		case method == "POST" && strings.HasPrefix(path, "/api/v5/trade/cancel-order"):
-			return true
-		// Fetch open orders
-		case method == "GET" && strings.HasPrefix(path, "/api/v5/trade/orders-pending"):
+		case method == "POST" && path == "/api/v5/trade/cancel-order":
 			return true
 		// Fetch positions (exact match: /api/v5/account/positions, not /api/v5/account/positions-history)
 		case method == "GET" && path == "/api/v5/account/positions":

@@ -103,7 +103,7 @@ func (i *Injector) Add(r Rule) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if kind == "written_then_timeout" && r.Match.Order == "" {
+	if (kind == "written_then_timeout" || kindLayer[kind] == layerOrder) && r.Match.Order == "" {
 		r.Match.Order = "create"
 	}
 	if sym := strings.ToUpper(r.Match.Symbol); r.Match.Market == "" && (strings.Contains(sym, ":") || strings.HasSuffix(sym, "-SWAP")) {

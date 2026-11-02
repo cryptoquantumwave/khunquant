@@ -91,11 +91,15 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 			return sim.binanceErrorResponse(400, -1013, "Invalid price."), true
 		}
 	}
-	o, rj := sim.book("binance").place(sp)
+	o, reported, rj := sim.book("binance").place(sp)
 	if rj != nil {
 		return sim.binanceReject(rj), true
 	}
-	return jsonResponse(200, sim.binanceOrderToWireFormat(o)), true
+	wire := sim.binanceOrderToWireFormat(o)
+	if reported != nil { // create_reports_fill: the order is filled, the answer says otherwise
+		wire["executedQty"], wire["cumQuote"], wire["status"], wire["avgPrice"] = formatNumber(*reported), "0", "NEW", "0"
+	}
+	return jsonResponse(200, wire), true
 }
 
 // binanceLookup finds the order a fetch or cancel names, by orderId or origClientOrderId.
@@ -115,7 +119,7 @@ func (sim *StatefulSimulator) simBinanceFetchOrder(state *VenueState, r *http.Re
 	switch {
 	case missing:
 		return sim.binanceErrorResponse(400, -1102, binanceNeedID), true
-	case o == nil:
+	case o == nil || !o.visible(sim.clock()):
 		return sim.binanceErrorResponse(400, -2013, "Order does not exist."), true
 	}
 	return jsonResponse(200, sim.binanceOrderToWireFormat(o)), true
@@ -135,16 +139,23 @@ func (sim *StatefulSimulator) simBinanceCancelOrder(state *VenueState, r *http.R
 		return sim.binanceErrorResponse(400, -2011, "Unknown order sent."), true
 	}
 	b.close(o, stCanceled, sim.clock())
+	sim.reschedule(sim.clock())
 	return jsonResponse(200, sim.binanceOrderToWireFormat(o)), true
 }
 
-// simBinanceListOrders handles GET openOrders.
-func (sim *StatefulSimulator) simBinanceListOrders(state *VenueState, r *http.Request) (*Response, bool) {
+// simBinanceListOrders handles GET openOrders, and allOrders (open and closed).
+func (sim *StatefulSimulator) simBinanceListOrders(state *VenueState, r *http.Request, all bool) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
-	out := make([]map[string]any, 0)
-	for _, o := range sim.book("binance").list(false, r.FormValue("symbol")) {
+	b, now, symbol := sim.book("binance"), sim.clock(), r.FormValue("symbol")
+	list := b.list(false, symbol, now)
+	if all {
+		list = append(list, b.list(true, symbol, now)...)
+		sortOrders(list)
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, o := range list {
 		out = append(out, sim.binanceOrderToWireFormat(o))
 	}
 	return jsonResponse(200, out), true
@@ -240,11 +251,11 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 			return bad("px is not a positive number")
 		}
 	}
-	o, rj := sim.book("okx").place(sp)
+	o, _, rj := sim.book("okx").place(sp)
 	if rj != nil {
 		return sim.okxReject(rj, req.ClOrdID), true
 	}
-	// An OKX create answer carries no fill and no state.
+	// An OKX create answer carries no fill and no state: create_reports_fill has nothing to lie about.
 	return jsonResponse(200, map[string]any{"code": "0", "msg": "", "data": []map[string]any{
 		{"ordId": o.ID, "clOrdId": o.ClientID, "tag": "", "sCode": "0", "sMsg": "", "ts": strconv.FormatInt(o.CreatedAt.UnixMilli(), 10)}}}), true
 }
@@ -267,7 +278,7 @@ func (sim *StatefulSimulator) simOKXFetchOrder(state *VenueState, r *http.Reques
 		return sim.okxErrorResponse("51000", "Parameter ordId or clOrdId is missing"), true
 	}
 	o := sim.book("okx").find(id, cid, r.FormValue("instId"))
-	if o == nil {
+	if o == nil || !o.visible(sim.clock()) {
 		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
 	}
 	return sim.okxOrderList(o), true
@@ -288,18 +299,21 @@ func (sim *StatefulSimulator) simOKXCancelOrder(state *VenueState, r *http.Reque
 		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
 	}
 	b.close(o, stCanceled, sim.clock())
+	sim.reschedule(sim.clock())
 	return jsonResponse(200, map[string]any{"code": "0", "msg": "", "data": []map[string]any{
 		{"ordId": o.ID, "clOrdId": o.ClientID, "sCode": "0", "sMsg": ""}}}), true
 }
 
-// simOKXListOrders handles GET orders-pending, for one instType and optionally one instrument.
-func (sim *StatefulSimulator) simOKXListOrders(state *VenueState, r *http.Request) (*Response, bool) {
+// simOKXListOrders handles GET orders-pending and orders-history, for one instType
+// (SWAP, SPOT) and optionally one instrument.
+func (sim *StatefulSimulator) simOKXListOrders(state *VenueState, r *http.Request, history bool) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.okxErrorResponse("51000", "invalid query string"), true
 	}
+	typ := r.FormValue("instType")
 	var out []*Order
-	for _, o := range sim.book("okx").list(false, r.FormValue("instId")) {
-		if typ := r.FormValue("instType"); typ == "" || typ == okxInstType(o) {
+	for _, o := range sim.book("okx").list(history, r.FormValue("instId"), sim.clock()) {
+		if typ == "" || typ == okxInstType(o) {
 			out = append(out, o)
 		}
 	}

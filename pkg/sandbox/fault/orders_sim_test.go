@@ -17,13 +17,15 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 )
 
-// orderRig is the lab's order path in miniature: a real sandbox server with the injector in
-// front of the simulator, a sim clock the test moves and the book as the price source (BTC
-// at 98000), driven through the real exchange adapters.
+// orderRig is the lab's order path in miniature: a real sandbox server, the injector wired
+// into the simulator as the lab does it, a sim clock the test moves and the book as the
+// price source (BTC at 98000), driven through the real exchange adapters.
 type orderRig struct {
 	*httpRig
 	clk *clock
 }
+
+var allOrderKinds = []string{"partial", "accept_no_fill", "cancel_after_accept", "create_reports_fill", "lookup_lag"}
 
 func newOrderRig(t *testing.T) *orderRig {
 	t.Helper()
@@ -44,6 +46,8 @@ func newOrderRig(t *testing.T) *orderRig {
 	}
 	sim.SetClock(clk.Now)
 	sim.SetPriceSource(book)
+	sim.SetOrderEffects(inj)
+	inj.EnableOrderKinds(allOrderKinds...)
 	chain := sandbox.NewChain(store)
 	chain.Set(sandbox.StageFault, inj.Middleware())
 	chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
@@ -96,7 +100,6 @@ func limitBuy(sym string, amount float64, px float64, cid string) broker.Futures
 	return broker.FuturesOrderRequest{Symbol: sym, OrderType: "limit", Side: "buy", Amount: amount, Price: &px,
 		PositionSide: "long", Params: map[string]any{"clientOrderId": cid}}
 }
-
 
 // The real adapters against the lab's order path, one rig per venue (an OKX client leaves
 // a connection that takes a server five seconds to shut down, so the steps share it):
@@ -178,5 +181,67 @@ func TestPlaceOrderIdempotent_ReconcilesWrittenThenTimeout(t *testing.T) {
 	}
 	if n := r.count("binance"); n != 1 {
 		t.Fatalf("the simulator holds %d orders, want 1", n)
+	}
+}
+
+// With a lookup lag shorter than the settle delay the retry (which waits that long) sees
+// the order; with a longer one it does not, and the same client ID places a second order,
+// because a closed order's ID is free again. This is the residual idempotent.go names.
+func TestPlaceOrderIdempotent_LookupLag(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		lag    time.Duration
+		orders int
+	}{{"shorter than the settle delay", 2 * time.Second, 1}, {"longer than the settle delay", 20 * time.Second, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newOrderRig(t)
+			fp, sym, amount := r.futures(t, "binance")
+			r.add(t, Rule{Match: Match{Venue: "binance", Market: "futures"}, Effect: Effect{Order: "written_then_timeout"}, When: When{Times: 1}})
+			r.add(t, Rule{Match: Match{Venue: "binance", Market: "futures"}, Effect: Effect{Order: "lookup_lag", Lag: Duration(tc.lag)}, When: When{Times: 1}})
+			first := r.clk.Now()
+			if _, err := r.place(t, fp, sym, amount, 1, first, 0); !errors.Is(err, broker.ErrOutcomeUnknown) {
+				t.Fatalf("attempt 1 = %v, want an unknown outcome", err)
+			}
+			r.clk.Add(6 * time.Second) // the backoff: past the 5 s settle delay
+			if _, err := r.place(t, fp, sym, amount, 2, first, 6*time.Second); err != nil {
+				t.Fatalf("attempt 2 = %v", err)
+			}
+			if n := r.count("binance"); n != tc.orders {
+				t.Fatalf("%d orders, want %d", n, tc.orders)
+			}
+		})
+	}
+}
+
+// Order effects reach the simulator through the injector: a rule fires once per create,
+// is journaled, and shapes the order; they are refused where the simulator cannot show them.
+func TestOrderEffects_ThroughTheInjector(t *testing.T) {
+	r := newOrderRig(t)
+	fp, sym, amount := r.futures(t, "binance")
+	r.add(t, Rule{Match: Match{Venue: "binance", Market: "futures"}, Effect: Effect{Order: "partial", Fraction: 0.5}, When: When{Times: 1}})
+	o, err := fp.CreateFuturesOrder(context.Background(), broker.FuturesOrderRequest{Symbol: sym, OrderType: "market", Side: "buy", Amount: amount * 10, PositionSide: "long"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Filled == nil || *o.Filled != amount*5 {
+		t.Fatalf("filled = %v, want half of %v", o.Filled, amount*10)
+	}
+	if s := r.inj.List()[0]; s.Fired != 1 {
+		t.Fatalf("rule fired %d times, want 1 (one question per create)", s.Fired)
+	}
+	for _, bad := range []Rule{
+		{Match: Match{Venue: "okx"}, Effect: Effect{Order: "create_reports_fill"}},
+		{Match: Match{Venue: "*"}, Effect: Effect{Order: "create_reports_fill"}},
+		{Match: Match{Venue: "binance", Order: "fetch"}, Effect: Effect{Order: "lookup_lag", Lag: Duration(time.Second)}},
+	} {
+		if _, err := r.inj.Add(bad); err == nil {
+			t.Errorf("Add(%+v) accepted, want a refusal", bad)
+		}
+	}
+	if id, err := r.inj.Add(Rule{Match: Match{Venue: "binance"}, Effect: Effect{Order: "accept_no_fill"}}); err != nil || id == "" {
+		t.Fatalf("an order-state rule with no operation must default to create: %v", err)
+	}
+	if got := r.inj.List()[1].Rule.Match.Order; got != "create" {
+		t.Fatalf("match.order = %q, want it defaulted to create", got)
 	}
 }

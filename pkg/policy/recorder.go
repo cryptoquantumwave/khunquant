@@ -36,7 +36,8 @@ type job struct {
 // had, and a detached copy of its context). One goroutine does everything else:
 // the engine's gates, including the mandate lookup and the USD valuation (each
 // bounded by its own timeout), the database insert and the event. When the queue is
-// full a record is dropped and counted; Observe never blocks.
+// full a record is dropped and counted; Observe never blocks. A record the store
+// could not write is counted apart and logged with what the row would have said.
 type Recorder struct {
 	engine Authorizer
 	store  *Store
@@ -50,6 +51,7 @@ type Recorder struct {
 	deadln  atomic.Int64 // unix nanos: when draining after Close must stop
 	pending atomic.Int64
 	dropped atomic.Int64
+	failed  atomic.Int64
 }
 
 // NewRecorder starts a recorder with a queue of buffer records (DefaultBuffer when
@@ -110,6 +112,10 @@ func (rc *Recorder) Idle() bool { return rc == nil || rc.pending.Load() == 0 }
 
 // Dropped is how many records were dropped because the queue was full.
 func (rc *Recorder) Dropped() int64 { return rc.dropped.Load() }
+
+// StoreFailed is how many records the store reported it could not write. Each left
+// the queue, so none is in Dropped, and the policy.decision event still went out.
+func (rc *Recorder) StoreFailed() int64 { return rc.failed.Load() }
 
 // Flush waits until every queued record has been processed, or the timeout
 // passes; it reports whether the queue emptied. For tests and shutdown.
@@ -198,7 +204,11 @@ func (rc *Recorder) process(j job) {
 	}
 	if rc.store != nil {
 		if err := rc.store.Add(j.ctx, d); err != nil {
-			logger.WarnCF("policy", "Could not record a policy decision", map[string]any{"error": err.Error()})
+			// Every one is logged: this line can be all that is left of the record.
+			logger.WarnCF("policy", "Could not record a policy decision", map[string]any{
+				"tool": r.Tool, "mode": string(v.Mode), "tier": v.Tier.String(), "enforced": j.decided != nil,
+				"failed": rc.failed.Add(1), "error": err.Error(),
+			})
 		}
 	}
 	if rc.events != nil {

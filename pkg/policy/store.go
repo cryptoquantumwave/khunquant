@@ -24,7 +24,17 @@ const Component = "policy"
 const MaxRows = 5000
 
 const (
-	storeTimeout = 250 * time.Millisecond
+	// writeTimeout bounds one Add: the insert and any trim. It is longer than the
+	// database's busy_timeout on purpose. The driver cannot end a lock wait, so a write
+	// behind another writer on the shared database sits in SQLite until it has the lock
+	// whatever the deadline says, and a deadline that passed meanwhile only throws the
+	// finished statement away. Waiting costs the recorder's goroutine time, which its
+	// queue absorbs; no tool call waits here.
+	writeTimeout = 2 * sqlitex.BusyTimeoutMillis * time.Millisecond
+	// housekeepTimeout limits the trim on the engine's pipeline goroutine, where a trim
+	// that fails is only late. It covers the pool wait and the statement; a lock wait
+	// runs to busy_timeout here as it does in Add.
+	housekeepTimeout = 250 * time.Millisecond
 	// pruneEvery is how many inserts pass between prunes. The table may overshoot
 	// MaxRows by this much before it is trimmed.
 	pruneEvery = 200
@@ -73,7 +83,11 @@ type Decision struct {
 
 // Store keeps the decisions in the shared proactive database.
 type Store struct {
-	db      *sql.DB
+	db *sql.DB
+	// writeBudget and housekeepBudget are writeTimeout and housekeepTimeout, as fields
+	// so a test can take wall-clock speed out of what it proves.
+	writeBudget, housekeepBudget time.Duration
+
 	inserts atomic.Int64
 	nextHK  atomic.Int64 // unix nanos: earliest time Housekeep trims again
 }
@@ -86,18 +100,19 @@ func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 	if err := sqlitex.Migrate(ctx, db, migrations...); err != nil {
 		return nil, fmt.Errorf("policy: migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, writeBudget: writeTimeout, housekeepBudget: housekeepTimeout}, nil
 }
 
-// Add records a decision. It takes a short timeout of its own (the caller's
-// context may already be done) and the table trims itself. Only a failure to
-// insert is returned.
+// Add records a decision. It takes a timeout of its own (the caller's context may
+// already be done) and the table trims itself. Only a failure to insert is returned.
+// A deadline error does not always mean the row is absent: the driver reports one for
+// any statement its interrupt raced, even one that had committed.
 func (s *Store) Add(ctx context.Context, d Decision) error {
 	reasons, err := json.Marshal(d.Reasons)
 	if err != nil {
 		return fmt.Errorf("policy: encode reasons: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.writeBudget)
 	defer cancel()
 	flag := func(b bool) int {
 		if b {
@@ -137,7 +152,7 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) {
 		return
 	}
 	s.nextHK.Store(now.Add(housekeepEvery).UnixNano())
-	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.housekeepBudget)
 	defer cancel()
 	_ = s.prune(ctx) // a failure leaves the table for the next call
 }

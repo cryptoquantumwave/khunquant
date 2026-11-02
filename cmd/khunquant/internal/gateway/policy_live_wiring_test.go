@@ -125,7 +125,7 @@ func TestPolicyLive_StatsShowModeDecisionsAndDropped(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil || got.Policy == nil {
 		t.Fatalf("no policy part in %s (%v)", body, err)
 	}
-	if got.Policy.Mode != "live" || got.Policy.DecisionsToday["notify_only"] < 1 || got.Policy.DecisionsToday["act"] < 1 || got.Policy.Dropped != 0 {
+	if got.Policy.Mode != "live" || got.Policy.DecisionsToday["notify_only"] < 1 || got.Policy.DecisionsToday["act"] < 1 || got.Policy.Dropped != 0 || got.Policy.StoreFailed != 0 {
 		t.Fatalf("policy stats = %+v", got.Policy)
 	}
 

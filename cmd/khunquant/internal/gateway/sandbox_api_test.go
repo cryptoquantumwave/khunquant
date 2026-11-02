@@ -51,7 +51,7 @@ func TestSandboxStatusEndpoint(t *testing.T) {
 
 	// Create handler - note: we pass store, not server
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleSandboxStatus(w, r, store, "/tmp/fixtures")
+		handleSandboxStatus(w, r, store, "/tmp/fixtures", nil)
 	})
 
 	// Test with loopback + bearer token
@@ -334,7 +334,7 @@ func TestBearerTokenAuth(t *testing.T) {
 	t.Cleanup(func() { srv.Stop() })
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleSandboxStatus(w, r, store, "/tmp/fixtures")
+		handleSandboxStatus(w, r, store, "/tmp/fixtures", nil)
 	})
 
 	// Test with wrong token
@@ -371,7 +371,7 @@ func TestLoopbackOnlyRestriction(t *testing.T) {
 	t.Cleanup(func() { srv.Stop() })
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleSandboxStatus(w, r, store, "/tmp/fixtures")
+		handleSandboxStatus(w, r, store, "/tmp/fixtures", nil)
 	})
 
 	// Test from non-loopback

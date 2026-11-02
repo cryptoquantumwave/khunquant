@@ -92,7 +92,6 @@ func TestE2E_HeartbeatOnSimClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	call("sandbox_instance", map[string]any{"op": "restart", "mode": "graceful"}, nil)
-	awaitServices(ctx, t, cs, stderr.String) // the heartbeat belongs to the first generation
 
 	call("sandbox_llm", map[string]any{"op": "script_put", "rules": []map[string]any{{
 		"id": "hb", "match": map[string]any{"turn": "heartbeat_legacy"}, "respond": map[string]any{"text": "HEARTBEAT_OK"},

@@ -181,10 +181,12 @@ func spawn(bin string, args, env []string, home string) (*proc, error) {
 	return p, nil
 }
 
-// waitReady polls /api/sandbox/status with the instance token until the gateway
-// answers. Only the instance itself knows the token, so an answer from anything else
-// (a stray listener on the port) never counts; an instance that does not report an
-// enabled, locked sandbox is never handed out.
+// waitReady polls /api/sandbox/status with the instance token until the gateway reports
+// itself ready (fully started: first generation of services published, signals handled;
+// /health is up earlier). Only the instance itself knows the token, so an answer from
+// anything else (a stray listener on the port) never counts; an instance that does not
+// report an enabled, locked sandbox is never handed out, and one that does not yet say
+// ready, or does not carry the field, is polled again.
 func waitReady(ctx context.Context, c *labclient.Client, exited <-chan struct{}, timeout time.Duration) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -201,7 +203,7 @@ func waitReady(ctx context.Context, c *labclient.Client, exited <-chan struct{},
 		case <-tick.C:
 		}
 		pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		locked, err := c.Status(pctx)
+		locked, ready, err := c.Status(pctx)
 		cancel()
 		if err != nil {
 			continue // not listening yet, or not an instance that knows the token
@@ -209,7 +211,9 @@ func waitReady(ctx context.Context, c *labclient.Client, exited <-chan struct{},
 		if !locked {
 			return ErrNotLocked
 		}
-		return nil
+		if ready {
+			return nil
+		}
 	}
 }
 

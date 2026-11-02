@@ -349,8 +349,8 @@ func TestSupervisor_ClientReachesTheInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if locked, err := c.Status(context.Background()); err != nil || !locked {
-		t.Errorf("Status = %v, %v", locked, err)
+	if locked, ready, err := c.Status(context.Background()); err != nil || !locked || !ready {
+		t.Errorf("Status = locked %v ready %v, %v", locked, ready, err)
 	}
 	if err := c.Health(context.Background()); err != nil {
 		t.Error(err)

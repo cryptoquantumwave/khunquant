@@ -166,6 +166,18 @@ func TestRunNotAvailableWhenUnlocked(t *testing.T) {
 	}
 }
 
+// An instance that is locked but does not say ready is refused before any step: the
+// supervisor waits for ready, so this one was handed out wrongly.
+func TestRunNotAvailableWhenNotReady(t *testing.T) {
+	sup := newFakeSup(t)
+	sup.notReady = true
+	rep := runOne(t, sup, scenarioOf(t, "timeline:\n  - advance: 5m\n"))
+	res := rep.Runs[0]
+	if res.Pass || !strings.Contains(res.Infra, "ready:true") || len(res.Steps) != 0 || rep.ExitCode() != ExitInfra {
+		t.Fatalf("result = %+v, want the runner to refuse an instance that is not ready, before any step", res)
+	}
+}
+
 func TestRunner_InstanceThatWillNotStart(t *testing.T) {
 	sup := newFakeSup(t)
 	sup.upErr = supervisor.ErrTooMany

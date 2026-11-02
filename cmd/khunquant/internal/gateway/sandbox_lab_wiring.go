@@ -235,12 +235,14 @@ func attachSimChat(shared *sharedResources, cm *channels.Manager) {
 
 // labDeps is the inspect group's view of the current generation, looked up on every
 // call. An op whose service this generation does not run gets a nil dependency and
-// answers unavailable; between generations nothing is published.
+// answers unavailable. Between generations (a reload) every op that needs one answers
+// errNoGeneration instead, so that cannot be read as "this instance lacks the feature";
+// ops that read only the journal keep working.
 func labDeps(shared *sharedResources) func() inspect.Deps {
 	return func() inspect.Deps {
 		s := shared.labGen.Load()
 		if s == nil {
-			return inspect.Deps{}
+			return inspect.Deps{Err: errNoGeneration()}
 		}
 		var d inspect.Deps
 		if shared.lab != nil && shared.lab.Quiesce != nil {
@@ -259,9 +261,17 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 	}
 }
 
-// publishLabGeneration makes s the generation the lab groups read. It runs once s has
-// its approval service, workflow engine and policy record, so no group sees a half-built
-// generation; retireLabGeneration withdraws a generation before its services stop.
+// errNoGeneration is the one answer of every lab group while no generation of services
+// is published (a reload is in progress, or the first build is not done). The scenario
+// runner's noServices recognises it for every group.
+func errNoGeneration() error {
+	return lab.Errorf(lab.CodeUnavailable, "no generation of services is running (a reload is in progress?)")
+}
+
+// publishLabGeneration makes s the generation the lab groups read. buildServices calls
+// it last, once s is fully built (the lab's goroutines read s's fields, which are
+// assigned until then), and only when the build succeeded; retireLabGeneration
+// withdraws a generation before its services stop.
 func publishLabGeneration(shared *sharedResources, s *gatewayServices) {
 	if shared.lab != nil {
 		shared.labGen.Store(s)
@@ -346,5 +356,5 @@ func registerLockedSandbox(mux handleMux, s *gatewayServices, l *lab.Lab) error 
 // carries. Both the locked and the unlocked path end here, so the routes have one
 // registration site.
 func mountSandboxAPI(mux handleMux, s *gatewayServices, store *sandbox.Store, fixturesDir string) {
-	registerSandboxAPI(mux, store, s.SandboxToken, s.SimulatorReseter, fixturesDir)
+	registerSandboxAPI(mux, store, s.SandboxToken, s.SimulatorReseter, fixturesDir, s.labReady)
 }

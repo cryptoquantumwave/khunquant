@@ -59,7 +59,7 @@ func TestLabClient_LoopbackOnlyAndErrors(t *testing.T) {
 	if _, err := c.do(context.Background(), http.MethodGet, "/redirect", nil); err == nil {
 		t.Error("a redirect was followed or treated as success")
 	}
-	if _, err := c.Status(context.Background()); err == nil {
+	if _, _, err := c.Status(context.Background()); err == nil {
 		t.Error("a 401 must be an error")
 	}
 }
@@ -73,7 +73,7 @@ func TestLabClient_Calls(t *testing.T) {
 		switch r.URL.Path {
 		case "/health":
 		case "/api/sandbox/status":
-			_, _ = io.WriteString(w, `{"enabled":true,"locked":true,"running":true}`)
+			_, _ = io.WriteString(w, `{"enabled":true,"locked":true,"running":true,"ready":true}`)
 		case "/api/sandbox/lab":
 			_, _ = io.WriteString(w, `{"groups":[{"name":"g","description":"d","ops":[{"name":"o","description":"x","args":{"a":{"type":"string"}},"required":["a"]}]}]}`)
 		case "/api/sandbox/lab/inspect":
@@ -87,8 +87,8 @@ func TestLabClient_Calls(t *testing.T) {
 	if err := c.Health(ctx); err != nil {
 		t.Error(err)
 	}
-	if locked, err := c.Status(ctx); err != nil || !locked || gotAuth != "Bearer "+tok {
-		t.Errorf("Status = %v, %v (auth %q)", locked, err, gotAuth)
+	if locked, ready, err := c.Status(ctx); err != nil || !locked || !ready || gotAuth != "Bearer "+tok {
+		t.Errorf("Status = locked %v ready %v, %v (auth %q)", locked, ready, err, gotAuth)
 	}
 	gs, err := c.Groups(ctx)
 	if err != nil || len(gs) != 1 || gs[0].Ops[0].Name != "o" || string(gs[0].Ops[0].Args) != `{"a":{"type":"string"}}` || gs[0].Ops[0].Required[0] != "a" {

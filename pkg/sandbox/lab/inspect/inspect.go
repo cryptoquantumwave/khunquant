@@ -33,6 +33,11 @@ type Deps struct {
 	// it when set. Snapshot lists every quiescer and its state, without waiting (the idle op).
 	SettleWait func(ctx context.Context, wallCap time.Duration) (quiesce.Report, error)
 	Snapshot   func() []quiesce.Status
+	// Err, when set, is the answer of every op that needs a dependency (workflows,
+	// proposals, policy, settle, idle): there is no generation of services to ask, so the
+	// ops must not read the nil fields as "this instance lacks the feature". Ops that
+	// read only the journal ignore it.
+	Err error
 }
 
 const (
@@ -184,7 +189,11 @@ func workflowsOp(deps func() Deps) lab.OpFunc {
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		list := deps().Workflows
+		dd := deps()
+		if dd.Err != nil {
+			return nil, dd.Err
+		}
+		list := dd.Workflows
 		if list == nil {
 			return nil, unavailable("the workflow engine")
 		}
@@ -214,7 +223,11 @@ func proposalsOp(j *labjournal.Journal, deps func() Deps) lab.OpFunc {
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		pending := deps().Pending
+		dd := deps()
+		if dd.Err != nil {
+			return nil, dd.Err
+		}
+		pending := dd.Pending
 		if pending == nil {
 			return nil, unavailable("order approvals")
 		}
@@ -241,7 +254,11 @@ func policyOp(deps func() Deps) lab.OpFunc {
 		if err := decode(args, &a); err != nil {
 			return nil, err
 		}
-		recent := deps().Policy
+		dd := deps()
+		if dd.Err != nil {
+			return nil, dd.Err
+		}
+		recent := dd.Policy
 		if recent == nil {
 			return nil, unavailable("the policy record")
 		}
@@ -266,6 +283,9 @@ const (
 func settleOp(deps func() Deps) lab.OpFunc {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		d := deps()
+		if d.Err != nil {
+			return nil, d.Err
+		}
 		var a struct {
 			WallCap string `json:"wall_cap"`
 		}
@@ -307,7 +327,11 @@ func settleOp(deps func() Deps) lab.OpFunc {
 // idleOp lists every quiescer and its state now.
 func idleOp(deps func() Deps) lab.OpFunc {
 	return func(context.Context, json.RawMessage) (any, error) {
-		snapshot := deps().Snapshot
+		dd := deps()
+		if dd.Err != nil {
+			return nil, dd.Err
+		}
+		snapshot := dd.Snapshot
 		if snapshot == nil {
 			return nil, unavailable("the quiescence registry")
 		}

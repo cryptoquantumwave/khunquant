@@ -59,6 +59,7 @@ type fakeSup struct {
 	downs map[string]bool // name -> keepHome
 
 	unlocked bool                         // report locked:false
+	notReady bool                         // report ready:false
 	upErr    error                        // Up fails
 	onUp     func(n int, i *fakeInstance) // after an instance is built (n from 1)
 	onPatch  func(i *fakeInstance, patch map[string]any) (changed bool, err error)
@@ -132,7 +133,7 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 	}
 	labapi.Register(mux, l, guard)
 	mux.Handle("GET /api/sandbox/status", guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "locked": !f.unlocked})
+		_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "locked": !f.unlocked, "ready": !f.notReady})
 	})))
 	srv := httptest.NewServer(mux)
 	in := &fakeInstance{name: name, srv: srv, lab: l, j: j, busy: busy, home: home}

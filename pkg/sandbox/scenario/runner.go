@@ -140,8 +140,9 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 	}
 	st.env = newEnv(st.c, st.start, st.loc)
 	st.env.logs = func() ([]string, error) { return r.Sup.Logs(info.Name, 2000, "") }
-	if locked, err := st.c.Status(ctx); err != nil || !locked {
-		res.Infra = fmt.Sprintf("instance %s did not report locked:true (%v): a scenario runs only on a locked instance", info.Name, err)
+	if locked, ready, err := st.c.Status(ctx); err != nil || !locked || !ready {
+		res.Infra = fmt.Sprintf("instance %s did not report locked:true and ready:true (locked=%v ready=%v, %v): a scenario runs only on a locked, fully started instance",
+			info.Name, locked, ready, err)
 		return res
 	}
 	if issues := st.requirements(ctx, f); len(issues) > 0 {

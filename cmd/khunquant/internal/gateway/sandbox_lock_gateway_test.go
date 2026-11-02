@@ -130,11 +130,18 @@ func launchLockedProcess(t *testing.T, home string, port int, env, scanDirs []st
 	return p
 }
 
-func (p *lockedProcess) get(path, token string) (int, []byte, error) {
-	return getStatus(fmt.Sprintf("http://127.0.0.1:%d%s", p.port, path), token)
+func (p *lockedProcess) url(path string) string {
+	return fmt.Sprintf("http://127.0.0.1:%d%s", p.port, path)
 }
 
-// waitReady waits for /health, failing if the child exits first.
+func (p *lockedProcess) get(path, token string) (int, []byte, error) {
+	return getStatus(p.url(path), token)
+}
+
+// waitReady waits for the instance to say it is ready: /api/sandbox/status, with the
+// instance token, answers ready:true (as the supervisor waits). /health is not enough: it
+// is up before the first generation of services is published and before the signal
+// handlers and the config watcher are armed. It fails if the child exits first.
 func (p *lockedProcess) waitReady() {
 	p.t.Helper()
 	deadline := time.Now().Add(45 * time.Second)
@@ -144,7 +151,7 @@ func (p *lockedProcess) waitReady() {
 			p.t.Fatalf("locked gateway exited before it was ready: %v\n%s", p.exit, p.out.String())
 		default:
 		}
-		if code, _, err := p.get("/health", ""); err == nil && code == http.StatusOK {
+		if p.statusReady() {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -152,48 +159,16 @@ func (p *lockedProcess) waitReady() {
 	p.t.Fatalf("locked gateway not ready in time\n%s", p.out.String())
 }
 
-// servicesWait bounds postWhenServices. /health answers as soon as the HTTP server is
-// up, which is before the gateway publishes its first generation of services
-// (publishLabGeneration), so a lab op that acts on a generation (call_tool, manage) can
-// meet "no generation of services is running" right after waitReady. The runner waits for
-// the same answer in pkg/sandbox/scenario (servicesWait).
-const servicesWait = 30 * time.Second
-
-// isNoServices says whether an answer from a lab route is exactly "unavailable: no
-// generation of services is running": HTTP 503, code unavailable, and that message.
-func isNoServices(code int, body string) bool {
-	var e struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
+// statusReady says whether /api/sandbox/status answers 200 with ready:true.
+func (p *lockedProcess) statusReady() bool {
+	code, body, err := p.get("/api/sandbox/status", lockTestToken)
+	if err != nil || code != http.StatusOK {
+		return false
 	}
-	return code == http.StatusServiceUnavailable && json.Unmarshal([]byte(body), &e) == nil &&
-		e.Code == "unavailable" && strings.HasPrefix(e.Error, "no generation of services is running")
-}
-
-// postWhenServices POSTs body to url (a lab route of the child) with token, retrying
-// only while the answer is exactly "no generation of services is running", for at most
-// servicesWait. Any other answer, a transport error included, is returned at once for
-// the caller's own assertions. If the wait runs out, or the child exits first, it fails
-// the test naming the last answer.
-func (p *lockedProcess) postWhenServices(url, token, body string) (int, string, error) {
-	p.t.Helper()
-	deadline := time.Now().Add(servicesWait)
-	for {
-		code, out, err := postJSON(url, token, body)
-		if err != nil || !isNoServices(code, out) {
-			return code, out, err
-		}
-		if !time.Now().Before(deadline) {
-			p.t.Fatalf("no generation of services after %s; last answer to POST %s = %d %s\n%s",
-				servicesWait, url, code, out, p.out.String())
-		}
-		select {
-		case <-p.exited:
-			p.t.Fatalf("locked gateway exited before it published a generation of services: %v\nlast answer to POST %s = %d %s\n%s",
-				p.exit, url, code, out, p.out.String())
-		case <-time.After(50 * time.Millisecond):
-		}
+	var s struct {
+		Ready bool `json:"ready"`
 	}
+	return json.Unmarshal(body, &s) == nil && s.Ready
 }
 
 func (p *lockedProcess) status() sandboxStatus {
@@ -314,28 +289,6 @@ func TestLockedGateway_SIGTERMStopsCleanly(t *testing.T) {
 	}
 	if !strings.Contains(p.out.String(), "Shutting down") {
 		t.Errorf("no graceful shutdown in the output:\n%s", p.out.String())
-	}
-}
-
-// The wait helper retries on exactly one answer; every other answer must end it.
-func TestIsNoServices_OnlyTheExactAnswer(t *testing.T) {
-	const exact = `{"code":"unavailable","error":"no generation of services is running (a reload is in progress?)"}`
-	for _, tc := range []struct {
-		name string
-		code int
-		body string
-		want bool
-	}{
-		{"the exact answer", http.StatusServiceUnavailable, exact, true},
-		{"same body, other status", http.StatusOK, exact, false},
-		{"another unavailable", http.StatusServiceUnavailable, `{"code":"unavailable","error":"the default agent has no tool registry"}`, false},
-		{"another code", http.StatusServiceUnavailable, `{"code":"failed","error":"no generation of services is running"}`, false},
-		{"not json", http.StatusServiceUnavailable, `no generation of services is running`, false},
-		{"empty", http.StatusServiceUnavailable, ``, false},
-	} {
-		if got := isNoServices(tc.code, tc.body); got != tc.want {
-			t.Errorf("%s: isNoServices(%d, %s) = %v, want %v", tc.name, tc.code, tc.body, got, tc.want)
-		}
 	}
 }
 

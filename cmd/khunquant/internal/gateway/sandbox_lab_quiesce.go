@@ -66,6 +66,9 @@ func registerQuiescers(reg *quiesce.Registry, shared *sharedResources, l *lab.La
 	// reload is process state.
 	reg.Register(quiesce.Func("orderfeed", orderfeed.Idle))
 	reg.Register(quiesce.Func("gateway.reload", func() bool { return shared.reloading.Load() == 0 }))
+	// With no generation published every idleOf above reads "idle", so a settle between
+	// generations would pass on a system whose services are not up. This one is busy then.
+	reg.Register(quiesce.Func("generation", func() bool { return shared.labGen.Load() != nil }))
 	if shared.simWorld != nil {
 		reg.Register(quiesce.Func("simchat", shared.simWorld.Idle))
 	}

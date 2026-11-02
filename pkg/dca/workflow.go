@@ -548,6 +548,8 @@ func (d *Deps) checkMandate(c *journal.Ctx, in ExecInput) func(context.Context, 
 		if dial == "ask" {
 			return ask(BoundOwnerDial, "the owner's autonomy setting asks about every mandated buy", "", 0)
 		}
+		// Only a slot that races the sync gets here: within one pass of the expiry the
+		// sync hands the plan back to its scheduled job and tells the owner.
 		if m.Status != MandateActive || !m.ExpiresAt.After(now) {
 			return ask(BoundExpired, "the mandate expired on "+m.ExpiresAt.Format("2006-01-02"), "", 0)
 		}

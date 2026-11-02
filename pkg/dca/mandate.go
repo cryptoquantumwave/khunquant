@@ -143,6 +143,12 @@ func (m Mandate) Matches(p *Plan) bool {
 		m.Symbol == p.Symbol && m.Side == side
 }
 
+// Expired reports whether the mandate ended by running out, not by being revoked. It
+// goes by the date, so it holds before ExpireMandates has marked the row.
+func (m Mandate) Expired(now time.Time) bool {
+	return m.Status != MandateRevoked && !m.ExpiresAt.After(now)
+}
+
 const mandateCols = `id, kind, plan_id, provider, account, symbol, side, quote, max_per_run_quote, max_per_period_quote,
 	max_per_run_usd, max_per_period_usd, period, timezone, valid_from_ms, expires_at_ms, status, proposal_id,
 	revoked_reason, legacy_off`

@@ -367,7 +367,8 @@ type dcaProposals interface {
 //	         went off): the legacy job is switched on first, the spec goes back to
 //	         shadow second.
 //
-// It also sends the one reminder for a mandate still pending after 24 h.
+// A plan whose mandate expired goes back to its job on purpose, and the owner is told
+// once (tellExpired). It also sends the one reminder for a mandate still pending after 24 h.
 type dcaMandateSync struct {
 	store     *dca.Store
 	jobs      dcaJobs
@@ -425,6 +426,7 @@ func (y *dcaMandateSync) tick(ctx context.Context) {
 		return
 	}
 	live := y.canPromote != nil && y.canPromote() && y.specs.reg != nil
+	var expired []dca.Mandate
 	for i := range plans {
 		p := &plans[i]
 		m, ok, err := y.store.ActiveMandateForPlan(ctx, p.ID, now)
@@ -434,15 +436,39 @@ func (y *dcaMandateSync) tick(ctx context.Context) {
 		// A plan with an indicator trigger or a contract symbol is not covered by mandates
 		// in this change: it keeps its scheduled job.
 		want := live && ok && m.Matches(p) && p.Enabled && p.CronJobID != "" && p.Trigger == nil && !strings.Contains(p.Symbol, ":")
-		_, was, _ := y.store.PromotedMandate(ctx, p.ID)
+		promoted, was, _ := y.store.PromotedMandate(ctx, p.ID)
 		switch {
 		case want:
 			y.promote(ctx, p, m)
 		case was || y.shared.promotedMandate(p.ID) != "":
-			y.demote(ctx, p)
+			// The mandate the plan was promoted for, not the latest one: an older expired
+			// mandate must not speak for a newer one that was revoked.
+			if y.demote(ctx, p) && was && promoted.Expired(now) {
+				expired = append(expired, promoted)
+			}
 		}
 	}
+	// After the pass: the notice is a network send, and another plan's job must not wait
+	// for it.
+	for _, m := range expired {
+		y.tellExpired(ctx, m)
+	}
 	y.remind(ctx, now)
+}
+
+// tellExpired tells the owner that a plan went back to its job because its mandate ran
+// out. demote cleared the legacy-off flag, and that flag is what selects the mandate
+// here, so a restart does not repeat the notice. As with the reminder, it is at most
+// once: a delivery that fails is logged by the teller and not sent again.
+func (y *dcaMandateSync) tellExpired(ctx context.Context, m dca.Mandate) {
+	if y.tell == nil {
+		return
+	}
+	loc, err := time.LoadLocation(m.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	y.tell(ctx, dca.MandateExpiredNotice(y.thai != nil && y.thai(), m.PlanID, m.Symbol, m.ID, m.ExpiresAt.In(loc), loc.String()))
 }
 
 // promote moves a plan to its mandate. The order is chosen for money: the plan's legacy
@@ -467,13 +493,17 @@ func (y *dcaMandateSync) promote(ctx context.Context, p *dca.Plan, m dca.Mandate
 	}
 }
 
-func (y *dcaMandateSync) demote(ctx context.Context, p *dca.Plan) {
+// demote reports whether the plan's job is on, which is what lets the owner be told so.
+func (y *dcaMandateSync) demote(ctx context.Context, p *dca.Plan) (jobOn bool) {
 	if err := y.store.ClearLegacyOff(ctx, p.ID); err != nil {
-		return
+		return false
 	}
 	if y.jobs != nil && p.CronJobID != "" && p.Enabled { // the job comes back first
-		if job := y.jobs.GetJob(p.CronJobID); job != nil && !job.Enabled {
-			y.jobs.EnableJob(p.CronJobID, true)
+		if job := y.jobs.GetJob(p.CronJobID); job != nil {
+			if !job.Enabled {
+				y.jobs.EnableJob(p.CronJobID, true)
+			}
+			jobOn = true
 		}
 	}
 	y.shared.dcaPromoted.Delete(p.ID)
@@ -482,6 +512,7 @@ func (y *dcaMandateSync) demote(ctx context.Context, p *dca.Plan) {
 			logger.WarnCF("dca", "A demoted plan's trigger spec could not be set back to shadow", map[string]any{"plan_id": p.ID, "error": err.Error()})
 		}
 	}
+	return jobOn
 }
 
 // remind sends the one reminder for a mandate that is still pending after 24 h, and

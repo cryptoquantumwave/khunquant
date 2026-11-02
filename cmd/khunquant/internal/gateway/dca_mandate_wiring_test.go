@@ -334,6 +334,141 @@ func TestRevokeAll_And_Expiry_ReEnableCron(t *testing.T) {
 	})
 }
 
+// An expiry hands the plan back to its job on purpose, and the owner is told: once per
+// mandate, a restart included, after the job is back.
+func TestMandateExpiry_TellsTheOwnerOnce(t *testing.T) {
+	r := newMandateRig(t)
+	r.approve(r.ask())
+	r.tick()
+	first, _, _ := r.store.ActiveMandateForPlan(context.Background(), r.plan.ID, r.clk.Now())
+	var jobOnWhenTold bool
+	r.sync.tell = func(ctx context.Context, n dca.Notice) {
+		jobOnWhenTold = r.jobs.enabled("job1")
+		r.tells.tell(ctx, n)
+	}
+	r.tick()
+	if r.tells.count() != 0 {
+		t.Fatalf("told while the mandate lives: %+v", r.tells.sent)
+	}
+
+	r.clk.Advance(190 * 24 * time.Hour)
+	r.tick()
+	r.tick()
+	r.clk.Advance(24 * time.Hour)
+	r.tick()
+	if r.tells.count() != 1 {
+		t.Fatalf("notices = %+v, want exactly one", r.tells.sent)
+	}
+	if !jobOnWhenTold {
+		t.Error("the owner was told before the job was back on")
+	}
+	n := r.tells.sent[0]
+	// mandateT0 plus six months, in the mandate's zone.
+	for _, want := range []string{"BTC/THB", "2027-04-12 09:00 (Asia/Bangkok)", "not held to the mandate's limits"} {
+		if !strings.Contains(n.Body, want) {
+			t.Errorf("body %q does not say %q", n.Body, want)
+		}
+	}
+	if !strings.Contains(n.Title, "mandate expired") || n.Severity != "notice" || n.Silent {
+		t.Errorf("notice = %+v", n)
+	}
+
+	// A new generation on the same store has nothing to say.
+	again := &dcaMandateSync{store: r.store, jobs: r.jobs, specs: r.sync.specs, shared: &sharedResources{}, now: r.clk.Now,
+		tell: r.tells.tell, canPromote: func() bool { return true }}
+	again.tick(context.Background())
+	if r.tells.count() != 1 {
+		t.Fatalf("the restart repeated the notice: %+v", r.tells.sent)
+	}
+
+	// The next mandate is told about on its own.
+	r.approve(r.ask())
+	r.tick()
+	if r.jobs.enabled("job1") {
+		t.Fatal("not promoted again")
+	}
+	r.clk.Advance(190 * 24 * time.Hour)
+	r.tick()
+	if r.tells.count() != 2 || r.tells.sent[1].DedupKey == r.tells.sent[0].DedupKey ||
+		!strings.Contains(r.tells.sent[0].DedupKey, first.ID) {
+		t.Errorf("notices = %+v, want one per mandate, each under its own key", r.tells.sent)
+	}
+}
+
+// Every other hand-back says nothing: a revocation or a /stop, a plan edited or disabled
+// before the expiry, mandates switched off. So does an expiry that leaves no job running,
+// since the notice says the plan is back on its job.
+func TestMandateExpiry_NoOtherHandBackTells(t *testing.T) {
+	edit := func(r *mandateRig, change func(*dca.Plan)) {
+		pl, _ := r.store.GetPlan(context.Background(), r.plan.ID)
+		change(pl)
+		_ = r.store.UpdatePlan(context.Background(), pl)
+	}
+	cases := map[string]func(*mandateRig){
+		"revoked by the owner":       func(r *mandateRig) { _, _ = r.store.RevokePlanMandate(context.Background(), r.plan.ID, "owner") },
+		"RevokeAll":                  func(r *mandateRig) { _, _ = r.store.RevokeAll(context.Background(), "stop") },
+		"an edited symbol":           func(r *mandateRig) { edit(r, func(p *dca.Plan) { p.Symbol = "ETH/THB" }) },
+		"mandates off":               func(r *mandateRig) { r.live = false },
+		"disabled before the expiry": func(r *mandateRig) { edit(r, func(p *dca.Plan) { p.Enabled = false }) },
+		"disabled in the same pass": func(r *mandateRig) {
+			r.clk.Advance(190 * 24 * time.Hour)
+			edit(r, func(p *dca.Plan) { p.Enabled = false })
+		},
+		"the job is gone": func(r *mandateRig) {
+			r.clk.Advance(190 * 24 * time.Hour)
+			r.jobs.mu.Lock()
+			delete(r.jobs.jobs, "job1")
+			r.jobs.mu.Unlock()
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newMandateRig(t)
+			r.approve(r.ask())
+			r.tick()
+			change(r)
+			r.tick()
+			r.clk.Advance(190 * 24 * time.Hour)
+			r.tick()
+			if r.tells.count() != 0 {
+				t.Errorf("notices = %+v, want none", r.tells.sent)
+			}
+		})
+	}
+	// Promoted in this process only: no flag in the store, so no mandate to speak of.
+	t.Run("no flag behind the promotion", func(t *testing.T) {
+		r := newMandateRig(t)
+		r.sync.shared.dcaPromoted.Store(r.plan.ID, "mnd_gone")
+		r.tick()
+		if r.sync.shared.promotedMandate(r.plan.ID) != "" {
+			t.Fatal("not demoted")
+		}
+		if r.tells.count() != 0 {
+			t.Errorf("notices = %+v, want none", r.tells.sent)
+		}
+	})
+	// An old expired mandate does not speak for the newer one that was revoked.
+	t.Run("a revoked mandate after an expired one", func(t *testing.T) {
+		r := newMandateRig(t)
+		r.approve(r.ask())
+		r.tick()
+		r.clk.Advance(190 * 24 * time.Hour)
+		r.tick()
+		r.approve(r.ask())
+		r.tick()
+		if _, err := r.store.RevokePlanMandate(context.Background(), r.plan.ID, "owner"); err != nil {
+			t.Fatal(err)
+		}
+		r.tick()
+		if !r.jobs.enabled("job1") {
+			t.Fatal("the revoked plan is not back on its job")
+		}
+		if r.tells.count() != 1 {
+			t.Errorf("notices = %+v, want only the first expiry's", r.tells.sent)
+		}
+	})
+}
+
 // /stop revokes the mandates, and the sync must not answer by switching the plans'
 // legacy jobs back on while the kill switch is engaged (that would restart the
 // scheduled buying /stop just ended). After /resume it puts the plans back as before.

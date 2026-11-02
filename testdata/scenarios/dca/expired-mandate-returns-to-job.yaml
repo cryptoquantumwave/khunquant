@@ -1,25 +1,22 @@
-# S108C-2: when a plan's mandate has expired the owner is asked, and the plan's old scheduled
-# job does not quietly go back to buying.
+# S108C-2, decided by the owner on 2026-11-02: when a plan's mandate expires the plan goes
+# back to its scheduled job, and the owner is told once. See "Cron hand-over" in SECURITY.md.
 #
 # What it proves, and what it does not. There is no credentialed exchange account in the lab,
 # so no order can be placed and an `order` check would pass whatever happened; the scenario
 # reads the cron job's turn instead. The script plays the model the job wakes: it calls
-# execute_dca_order, and a tool.call for it means the old scheduled path got as far as trying
-# a buy (here it ends in an error). The control: while the mandate lives the job's gate stops
-# it before any turn (check 2 passes), and a plan with no mandate shows the call at its first
-# slot. So "no-legacy-buy-after-expiry" proves no attempt, not no fill. "asked" is a check on
-# wording ("mandate"); the approval confirmation at +0 carries the word, so the matcher can
-# see it.
+# execute_dca_order, and a tool.call for it means the scheduled path got as far as trying a
+# buy (here it ends in an error). The control: while the mandate lives the job's gate stops
+# it before any turn. So "job-runs-after-expiry" proves an attempt, not a fill. The notice is
+# matched by its own words, because the approval confirmation at +0 says "mandate" too; the
+# window would hide that one, and the second check proves the notice needs the expiry.
 #
 # One long advance (816 h, 34 days) on purpose: it takes several wall-budget calls and each
-# one must settle before it moves.
-# Red today: the mandate expires after one month (mandate_months: 1) and the next slots are
-# bought by the cron job; the owner hears nothing about it.
+# one must settle before it moves. The mandate lasts a month (mandate_months: 1), so it ends
+# at +744 h, an hour before that day's slot, and three slots fall in the window.
 version: 1
-scenario: expired-mandate-asks-owner
+scenario: expired-mandate-returns-to-job
 covers: [S108C-2]
-status: known_bug
-known_bug: S108C-2
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
@@ -59,14 +56,17 @@ setup:
 timeline:
   - advance: 816h
 expect:
-  - id: asked
-    message: { to: owner, contains: ["mandate"], count: ">= 1" }
+  - id: told-once
+    message: { to: owner, contains: ["mandate expired", "back on its scheduled job"], count: 1 }
     within: { from: "744h", to: "816h" }
-  - id: legacy-job-stood-down-while-the-mandate-lived
+  - id: no-notice-while-the-mandate-lived
+    message: { to: owner, contains: ["mandate expired"], count: 0 }
+    within: { from: "0h", to: "743h" }
+  - id: job-stood-down-while-the-mandate-lived
     event: { kind: tool.call, fields: { name: execute_dca_order } }
     within: { from: "0h", to: "743h" }
     count: 0
-  - id: no-legacy-buy-after-expiry
+  - id: job-runs-after-expiry
     event: { kind: tool.call, fields: { name: execute_dca_order } }
     within: { from: "744h", to: "816h" }
-    count: 0
+    count: 3

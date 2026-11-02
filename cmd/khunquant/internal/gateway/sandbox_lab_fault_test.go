@@ -99,11 +99,11 @@ func TestFaultGroup_AddListClearOnALockedGateway(t *testing.T) {
 		t.Fatalf("fault.fired entries = %v", fired)
 	}
 
-	// A rule nobody can honour is refused: an unknown name, an order effect no simulator
-	// executes yet, a misspelt key.
+	// A rule nobody can honour is refused: an unknown name, an order effect the venue's
+	// create answer cannot show (the simulator executes the others), a misspelt key.
 	for _, body := range []string{
 		`{"op":"add","match":{"venue":"okx"},"effect":{"error":"nope"}}`,
-		`{"op":"add","match":{"venue":"binance"},"effect":{"order":"partial","fraction":0.5}}`,
+		`{"op":"add","match":{"venue":"okx"},"effect":{"order":"create_reports_fill"}}`,
 		`{"op":"add","match":{"venue":"okx","pathprefix":"/x"},"effect":{"status":503}}`,
 	} {
 		if code, out := labPost(t, f, "fault", body); code != http.StatusBadRequest {

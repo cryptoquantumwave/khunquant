@@ -57,7 +57,17 @@ func (l *Lab) InitClock(getenv func(string) string) error {
 	l.Clock = sim
 	l.Now = simclock.NowFunc(sim)
 	var last atomic.Int64 // unix nano of the last save of a driven clock
+	// The simulator's orders have events of their own in sim time (a cancel, a limit price
+	// crossed). It arms a timer on this clock for the next one, so the clock stops near it,
+	// and every step runs the simulator up to the step before the step is settled: the
+	// events happen at their time whether or not anything polls, and a settle sees them.
+	if l.Sim != nil {
+		l.Sim.SetWake(func(at time.Time) { sim.NewTimer(at.Sub(sim.Now())) })
+	}
 	sim.OnStep(func(s simclock.Step) {
+		if l.Sim != nil {
+			l.Sim.Advance(s.At)
+		}
 		if sim.State().Mode == simclock.ModeManual {
 			if j := l.Journal; j != nil {
 				p, _ := json.Marshal(map[string]any{"at": s.At, "timers_fired": s.TimersFired})

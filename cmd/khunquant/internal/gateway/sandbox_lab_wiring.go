@@ -18,10 +18,10 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/account"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
-	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/faultops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
@@ -60,8 +60,9 @@ const kindConfigReload = "config.reload"
 // workflow.step, proposal and policy.decision.
 var labJournalKinds = []string{
 	"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", // simchat
-	"exchange.req",                // the sandbox server's request log
-	"llm.call", "llm.complete",    // the simulated model
+	"exchange.req",             // the sandbox server's request log
+	sandbox.KindOrder,          // the simulator's order ledger: create, fill, cancel, effect
+	"llm.call", "llm.complete", // the simulated model
 	"event.*", "workflow.step", "proposal", "policy.decision", // the bus observer
 	"tool.call",   // the tool tap
 	"manage.call", // sandbox_manage
@@ -123,6 +124,20 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	l.Chain.Set(sandbox.StageFault, l.Faults.Middleware())
 	l.Server.SetHandlerWrap(l.Faults.HandlerWrap())
 	l.OnClose(l.Faults.Close)
+	// The simulator asks the injector what an order create should suffer, and journals its
+	// order transitions at their own sim time. Only a locked process gets either: buildLab
+	// is not run otherwise. The injector accepts the order effects once the simulator
+	// that executes them is wired, so this stays after SetOrderEffects.
+	l.Sim.SetOrderEffects(l.Faults)
+	l.Sim.SetJournal(func(kind, subject string, payload any) {
+		b, _ := json.Marshal(payload)
+		e := labjournal.Entry{Kind: kind, Source: "sandbox", Subject: subject, Payload: b}
+		if oe, ok := payload.(sandbox.OrderEntry); ok {
+			e.SimTime = oe.At
+		}
+		j.Append(e)
+	})
+	l.Faults.EnableOrderKinds("partial", "accept_no_fill", "cancel_after_accept", "create_reports_fill", "lookup_lag")
 	// Every request the chain sees is journaled (Append never blocks: a full queue drops).
 	l.Chain.Observe(func(i sandbox.ReqInfo) {
 		payload, _ := json.Marshal(i)

@@ -51,10 +51,11 @@ type Injector struct {
 	journal Journal
 	maxHold time.Duration
 
-	mu      sync.Mutex
-	rules   []*entry
-	seq     int
-	enabled map[string]bool
+	mu       sync.Mutex
+	rules    []*entry
+	seq      int
+	enabled  map[string]bool
+	classify bool // some HTTP rule looks at the order fields of a request
 }
 
 // New builds an injector with no rules.
@@ -123,7 +124,17 @@ func (i *Injector) Add(r Rule) (string, error) {
 		Rule: r, kind: kind, ly: kindLayer[kind], pair: pair, from: from, to: to,
 		rng: rand.New(rand.NewPCG(r.When.Seed, 0x9e3779b97f4a7c15)),
 	})
+	i.refreshLocked()
 	return r.ID, nil
+}
+
+// refreshLocked recomputes whether a request must be classified before rules are tried.
+func (i *Injector) refreshLocked() {
+	i.classify = slices.ContainsFunc(i.rules, func(e *entry) bool {
+		m := e.Match
+		return (e.ly == layerResponse || e.ly == layerWrap) &&
+			(m.Order != "" || m.Market != "" || m.Symbol != "" || m.Side != "" || m.ReduceOnly != nil || e.kind == "reject")
+	})
 }
 
 // List returns every rule with its firing count and whether it can fire now.
@@ -145,6 +156,7 @@ func (i *Injector) Clear(ids ...string) int {
 	defer i.mu.Unlock()
 	before := len(i.rules)
 	i.rules = slices.DeleteFunc(i.rules, func(e *entry) bool { return len(ids) == 0 || slices.Contains(ids, e.ID) })
+	i.refreshLocked()
 	return before - len(i.rules)
 }
 

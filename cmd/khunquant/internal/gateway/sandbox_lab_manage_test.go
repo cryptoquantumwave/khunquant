@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,31 +225,29 @@ func TestLockedGatewayManageResumeAsWebOwner(t *testing.T) {
 	t.Setenv("KHUNQUANT_HOME", home)
 	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(home, "config.json"))
 	t.Setenv("KQ_SANDBOX_TOKEN", "")
-	port := freePort(t)
-	cfg, err := sandbox.Profile(sandbox.ProfileOptions{Home: home, Port: port})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Proactive.Enabled = true
-	on := true
-	cfg.Proactive.Owner = config.OwnerConfig{Channel: "simchat", ChatID: "dm:boss", SenderID: "simchat:boss", WebIsOwner: &on}
-	if err := config.SaveConfig(filepath.Join(home, "config.json"), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(home, "launcher-config.json")); err == nil {
-		t.Fatal("setup: a launcher-config.json exists")
-	}
-
 	childHome, childTmp := t.TempDir(), t.TempDir()
 	env := []string{
 		"PATH=" + os.Getenv("PATH"), "TMPDIR=" + childTmp, "HOME=" + childHome,
 		"KHUNQUANT_HOME=" + home, "KHUNQUANT_CONFIG=" + home + "/config.json",
 		"KQ_SANDBOX_LOCKED=1", "KQ_SANDBOX_TOKEN=" + lockTestToken, "KQ_SANDBOX_INSTANCE=subprocess",
 	}
-	p := launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
-	p.waitReady()
+	p := startLocked(t, home, env, []string{home, childHome, childTmp}, func(port int) {
+		cfg, err := sandbox.Profile(sandbox.ProfileOptions{Home: home, Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Proactive.Enabled = true
+		on := true
+		cfg.Proactive.Owner = config.OwnerConfig{Channel: "simchat", ChatID: "dm:boss", SenderID: "simchat:boss", WebIsOwner: &on}
+		if err := config.SaveConfig(filepath.Join(home, "config.json"), cfg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "launcher-config.json")); err == nil {
+			t.Fatal("setup: a launcher-config.json exists")
+		}
+	})
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/manage", port)
+	url := p.url("/api/sandbox/lab/manage")
 	code, body, err := postJSON(url, lockTestToken, `{"method":"POST","route":"/api/proactive/resume"}`)
 	var out struct {
 		Status         int  `json:"status"`

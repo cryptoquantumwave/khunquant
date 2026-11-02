@@ -147,7 +147,11 @@ func TestHelperFakeGateway(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(st)
 	})
 	go func() {
-		_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", cfg.Gateway.Port), mux)
+		// Like the real gateway (channels.Manager.StartAll): a server that cannot listen
+		// ends the process with exit 1.
+		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", cfg.Gateway.Port), mux)
+		fmt.Println("Shared HTTP server error:", err)
+		os.Exit(1)
 	}()
 
 	if hasFlag("--exit3-on-usr1") { // the lock invariant exit of the real gateway

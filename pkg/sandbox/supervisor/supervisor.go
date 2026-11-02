@@ -102,9 +102,13 @@ type instance struct {
 	opMu sync.Mutex // serializes up, down and restart of this instance
 
 	// Fixed once the instance is registered.
-	name, home, url, token, logPath string
-	env                             map[string]string
-	client                          *labclient.Client
+	name, home, token, logPath string
+	env                        map[string]string
+
+	// url, port and client change with each attempt of Up, under mu; a Restart keeps them.
+	url    string
+	port   int
+	client *labclient.Client
 
 	mu        sync.Mutex // guards the rest
 	p         *proc
@@ -119,6 +123,9 @@ type instance struct {
 // It is the only place an instance's token lives.
 type Supervisor struct {
 	cfg Config
+
+	// pickPort chooses a gateway's port: freePort, except where a test injects one.
+	pickPort func() (int, error)
 
 	mu        sync.Mutex
 	instances map[string]*instance
@@ -156,7 +163,7 @@ func New(cfg Config) (*Supervisor, error) {
 	if cfg.TermGrace <= 0 {
 		cfg.TermGrace = defaultTermGrace
 	}
-	return &Supervisor{cfg: cfg, instances: map[string]*instance{}}, nil
+	return &Supervisor{cfg: cfg, pickPort: freePort, instances: map[string]*instance{}}, nil
 }
 
 // Up makes an instance home, starts a locked gateway in it and returns once the gateway
@@ -204,43 +211,76 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	port, err := freePort()
-	if err != nil {
-		return Info{}, err
-	}
 	in.token = randomHex(32)
-	in.url = fmt.Sprintf("http://127.0.0.1:%d", port)
-	if in.client, err = labclient.New(in.url, in.token); err != nil {
-		return Info{}, err
-	}
-
-	if err := os.Mkdir(home, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return Info{}, fmt.Errorf("sandbox up: instance %q already exists at %s; run `khunquant sandbox down %s`", name, home, name)
+	for attempt := 1; ; attempt++ {
+		err := s.attempt(ctx, in, o, fixtures)
+		if err == nil {
+			break
 		}
-		return Info{}, fmt.Errorf("sandbox up: create %s: %w", home, err)
-	}
-	defer func() {
-		if !ok {
-			_ = os.RemoveAll(home)
+		// Only a port taken between choosing it and binding it is tried again; any other
+		// failure is the single attempt it always was.
+		var taken *portTakenError
+		if !errors.As(err, &taken) {
+			return Info{}, err
 		}
-	}()
-	if err := prepareHome(home, name, port, fixtures); err != nil {
-		return Info{}, err
-	}
-	if len(o.ConfigPatch) > 0 {
-		if _, err := patchConfigFile(home, o.ConfigPatch); err != nil {
-			return Info{}, fmt.Errorf("sandbox up: config patch: %w", err)
+		if attempt == maxStartAttempts {
+			taken.tries = attempt
+			return Info{}, taken
 		}
-	}
-	if err := writeWorkspace(home, o.Workspace); err != nil {
-		return Info{}, fmt.Errorf("sandbox up: workspace: %w", err)
-	}
-	if err := in.start(ctx, s.cfg); err != nil {
-		return Info{}, err
+		in.forgetFailedStart()
 	}
 	ok = true
 	return in.info(), nil
+}
+
+// attempt is one try of Up: a new port, a client and URL for it, a home made from
+// scratch, and a start. On failure the home it made is gone again.
+func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fixtures []fixtureFile) (err error) {
+	port, err := s.pickPort()
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client, err := labclient.New(url, in.token)
+	if err != nil {
+		return err
+	}
+	in.mu.Lock()
+	in.port, in.url, in.client = port, url, client
+	in.mu.Unlock()
+
+	if err := os.Mkdir(in.home, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("sandbox up: instance %q already exists at %s; run `khunquant sandbox down %s`", in.name, in.home, in.name)
+		}
+		return fmt.Errorf("sandbox up: create %s: %w", in.home, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(in.home)
+		}
+	}()
+	if err := prepareHome(in.home, in.name, port, fixtures); err != nil {
+		return err
+	}
+	if len(o.ConfigPatch) > 0 {
+		if _, err := patchConfigFile(in.home, o.ConfigPatch); err != nil {
+			return fmt.Errorf("sandbox up: config patch: %w", err)
+		}
+	}
+	if err := writeWorkspace(in.home, o.Workspace); err != nil {
+		return fmt.Errorf("sandbox up: workspace: %w", err)
+	}
+	return in.start(ctx, s.cfg)
+}
+
+// forgetFailedStart clears what a failed attempt recorded, so the attempt after it does
+// not report the dead process's exit as the instance's own. It drops p first: a
+// watcher that has not run yet then sees another process and records nothing.
+func (in *instance) forgetFailedStart() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.p, in.lastExit, in.reason, in.asked = nil, nil, "", ""
 }
 
 // register adds in to the table unless the name is taken or the limit is reached.
@@ -283,10 +323,16 @@ func (in *instance) start(ctx context.Context, cfg Config) error {
 	in.mu.Unlock()
 	go in.watch(p)
 
-	if err := waitReady(ctx, in.client, p.exited, cfg.ReadyTimeout); err != nil {
+	in.mu.Lock()
+	client, port := in.client, in.port
+	in.mu.Unlock()
+	if err := waitReady(ctx, client, p.exited, cfg.ReadyTimeout); err != nil {
 		killGroup(p.cmd.Process.Pid)
 		_ = p.cmd.Process.Kill()
 		<-p.exited
+		if errors.Is(err, errGatewayExited) && logShowsPortTaken(in.logPath, port) {
+			return &portTakenError{port: port, tail: logTail(in.logPath, in.token)}
+		}
 		return fmt.Errorf("sandbox up: %w%s", err, logTail(in.logPath, in.token))
 	}
 	in.mu.Lock()
@@ -489,6 +535,8 @@ func (s *Supervisor) Client(name string) (*labclient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	return in.client, nil
 }
 

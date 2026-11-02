@@ -29,6 +29,8 @@ type Options struct {
 	// Getenv, when set, makes New build the instance clock (InitClock) before the server
 	// starts, so no request is served while Now is still the wall clock. Nil: no sim clock.
 	Getenv func(string) string
+	// AvoidPort is the gateway's own port: the server must not take it (0: none).
+	AvoidPort int
 }
 
 // Lab holds the components of one sandbox instance.
@@ -91,6 +93,7 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	sim := sandbox.NewStatefulSimulator(state)
 
 	srv := sandbox.NewServer(store)
+	srv.AvoidPort(opts.AvoidPort)
 	l := &Lab{
 		Home:        opts.Home,
 		Server:      srv,

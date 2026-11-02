@@ -24,6 +24,9 @@ type Server struct {
 	responder Responder
 	inflight  atomic.Int32 // requests being served (for Idle)
 
+	avoid  int                                                // a port Start must not take (0: none); set before Start
+	listen func(network, address string) (net.Listener, error) // net.Listen unless a test replaces it
+
 	// Global state accessor (singleton pattern for accessing current sandbox state).
 	// Guarded by instanceMu.
 }
@@ -131,8 +134,8 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Listen on any available port on loopback.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Listen on any available port on loopback, but not the one in s.avoid.
+	listener, err := s.listenAvoiding()
 	if err != nil {
 		return fmt.Errorf("listen on loopback: %w", err)
 	}
@@ -168,6 +171,41 @@ func (s *Server) Start(ctx context.Context) error {
 	logger.Debugf("sandbox server started on %s", addr)
 
 	return nil
+}
+
+// AvoidPort names a port Start must not take: the gateway binds its own port after the
+// simulator has started, and a simulator that took that number first would make the
+// gateway die with "address already in use". Call it before Start; 0 means none.
+func (s *Server) AvoidPort(port int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.avoid = port
+}
+
+// AvoidedPort is the port set by AvoidPort (0 when none).
+func (s *Server) AvoidedPort() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.avoid
+}
+
+// listenAvoiding listens on a free loopback port other than s.avoid. When the kernel
+// hands out that port, the listener is kept open while another is made, so the second
+// bind cannot return it, and is closed afterwards: the avoided port is left free.
+func (s *Server) listenAvoiding() (net.Listener, error) {
+	listen := s.listen
+	if listen == nil {
+		listen = net.Listen
+	}
+	l, err := listen("tcp", "127.0.0.1:0")
+	if err != nil || s.avoid == 0 {
+		return l, err
+	}
+	if a, ok := l.Addr().(*net.TCPAddr); !ok || a.Port != s.avoid {
+		return l, nil
+	}
+	defer l.Close()
+	return listen("tcp", "127.0.0.1:0")
 }
 
 // Idle is true when no request is being served. It changes nothing; only the sandbox

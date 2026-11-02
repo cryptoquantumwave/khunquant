@@ -513,6 +513,7 @@ func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewa
 
 	// Create and start server
 	srv := sandbox.NewServer(store)
+	srv.AvoidPort(cfg.Gateway.Port) // the shared HTTP server binds it later
 	if err := srv.Start(context.Background()); err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}

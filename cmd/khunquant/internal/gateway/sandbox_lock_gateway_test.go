@@ -78,17 +78,25 @@ func writeSandboxConfig(t *testing.T, home string, port int, mutate func(*config
 	}
 }
 
-// startLockedProcess starts the locked gateway child on a fresh instance home.
+// startLockedProcess starts the locked gateway child on a fresh instance home and
+// returns it once it says ready (startLocked).
 func startLockedProcess(t *testing.T) *lockedProcess {
 	t.Helper()
-	home := newInstanceHome(t)
+	home, env, scanDirs := lockedChildSetup(t)
+	return startLocked(t, home, env, scanDirs, func(port int) {
+		writeSandboxConfig(t, home, port, nil)
+	})
+}
+
+// lockedChildSetup makes a fresh instance home and the environment of a locked child.
+func lockedChildSetup(t *testing.T) (home string, env, scanDirs []string) {
+	t.Helper()
+	home = newInstanceHome(t)
 	t.Setenv("KHUNQUANT_HOME", home) // for DefaultConfig in writeSandboxConfig only
-	port := freePort(t)
-	writeSandboxConfig(t, home, port, nil)
 
 	// The child's HOME and TMPDIR are private dirs the token scan covers too.
 	childHome, childTmp := t.TempDir(), t.TempDir()
-	env := []string{
+	env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + childTmp,
 		"HOME=" + childHome,
@@ -98,7 +106,85 @@ func startLockedProcess(t *testing.T) *lockedProcess {
 		"KQ_SANDBOX_TOKEN=" + lockTestToken,
 		"KQ_SANDBOX_INSTANCE=subprocess",
 	}
-	return launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
+	return home, env, []string{home, childHome, childTmp}
+}
+
+// lockedPort picks the gateway port of a locked child; tests of the retry replace it.
+var lockedPort = freePort
+
+// maxLockedStarts bounds how often startLocked tries a child that lost its port.
+const maxLockedStarts = 3
+
+// startLocked starts the locked gateway child and returns it once it says ready.
+// writeConfig writes the instance's config for the port it is given. The port is only
+// a number picked while nothing holds it, so another socket can take it before the child
+// binds it, and the child then dies with "address already in use". That one cause is
+// tried again, up to maxLockedStarts times, on a new port with the config written again;
+// any other failure ends the test as it always did. The child's output is in every
+// failure message.
+func startLocked(t *testing.T, home string, env, scanDirs []string, writeConfig func(port int)) *lockedProcess {
+	t.Helper()
+	p, err := tryStartLocked(t, home, env, scanDirs, writeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// tryStartLocked is startLocked returning its error, so a test can look at the failure.
+func tryStartLocked(t *testing.T, home string, env, scanDirs []string, writeConfig func(port int)) (*lockedProcess, error) {
+	t.Helper()
+	before := dirEntries(t, scanDirs)
+	for attempt := 1; ; attempt++ {
+		port := lockedPort(t)
+		writeConfig(port)
+		p := launchLockedProcess(t, home, port, env, scanDirs)
+		err := p.readyErr()
+		if err == nil {
+			return p, nil
+		}
+		if !p.lostPort() {
+			return nil, err
+		}
+		if attempt == maxLockedStarts {
+			return nil, fmt.Errorf("locked gateway lost its port on each of %d attempts (address already in use): %w", attempt, err)
+		}
+		// The next attempt starts clean: nothing the dead child left (pid file, journal,
+		// state) stays; the config is written again for the new port.
+		for path := range dirEntries(t, scanDirs) {
+			if !before[path] {
+				if err := os.RemoveAll(path); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+}
+
+// dirEntries is the set of paths directly inside each of dirs.
+func dirEntries(t *testing.T, dirs []string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, d := range dirs {
+		es, err := os.ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range es {
+			out[filepath.Join(d, e.Name())] = true
+		}
+	}
+	return out
+}
+
+// lostPort says the child has exited because it could not bind its port.
+func (p *lockedProcess) lostPort() bool {
+	select {
+	case <-p.exited:
+	default:
+		return false
+	}
+	return strings.Contains(p.out.String(), fmt.Sprintf("listen tcp 127.0.0.1:%d: bind: address already in use", p.port))
 }
 
 // launchLockedProcess re-executes the test binary as the locked gateway with exactly
@@ -144,19 +230,26 @@ func (p *lockedProcess) get(path, token string) (int, []byte, error) {
 // handlers and the config watcher are armed. It fails if the child exits first.
 func (p *lockedProcess) waitReady() {
 	p.t.Helper()
+	if err := p.readyErr(); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+// readyErr is waitReady returning its failure, with the child's output in it.
+func (p *lockedProcess) readyErr() error {
 	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case <-p.exited:
-			p.t.Fatalf("locked gateway exited before it was ready: %v\n%s", p.exit, p.out.String())
+			return fmt.Errorf("locked gateway exited before it was ready: %v\n%s", p.exit, p.out.String())
 		default:
 		}
 		if p.statusReady() {
-			return
+			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	p.t.Fatalf("locked gateway not ready in time\n%s", p.out.String())
+	return fmt.Errorf("locked gateway not ready in time\n%s", p.out.String())
 }
 
 // statusReady says whether /api/sandbox/status answers 200 with ready:true.

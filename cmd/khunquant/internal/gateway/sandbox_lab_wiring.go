@@ -87,6 +87,8 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		// The one clock of the process (clock.json, else the KQ_SANDBOX_CLOCK_* env), built
 		// inside New before the server starts: l.Now then follows it from the first request.
 		Getenv: os.Getenv,
+		// The gateway binds this port after the server starts: the server must not take it.
+		AvoidPort: cfg.Gateway.Port,
 	})
 	if err != nil {
 		return nil, err

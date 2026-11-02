@@ -22,7 +22,8 @@ type Server struct {
 	store     *Store
 	respMu    sync.RWMutex
 	responder Responder
-	inflight  atomic.Int32 // requests being served (for Idle)
+	wrap      func(http.Handler) http.Handler // see SetHandlerWrap; guarded by respMu
+	inflight  atomic.Int32                    // requests being served (for Idle)
 
 	avoid  int                                                // a port Start must not take (0: none); set before Start
 	listen func(network, address string) (net.Listener, error) // net.Listen unless a test replaces it
@@ -124,6 +125,24 @@ func (s *Server) SetResponder(r Responder) {
 	s.responder = r
 }
 
+// SetHandlerWrap wraps the router at the handler level, so a component can hold,
+// delay or drop a connection (a Responder can only answer). It can be called before or
+// after Start, like SetResponder, and nil removes the wrap. With none set a request is
+// served exactly as before. The wrap runs inside the in-flight count, so Idle covers a
+// request it holds.
+func (s *Server) SetHandlerWrap(w func(http.Handler) http.Handler) {
+	s.respMu.Lock()
+	defer s.respMu.Unlock()
+	s.wrap = w
+}
+
+// HasHandlerWrap says whether a handler wrap is set.
+func (s *Server) HasHandlerWrap() bool {
+	s.respMu.RLock()
+	defer s.respMu.RUnlock()
+	return s.wrap != nil
+}
+
 // Start begins listening for requests. It is safe to call multiple times; if
 // already running, Start returns the address without error.
 func (s *Server) Start(ctx context.Context) error {
@@ -149,7 +168,14 @@ func (s *Server) Start(ctx context.Context) error {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.inflight.Add(1)
 		defer s.inflight.Add(-1)
-		router.ServeHTTP(w, r)
+		s.respMu.RLock()
+		wrap := s.wrap
+		s.respMu.RUnlock()
+		if wrap == nil {
+			router.ServeHTTP(w, r)
+			return
+		}
+		wrap(router).ServeHTTP(w, r)
 	})
 
 	// Create and start the HTTP server.

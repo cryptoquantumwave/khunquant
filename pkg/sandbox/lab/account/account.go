@@ -76,6 +76,7 @@ func run(sim *sandbox.StatefulSimulator, op func(*sandbox.StatefulSimulator, req
 		default: // GetState would create state for any name
 			return nil, lab.Errorf(lab.CodeUnavailable, "venue %q has no simulator account (binance and okx do)", r.Venue)
 		}
+		sim.Advance(time.Time{}) // a read shows what has fallen due (a cancel, a crossed limit)
 		return op(sim, r)
 	}
 }

@@ -136,8 +136,10 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 	// Only handle Binance and OKX for now.
 	switch venue {
 	case "binance":
+		sim.advanceLocked(time.Time{}) // what fell due since the last request
 		return sim.respondBinance(method, path, r)
 	case "okx":
+		sim.advanceLocked(time.Time{})
 		return sim.respondOKX(method, path, r)
 	default:
 		return nil, false // fall through to fixture store
@@ -149,20 +151,17 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Request) (*Response, bool) {
 	state := sim.stateManager.GetState("binance")
 
-	// Dispatch by method and path. Check for /fapi/v3 first (newer), then /fapi/v1.
+	// The order endpoints match the whole path (v1 or v3); the rest by prefix, as before.
+	ep := fapiEndpoint(path)
 	switch {
-	// Create futures order (v1 or v3)
-	case method == "POST" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
+	case method == "POST" && ep == "order":
 		return sim.simBinanceCreateOrder(state, r)
-	// Fetch futures order (v1 or v3)
-	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
+	case method == "GET" && ep == "order":
 		return sim.simBinanceFetchOrder(state, r)
-	// Cancel futures order (v1 or v3)
-	case method == "DELETE" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
+	case method == "DELETE" && ep == "order":
 		return sim.simBinanceCancelOrder(state, r)
-	// Fetch open orders (v1 or v3)
-	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/openOrders") || strings.HasPrefix(path, "/fapi/v3/openOrders")):
-		return sim.simBinanceFetchOpenOrders(state, r)
+	case method == "GET" && ep == "openOrders":
+		return sim.simBinanceListOrders(state, r)
 	// Fetch positions (positionRisk is Binance's positions endpoint, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):
 		return sim.simBinanceFetchPositions(state, r)
@@ -178,266 +177,6 @@ func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Reques
 	default:
 		return nil, false // fall through to fixture store
 	}
-}
-
-// simBinanceCreateOrder handles POST /fapi/v1/order and /fapi/v3/order for Binance.
-// Binance uses query string + body parameters for signed POSTs.
-func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	// Parse both query and body (Binance signed POSTs use query params).
-	if err := r.ParseForm(); err != nil {
-		return sim.binanceErrorResponse(400, -1000, "invalid request"), true
-	}
-
-	// Read body if present (for multipart or raw body)
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-	symbol := r.FormValue("symbol")
-	sideRaw := r.FormValue("side")
-	orderType := strings.ToLower(r.FormValue("type"))
-	quantityStr := r.FormValue("quantity")
-	priceStr := r.FormValue("price")
-	positionSideRaw := r.FormValue("positionSide")
-
-	// Limit orders not yet implemented; reject until explicit fill helper added
-	if orderType == "limit" {
-		return sim.binanceErrorResponse(400, -1022, "Limit orders not yet implemented in sandbox"), true
-	}
-
-	// Validate side (must be "BUY" or "SELL", not "LONG"/"SHORT").
-	side := strings.ToUpper(sideRaw)
-	if side != "BUY" && side != "SELL" {
-		// Binance error code -1022 for invalid side
-		return sim.binanceErrorResponse(400, -1022, fmt.Sprintf("Unknown order side: %s", sideRaw)), true
-	}
-
-	// Validate positionSide (must be "LONG" or "SHORT", default to "LONG" if not provided).
-	positionSide := strings.ToUpper(positionSideRaw)
-	if positionSide == "" {
-		// Default to LONG if not provided
-		positionSide = "LONG"
-	} else if positionSide != "LONG" && positionSide != "SHORT" {
-		// Binance error code -1022 for invalid position side
-		return sim.binanceErrorResponse(400, -1022, fmt.Sprintf("Invalid positionSide: %s", positionSideRaw)), true
-	}
-
-	// Validate symbol and quantity
-	if symbol == "" {
-		return sim.binanceErrorResponse(400, -1022, "symbol is missing"), true
-	}
-
-	quantity, err := strconv.ParseFloat(quantityStr, 64)
-	if err != nil || quantity <= 0 {
-		return sim.binanceErrorResponse(400, -1022, "Quantity is invalid"), true
-	}
-
-	// Get market metadata
-	market, ok := state.Markets[symbol]
-	if !ok {
-		// Unknown market - return error instead of falling through
-		return sim.binanceErrorResponse(400, -4625, "This symbol does not exist"), true
-	}
-
-	// Parse price if provided (for limit orders)
-	price := 0.0
-	if priceStr != "" {
-		p, err := strconv.ParseFloat(priceStr, 64)
-		if err == nil && p > 0 {
-			price = p
-		}
-	}
-
-	// For market orders, use mark price
-	if orderType == "market" {
-		// Try to use configured mark price for the symbol
-		markPrice := sim.markPrice("binance", symbol, state)
-		if markPrice > 0 {
-			price = markPrice
-		}
-	}
-
-	// If still no price, return error (need price data for order validation)
-	if price <= 0 {
-		return sim.binanceErrorResponse(400, -4625, fmt.Sprintf("Mark price unavailable for %s", symbol)), true
-	}
-
-	// Calculate notional value in quote currency (USDT)
-	// notional = quantity (contracts) * contractSize (base per contract) * price (quote per base)
-	notional := quantity * market.ContractSize * price
-
-	// Check USDT balance (lock this amount)
-	usdtBalance := state.Balances["USDT"]
-	if usdtBalance.Free < notional {
-		// -2010 with Binance's own text: the pinned ccxt maps it to InsufficientFunds even
-		// against the rewritten host. The -2015 this answered is an authentication error,
-		// and -2019 (insufficient margin) is InsufficientFunds only in ccxt's per-host
-		// "linear" table, so against the lab it is a plain, unknown-outcome error.
-		return sim.binanceErrorResponse(400, -2010, "Account has insufficient balance for requested action."), true
-	}
-
-	// Create the order
-	orderID := sim.stateManager.NextOrderID("binance")
-	now := sim.clock()
-	order := &Order{
-		ID:        orderID,
-		Symbol:    symbol,
-		OrderType: orderType,
-		Side:      side,
-		Amount:    quantity,
-		Filled:    quantity, // market orders fill immediately
-		Average:   price,
-		Cost:      notional,
-		Status:    "FILLED", // market orders are immediately filled
-		CreatedAt: now,
-		UpdatedAt: now,
-		Params: map[string]interface{}{
-			"positionSide": positionSide,
-		},
-	}
-
-	// Lock balance (deduct from free, add to locked)
-	usdtBalance.Free -= notional
-	usdtBalance.Locked += notional
-	state.Balances["USDT"] = usdtBalance
-
-	// Update or create position (filled immediately for market orders)
-	if existing, ok := state.Positions[symbol]; ok {
-		// Position exists, add to it
-		existing.Contracts += quantity
-		existing.EntryPrice = price
-		existing.MarkPrice = price
-		existing.UpdatedAt = now
-	} else {
-		// New position
-		state.Positions[symbol] = &Position{
-			Symbol:       symbol,
-			Side:         strings.ToLower(positionSide),
-			Contracts:    quantity,
-			ContractSize: market.ContractSize,
-			EntryPrice:   price,
-			MarkPrice:    price,
-			Leverage:     state.Leverage[symbol],
-			UpdatedAt:    now,
-		}
-	}
-
-	// Store order in closed orders (since it filled)
-	state.ClosedOrders[orderID] = order
-
-	// Build wire-format Binance order response
-	respBody := sim.buildBinanceOrderResponseBody(order)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simBinanceFetchOrder handles GET /fapi/v1/order and /fapi/v3/order for Binance.
-func (sim *StatefulSimulator) simBinanceFetchOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	if err := r.ParseForm(); err != nil {
-		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
-	}
-
-	_ = r.FormValue("symbol") // unused
-	orderId := r.FormValue("orderId")
-
-	if orderId == "" {
-		return sim.binanceErrorResponse(400, -1022, "orderId is missing"), true
-	}
-
-	// Check open orders first, then closed
-	order, ok := state.OpenOrders[orderId]
-	if !ok {
-		order, ok = state.ClosedOrders[orderId]
-	}
-	if !ok {
-		return sim.binanceErrorResponse(404, -2013, "Order does not exist."), true
-	}
-
-	respBody := sim.buildBinanceOrderResponseBody(order)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simBinanceCancelOrder handles DELETE /fapi/v1/order and /fapi/v3/order for Binance.
-func (sim *StatefulSimulator) simBinanceCancelOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	if err := r.ParseForm(); err != nil {
-		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
-	}
-
-	orderId := r.FormValue("orderId")
-	if orderId == "" {
-		return sim.binanceErrorResponse(400, -1022, "orderId is missing"), true
-	}
-
-	order, ok := state.OpenOrders[orderId]
-	if !ok {
-		// Order not found or already closed
-		return sim.binanceErrorResponse(404, -2013, "Order does not exist."), true
-	}
-
-	// Move from open to closed
-	delete(state.OpenOrders, orderId)
-	order.Status = "CANCELED"
-	order.UpdatedAt = sim.clock()
-	state.ClosedOrders[orderId] = order
-
-	// Unlock the locked balance (refund the reservation)
-	// The cost is locked, refund it entirely (for unfilled orders) or partially
-	unfilled := order.Amount - order.Filled
-	if unfilled > 0 {
-		market, ok := state.Markets[order.Symbol]
-		if ok {
-			refundAmount := unfilled * market.ContractSize * order.Average
-			usdtBal := state.Balances["USDT"]
-			usdtBal.Locked -= refundAmount
-			usdtBal.Free += refundAmount
-			state.Balances["USDT"] = usdtBal
-		}
-	}
-
-	respBody := sim.buildBinanceOrderResponseBody(order)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simBinanceFetchOpenOrders handles GET /fapi/v1/openOrders and /fapi/v3/openOrders for Binance.
-func (sim *StatefulSimulator) simBinanceFetchOpenOrders(state *VenueState, r *http.Request) (*Response, bool) {
-	if err := r.ParseForm(); err != nil {
-		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
-	}
-
-	symbol := r.FormValue("symbol")
-	var orders []map[string]interface{}
-
-	for _, order := range state.OpenOrders {
-		if symbol == "" || order.Symbol == symbol {
-			orders = append(orders, sim.binanceOrderToWireFormat(order))
-		}
-	}
-
-	// Marshal as array (Binance returns array of orders)
-	respBody, _ := json.Marshal(orders)
-	return &Response{
-		Status: 200,
-		Body:   json.RawMessage(respBody),
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
 }
 
 // simBinanceFetchPositions handles GET /fapi/v1/positionRisk and /fapi/v3/positionRisk for Binance.
@@ -715,7 +454,7 @@ func (sim *StatefulSimulator) respondOKX(method, path string, r *http.Request) (
 		return sim.simOKXCancelOrder(state, r)
 	// Fetch open orders
 	case method == "GET" && path == "/api/v5/trade/orders-pending":
-		return sim.simOKXFetchOpenOrders(state, r)
+		return sim.simOKXListOrders(state, r)
 	// Fetch positions (exact match: /api/v5/account/positions, not /api/v5/account/positions-history)
 	case method == "GET" && path == "/api/v5/account/positions":
 		return sim.simOKXFetchPositions(state, r)
@@ -731,274 +470,6 @@ func (sim *StatefulSimulator) respondOKX(method, path string, r *http.Request) (
 	default:
 		return nil, false // fall through to fixture store
 	}
-}
-
-// simOKXCreateOrder handles POST /api/v5/trade/order and /api/v5/trade/batch-orders for OKX.
-// OKX uses JSON body for POST requests.
-func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return sim.okxErrorResponse("51000", "invalid request body"), true
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body)) // restore body
-
-	// Check if this is a batch order request (array) or single order (object)
-	isBatch := bytes.HasPrefix(bytes.TrimSpace(body), []byte("["))
-
-	if isBatch {
-		// Batch orders: parse as array and handle first order only (simplification)
-		var requests []map[string]interface{}
-		if err := json.Unmarshal(body, &requests); err != nil {
-			return sim.okxErrorResponse("51000", "invalid JSON"), true
-		}
-		if len(requests) == 0 {
-			return sim.okxErrorResponse("51000", "empty batch"), true
-		}
-		// Use first order in batch
-		orderBody, _ := json.Marshal(requests[0])
-		body = orderBody
-	}
-
-	var req struct {
-		InstID  string `json:"instId"`
-		TdMode  string `json:"tdMode"`
-		Side    string `json:"side"`
-		PosSide string `json:"posSide"`
-		OrdType string `json:"ordType"`
-		Sz      string `json:"sz"` // in contracts for perpetuals
-		Px      string `json:"px"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return sim.okxErrorResponse("51000", "invalid JSON"), true
-	}
-
-	// Validate
-	if req.InstID == "" {
-		return sim.okxErrorResponse("51000", "missing instId"), true
-	}
-	if req.Side != "buy" && req.Side != "sell" {
-		return sim.okxErrorResponse("51000", "invalid side"), true
-	}
-	// posSide can be "long", "short", or "net" (hedging mode); default to "net" if empty
-	if req.PosSide == "" {
-		req.PosSide = "net" // Default for batch/unified mode
-	} else if req.PosSide != "long" && req.PosSide != "short" && req.PosSide != "net" {
-		return sim.okxErrorResponse("51000", "invalid posSide"), true
-	}
-
-	// Limit orders not yet implemented; reject until explicit fill helper added
-	if req.OrdType == "limit" {
-		return sim.okxErrorResponse("51000", "Limit orders not yet implemented in sandbox"), true
-	}
-
-	sz, err := strconv.ParseFloat(req.Sz, 64)
-	if err != nil || sz <= 0 {
-		return sim.okxErrorResponse("51000", "invalid sz"), true
-	}
-
-	// Get market info
-	market, ok := state.Markets[req.InstID]
-	if !ok {
-		// Unknown market - return error instead of falling through
-		return sim.okxErrorResponse("51000", fmt.Sprintf("Instrument ID %s does not exist", req.InstID)), true
-	}
-
-	// Parse price
-	price := 0.0
-	if req.Px != "" {
-		p, err := strconv.ParseFloat(req.Px, 64)
-		if err == nil && p > 0 {
-			price = p
-		}
-	}
-
-	// For market orders, use mark price
-	if req.OrdType == "market" {
-		markPrice := sim.markPrice("okx", req.InstID, state)
-		if markPrice > 0 {
-			price = markPrice
-		}
-	}
-
-	// If still no price, return error (need price data for order validation)
-	if price <= 0 {
-		return sim.okxErrorResponse("51000", fmt.Sprintf("Mark price unavailable for %s", req.InstID)), true
-	}
-
-	// Calculate notional value
-	notional := sz * market.ContractSize * price
-
-	// Check USDT balance
-	usdtBal := state.Balances["USDT"]
-	if usdtBal.Free < notional {
-		// OKX insufficient funds error: code "51008"
-		return sim.okxErrorResponse("51008", "The margin is insufficient."), true
-	}
-
-	// Create order
-	orderID := sim.stateManager.NextOrderID("okx")
-	now := sim.clock()
-	order := &Order{
-		ID:        orderID,
-		Symbol:    req.InstID,
-		OrderType: req.OrdType,
-		Side:      req.Side,
-		Amount:    sz,
-		Filled:    sz, // market orders fill immediately
-		Average:   price,
-		Cost:      notional,
-		Status:    "filled",
-		CreatedAt: now,
-		UpdatedAt: now,
-		Params: map[string]interface{}{
-			"posSide": req.PosSide,
-		},
-	}
-
-	// Lock balance
-	usdtBal.Free -= notional
-	usdtBal.Locked += notional
-	state.Balances["USDT"] = usdtBal
-
-	// Update or create position
-	if existing, ok := state.Positions[req.InstID]; ok {
-		existing.Contracts += sz
-		existing.EntryPrice = price
-		existing.MarkPrice = price
-		existing.UpdatedAt = now
-	} else {
-		state.Positions[req.InstID] = &Position{
-			Symbol:       req.InstID,
-			Side:         req.PosSide,
-			Contracts:    sz,
-			ContractSize: market.ContractSize,
-			EntryPrice:   price,
-			MarkPrice:    price,
-			Leverage:     state.Leverage[req.InstID],
-			UpdatedAt:    now,
-		}
-	}
-
-	// Store in closed orders
-	state.ClosedOrders[orderID] = order
-
-	// Return OKX-format response
-	respBody := sim.buildOKXOrderResponseBody(orderID, req.InstID, req.Side, req.PosSide, sz, price)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simOKXFetchOrder handles GET /api/v5/trade/order for OKX.
-func (sim *StatefulSimulator) simOKXFetchOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	if err := r.ParseForm(); err != nil {
-		return sim.okxErrorResponse("51000", "invalid query string"), true
-	}
-
-	ordId := r.FormValue("ordId")
-	_ = r.FormValue("instId") // unused
-
-	if ordId == "" {
-		return sim.okxErrorResponse("51000", "missing ordId"), true
-	}
-
-	order, ok := state.OpenOrders[ordId]
-	if !ok {
-		order, ok = state.ClosedOrders[ordId]
-	}
-	if !ok {
-		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
-	}
-
-	posSide, _ := order.Params["posSide"].(string)
-	if posSide == "" {
-		posSide = "net"
-	}
-	respBody := sim.buildOKXOrderResponseBody(ordId, order.Symbol, order.Side, posSide, order.Amount, order.Average)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simOKXCancelOrder handles POST /api/v5/trade/cancel-order for OKX.
-func (sim *StatefulSimulator) simOKXCancelOrder(state *VenueState, r *http.Request) (*Response, bool) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return sim.okxErrorResponse("51000", "invalid request body"), true
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-
-	var req struct {
-		OrdId  string `json:"ordId"`
-		InstId string `json:"instId"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return sim.okxErrorResponse("51000", "invalid JSON"), true
-	}
-
-	order, ok := state.OpenOrders[req.OrdId]
-	if !ok {
-		return sim.okxErrorResponse(okxOrderNotFound, "Order does not exist"), true
-	}
-
-	delete(state.OpenOrders, req.OrdId)
-	order.Status = "canceled"
-	order.UpdatedAt = sim.clock()
-	state.ClosedOrders[req.OrdId] = order
-
-	// Unlock balance
-	unfilled := order.Amount - order.Filled
-	if unfilled > 0 {
-		market, ok := state.Markets[order.Symbol]
-		if ok {
-			refundAmount := unfilled * market.ContractSize * order.Average
-			usdtBal := state.Balances["USDT"]
-			usdtBal.Locked -= refundAmount
-			usdtBal.Free += refundAmount
-			state.Balances["USDT"] = usdtBal
-		}
-	}
-
-	respBody := sim.buildOKXCancelResponseBody(req.OrdId, req.InstId)
-	return &Response{
-		Status: 200,
-		Body:   respBody,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
-}
-
-// simOKXFetchOpenOrders handles GET /api/v5/trade/orders-pending for OKX.
-func (sim *StatefulSimulator) simOKXFetchOpenOrders(state *VenueState, r *http.Request) (*Response, bool) {
-	if err := r.ParseForm(); err != nil {
-		return sim.okxErrorResponse("51000", "invalid query string"), true
-	}
-
-	var orders []map[string]interface{}
-	for _, order := range state.OpenOrders {
-		orders = append(orders, sim.okxOrderToWireFormat(order))
-	}
-
-	respBody, _ := json.Marshal(map[string]interface{}{
-		"code": "0",
-		"data": orders,
-	})
-	return &Response{
-		Status: 200,
-		Body:   json.RawMessage(respBody),
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-	}, true
 }
 
 // simOKXFetchPositions handles GET /api/v5/account/positions for OKX.
@@ -1184,37 +655,13 @@ func formatNumber(f float64) string {
 	return s
 }
 
-// binanceOrderToWireFormat converts an Order to Binance wire format (map).
-// CRITICAL: orderId is a JSON NUMBER (not string), status/side/type are uppercase strings,
-// all prices/quantities are strings. This format must match exactly for CCXT to parse.
-func (sim *StatefulSimulator) binanceOrderToWireFormat(order *Order) map[string]interface{} {
-	// Parse orderId to int64 (Binance returns numeric orderId in JSON)
-	var orderIDInt int64
-	if parsed, err := strconv.ParseInt(order.ID, 10, 64); err == nil {
-		orderIDInt = parsed
-	}
-
-	return map[string]interface{}{
-		"orderId":      orderIDInt, // NUMBER type, not string
-		"symbol":       order.Symbol,
-		"status":       order.Status, // "FILLED", "NEW", "CANCELED", etc.
-		"origQty":      formatNumber(order.Amount),
-		"executedQty":  formatNumber(order.Filled),
-		"avgPrice":     formatNumber(order.Average),
-		"positionSide": positionSideOf(order),
-		"side":         strings.ToUpper(order.Side),      // "BUY" or "SELL"
-		"type":         strings.ToUpper(order.OrderType), // "MARKET" or "LIMIT"
-		"timeInForce":  "GTC",
-		"time":         order.CreatedAt.UnixMilli(),
-		"updateTime":   order.UpdatedAt.UnixMilli(),
-	}
-}
-
 // positionSideOf is the order's Binance positionSide: what the request carried, BOTH
 // (one-way mode) when it carried none. A stored order may have no params at all.
 func positionSideOf(order *Order) string {
-	if s, _ := order.Params["positionSide"].(string); s != "" {
-		return strings.ToUpper(s)
+	for _, k := range [...]string{"posSide", "positionSide"} { // the ledger's key, or a hand-built order's
+		if s, _ := order.Params[k].(string); s != "" {
+			return strings.ToUpper(s)
+		}
 	}
 	return "BOTH"
 }
@@ -1259,23 +706,6 @@ func (sim *StatefulSimulator) binanceErrorResponse(httpStatus int, code int, msg
 	}
 }
 
-// okxOrderToWireFormat converts an Order to OKX wire format.
-// CRITICAL: includes sCode (per-order success code) for CCXT error detection.
-// CRITICAL: uses "state" field name (not "status") - CCXT expects OKX state values like "filled", "live", "canceled"
-func (sim *StatefulSimulator) okxOrderToWireFormat(order *Order) map[string]interface{} {
-	return map[string]interface{}{
-		"ordId":   order.ID,
-		"instId":  order.Symbol,
-		"side":    order.Side,
-		"posSide": order.Params["posSide"],
-		"sz":      formatNumber(order.Amount),
-		"state":   order.Status, // OKX uses "state" not "status"; value like "filled", "live", "canceled"
-		"avgPx":   formatNumber(order.Average),
-		"sCode":   "0", // Per-order success code (0 = success)
-		"sMsg":    "",  // Per-order success message
-	}
-}
-
 // okxPositionToWireFormat converts a Position to OKX wire format.
 func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position) map[string]interface{} {
 	return map[string]interface{}{
@@ -1287,29 +717,6 @@ func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position) map[string]
 		"lever":   pos.Leverage,
 		"uPL":     "0",
 	}
-}
-
-// buildOKXOrderResponseBody builds an OKX createOrder response in wire format.
-// CRITICAL: each element in data[] must include sCode for CCXT to detect per-order errors.
-// Wire format per OKX API spec for POST /api/v5/trade/order response.
-// Note: createOrder response only includes clOrdId, ordId, tag, sCode, sMsg.
-// Status/state is only available via FetchOrder, not in CreateOrder response.
-func (sim *StatefulSimulator) buildOKXOrderResponseBody(ordId, instId, side, posSide string, sz, price float64) json.RawMessage {
-	// Ignore instId, side, posSide, sz, price - they're not in the real createOrder response
-	body, _ := json.Marshal(map[string]interface{}{
-		"code": "0",
-		"msg":  "",
-		"data": []map[string]interface{}{
-			{
-				"ordId":   ordId,
-				"sCode":   "0", // Per-order success code (CRITICAL for CCXT)
-				"sMsg":    "",  // Per-order message
-				"clOrdId": "",  // Client order ID (optional)
-				"tag":     "",  // Tag (optional)
-			},
-		},
-	})
-	return json.RawMessage(body)
 }
 
 // buildOKXCancelResponseBody builds an OKX cancel response.
@@ -1353,18 +760,12 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 	switch venue {
 	case "binance":
 		// Binance futures endpoints: /fapi/v1/ and /fapi/v3/
+		ep := fapiEndpoint(path)
 		switch {
-		// Create order
-		case method == "POST" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
+		// The order endpoints, by exact path (as respondBinance matches them)
+		case (method == "POST" || method == "GET" || method == "DELETE") && ep == "order":
 			return true
-		// Fetch order
-		case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
-			return true
-		// Cancel order
-		case method == "DELETE" && (strings.HasPrefix(path, "/fapi/v1/order") || strings.HasPrefix(path, "/fapi/v3/order")):
-			return true
-		// Fetch open orders
-		case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/openOrders") || strings.HasPrefix(path, "/fapi/v3/openOrders")):
+		case method == "GET" && ep == "openOrders":
 			return true
 		// Fetch positions
 		case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):

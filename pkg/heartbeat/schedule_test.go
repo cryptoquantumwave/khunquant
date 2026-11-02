@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -134,7 +135,22 @@ func (r *scheduleRig) start(t *testing.T) {
 	if err := r.hs.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(r.hs.Stop)
+	t.Cleanup(func() { stopAndWait(t, r.hs) })
+}
+
+// stopAndWait stops hs and waits for its schedule goroutine to return. Stop does
+// not wait for a legacy run, and a run writes heartbeat.log after its handler has
+// returned, so without this t.TempDir's cleanup can find the workspace refilled
+// between listing it and removing it. The wait is bounded so a stuck run fails the
+// test by name instead of hanging it.
+func stopAndWait(t *testing.T, hs *HeartbeatService) {
+	t.Helper()
+	hs.Stop()
+	select {
+	case <-hs.done:
+	case <-time.After(10 * time.Second):
+		t.Errorf("a heartbeat run was still going 10s after Stop")
+	}
 }
 
 func (r *scheduleRig) expectCall(t *testing.T) time.Time {
@@ -155,6 +171,36 @@ func (r *scheduleRig) expectNoCall(t *testing.T) {
 	case at := <-r.calls:
 		t.Fatalf("the heartbeat ran at %v and must not have", at)
 	default:
+	}
+}
+
+// The rig's cleanup outlasts a legacy run, which Stop does not wait for: the run's
+// last log line lands before the workspace is removed, not while it is.
+func TestRig_CleanupWaitsForALegacyRun(t *testing.T) {
+	ws := t.TempDir()
+	t.Run("rig", func(t *testing.T) {
+		clk := newFakeClock()
+		r := newRig(t, ws, state.NewManager(ws), clk, 30)
+		entered := make(chan struct{})
+		r.hs.SetContextHandler(func(ctx context.Context, _, _, _ string) *tools.ToolResult {
+			close(entered)
+			<-ctx.Done()
+			// Take a moment so Stop would return first if nothing waited.
+			time.Sleep(30 * time.Millisecond)
+			return tools.SilentResult("ok")
+		})
+		r.start(t)
+		clk.waitArmed(t, time.Second)
+		clk.Advance(time.Second)
+		<-entered
+	})
+
+	data, err := os.ReadFile(filepath.Join(ws, "heartbeat.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Heartbeat OK - silent") {
+		t.Fatalf("the rig's cleanup returned before the run ended; heartbeat.log:\n%s", data)
 	}
 }
 

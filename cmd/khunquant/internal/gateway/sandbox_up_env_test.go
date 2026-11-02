@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -24,11 +23,6 @@ import (
 // starts fully. This is what shows that up's environment passes the lock checks.
 func TestLockedGateway_StartsWithUpEnvAndProfile(t *testing.T) {
 	home := newInstanceHome(t)
-	port := freePort(t)
-	if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
-		t.Fatal(err)
-	}
-
 	// The test process has its own HOME (newInstanceHome set it); the child must not
 	// see it, so ChildEnv is built after pointing TMPDIR at a scanned dir.
 	childTmp := t.TempDir()
@@ -38,8 +32,11 @@ func TestLockedGateway_StartsWithUpEnvAndProfile(t *testing.T) {
 		t.Fatalf("ChildEnv does not set HOME to the instance home: %v", env)
 	}
 
-	p := launchLockedProcess(t, home, port, env, []string{home, childTmp})
-	p.waitReady()
+	p := startLocked(t, home, env, []string{home, childTmp}, func(port int) {
+		if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	st := p.status()
 	if !st.Enabled || !st.Locked || !st.Running || st.BaseURL == "" {
@@ -67,7 +64,7 @@ func TestLockedGateway_StartsWithUpEnvAndProfile(t *testing.T) {
 		t.Fatalf("no fixtures found under %s", repoFixtures)
 	}
 	put := `[{"method":"GET","path_prefix":"/lab/ping","response":{"status":200,"body_text":"pong"}}]`
-	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/fixtures?venue=okx", port), strings.NewReader(put))
+	req, err := http.NewRequest(http.MethodPut, p.url("/api/sandbox/fixtures?venue=okx"), strings.NewReader(put))
 	if err != nil {
 		t.Fatal(err)
 	}

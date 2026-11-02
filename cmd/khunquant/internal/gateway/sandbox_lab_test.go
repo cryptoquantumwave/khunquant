@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -200,16 +199,9 @@ func TestDevMCPLockedBearerIsInstanceToken(t *testing.T) {
 func TestDevMCPLockedUsesInstanceToken(t *testing.T) {
 	home := newInstanceHome(t)
 	t.Setenv("KHUNQUANT_HOME", home) // for DefaultConfig in writeSandboxConfig only
-	port := freePort(t)
 	const cfgToken = "cfg-devmcp-token-0123456789abcdef0123456789"
-	writeSandboxConfig(t, home, port, func(c *config.Config) {
-		c.Debug.DevMCP.Enabled, c.Debug.DevMCP.Token = true, cfgToken
-	})
 	cfgPath := filepath.Join(home, "config.json")
-	before, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var before []byte // the config as written for the attempt that started, before the child ran
 
 	childHome, childTmp := t.TempDir(), t.TempDir()
 	env := []string{
@@ -217,8 +209,15 @@ func TestDevMCPLockedUsesInstanceToken(t *testing.T) {
 		"KHUNQUANT_HOME=" + home, "KHUNQUANT_CONFIG=" + cfgPath,
 		"KQ_SANDBOX_LOCKED=1", "KQ_SANDBOX_TOKEN=" + lockTestToken, "KQ_SANDBOX_INSTANCE=subprocess",
 	}
-	p := launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
-	p.waitReady()
+	p := startLocked(t, home, env, []string{home, childHome, childTmp}, func(port int) {
+		writeSandboxConfig(t, home, port, func(c *config.Config) {
+			c.Debug.DevMCP.Enabled, c.Debug.DevMCP.Token = true, cfgToken
+		})
+		var err error
+		if before, err = os.ReadFile(cfgPath); err != nil {
+			t.Fatal(err)
+		}
+	})
 	p.waitOutput("Dev MCP", 20*time.Second)
 
 	if code, _, _ := p.get("/dev-mcp", cfgToken); code != http.StatusUnauthorized {
@@ -227,12 +226,12 @@ func TestDevMCPLockedUsesInstanceToken(t *testing.T) {
 	if code, _, _ := p.get("/dev-mcp", lockTestToken); code == http.StatusUnauthorized || code == http.StatusForbidden {
 		t.Errorf("/dev-mcp with the instance token = %d", code)
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/inspect", port)
+	url := p.url("/api/sandbox/lab/inspect")
 	if code, body, err := postJSON(url, lockTestToken, `{"op":"journal","limit":5}`); err != nil || code != http.StatusOK ||
 		!strings.Contains(body, `"entries"`) || !strings.Contains(body, `"drops"`) {
 		t.Errorf("inspect journal on the real gateway's first generation = %d (%v) %s, want 200 with entries and drops", code, err, body)
 	}
-	if !mcpToolsAt(t, fmt.Sprintf("http://127.0.0.1:%d/dev-mcp", port), lockTestToken)["sandbox_inspect"] {
+	if !mcpToolsAt(t, p.url("/dev-mcp"), lockTestToken)["sandbox_inspect"] {
 		t.Error("tools/list of the real gateway's first generation has no sandbox_inspect")
 	}
 	if code, _, _ := postJSON(url, "", `{}`); code != http.StatusUnauthorized {

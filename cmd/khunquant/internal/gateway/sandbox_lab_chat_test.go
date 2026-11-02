@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,22 +139,20 @@ func TestLockedGatewayStartsWithSimChat(t *testing.T) {
 	t.Setenv("KHUNQUANT_HOME", home)
 	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(home, "config.json"))
 	t.Setenv("KQ_SANDBOX_TOKEN", "") // the profile must not pick it up
-	port := freePort(t)
-	if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
-		t.Fatal(err)
-	}
-
 	childHome, childTmp := t.TempDir(), t.TempDir()
 	env := []string{
 		"PATH=" + os.Getenv("PATH"), "TMPDIR=" + childTmp, "HOME=" + childHome,
 		"KHUNQUANT_HOME=" + home, "KHUNQUANT_CONFIG=" + home + "/config.json",
 		"KQ_SANDBOX_LOCKED=1", "KQ_SANDBOX_TOKEN=" + lockTestToken, "KQ_SANDBOX_INSTANCE=subprocess",
 	}
-	p := launchLockedProcess(t, home, port, env, []string{home, childHome, childTmp})
-	p.waitReady()
+	p := startLocked(t, home, env, []string{home, childHome, childTmp}, func(port int) {
+		if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
+			t.Fatal(err)
+		}
+	})
 	p.waitOutput("Channels enabled: [simchat]", 20*time.Second)
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/chat", port)
+	url := p.url("/api/sandbox/lab/chat")
 	if code, body, err := postJSON(url, lockTestToken, `{"op":"send","as":"stranger","text":"/whoami"}`); err != nil || code != http.StatusOK {
 		t.Fatalf("POST chat send = %d (%v) %s\n%s", code, err, body, p.out.String())
 	}

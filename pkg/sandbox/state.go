@@ -78,9 +78,8 @@ type Seed struct {
 // StateManager holds all venue states and is concurrency-safe.
 type StateManager struct {
 	mu          sync.RWMutex
-	venueStates map[string]*VenueState       // venue → VenueState
-	seeds       map[string]*Seed             // venue → seed (for Reset)
-	errorForces map[string]map[string]string // venue→path→errorCode for error simulation
+	venueStates map[string]*VenueState // venue → VenueState
+	seeds       map[string]*Seed       // venue → seed (for Reset)
 }
 
 // NewStateManager creates an empty StateManager.
@@ -88,7 +87,6 @@ func NewStateManager() *StateManager {
 	return &StateManager{
 		venueStates: make(map[string]*VenueState),
 		seeds:       make(map[string]*Seed),
-		errorForces: make(map[string]map[string]string),
 	}
 }
 
@@ -288,32 +286,4 @@ func (sm *StateManager) Reset(venue string) error {
 
 	sm.venueStates[venue] = state
 	return nil
-}
-
-// SetErrorForce forces an endpoint to return an error.
-// errorCode should be the exchange error code (e.g., "51008" for OKX, "-2015" for Binance).
-func (sm *StateManager) SetErrorForce(venue, path, errorCode string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if sm.errorForces[venue] == nil {
-		sm.errorForces[venue] = make(map[string]string)
-	}
-	sm.errorForces[venue][path] = errorCode
-}
-
-// GetErrorForce returns the forced error code for an endpoint, or empty string if none.
-func (sm *StateManager) GetErrorForce(venue, path string) string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.errorForces[venue][path]
-}
-
-// ClearErrorForce removes any forced error for an endpoint.
-func (sm *StateManager) ClearErrorForce(venue, path string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.errorForces[venue] != nil {
-		delete(sm.errorForces[venue], path)
-	}
 }

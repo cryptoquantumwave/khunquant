@@ -2,12 +2,13 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
-<title>KhunQuant Promo 60s</title>
-<link rel="stylesheet" href="fonts/fonts.css">
+<title>KhunQuant Promo</title>
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<script src="assets/vendor/gsap.min.js"></script>
 <style>
 :root{
-  --bg:#f3f4f8; --ink:#16173a; --mute:#8a8fa8; --accent:#5c6bc0; --accent-d:#3e4da0; --accent-l:#e8eaf6;
-  --up:#16a34a; --dn:#e11d48; --line-me:#9be27a; --chat:#dde4ee;
+  --bg:#f3f4f8; --ink:#16173a; --mute:#62677f; --accent:#5c6bc0; --accent-d:#3e4da0; --accent-l:#e8eaf6;
+  --up:#15803d; --dn:#be123c; --line-me:#9be27a; --chat:#dde4ee;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:1080px;height:1920px;overflow:hidden;background:var(--bg)}
@@ -87,11 +88,11 @@ img{display:block}
 .icons{margin-left:auto;display:flex;gap:30px}
 #vp{position:absolute;top:200px;left:0;right:0;overflow:hidden;z-index:5}
 #content{position:absolute;left:0;right:0;top:0;padding:18px 20px 0;display:flex;flex-direction:column;gap:22px}
-.date{align-self:center;font:500 22px Plex;color:#fff;background:rgba(60,70,100,.28);padding:6px 20px;border-radius:20px}
+.date{align-self:center;font:500 22px Plex;color:#fff;background:rgba(40,48,80,.62);padding:6px 20px;border-radius:20px}
 .it{display:flex;align-items:flex-end;gap:12px;position:relative}
 .it.me{flex-direction:row-reverse}
 .it .av{width:60px;height:60px;align-self:flex-start}
-.meta{font:500 19px/1.25 Plex;color:#6b7390;flex:none;text-align:right}
+.meta{font:500 19px/1.25 Plex;color:#4a5070;flex:none;text-align:right}
 .it:not(.me) .meta{text-align:left}
 .bub{font:500 31px/1.42 Plex;padding:18px 24px;border-radius:30px;max-width:520px;background:#fff}
 .me .bub{background:var(--line-me);color:#10210a}
@@ -113,7 +114,7 @@ img{display:block}
 .weeks{display:flex;gap:8px;margin:10px 0 4px}
 .weeks i{flex:1;height:40px;border-radius:10px;background:#eef0f6;display:grid;place-items:center;font:700 20px Kanit;color:#fff}
 .ladder{display:flex;gap:10px;align-items:flex-end;height:120px;margin:10px 0 2px}
-.ladder i{flex:1;border-radius:10px 10px 4px 4px;background:#eef0f6;display:flex;justify-content:center;padding-top:6px;font:700 21px Kanit;color:#fff;transform-origin:bottom}
+.ladder i{flex:1;border-radius:10px 10px 4px 4px;background:#eef0f6;display:flex;justify-content:center;padding-top:6px;font:700 21px Kanit;color:#3a2400;transform-origin:bottom}
 .fbtn{border-top:1px solid #eceef4;text-align:center;padding:20px 0;font:600 29px Kanit;color:var(--accent-d);position:relative;overflow:hidden}
 .ripple{position:absolute;border-radius:50%;background:rgba(92,107,192,.25);width:40px;height:40px;margin:-20px 0 0 -20px;left:50%;top:50%;opacity:0}
 .legs .leg{display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:18px;background:#f5f6fa;margin:8px 0}
@@ -128,7 +129,7 @@ img{display:block}
 /* input + keyboard */
 #inbar{position:absolute;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;z-index:20;border-top:1px solid #e6e8ee}
 #inbox{flex:1;height:68px;border-radius:34px;background:#f1f2f6;display:flex;align-items:center;padding:0 24px;overflow:hidden;font:500 30px Plex;position:relative}
-#inbox .ph{color:#a3a8bb;position:absolute;left:24px}
+#inbox .ph{color:#6d7288;position:absolute;left:24px}
 #intext{white-space:nowrap;display:flex;align-items:center;flex:none}
 #caret{display:inline-block;width:3px;height:38px;background:#06c755;margin-left:2px}
 #sendb{width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:#e5e7ee;flex:none}
@@ -147,25 +148,25 @@ img{display:block}
 #tg .thdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#fff;display:flex;align-items:center;gap:16px;padding:0 26px 0 18px;border-bottom:1px solid #e3e6ea}
 #tg .tbody{position:absolute;top:220px;left:20px;right:20px;display:flex;flex-direction:column;gap:18px}
 .tb{font:500 31px/1.42 Plex;padding:16px 22px 12px;border-radius:26px;max-width:540px;background:#fff;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.08)}
-.tb small{display:block;text-align:right;font:500 19px Plex;color:#8a9aa6;margin-top:2px}
+.tb small{display:block;text-align:right;font:500 19px Plex;color:#56656f;margin-top:2px}
 .tb.out{align-self:flex-end;background:#e2fdc8;border-bottom-right-radius:8px}
 .tb.out small{color:#5aa64a}
 .tb.inn{align-self:flex-start;border-bottom-left-radius:8px}
 .tinp{position:absolute;left:0;right:0;bottom:0;height:138px;background:#fff;display:flex;align-items:flex-start;gap:20px;padding:22px 26px 0;border-top:1px solid #e3e6ea}
-.tinp .box{flex:1;height:64px;border-radius:32px;border:1px solid #dfe3e8;display:flex;align-items:center;padding:0 24px;color:#9aa5ae;font:500 29px Plex}
+.tinp .box{flex:1;height:64px;border-radius:32px;border:1px solid #dfe3e8;display:flex;align-items:center;padding:0 24px;color:#66727c;font:500 29px Plex}
 /* Discord-like */
 #dc{background:#313338;color:#dbdee1}
 #dc .status{color:#fff;background:#2b2d31}
 #dc .dhdr{position:absolute;top:96px;left:0;right:0;height:104px;background:#2b2d31;display:flex;align-items:center;gap:14px;padding:0 28px;border-bottom:1px solid #1e1f22;font:700 32px Plex;color:#f2f3f5}
-#dc .dhdr span{font:500 22px Plex;color:#949ba4;margin-left:auto}
+#dc .dhdr span{font:500 22px Plex;color:#b5bac1;margin-left:auto}
 #dc .dbody{position:absolute;top:226px;left:20px;right:20px;display:flex;flex-direction:column;gap:26px}
 .dm{display:flex;gap:18px;font:500 29px/1.42 Plex}
 .dm .dav{width:64px;height:64px;border-radius:50%;flex:none;display:grid;place-items:center;overflow:hidden}
 .dm b{color:#f2f3f5;font:600 29px Plex}
 .dm .bot{font:700 18px Plex;background:#5865f2;color:#fff;border-radius:6px;padding:1px 7px;margin-left:8px;vertical-align:3px}
-.dm .tm{font:500 20px Plex;color:#949ba4;margin-left:10px}
+.dm .tm{font:500 20px Plex;color:#b5bac1;margin-left:10px}
 .emb{margin-top:8px;background:#2b2d31;border-left:6px solid #5c6bc0;border-radius:8px;padding:16px 20px;color:#dbdee1}
-.dinp{position:absolute;left:20px;right:20px;bottom:52px;height:84px;border-radius:20px;background:#383a40;display:flex;align-items:center;padding:0 26px;color:#80848e;font:500 28px Plex}
+.dinp{position:absolute;left:20px;right:20px;bottom:52px;height:84px;border-radius:20px;background:#383a40;display:flex;align-items:center;padding:0 26px;color:#b5bac1;font:500 28px Plex}
 
 /* banner + lock screen */
 #banner{position:absolute;left:18px;right:18px;top:96px;z-index:85;background:rgba(250,250,252,.94);border-radius:40px;padding:22px 24px;display:flex;gap:20px;box-shadow:0 12px 30px rgba(20,20,60,.18)}
@@ -177,6 +178,7 @@ img{display:block}
 #lock{position:absolute;inset:0;z-index:70;background:linear-gradient(180deg,#d9ddf5 0%,#aab3ea 45%,#6f7ccc 100%);overflow:hidden}
 #lock .orb{position:absolute;border-radius:50%;filter:blur(40px)}
 #lock .status{color:#fff}
+#lock .status span{text-shadow:0 1px 3px rgba(20,24,60,.35)}
 #ldate{position:absolute;top:150px;width:100%;text-align:center;font:600 34px Kanit;color:rgba(255,255,255,.92)}
 #lclock{position:absolute;top:190px;width:100%;text-align:center;font:600 196px/1 Plex;color:#fff;letter-spacing:-4px}
 #notifs{position:absolute;top:440px;left:22px;right:22px;display:flex;flex-direction:column;gap:16px}
@@ -188,7 +190,7 @@ img{display:block}
 #title{position:absolute;left:0;right:0;top:86px;display:flex;justify-content:center;z-index:200}
 #title div{background:#fff;border-radius:50px;padding:14px 34px 14px 18px;font:600 38px Kanit;box-shadow:0 8px 30px rgba(22,23,58,.10);display:flex;align-items:center;gap:16px;white-space:nowrap}
 #title b{font:700 26px Kanit;color:#fff;background:var(--accent);border-radius:30px;padding:4px 14px}
-#foot{position:absolute;left:0;right:0;top:1856px;text-align:center;font:400 22px Plex;color:#9a9fb5;z-index:200}
+#foot{position:absolute;left:0;right:0;top:1856px;text-align:center;font:400 22px Plex;color:#62677f;z-index:200}
 
 /* end card */
 #end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:150}
@@ -209,7 +211,8 @@ img{display:block}
 </style>
 </head>
 <body>
-<div id="stage">
+<div id="root" data-composition-id="main" data-start="0" data-duration="74" data-width="1080" data-height="1920">
+<div id="stage" class="clip" data-start="0" data-duration="74" data-track-index="0" data-track-kind="graphics" data-layout-allow-overflow data-layout-allow-overlap>
   <div id="world">
     <div id="chaos"></div>
     <svg id="lines" width="1080" height="1920"></svg>
@@ -233,9 +236,9 @@ img{display:block}
       <div id="phone"><div id="bezel"><div id="screen">
         <div id="island"></div>
         <div id="swbg"></div>
-        <div class="swl" id="swl0"><div class="ic"><img src="logos/line.svg" alt=""></div>LINE</div>
-        <div class="swl" id="swl1"><div class="ic"><img src="logos/telegram.svg" alt=""></div>Telegram</div>
-        <div class="swl" id="swl2"><div class="ic"><img src="logos/discord.svg" alt=""></div>Discord</div>
+        <div class="swl" id="swl0"><div class="ic"><img src="assets/logos/line.svg" alt=""></div>LINE</div>
+        <div class="swl" id="swl1"><div class="ic"><img src="assets/logos/telegram.svg" alt=""></div>Telegram</div>
+        <div class="swl" id="swl2"><div class="ic"><img src="assets/logos/discord.svg" alt=""></div>Discord</div>
 
         <!-- LINE -->
         <div class="app" id="chat">
@@ -268,7 +271,7 @@ img{display:block}
           <div class="thdr">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#2481cc" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
             <div class="av" style="width:66px;height:66px" data-mascot></div>
-            <div class="hnm">KhunQuant<small style="color:#2481cc">bot</small></div>
+            <div class="hnm">KhunQuant<small style="color:#17619b">bot</small></div>
             <div class="icons"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#7d8b99" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
           </div>
           <div class="tbody">
@@ -321,12 +324,12 @@ img{display:block}
 
   <div id="flash"></div>
   <div id="end">
-    <div id="logoWrap"><img src="logo.png" alt=""></div>
+    <div id="logoWrap"><img src="assets/logo.png" alt=""></div>
     <div class="wm" id="wm">KhunQuant</div>
     <div class="thn" id="thn">คุณควอนต์</div>
     <div class="tagl" id="tagl">ทุกพอร์ตรวมเป็นหนึ่งเดียว<br>คุยง่ายในแชทของคุณ</div>
     <div id="estrip"></div>
-    <div class="chips" id="chips"><span><img src="logos/line.svg" alt="">LINE</span><span><img src="logos/telegram.svg" alt="">Telegram</span><span><img src="logos/discord.svg" alt="">Discord</span></div>
+    <div class="chips" id="chips"><span><img src="assets/logos/line.svg" alt="">LINE</span><span><img src="assets/logos/telegram.svg" alt="">Telegram</span><span><img src="assets/logos/discord.svg" alt="">Discord</span></div>
     <div class="url" id="url">khunquant.com</div>
     <div class="disc" id="disc"><b>KhunQuant เป็นเพียง AI agent ผู้ช่วย ไม่ใช่ผู้แนะนำการลงทุน</b><br>การลงทุนมีความเสี่ยง ผู้ลงทุนควรศึกษาข้อมูลก่อนตัดสินใจลงทุน</div>
   </div>
@@ -334,6 +337,15 @@ img{display:block}
   <div id="cap"><div></div></div>
   <div id="title"><div><b id="tnum">01</b><span id="ttxt"></span></div></div>
   <div id="foot">ภาพจำลองเพื่อการสาธิต · ตัวเลขสมมติ · ไม่ใช่คำแนะนำการลงทุน</div>
+</div>
+<!-- voice-over: ElevenLabs, voice "Arm"; script = khunquant-promo.th.srt -->
+<audio id="vo" class="clip" src="assets/audio/vo.wav" data-start="0" data-track-index="1" data-volume="1" data-audio-group="voiceover"
+  data-fx-chain="{&quot;version&quot;:1,&quot;nodes&quot;:[{&quot;type&quot;:&quot;highpass&quot;,&quot;id&quot;:&quot;v1&quot;,&quot;label&quot;:&quot;Remove rumble&quot;,&quot;params&quot;:{&quot;frequency&quot;:80}},{&quot;type&quot;:&quot;peaking&quot;,&quot;id&quot;:&quot;v2&quot;,&quot;label&quot;:&quot;Clarity&quot;,&quot;params&quot;:{&quot;frequency&quot;:3000,&quot;gain&quot;:2.5,&quot;q&quot;:1}},{&quot;type&quot;:&quot;compressor&quot;,&quot;id&quot;:&quot;v3&quot;,&quot;label&quot;:&quot;Even level&quot;,&quot;params&quot;:{&quot;threshold&quot;:-24,&quot;ratio&quot;:3}},{&quot;type&quot;:&quot;gain&quot;,&quot;id&quot;:&quot;v4&quot;,&quot;label&quot;:&quot;Make-up&quot;,&quot;params&quot;:{&quot;gain&quot;:5}},{&quot;type&quot;:&quot;limiter&quot;,&quot;id&quot;:&quot;v5&quot;,&quot;params&quot;:{&quot;limit&quot;:-1}}]}"></audio>
+<!-- music bed: ducked under the voice, back up for the end card -->
+<audio id="music" class="clip" src="assets/audio/music.wav" data-start="0" data-track-index="2" data-volume="1" data-audio-group="music" data-fade-out="1.5"
+  data-automation="{&quot;version&quot;:1,&quot;lanes&quot;:[{&quot;target&quot;:&quot;volume&quot;,&quot;points&quot;:[{&quot;t&quot;:0,&quot;v&quot;:0.32},{&quot;t&quot;:70.2,&quot;v&quot;:0.32},{&quot;t&quot;:70.8,&quot;v&quot;:0.8}]}]}"></audio>
+<!-- UI sound effects (keys, sends, chimes, taps, whooshes), synced to the animation -->
+<audio id="sfx" class="clip" src="assets/audio/sfx.wav" data-start="0" data-track-index="3" data-volume="0.3" data-audio-group="sfx"></audio>
 </div>
 
 <script>
@@ -350,12 +362,12 @@ const CUES = []; const cue = (t, type, extra) => CUES.push({ t: +t.toFixed(3), t
 const fmt = (n, d = 0) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const seg = new Intl.Segmenter('th', { granularity: 'grapheme' });
 const graphemes = s => [...seg.segment(s)].map(x => x.segment);
-const DURATION = 60;
-// Time warp onto the recorded voice-over (audio/vo.wav): [video time, scene time] anchors.
+const DURATION = 74;
+// Time warp onto the recorded voice-over (assets/audio/vo.wav): [video time, scene time] anchors.
 // Scenes are authored on their own clock; render() and the sound cues go through this map.
-const WARP = [[0, 0], [8.0, 6.5], [9.35, 8.45], [10.65, 9.9], [11.2, 10.35], [11.75, 10.8], [12.85, 11.25], [13.35, 11.7], [13.75, 12.15], [14.3, 12.85],
-  [15.6, 14.3], [16.9, 15.45], [19.5, 18.1], [20.2, 19.05], [22.3, 19.8], [26.6, 24.0], [32.0, 27.9], [34.1, 31.6], [35.4, 33.7], [36.6, 35.3],
-  [40.55, 39.5], [44.0, 42.6], [46.0, 44.95], [48.2, 45.65], [52.0, 50.0], [55.3, 53.3], [60, 60]];
+const WARP = [[0, 0], [3.9, 2.35], [6.4, 4.45], [9.3, 6.5], [10.5, 8.45], [13.3, 9.9], [14.0, 10.35], [14.8, 10.8], [15.6, 11.25], [16.4, 11.7], [16.95, 12.15],
+  [17.8, 12.85], [19.6, 14.3], [21.3, 15.45], [24.3, 18.1], [25.0, 19.05], [27.2, 19.8], [33.2, 24.0], [39.4, 27.9], [40.2, 28.7], [41.6, 31.6],
+  [43.0, 33.7], [44.5, 35.3], [48.9, 39.5], [52.6, 42.6], [54.3, 44.95], [56.7, 45.65], [61.2, 50.0], [64.7, 53.3], [65.3, 53.9], [68.6, 55.7], [74, 60]];
 function pw(x, from, to) {
   if (x <= WARP[0][from]) return x;
   for (let i = 1; i < WARP.length; i++) if (x <= WARP[i][from]) { const a = WARP[i - 1], b = WARP[i]; return a[to] + (b[to] - a[to]) * (x - a[from]) / (b[from] - a[from]); }
@@ -395,7 +407,7 @@ function statusHTML(time, col) {
 }
 
 /* ================= exchange / broker logos ================= */
-// Official artwork is read from logos/<key>.svg|png when present; otherwise a neutral placeholder tile is drawn.
+// Artwork files in assets/logos/ (LOGO_FILES); a key without one gets a neutral placeholder tile.
 const EX = [
   { key: 'bitkub', name: 'Bitkub', fb: ['bitkub', '#4cba64'] },
   { key: 'binance', name: 'Binance', fb: ['Binance', '#f0b90b'] },
@@ -404,13 +416,10 @@ const EX = [
   { key: 'set', name: 'SET · Settrade', fb: ['SET', '#1d3f8f'] },
   { key: 'webull', name: 'Webull', fb: ['webull', '#1d6bff'] },
 ];
-const tryImg = src => new Promise(res => { const i = new Image(); i.onload = () => res(src); i.onerror = () => res(null); i.src = src; });
+const LOGO_FILES = { bitkub: 'bitkub.png', binance: 'binance.svg', okx: 'okx.svg', set: 'set.png', webull: 'webull.png' };
 async function resolveLogos() {
-  for (const e of EX) {
-    const k = e.base || e.key;
-    e.src = (e.th && await tryImg(`logos/${e.key}.svg`)) || (e.th && await tryImg(`logos/${e.key}.png`)) || await tryImg(`logos/${k}.svg`) || await tryImg(`logos/${k}.png`);
-    if (e.th && e.src && e.src.includes(e.key)) e.th = 0; // dedicated Binance TH artwork, no badge
-  }
+  // Binance TH has no artwork of its own: the Binance mark with a "TH" badge.
+  for (const e of EX) { const f = LOGO_FILES[e.base || e.key]; e.src = f ? `assets/logos/${f}` : null; }
 }
 const logoHTML = e => `<div class="lg">${e.src ? `<img src="${e.src}" alt="">` : `<div class="lgfb" style="background:${e.fb[1]};font-size:${e.fb[0].length > 4 ? 26 : 36}px">${e.fb[0]}</div>`}${e.th ? '<span class="thb">TH</span>' : ''}</div>`;
 
@@ -429,7 +438,7 @@ function buildKB() {
 
 /* ================= pain point: scattered portfolios ================= */
 const CHAOS = [
-  { x: 250, y: 560, w: 340, r: -6, t: .2, badge: 3, html: `<div class="h" style="background:#ecfdf3"><i style="background:#4cba64"></i>Bitkub</div><div class="b"><div class="sub">มูลค่าพอร์ต</div><div style="font:700 40px Kanit">฿182,400</div><svg width="300" height="60"><polyline points="0,40 40,30 80,45 120,20 160,35 200,15 240,30 300,10" fill="none" stroke="#4cba64" stroke-width="4"/></svg></div>` },
+  { x: 250, y: 560, w: 340, r: -6, t: -.5, badge: 3, html: `<div class="h" style="background:#ecfdf3"><i style="background:#4cba64"></i>Bitkub</div><div class="b"><div class="sub">มูลค่าพอร์ต</div><div style="font:700 40px Kanit">฿182,400</div><svg width="300" height="60"><polyline points="0,40 40,30 80,45 120,20 160,35 200,15 240,30 300,10" fill="none" stroke="#4cba64" stroke-width="4"/></svg></div>` },
   { x: 800, y: 520, w: 360, r: 5, t: .5, badge: 7, html: `<div class="h" style="background:#fffbea"><i style="background:#f0b90b"></i>Binance Futures</div><div class="b"><div class="row"><span>ETH-PERP</span><b class="dn">-$214</b></div><div class="row"><span>SOL-PERP</span><b class="up">+$88</b></div><div class="ln" style="width:70%"></div></div>` },
   { x: 290, y: 905, w: 410, r: 4, t: .8, badge: 2, html: `<div class="h" style="background:#eef3ff"><i style="background:#1d3f8f"></i>Settrade · หุ้นไทย</div><div class="b"><div class="row"><span>PTT</span><span class="dn">-0.5%</span></div><div class="row"><span>KBANK</span><span class="up">+1.1%</span></div><div class="row"><span>AOT</span><span class="up">+0.6%</span></div></div>` },
   { x: 790, y: 880, w: 340, r: -4, t: 1.1, badge: 5, html: `<div class="h" style="background:#eef4ff"><i style="background:#1d6bff"></i>Webull · หุ้น US</div><div class="b"><div class="row"><span>NVDA</span><span class="up">+6.0%</span></div><div class="row"><span>TSLA</span><span class="dn">-1.9%</span></div><div class="row"><span>AAPL</span><span class="up">+0.8%</span></div></div>` },
@@ -440,7 +449,7 @@ const CHAOS = [
   { x: 860, y: 1590, w: 330, r: 3, t: 2.6, badge: 31, html: `<div class="h"><i style="background:#f59e0b"></i>ข่าวคริปโต</div><div class="b"><div class="ln"></div><div class="ln" style="width:70%"></div></div>` },
   { x: 230, y: 1620, w: 290, r: -8, t: 2.9, sticky: 1, html: `อย่าลืม!<br>• DCA วันจันทร์<br>• เช็ค funding<br>• จดกำไรเมื่อวาน` },
 ];
-const CAPS = [[.35, 2.25, 'พอร์ตกระจายอยู่หลายที่…'], [2.35, 4.35, 'ดูแลยาก จัดการยาก 😵‍💫'], [4.45, 6.45, 'ต้องจดเอง ตามข่าวเองทีละตลาด'], [9.3, 12.6, 'เชื่อมต่อได้ทุกพอร์ตของคุณ'], [12.75, 14.2, 'ทุกพอร์ตรวมเป็นหนึ่งเดียว']];
+const CAPS = [[-.4, 2.25, 'พอร์ตกระจายอยู่หลายที่…'], [2.35, 4.35, 'ดูแลยาก จัดการยาก 😵‍💫'], [4.45, 6.45, 'ต้องจดเอง ตามข่าวเองทีละตลาด'], [9.3, 12.6, 'เชื่อมต่อได้ทุกพอร์ตของคุณ'], [12.75, 14.2, 'ทุกพอร์ตรวมเป็นหนึ่งเดียว']];
 
 /* ================= chat content ================= */
 const BTN = (id, txt) => `<div class="fbtn" id="${id}"><span class="ripple"></span>${txt}</div>`;
@@ -577,7 +586,7 @@ function buildCues() {
   TAPS.forEach(x => cue(x.t, 'tap'));
   [47.6, 51.3].forEach(t => cue(t, 'tap'));
   [45.9, 46.8, 49.9, 50.6].forEach(t => cue(t, 'swipe'));
-  CHAOS.forEach((c, i) => cue(c.t, 'card', { i }));
+  CHAOS.forEach((c, i) => { if (c.t > 0) cue(c.t, 'card', { i }); });
   cue(2.45, 'thud'); cue(6.6, 'pop'); cue(6.75, 'bubble'); cue(7.3, 'vacuum'); cue(8.0, 'jump'); cue(8.55, 'bubble');
   EX.forEach((e, i) => cue(9.9 + i * .45, 'tile', { i }));
   cue(12.85, 'whoosh'); cue(13.2, 'sparkle_s'); cue(14.25, 'jump'); cue(14.3, 'whoosh');
@@ -803,8 +812,8 @@ function renderScene(t) {
   $('#rbNew').style.opacity = P(t, 29.85, .3);
   $('#cntPort').textContent = '฿' + fmt(1248500 * oC(P(t, 33.8, 1.1)));
   [[38, '#sg1', 33.9], [34, '#sg2', 34.05], [28, '#sg3', 34.2]].forEach(([w, id, a]) => $(id).style.width = (w * oC(P(t, a, .5))) + '%');
-  $$('#weeks i').forEach((c, k) => { const a = 38.15 + k * .1, on = t >= a, skip = k === 3 || k === 6; c.style.background = on ? (skip ? '#c9cde0' : '#16a34a') : '#eef0f6'; c.textContent = on ? (skip ? '–' : '✓') : ''; c.style.transform = `scale(${on ? oB(P(t, a, .25)) : .85})`; });
-  $$('#ladder i').forEach((c, k) => { const p = oC(P(t, 38.5 + k * .14, .35)); c.style.transform = `scaleY(${.25 + .75 * p})`; c.style.background = p > .5 ? '#f59e0b' : '#eef0f6'; });
+  $$('#weeks i').forEach((c, k) => { const a = 38.15 + k * .1, on = t >= a, skip = k === 3 || k === 6; c.style.background = on ? (skip ? '#8c92b0' : '#15803d') : '#eef0f6'; c.textContent = on ? (skip ? '–' : '✓') : ''; c.style.transform = `scale(${on ? oB(P(t, a, .25)) : .85})`; });
+  $$('#ladder i').forEach((c, k) => { const p = oC(P(t, 38.5 + k * .14, .35)); c.style.transform = `scaleY(${.25 + .75 * p})`; c.style.background = p > .5 ? '#fbbf24' : '#eef0f6'; });
   $('#beam').setAttribute('transform', `rotate(${t < 40.95 ? -13 : -13 * (1 - oB(P(t, 40.95, .8)))} 244 55)`);
   $('#cntApr').textContent = fmt(14.6 * oC(P(t, 41.1, .9)), 1) + '%';
   $$('#chart .cdl').forEach((c, k) => c.style.opacity = P(t, 43.85 + k * .027, .18));
@@ -888,7 +897,7 @@ function renderScene(t) {
   $('#end').style.opacity = t >= 53.9 ? 1 : 0;
   $('#logoWrap').style.transform = `scale(${lg}) rotate(${(1 - lg) * -40}deg)`;
   const fadeUp = (id, a) => { const p = P(t, a, .45); $(id).style.opacity = cl(p * 2); $(id).style.transform = `translateY(${(1 - oC(p)) * 40}px)`; };
-  fadeUp('#wm', 54.2); fadeUp('#thn', 54.4); fadeUp('#tagl', 54.65); fadeUp('#chips', 55.35); fadeUp('#url', 55.7); fadeUp('#disc', 56.1);
+  fadeUp('#wm', 54.2); fadeUp('#thn', 54.4); fadeUp('#tagl', 54.65); fadeUp('#chips', 55.35); fadeUp('#url', 55.7); fadeUp('#disc', 54.9);
   $$('#estrip .lg').forEach((e, i) => { const p = oB(P(t, 55.0 + i * .06, .4)); e.style.transform = `scale(${t >= 55 + i * .06 ? p : 0})`; });
 }
 window.render = v => renderScene(sceneTime(v)); window.DURATION = DURATION;
@@ -900,8 +909,13 @@ const q = new URLSearchParams(location.search);
   await document.fonts.ready;
   await new Promise(r => setTimeout(r, 50));
   setup();
-  if (q.has('t')) window.render(+q.get('t'));
-  else if (!q.has('static')) { const t0 = performance.now(); (function loop() { window.render(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
+  // HyperFrames drives the frame: a paused timeline (preview / Studio scrubbing) and the hf-seek event (render).
+  const tl = gsap.timeline({ paused: true, onUpdate: () => window.render(tl.time()) });
+  tl.to({}, { duration: DURATION }, 0);
+  window.addEventListener('hf-seek', e => window.render(e.detail.time));
+  window.render(q.has('t') ? +q.get('t') : 0);
+  window.__timelines = window.__timelines || {};
+  window.__timelines['main'] = tl;
   window.READY = true;
 })();
 </script>

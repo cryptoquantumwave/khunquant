@@ -18,7 +18,7 @@ import wave
 import numpy as np
 
 SR = 48000
-DUR = 60.0
+DUR = 74.0
 N = int(SR * DUR)
 HERE = os.path.dirname(os.path.abspath(__file__))
 rng = np.random.default_rng(7)
@@ -320,9 +320,9 @@ def main():
     if peak > 0.89:  # keep 1 dB of headroom
         g = 0.89 / peak
         m, s, mix = m * g, s * g, mix * g
-    write(os.path.join(HERE, "music.wav"), m)
-    write(os.path.join(HERE, "sfx.wav"), s)
-    write(os.path.join(HERE, "music_sfx.wav"), mix)
+    OUT = os.path.join(HERE, "..", "assets", "audio")
+    write(os.path.join(OUT, "music.wav"), m)
+    write(os.path.join(OUT, "sfx.wav"), s)
     print(f"music {rms_db(m):.1f} dBFS RMS, sfx peak {20*np.log10(np.max(np.abs(s))+1e-12):.1f} dBFS, mix peak {20*np.log10(np.max(np.abs(mix))):.1f} dBFS, {len(cues)} cues")
 
 

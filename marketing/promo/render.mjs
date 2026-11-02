@@ -2,6 +2,7 @@
 //
 //   node render.mjs                     -> build/video-only.mp4 (+ audio/cues.json)
 //   node render.mjs --stills 1,8,13     -> stills/t-<sec>.png only
+//   node render.mjs --cues              -> audio/cues.json only (the delivery render is `npx hyperframes render`)
 //
 // Requires playwright (Chromium) and ffmpeg on PATH.
 import { chromium } from 'playwright';
@@ -20,14 +21,16 @@ mkdirSync(join(here, 'audio'), { recursive: true });
 mkdirSync(join(here, 'build'), { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
-await page.goto(pathToFileURL(join(here, 'promo.html')).href + '?static');
+await page.goto(pathToFileURL(join(here, 'index.html')).href + '?static');
 await page.waitForFunction(() => window.READY === true);
 await page.waitForTimeout(200);
 const DURATION = await page.evaluate(() => window.DURATION);
 // sound-effect cue sheet, consumed by audio/make_audio.py
 writeFileSync(join(here, 'audio', 'cues.json'), '[\n' + (await page.evaluate(() => window.CUES)).map(c => JSON.stringify(c)).join(',\n') + '\n]\n');
 
-if (stillsArg) {
+if (args.includes('--cues')) {
+  // cue sheet already written above
+} else if (stillsArg) {
   mkdirSync(join(here, 'stills'), { recursive: true });
   for (const s of stillsArg.split(',').map(Number)) {
     await page.evaluate(t => window.render(t), s);

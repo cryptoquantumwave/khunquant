@@ -1,0 +1,6 @@
+stills/
+node_modules
+build/
+.hyperframes/
+renders/
+*_adjusted.srt

@@ -268,8 +268,11 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 	// Check USDT balance (lock this amount)
 	usdtBalance := state.Balances["USDT"]
 	if usdtBalance.Free < notional {
-		// Binance error code -2015 for insufficient balance
-		return sim.binanceErrorResponse(400, -2015, "Margin is insufficient."), true
+		// -2010 with Binance's own text: the pinned ccxt maps it to InsufficientFunds even
+		// against the rewritten host. The -2015 this answered is an authentication error,
+		// and -2019 (insufficient margin) is InsufficientFunds only in ccxt's per-host
+		// "linear" table, so against the lab it is a plain, unknown-outcome error.
+		return sim.binanceErrorResponse(400, -2010, "Account has insufficient balance for requested action."), true
 	}
 
 	// Create the order

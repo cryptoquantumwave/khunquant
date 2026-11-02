@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -56,11 +57,15 @@ type Injector struct {
 	seq      int
 	enabled  map[string]bool
 	classify bool // some HTTP rule looks at the order fields of a request
+
+	held atomic.Int32 // holds in progress, of every kind (hold.go)
+	stop chan struct{}
+	once sync.Once
 }
 
 // New builds an injector with no rules.
 func New(o Options) *Injector {
-	i := &Injector{now: o.Now, journal: o.Journal, maxHold: o.MaxHold, enabled: map[string]bool{}}
+	i := &Injector{now: o.Now, journal: o.Journal, maxHold: o.MaxHold, enabled: map[string]bool{}, stop: make(chan struct{})}
 	if i.now == nil {
 		i.now = time.Now //simclock:wall no injected clock: the caller did not give one
 	}

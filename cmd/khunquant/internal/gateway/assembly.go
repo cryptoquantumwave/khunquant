@@ -126,6 +126,10 @@ type sharedResources struct {
 	// generation the lab groups read (sandbox_lab_wiring.go).
 	labTapped *tools.ToolRegistry
 	labGen    atomic.Pointer[gatewayServices]
+	// labReady is the locked instance's "ready" (gatewayCmd sets it, in one place, and
+	// nothing clears it): /api/sandbox/status reports it, and the supervisor hands the
+	// instance out only once it is true.
+	labReady atomic.Bool
 	// simWorld is the simulated chat's personas, outbox and channel state: built once
 	// with the lab groups (the lab package cannot import simchat), read-only after.
 	simWorld *simchat.World
@@ -299,7 +303,19 @@ func (p phase) sayf(format string, args ...any) {
 //
 // ctx only bounds construction. Long-lived services (channels, devices) run on
 // context.Background() on purpose: they must outlive this call.
+//
+// A locked process's lab reads the generation only once the whole build succeeded
+// (publishLabGeneration is the last thing done): its goroutines read the fields of s,
+// which assembleServices assigns until it returns.
 func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
+	s, err := assembleServices(ctx, d)
+	if err == nil {
+		publishLabGeneration(d.Shared, s)
+	}
+	return s, err
+}
+
+func assembleServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error) {
 	s := &gatewayServices{perceptionLive: newPerceptionHolder(), journalLive: newJournalHolder()}
 	if prev := d.Prev; prev != nil {
 		s.SandboxServer = prev.SandboxServer
@@ -308,6 +324,9 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 		s.DebugTap = prev.DebugTap
 	}
 	s.lab = d.Shared.lab
+	if s.lab != nil {
+		s.labReady = d.Shared.labReady.Load
+	}
 	if err := ctx.Err(); err != nil {
 		return s, fmt.Errorf("service assembly aborted: %w", err)
 	}
@@ -499,7 +518,6 @@ func buildServices(ctx context.Context, d assemblyDeps) (*gatewayServices, error
 	s.Control.attach(d, s.NotifyService, s.Attention, s.Approval)
 	s.Control.attachStop(d, s.journalLive.Load(), s.NotifyService)
 	s.Control.attachManage(d, s.Perception)
-	publishLabGeneration(d.Shared, s)
 
 	// The owner's responses to proactive messages, recorded only with proactive.learning
 	// on. After the control path (taps and replies reach it) and the outbox (whose

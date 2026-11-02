@@ -125,18 +125,21 @@ func (c *Client) Health(ctx context.Context) error {
 	return err
 }
 
-// Status reports whether the instance says it is an enabled, locked sandbox. An error
-// means it did not answer, or did not accept the token.
-func (c *Client) Status(ctx context.Context) (locked bool, err error) {
+// Status reports whether the instance says it is an enabled, locked sandbox, and
+// separately whether it says it is ready (fully started: services up, signals handled).
+// ready is not folded into locked: a not-yet-ready instance is still a locked one, to be
+// polled, not refused. An answer without the ready field is not ready (fail closed). An
+// error means it did not answer, or did not accept the token.
+func (c *Client) Status(ctx context.Context) (locked, ready bool, err error) {
 	data, err := c.do(ctx, http.MethodGet, "/api/sandbox/status", nil)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	var st struct{ Enabled, Locked bool }
+	var st struct{ Enabled, Locked, Ready bool }
 	if err := json.Unmarshal(data, &st); err != nil {
-		return false, fmt.Errorf("labclient: status: %w", err)
+		return false, false, fmt.Errorf("labclient: status: %w", err)
 	}
-	return st.Enabled && st.Locked, nil
+	return st.Enabled && st.Locked, st.Ready, nil
 }
 
 // LabInfo is what GET /api/sandbox/lab says: the groups and the declared journal kinds.

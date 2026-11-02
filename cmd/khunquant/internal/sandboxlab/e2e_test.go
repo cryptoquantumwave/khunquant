@@ -8,11 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // repoRoot is the repository, found by walking up to go.mod.
@@ -72,46 +68,6 @@ func getCode(t *testing.T, url, token string) int {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode
-}
-
-// e2eServicesWait bounds awaitServices. `sandbox_instance up` returns once the gateway
-// answers /status, which is before it publishes its first generation of services, and
-// the ops that act on a generation (inspect idle and settle, call_tool, manage) cannot
-// answer until then. The scenario runner waits for the same thing (servicesWait in
-// pkg/sandbox/scenario).
-const e2eServicesWait = 30 * time.Second
-
-// awaitServices returns once the instance has published a generation of services. It
-// probes with a call_tool of a tool that does not exist, which answers exactly
-// "unavailable: no generation of services is running" until then and anything else (a
-// refusal of the unknown tool) after; it retries only on that exact answer, and any
-// other answer returns at once. After e2eServicesWait it fails naming the last answer.
-func awaitServices(ctx context.Context, t *testing.T, cs *mcp.ClientSession, stderr func() string) {
-	t.Helper()
-	deadline := time.Now().Add(e2eServicesWait)
-	for {
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "sandbox_call_tool", Arguments: map[string]any{"name": "no_such_tool_probe"}})
-		if err != nil {
-			t.Fatalf("probing for the first generation of services: %v\nstderr:\n%s", err, stderr())
-		}
-		var sb strings.Builder
-		for _, c := range res.Content {
-			if tc, ok := c.(*mcp.TextContent); ok {
-				sb.WriteString(tc.Text)
-			}
-		}
-		if !res.IsError || !strings.HasPrefix(sb.String(), "unavailable: no generation of services is running") {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("no generation of services after %s; last answer = %s\nstderr:\n%s", e2eServicesWait, sb.String(), stderr())
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("waiting for the first generation of services: %v; last answer = %s", ctx.Err(), sb.String())
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
 }
 
 // TestUpDown_LocalBinary drives the real binary: a locked gateway with the simchat

@@ -373,6 +373,8 @@ func TestUp_FailureCleansUp(t *testing.T) {
 		{"gateway exits early", []string{"--exit-early"}, "boom"},
 		{"gateway is not locked", []string{"--not-locked"}, "locked"},
 		{"gateway never answers", []string{"--hang"}, "not ready"},
+		{"gateway never says ready", []string{"--never-ready"}, "not ready"},
+		{"gateway has no ready field", []string{"--no-ready-field"}, "not ready"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -402,6 +404,32 @@ func TestUp_FailureCleansUp(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Up polls through a gateway that answers /status with ready:false, and hands the instance
+// out only once it says ready; an unlocked one is still refused at its first answer.
+func TestUp_WaitsForReady(t *testing.T) {
+	base := sandboxEnv(t)
+	cfg := fakeConfig(base, "--ready-after-ms=1500")
+	sup, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sup.Close(context.Background()) })
+	start := time.Now()
+	if _, err := sup.Up(context.Background(), UpOptions{Name: "late", FixturesFrom: repoFixtures(t)}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if took := time.Since(start); took < time.Second {
+		t.Errorf("Up returned after %s, before the gateway said ready", took)
+	}
+	c, err := sup.Client("late")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked, ready, err := c.Status(context.Background()); err != nil || !locked || !ready {
+		t.Errorf("Status = locked %v ready %v, %v", locked, ready, err)
 	}
 }
 

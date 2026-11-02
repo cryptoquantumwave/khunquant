@@ -10,9 +10,9 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 )
 
-// call_tool answers "no generation of services is running" until the instance has
-// published its first generation; a call made in that window waits for it rather than
-// failing the run, and any other answer is returned at once.
+// Every group answers "no generation of services is running" between the generations of
+// a reload; a call made in that window waits for the next one rather than failing the
+// run, and any other answer is returned at once.
 func TestCall_WaitsForTheFirstGenerationOfServices(t *testing.T) {
 	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

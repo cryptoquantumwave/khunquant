@@ -96,6 +96,7 @@ type gatewayServices struct {
 	DNStore          *deltaneutral.Store             // nil when the store could not be opened; handed to the cron API
 	DebugTap         *debugtap.Store                 // non-nil only while dev-mcp is enabled
 	lab              *lab.Lab                        // the process-lifetime lab; non-nil only when locked (set from sharedResources)
+	labReady         func() bool                     // sharedResources.labReady for /api/sandbox/status; nil unless locked
 	labSetup         *labSetup                       // what the lab's setup shortcuts read of this generation; set by registerSandboxLab before it is published
 	SandboxServer    *sandbox.Server                 // non-nil only while sandbox is enabled
 	SandboxToken     string                          // bearer token for sandbox API
@@ -272,6 +273,14 @@ func gatewayCmd(debug, locked bool) error {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, shutdownSignals(isLocked)...)
+
+	// The one place a locked instance says it is ready: services are up (first
+	// generation published), the agent loop runs, the config watcher has its baseline and
+	// the shutdown signals are handled. /health comes up earlier, inside buildServices.
+	// Latched: a reload never takes it back.
+	if isLocked {
+		shared.labReady.Store(true)
+	}
 
 	// Main event loop - wait for signals or config changes
 	for {
@@ -552,13 +561,14 @@ func setupConfigWatcherPolling(configPath string, debug bool) (chan *config.Conf
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
+	// The baseline is taken here, before the goroutine starts: a write made right after
+	// this returns must be seen as a change, not become the baseline.
+	lastModTime := getFileModTime(configPath)
+	lastSize := getFileSize(configPath)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		// Get initial file info
-		lastModTime := getFileModTime(configPath)
-		lastSize := getFileSize(configPath)
 
 		//simclock:wall the config file watcher polls in wall time
 		ticker := time.NewTicker(2 * time.Second) // Check every 2 seconds

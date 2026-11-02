@@ -126,6 +126,13 @@ func TestHelperFakeGateway(t *testing.T) {
 	}
 
 	locked := !hasFlag("--not-locked")
+	// The real gateway answers ready:false until it is fully started: --ready-after-ms=N
+	// sends ready:false for the first N ms, --never-ready always, --no-ready-field omits
+	// the field as an older gateway would.
+	readyAt := time.Now()
+	if ms, err := strconv.Atoi(flagValue("--ready-after-ms=")); err == nil {
+		readyAt = readyAt.Add(time.Duration(ms) * time.Millisecond)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/api/sandbox/status", func(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +140,11 @@ func TestHelperFakeGateway(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "locked": locked, "running": true})
+		st := map[string]any{"enabled": true, "locked": locked, "running": true}
+		if !hasFlag("--no-ready-field") {
+			st["ready"] = !hasFlag("--never-ready") && !time.Now().Before(readyAt)
+		}
+		_ = json.NewEncoder(w).Encode(st)
 	})
 	go func() {
 		_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", cfg.Gateway.Port), mux)

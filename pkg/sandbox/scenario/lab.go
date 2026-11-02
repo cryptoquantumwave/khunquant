@@ -49,10 +49,11 @@ func jsonable(v any) any {
 	return v
 }
 
-// servicesWait is how long a call waits for the instance's services: call_tool and manage
-// answer "unavailable: no generation of services is running" until the first generation is
-// published, which can be later than /health when the machine is busy, and between
-// generations of a reload. The wall time is the runner's own.
+// servicesWait is how long a call waits for the instance's services: every group answers
+// "unavailable: no generation of services is running" between the generations of a reload
+// (a config.patch step returns as the new one is built). A started instance is ready only
+// once its first generation is published, so this is not for the first start. The wall
+// time is the runner's own.
 const servicesWait = 30 * time.Second
 
 // noServices says whether err is that answer.

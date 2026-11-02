@@ -251,7 +251,7 @@ func TestLockedGatewayManageResumeAsWebOwner(t *testing.T) {
 	p.waitReady()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/sandbox/lab/manage", port)
-	code, body, err := p.postWhenServices(url, lockTestToken, `{"method":"POST","route":"/api/proactive/resume"}`)
+	code, body, err := postJSON(url, lockTestToken, `{"method":"POST","route":"/api/proactive/resume"}`)
 	var out struct {
 		Status         int  `json:"status"`
 		WebOwnerActive bool `json:"web_owner_active"`

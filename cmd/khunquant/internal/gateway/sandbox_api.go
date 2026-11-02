@@ -18,13 +18,13 @@ import (
 // reset simulator state. All endpoints require loopback origin + bearer token.
 func registerSandboxAPI(mux interface {
 	Handle(pattern string, handler http.Handler)
-}, store *sandbox.Store, token string, reseter interface{ ResetState() error }, fixturesDir string) {
+}, store *sandbox.Store, token string, reseter interface{ ResetState() error }, fixturesDir string, ready func() bool) {
 	guard := loopbackOnly(bearerTokenMiddleware(token, http.HandlerFunc(nil)))
 
 	// GET /api/sandbox/status — fixture venue list and server status
 	mux.Handle("GET /api/sandbox/status", loopbackOnly(bearerTokenMiddleware(token,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleSandboxStatus(w, r, store, fixturesDir)
+			handleSandboxStatus(w, r, store, fixturesDir, ready)
 		}))))
 
 	// GET /api/sandbox/fixtures?venue=okx — list fixtures for a venue
@@ -61,22 +61,27 @@ type sandboxStatusResponse struct {
 	BaseURL     string   `json:"base_url,omitempty"`
 	FixturesDir string   `json:"fixtures_dir,omitempty"`
 	Venues      []string `json:"venues"`
+	// Ready is set only by a locked instance, once it is fully started (gatewayCmd). It is
+	// omitted when false, so an unlocked response is unchanged.
+	Ready bool `json:"ready,omitempty"`
 }
 
-func handleSandboxStatus(w http.ResponseWriter, r *http.Request, store *sandbox.Store, fixturesDir string) {
+func handleSandboxStatus(w http.ResponseWriter, r *http.Request, store *sandbox.Store, fixturesDir string, ready func() bool) {
 	enabled, baseURL := sandbox.GlobalState()
 	venues := store.Venues()
 	sort.Strings(venues)
 
 	// Enabled with no base URL is the armed-but-not-serving state (and, locked, the
 	// fail-closed one), so running means a server address is published.
+	locked := sandbox.Locked()
 	resp := sandboxStatusResponse{
 		Enabled:     enabled,
 		Running:     baseURL != "",
-		Locked:      sandbox.Locked(),
+		Locked:      locked,
 		BaseURL:     baseURL,
 		FixturesDir: fixturesDir,
 		Venues:      venues,
+		Ready:       locked && ready != nil && ready(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

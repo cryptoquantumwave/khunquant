@@ -14,7 +14,7 @@ import (
 var acceptanceQuiescers = []string{
 	"engine", "perception", "outbox", "bus", "channels", "agent", "cognition", "cron", "notify", "orderfeed",
 	"worldmodel", "journal", "approval", "mandate_sync", "feedback", "policy", "replay", "reflection", "hindsight",
-	"intents", "simchat", "exchange_sim", "gateway.reload", "labjournal",
+	"intents", "simchat", "exchange_sim", "gateway.reload", "generation", "labjournal",
 }
 
 func labIdle(t *testing.T, f *lockedFixture) map[string]bool {
@@ -136,8 +136,14 @@ func TestLabSettle_ReloadIsBusy(t *testing.T) {
 	}
 	f.shared.reloading.Add(-1)
 	f.shared.retireLabGeneration()
+	// Every per-generation component reads idle with no generation, so only "generation"
+	// itself holds a settle then.
 	for _, q := range f.lab.Quiesce.Snapshot() {
-		if !q.Idle {
+		if q.Name == "generation" {
+			if q.Idle {
+				t.Error("generation is idle between generations")
+			}
+		} else if !q.Idle {
 			t.Errorf("%s is busy between generations", q.Name)
 		}
 	}

@@ -82,7 +82,7 @@ func manageCall(ctx context.Context, shared *sharedResources, raw json.RawMessag
 	}
 	setup := labSetupOf(shared)
 	if setup == nil || setup.mux == nil {
-		return nil, lab.Errorf(lab.CodeUnavailable, "no generation of services is running (a reload is in progress?)")
+		return nil, errNoGeneration()
 	}
 
 	var body *bytes.Reader

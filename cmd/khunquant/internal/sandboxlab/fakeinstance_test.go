@@ -79,7 +79,7 @@ func TestHelperFakeInstance(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(http.ResponseWriter, *http.Request) {})
 	mux.Handle("GET /api/sandbox/status", guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reply(w, 200, map[string]any{"enabled": true, "locked": true, "running": true})
+		reply(w, 200, map[string]any{"enabled": true, "locked": true, "running": true, "ready": true})
 	})))
 	mux.Handle("GET /api/sandbox/lab", guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, 200, map[string]any{"groups": []any{

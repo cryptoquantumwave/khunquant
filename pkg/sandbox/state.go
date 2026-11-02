@@ -61,6 +61,17 @@ type Order struct {
 	EvalAt     time.Time `json:"evalAt,omitzero"`    // the price path was checked up to here
 }
 
+// Trade is one spot fill, for myTrades. Fees are not modelled.
+type Trade struct {
+	ID      string    `json:"id"`
+	OrderID string    `json:"orderId"`
+	Symbol  string    `json:"symbol"`
+	Side    string    `json:"side"`
+	Price   float64   `json:"price"`
+	Amount  float64   `json:"amount"`
+	Time    time.Time `json:"time"`
+}
+
 // Market represents a market with contract size and precision info.
 type Market struct {
 	Symbol       string  `json:"symbol"`
@@ -75,10 +86,11 @@ type VenueState struct {
 	Positions    map[string]*Position `json:"positions"`    // symbol → Position
 	OpenOrders   map[string]*Order    `json:"openOrders"`   // orderId → Order
 	ClosedOrders map[string]*Order    `json:"closedOrders"` // orderId → Order
-	Markets      map[string]Market    `json:"markets"`      // symbol → Market
-	OrderIDSeq   int64                `json:"-"`            // monotonic order ID counter
-	Leverage     map[string]int64     `json:"leverage"`     // symbol → leverage
-	MarkPrices   map[string]float64   `json:"markPrices"`   // symbol → mark price
+	Trades       []Trade              `json:"trades,omitempty"`
+	Markets      map[string]Market    `json:"markets"`    // symbol → Market
+	OrderIDSeq   int64                `json:"-"`          // monotonic order ID counter
+	Leverage     map[string]int64     `json:"leverage"`   // symbol → leverage
+	MarkPrices   map[string]float64   `json:"markPrices"` // symbol → mark price
 	ClosedAt     time.Time            `json:"closedAt"`
 }
 

@@ -181,6 +181,9 @@ func spawn(bin string, args, env []string, home string) (*proc, error) {
 	return p, nil
 }
 
+// errGatewayExited is what waitReady returns when the process ended first.
+var errGatewayExited = errors.New("the gateway exited before it was ready")
+
 // waitReady polls /api/sandbox/status with the instance token until the gateway reports
 // itself ready (fully started: first generation of services published, signals handled;
 // /health is up earlier). Only the instance itself knows the token, so an answer from
@@ -197,7 +200,7 @@ func waitReady(ctx context.Context, c *labclient.Client, exited <-chan struct{},
 		case <-ctx.Done():
 			return fmt.Errorf("interrupted while waiting for the gateway: %w", ctx.Err())
 		case <-exited:
-			return errors.New("the gateway exited before it was ready")
+			return errGatewayExited
 		case <-deadline.C:
 			return fmt.Errorf("the gateway was not ready after %s", timeout)
 		case <-tick.C:

@@ -337,8 +337,8 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 	if !ok || size <= 0 {
 		return bad("sz is not a positive number")
 	}
-	// A spot market buy is sized in the quote asset unless tgtCcy says base_ccy (OKX's default
-	// for that order, and what ccxt overrides).
+	// OKX sizes a spot market buy in the quote asset unless tgtCcy says base_ccy, which is
+	// what ccxt sends by default.
 	if spot && sp.Type == "market" && sp.Side == "buy" && req.TgtCcy != "base_ccy" {
 		sp.QuoteAmount = size
 	} else {

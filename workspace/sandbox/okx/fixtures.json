@@ -48,6 +48,9 @@
             "instId": "BTC-USDT",
             "baseCcy": "BTC",
             "quoteCcy": "USDT",
+            "minSz": "0.00001",
+            "lotSz": "0.00000001",
+            "tickSz": "0.1",
             "state": "live"
           },
           {
@@ -55,6 +58,9 @@
             "instId": "ETH-USDT",
             "baseCcy": "ETH",
             "quoteCcy": "USDT",
+            "minSz": "0.0001",
+            "lotSz": "0.000001",
+            "tickSz": "0.01",
             "state": "live"
           },
           {

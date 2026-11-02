@@ -70,6 +70,8 @@ func TestE2E_SettleOnIdleInstance(t *testing.T) {
 		t.Fatalf("up = %+v", up)
 	}
 
+	awaitServices(ctx, t, cs, stderr.String) // idle and settle read the first generation
+
 	var idle struct {
 		Quiescers []struct {
 			Name string `json:"name"`

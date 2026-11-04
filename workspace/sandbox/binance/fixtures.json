@@ -188,6 +188,31 @@
     }
   },
   {
+    "method": "POST",
+    "path_prefix": "/sapi/v1/asset/get-funding-asset",
+    "response": { "status": 200, "body": [] }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/dapi/v1/account",
+    "response": { "status": 200, "body": { "assets": [], "positions": [] } }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/margin/account",
+    "response": { "status": 200, "body": { "userAssets": [] } }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/simple-earn/flexible/position",
+    "response": { "status": 200, "body": { "rows": [], "total": 0 } }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/sapi/v1/simple-earn/locked/position",
+    "response": { "status": 200, "body": { "rows": [], "total": 0 } }
+  },
+  {
     "method": "GET",
     "path_prefix": "/api/v3/time",
     "response": {

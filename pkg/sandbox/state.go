@@ -98,6 +98,11 @@ type VenueState struct {
 	Leverage     map[string]int64     `json:"leverage"`   // symbol → leverage
 	MarkPrices   map[string]float64   `json:"markPrices"` // symbol → mark price
 	ClosedAt     time.Time            `json:"closedAt"`
+
+	// Funding and liquidation (sim_derivs.go). Reset clears them with the rest of the state.
+	Income       []IncomeEntry `json:"income,omitempty"`       // funding payments, oldest first
+	Liquidations []*Order      `json:"liquidations,omitempty"` // the venue's liquidation orders
+	LastDerivs   time.Time     `json:"lastDerivs,omitzero"`    // derivatives are settled up to here
 }
 
 // Seed holds the initial state for resetting via Reset().

@@ -62,6 +62,7 @@ var labJournalKinds = []string{
 	"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", // simchat
 	"exchange.req",             // the sandbox server's request log
 	sandbox.KindOrder,          // the simulator's order ledger: create, fill, cancel, effect
+	sandbox.KindFunding,        // a funding payment of an open perpetual position
 	"llm.call", "llm.complete", // the simulated model
 	"event.*", "workflow.step", "proposal", "policy.decision", // the bus observer
 	"tool.call",   // the tool tap
@@ -132,8 +133,11 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	l.Sim.SetJournal(func(kind, subject string, payload any) {
 		b, _ := json.Marshal(payload)
 		e := labjournal.Entry{Kind: kind, Source: "sandbox", Subject: subject, Payload: b}
-		if oe, ok := payload.(sandbox.OrderEntry); ok {
-			e.SimTime = oe.At
+		switch p := payload.(type) {
+		case sandbox.OrderEntry:
+			e.SimTime = p.At
+		case sandbox.FundingEntry:
+			e.SimTime = p.Time
 		}
 		j.Append(e)
 	})

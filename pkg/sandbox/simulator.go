@@ -110,7 +110,10 @@ func (sim *StatefulSimulator) refreshMarks(venue string, state *VenueState) {
 func (sim *StatefulSimulator) Mutate(venue string, fn func(*VenueState) error) error {
 	sim.mu.Lock()
 	defer sim.mu.Unlock()
-	return fn(sim.stateManager.GetState(venue))
+	sim.advanceLocked(time.Time{}) // what is due happens before the change, not after it
+	err := fn(sim.stateManager.GetState(venue))
+	sim.reschedule(sim.clock()) // a position the change added settles funding
+	return err
 }
 
 // Read runs fn on the venue's state under the read lock. fn must copy what it keeps:
@@ -190,6 +193,10 @@ func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Reques
 	// Fetch markets (exchangeInfo, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/exchangeInfo") || strings.HasPrefix(path, "/fapi/v3/exchangeInfo")):
 		return sim.simBinanceFetchExchangeInfo(state, r)
+	case method == "GET" && path == "/fapi/v1/income":
+		return sim.simBinanceIncome(state, r)
+	case method == "GET" && path == "/fapi/v1/forceOrders":
+		return sim.simBinanceForceOrders(state, r)
 	case method == "POST" && key == "binance" && ep == "marginType":
 		return sim.simBinanceAccountSetting(state, r)
 	case method == "GET" && key == "binance" && ep == "leverageBracket":
@@ -490,6 +497,9 @@ func (sim *StatefulSimulator) respondOKX(method, path string, r *http.Request) (
 	// Fetch balance
 	case method == "GET" && strings.HasPrefix(path, "/api/v5/account/balance"):
 		return sim.simOKXFetchBalance(state, r)
+	// ccxt's fetchFundingHistory reads the archive; the bills are the same ledger
+	case method == "GET" && (path == "/api/v5/account/bills" || path == "/api/v5/account/bills-archive"):
+		return sim.simOKXBills(state, r)
 	// Set leverage
 	case method == "POST" && strings.HasPrefix(path, "/api/v5/account/set-leverage"):
 		return sim.simOKXSetLeverage(state, r)
@@ -617,7 +627,6 @@ func (sim *StatefulSimulator) simOKXFetchInstruments(state *VenueState, r *http.
 	if r.URL.Query().Get("instType") == "SPOT" {
 		return nil, false
 	}
-
 	if err := r.ParseForm(); err != nil {
 		return sim.okxErrorResponse("51000", "invalid query string"), true
 	}
@@ -847,6 +856,9 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 			return true
 		// Set leverage
 		case method == "POST" && (strings.HasPrefix(path, "/fapi/v1/leverage") || strings.HasPrefix(path, "/fapi/v3/leverage")):
+			return true
+		// The liquidation orders (income is not listed: it falls through while the ledger is empty)
+		case method == "GET" && path == "/fapi/v1/forceOrders":
 			return true
 		default:
 			return false

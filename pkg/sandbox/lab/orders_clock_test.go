@@ -126,7 +126,9 @@ func TestLimitCross_FilledWithoutPolling(t *testing.T) {
 	if steps := sum["steps"].(float64); steps > 4 {
 		t.Fatalf("%v clock steps: the watch must stop once the order is filled", steps)
 	}
-	if got := l.Clock.Pending(); got != 0 {
-		t.Fatalf("armed timers = %d after the fill, want none", got)
+	// The watch of the resting order is gone; what remains is the one stop the position the fill
+	// opened asks for: its next funding settlement (16:00 UTC after 09:00).
+	if at, ok := l.Clock.NextAt(); !ok || l.Clock.Pending() != 1 || !at.Equal(clockT0.Add(7*time.Hour)) {
+		t.Fatalf("armed timers = %d, next %v, want only the 16:00 UTC funding settlement", l.Clock.Pending(), at)
 	}
 }

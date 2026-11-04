@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 )
 
 func loadProfile(t *testing.T, accounts ...string) (home string, cfg *config.Config) {
@@ -27,7 +28,13 @@ func loadProfile(t *testing.T, accounts ...string) (home string, cfg *config.Con
 // fake credentials and the narrow scopes, enables the venue, and keeps the credentials in
 // .security.yml (0600) and out of config.json.
 func TestProfile_PlaceholderAccounts(t *testing.T) {
+	// A developer who encrypts their own credentials must not get an instance whose
+	// placeholders it cannot read: the child has no passphrase.
+	t.Setenv(credential.PassphraseEnvVar, "a developer's passphrase")
 	home, cfg := loadProfile(t, "binance", "okx")
+	if sec, err := os.ReadFile(filepath.Join(home, ".security.yml")); err != nil || strings.Contains(string(sec), "enc://") || !strings.Contains(string(sec), PlaceholderKey) {
+		t.Fatalf(".security.yml = %s (%v), want the placeholders in plain text", sec, err)
+	}
 
 	bn, ok := cfg.Exchanges.Binance.ResolveAccount("")
 	if !cfg.Exchanges.Binance.Enabled || !ok || bn.Name != PlaceholderAccountName ||

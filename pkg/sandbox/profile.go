@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/credential"
 )
 
 // ProfileOptions describes the instance a sandbox profile is written for.
@@ -104,8 +106,27 @@ func WriteProfile(o ProfileOptions) (string, error) {
 		return "", fmt.Errorf("sandbox profile: create home: %w", err)
 	}
 	path := filepath.Join(home, "config.json")
-	if err := config.SaveConfig(path, cfg); err != nil {
+	if err := saveProfile(path, cfg, len(o.Accounts) > 0); err != nil {
 		return "", fmt.Errorf("sandbox profile: write config: %w", err)
 	}
 	return path, nil
+}
+
+// plainSave serialises the one place the passphrase is hidden from the config writer.
+var plainSave sync.Mutex
+
+// saveProfile writes the config. A profile with placeholder accounts is written without
+// the developer's key passphrase: SaveConfig would encrypt the placeholders with it
+// (enc://), which the instance, with an allowlisted environment, could not read. They are
+// constants that guard nothing, so plain text is right, and the same on every machine.
+func saveProfile(path string, cfg *config.Config, plain bool) error {
+	if !plain {
+		return config.SaveConfig(path, cfg)
+	}
+	plainSave.Lock()
+	defer plainSave.Unlock()
+	prev := credential.PassphraseProvider
+	credential.PassphraseProvider = func() string { return "" }
+	defer func() { credential.PassphraseProvider = prev }()
+	return config.SaveConfig(path, cfg)
 }

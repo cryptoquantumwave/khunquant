@@ -19,7 +19,12 @@ import (
 //   - the device perception source: it only reacts to real hotplug events, which a lab
 //     does not produce. (The clock and DCA-plan sources do run a pass after a sim-clock
 //     wake, so they are Idlers under "perception".)
-//   - SimWeb and the fault injector's latencies: SBX-15 and SBX-13 add them.
+//   - SimWeb: SBX-15 adds it.
+//
+// The fault injector's holds: a held HTTP request (latency, timeout, written_then_timeout)
+// is already in flight on the exchange server, so "exchange_sim" covers it; a model call
+// held by llm_latency is not, so the injector counts every hold and "faults" is busy while
+// one runs. A hold that outlives the settle cap fails the settle naming the component.
 func registerQuiescers(reg *quiesce.Registry, shared *sharedResources, l *lab.Lab) {
 	// idleOf adapts a per-generation check: a missing generation is idle.
 	idleOf := func(name string, f func(s *gatewayServices) bool) {
@@ -75,6 +80,9 @@ func registerQuiescers(reg *quiesce.Registry, shared *sharedResources, l *lab.La
 	if l != nil {
 		if l.Server != nil {
 			reg.Register(quiesce.Func("exchange_sim", l.Server.Idle))
+		}
+		if l.Faults != nil {
+			reg.Register(quiesce.Func("faults", l.Faults.Idle))
 		}
 		reg.Register(quiesce.Func("labjournal", func() bool {
 			if l.Journal != nil && !l.Journal.Idle() {

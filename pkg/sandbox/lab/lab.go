@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
@@ -53,7 +54,9 @@ type Lab struct {
 	// after each step (nil: nothing), is a settle over it unless a test replaces it.
 	Quiesce *quiesce.Registry
 	Settle  func(context.Context) error
-	// Later PRs add their components here: Faults, Web, Crash, ...
+	// Faults is the fault injector (nil until the gateway builds it under the lock).
+	Faults *fault.Injector
+	// Later PRs add their components here: Web, Crash, ...
 
 	fixturesDir string
 	token       string

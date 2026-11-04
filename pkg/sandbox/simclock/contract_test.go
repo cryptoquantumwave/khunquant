@@ -38,6 +38,7 @@ var contractPackages = []string{
 	"pkg/cron",
 	"pkg/providers/broker",
 	"pkg/sandbox",
+	"pkg/sandbox/fault", // a rule's window is sim time; a hold is wall time, annotated
 	"cmd/khunquant/internal/gateway",
 }
 

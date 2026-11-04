@@ -21,6 +21,8 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/account"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/faultops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/marketops"
@@ -41,6 +43,12 @@ import (
 // current generation it reads at call time through a closure over sharedResources (see
 // labDeps), never by capturing a generation's services.
 
+// faultMaxHold caps every fault hold (timeout, written_then_timeout, latency). It is under
+// a settle's 10 s cap and the lab call's 25 s, so a held request has ended, by closing the
+// connection, before either gives up; the exchange clients wait longer (ccxt 30 s). A
+// variable so tests can shorten it.
+var faultMaxHold = 8 * time.Second
+
 // kindConfigReload is journaled once a locked gateway has finished a config reload.
 const kindConfigReload = "config.reload"
 
@@ -59,6 +67,7 @@ var labJournalKinds = []string{
 	"manage.call", // sandbox_manage
 	"clock.step",  // the sim clock
 	"settle",      // quiescence
+	fault.KindFired,
 	kindConfigReload,
 }
 
@@ -107,6 +116,13 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	l.Journal = j
 	l.DeclareKinds(labJournalKinds...)
 	l.OnClose(j.Close)
+	// The fault injector reads lab time through a closure (SBX-07 swaps l.Now) and is built
+	// before the model engine, which asks it. It closes before the server stops, so a held
+	// request does not stall the shutdown.
+	l.Faults = fault.New(fault.Options{Now: func() time.Time { return l.Now() }, Journal: j, MaxHold: faultMaxHold})
+	l.Chain.Set(sandbox.StageFault, l.Faults.Middleware())
+	l.Server.SetHandlerWrap(l.Faults.HandlerWrap())
+	l.OnClose(l.Faults.Close)
 	// Every request the chain sees is journaled (Append never blocks: a full queue drops).
 	l.Chain.Observe(func(i sandbox.ReqInfo) {
 		payload, _ := json.Marshal(i)
@@ -180,7 +196,8 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		sj = simJournal{l.Journal}
 	}
 	e, err := sim.NewEngine(sim.EngineOptions{
-		Journal: sj, TurnInfo: simTurnInfo, Store: filepath.Join(l.Home, "lab", "llm_script.json"),
+		Journal: sj, TurnInfo: simTurnInfo, Faults: llmFaults{l.Faults},
+		Store: filepath.Join(l.Home, "lab", "llm_script.json"),
 	})
 	if err != nil {
 		return err
@@ -189,7 +206,22 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		return err
 	}
 	l.OnClose(func() error { sim.Detach(e); return nil })
+	if err := l.AddGroup(faultops.Group(l.Faults)); err != nil {
+		return err
+	}
 	return l.AddGroup(llmops.Group(e))
+}
+
+// llmFaults lets the fault injector delay or fail a model call. The wait is made here, in
+// the injector's counted hold (a settle sees it), so the engine gets no delay of its own.
+type llmFaults struct{ i *fault.Injector }
+
+func (f llmFaults) BeforeLLM(ctx context.Context, c sim.CallInfo) (time.Duration, error) {
+	d, err := f.i.LLM(ctx, c.Turn, c.Caller, c.Model)
+	if err == nil {
+		err = f.i.Hold(ctx, d)
+	}
+	return 0, err
 }
 
 // simJournal writes the simulated model's llm.call / llm.complete entries to the lab

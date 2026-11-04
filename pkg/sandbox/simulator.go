@@ -40,6 +40,12 @@ type StatefulSimulator struct {
 	stateManager *StateManager
 	prices       PriceSource      // optional; guarded by mu
 	now          func() time.Time // order and fill times; nil is time.Now; guarded by mu
+
+	// A locked lab sets these (sim_effects.go); a bare simulator has none. Guarded by mu.
+	effects OrderEffects
+	journal func(kind, subject string, payload any)
+	wake    func(at time.Time)
+	wakeAt  time.Time // the wake armed and not yet due
 }
 
 // SetClock makes order, fill and account timestamps read now (the lab passes its sim
@@ -160,8 +166,8 @@ func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Reques
 		return sim.simBinanceFetchOrder(state, r)
 	case method == "DELETE" && ep == "order":
 		return sim.simBinanceCancelOrder(state, r)
-	case method == "GET" && ep == "openOrders":
-		return sim.simBinanceListOrders(state, r)
+	case method == "GET" && (ep == "openOrders" || ep == "allOrders"):
+		return sim.simBinanceListOrders(state, r, ep == "allOrders")
 	// Fetch positions (positionRisk is Binance's positions endpoint, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):
 		return sim.simBinanceFetchPositions(state, r)
@@ -453,8 +459,8 @@ func (sim *StatefulSimulator) respondOKX(method, path string, r *http.Request) (
 	case method == "POST" && path == "/api/v5/trade/cancel-order":
 		return sim.simOKXCancelOrder(state, r)
 	// Fetch open orders
-	case method == "GET" && path == "/api/v5/trade/orders-pending":
-		return sim.simOKXListOrders(state, r)
+	case method == "GET" && (path == "/api/v5/trade/orders-pending" || path == "/api/v5/trade/orders-history"):
+		return sim.simOKXListOrders(state, r, path == "/api/v5/trade/orders-history")
 	// Fetch positions (exact match: /api/v5/account/positions, not /api/v5/account/positions-history)
 	case method == "GET" && path == "/api/v5/account/positions":
 		return sim.simOKXFetchPositions(state, r)
@@ -765,7 +771,7 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 		// The order endpoints, by exact path (as respondBinance matches them)
 		case (method == "POST" || method == "GET" || method == "DELETE") && ep == "order":
 			return true
-		case method == "GET" && ep == "openOrders":
+		case method == "GET" && (ep == "openOrders" || ep == "allOrders"):
 			return true
 		// Fetch positions
 		case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):
@@ -786,7 +792,7 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 		// The order routes, by exact path (as respondOKX matches them)
 		case method == "POST" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/batch-orders" || path == "/api/v5/trade/order-algo"):
 			return true
-		case method == "GET" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/orders-pending"):
+		case method == "GET" && (path == "/api/v5/trade/order" || path == "/api/v5/trade/orders-pending" || path == "/api/v5/trade/orders-history"):
 			return true
 		case method == "POST" && path == "/api/v5/trade/cancel-order":
 			return true

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,7 +53,11 @@ type Order struct {
 	Market     string    `json:"market,omitempty"` // spot | futures
 	Price      float64   `json:"price,omitempty"`  // the limit price; 0 for a market order
 	ReduceOnly bool      `json:"reduceOnly,omitempty"`
-	Reserved   float64   `json:"reserved,omitempty"` // held for the unfilled part
+	Reserved   float64   `json:"reserved,omitempty"` // held for the unfilled part (see reserve)
+	Hold       bool      `json:"hold,omitempty"`     // accepted and never filled until cancelled
+	Partial    float64   `json:"partial,omitempty"`  // its first fill is this fraction of Amount
+	VisibleAt  time.Time `json:"visibleAt,omitzero"` // lookups and listings miss it until then
+	CancelAt   time.Time `json:"cancelAt,omitzero"`  // the simulator cancels it at this time
 	EvalAt     time.Time `json:"evalAt,omitzero"`    // the price path was checked up to here
 }
 
@@ -246,16 +251,26 @@ func (sm *StateManager) SnapshotAsSeed(venue string) {
 	sm.seeds[venue] = seed
 }
 
-// Keys lists the state keys in order.
+// Keys lists the state keys in order: a venue, or "<venue>.spot" for the wallet a venue
+// keeps apart from its futures one.
 func (sm *StateManager) Keys() []string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return slices.Sorted(maps.Keys(sm.venueStates))
 }
 
-// Reset restores a venue to its seeded state (initial state).
-// If no seed has been registered (via SnapshotAsSeed), this creates an empty state.
+// Reset restores a venue to its seeded state (initial state), and the "<venue>.spot"
+// wallet beside it when there is one. If no seed has been registered (via
+// SnapshotAsSeed), this creates an empty state.
 func (sm *StateManager) Reset(venue string) error {
+	if !strings.Contains(venue, ".") {
+		sm.mu.RLock()
+		_, has := sm.venueStates[venue+".spot"]
+		sm.mu.RUnlock()
+		if has {
+			defer sm.Reset(venue + ".spot") //nolint:errcheck // Reset never fails
+		}
+	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

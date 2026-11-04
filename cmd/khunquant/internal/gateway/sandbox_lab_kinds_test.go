@@ -91,7 +91,7 @@ func TestDeclaredKinds_CoverMergedProducers(t *testing.T) {
 	f := newLockedFixture(t)
 	kinds := f.lab.Kinds()
 	for _, want := range []string{
-		"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", "exchange.req", "llm.call", "llm.complete",
+		"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", "exchange.req", "exchange.order", "llm.call", "llm.complete",
 		"event.*", "tool.call", "workflow.step", "proposal", "policy.decision", "manage.call", "clock.step", "settle", "config.reload", "fault.fired",
 	} {
 		if !scenario.KindDeclared(kinds, want) {

@@ -25,7 +25,7 @@ type Server struct {
 	wrap      func(http.Handler) http.Handler // see SetHandlerWrap; guarded by respMu
 	inflight  atomic.Int32                    // requests being served (for Idle)
 
-	avoid  int                                                // a port Start must not take (0: none); set before Start
+	avoid  int                                                 // a port Start must not take (0: none); set before Start
 	listen func(network, address string) (net.Listener, error) // net.Listen unless a test replaces it
 
 	// Global state accessor (singleton pattern for accessing current sandbox state).
@@ -123,6 +123,14 @@ func (s *Server) SetResponder(r Responder) {
 	s.respMu.Lock()
 	defer s.respMu.Unlock()
 	s.responder = r
+}
+
+// Responder is the responder set with SetResponder (nil when none), for a test that checks
+// what a gateway wired into the server it runs.
+func (s *Server) Responder() Responder {
+	s.respMu.RLock()
+	defer s.respMu.RUnlock()
+	return s.responder
 }
 
 // SetHandlerWrap wraps the router at the handler level, so a component can hold,

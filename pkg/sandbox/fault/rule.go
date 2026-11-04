@@ -221,8 +221,10 @@ func (i *Injector) validateMatch(m Match, llm bool, kind string) error {
 		return errors.New("match.market is spot|futures")
 	case !oneOf(strings.ToLower(m.Side), "", "buy", "sell"):
 		return errors.New("match.side is buy|sell")
-	case kind == "written_then_timeout" && !oneOf(m.Order, "", "create"):
-		return errors.New("written_then_timeout applies to create only")
+	case (kind == "written_then_timeout" || kindLayer[kind] == layerOrder) && !oneOf(m.Order, "", "create"):
+		// The simulator asks about an order once, when it is created: a rule for another
+		// operation would never fire.
+		return fmt.Errorf("%s applies to create only", kind)
 	}
 	return nil
 }
@@ -288,6 +290,11 @@ func (i *Injector) validateEffect(r Rule, kind string, ly layer) error {
 	case "create_reports_fill":
 		if e.Reported != nil && (!finite(*e.Reported) || *e.Reported < 0) {
 			return errors.New("reported must be a finite number, 0 or more")
+		}
+		// OKX's create answer carries no fill and no state, so there is nothing to under-report
+		// there; a rule for every venue would match it.
+		if r.Match.Venue == "okx" || r.Match.Venue == venueAny {
+			return errors.New("create_reports_fill needs a venue whose create answer reports a fill (binance); okx's carries none")
 		}
 	}
 	if ly == layerOrder {

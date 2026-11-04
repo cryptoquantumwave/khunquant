@@ -13,6 +13,15 @@ type PriceHistory interface {
 	MarkPriceAt(venue, wireSymbol string, t time.Time) (float64, bool)
 }
 
+// Now is the simulator's current time, for a caller outside the package that stamps what it
+// stores (the account group's seeded positions). Read it before Mutate, never inside its fn:
+// Mutate holds the lock this takes.
+func (sim *StatefulSimulator) Now() time.Time {
+	sim.mu.RLock()
+	defer sim.mu.RUnlock()
+	return sim.clock()
+}
+
 // SetOrderEffects makes the simulator ask e what an order create should suffer (partial
 // fills, orders that never fill, lag). Nil removes the source; only a locked lab sets one.
 func (sim *StatefulSimulator) SetOrderEffects(e OrderEffects) {

@@ -6,6 +6,26 @@ import (
 	"slices"
 )
 
+// signedAmt is a Binance positionAmt: the base quantity, negative for a short (ccxt reads
+// the side from the sign, so a short written positive reads back as a long).
+func signedAmt(pos *Position) string {
+	base := pos.Contracts * pos.ContractSize
+	if pos.Side == "short" {
+		base = -base
+	}
+	return formatNumber(base)
+}
+
+// signedNotional is the position's notional at its mark, negative for a short: ccxt takes
+// the side from its sign.
+func signedNotional(pos *Position) string {
+	n := pos.Contracts * pos.ContractSize * pos.MarkPrice
+	if pos.Side == "short" {
+		n = -n
+	}
+	return formatNumber(n)
+}
+
 // simBinanceAccountSetting handles POST /fapi/v1/marginType: the simulator keeps no margin
 // mode (every position is margined as cross), so a change is accepted. Like exchangeInfo it
 // falls through while there are no markets.

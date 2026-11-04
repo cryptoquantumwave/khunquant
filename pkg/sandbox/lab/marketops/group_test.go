@@ -132,6 +132,56 @@ func TestGroup_SetFundingRate(t *testing.T) {
 	}
 }
 
+// funding_interval and maint_margin_rate are applied from now, and a refusal changes
+// nothing: not even the price that came with it. No spelling of a non-finite number gets
+// through (JSON has none, and an out-of-range literal is refused by the decoder).
+func TestGroup_SetTermsValidated(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b := market.NewBook(market.Options{Now: func() time.Time { return now }})
+	l := &lab.Lab{}
+	if err := l.AddGroup(Group(b, Options{Home: t.TempDir()})); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args string) error {
+		_, err := l.Call(context.Background(), "market", "set", json.RawMessage(args))
+		return err
+	}
+	pair := market.Pair{Base: "BTC", Quote: "USDT"}
+	if err := call(`{"symbol":"BTC/USDT","price":100,"funding_interval":"4h","maint_margin_rate":0.01,"funding_rate":0.0002}`); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := b.NextFunding("okx", "BTC-USDT-SWAP", now); !next.Equal(now.Add(4 * time.Hour)) {
+		t.Errorf("next funding = %v, want 04:00 on a 4h interval", next)
+	}
+	if r, _ := b.MaintRateAt("okx", "BTC-USDT-SWAP", now); r != 0.01 {
+		t.Errorf("maintenance rate = %v, want 0.01", r)
+	}
+	for _, bad := range []string{
+		`{"symbol":"BTC/USDT","price":200,"funding_interval":"0s"}`,
+		`{"symbol":"BTC/USDT","price":200,"funding_interval":"-8h"}`,
+		`{"symbol":"BTC/USDT","price":200,"funding_interval":"30s"}`,
+		`{"symbol":"BTC/USDT","price":200,"funding_interval":"100h"}`,
+		`{"symbol":"BTC/USDT","price":200,"funding_interval":"soon"}`,
+		`{"symbol":"BTC/USDT","price":200,"maint_margin_rate":0}`,
+		`{"symbol":"BTC/USDT","price":200,"maint_margin_rate":1}`,
+		`{"symbol":"BTC/USDT","price":200,"maint_margin_rate":-0.1}`,
+		`{"symbol":"BTC/USDT","price":200,"maint_margin_rate":1e999}`,
+		`{"symbol":"BTC/USDT","price":200,"funding_rate":1e999}`,
+		`{"symbol":"BTC/USDT","price":1e999}`,
+		`{"symbol":"BTC/USDT","price":-5}`,
+	} {
+		if err := call(bad); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+	if p, _ := b.Price("okx", pair, now); p != 100 {
+		t.Errorf("a refused set moved the price to %v", p)
+	}
+	if b.Funding("okx", pair) != 0.0002 {
+		t.Errorf("a refused set changed the rate to %v", b.Funding("okx", pair))
+	}
+}
+
 func asBadArgs(err error, le **lab.Error) bool {
 	e, ok := err.(*lab.Error)
 	*le = e

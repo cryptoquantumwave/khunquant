@@ -1,52 +1,9 @@
 package market
 
 import (
-	"errors"
-	"math"
 	"net/url"
 	"strconv"
-	"time"
 )
-
-// DefaultFunding is the funding rate (per 8 h) a pair has until the `set` op gives it one.
-const DefaultFunding = 0.0001
-
-const fundingInterval = 8 * time.Hour
-
-// SetFunding sets the funding rate a venue (or "*": every venue without its own) serves for
-// p's perpetual. Funding payments are not simulated here, only the current rate.
-func (b *Book) SetFunding(venue string, p Pair, rate float64) error {
-	venue, err := checkVenue(venue)
-	if err != nil {
-		return err
-	}
-	if math.IsNaN(rate) || math.IsInf(rate, 0) || math.Abs(rate) >= 1 {
-		return errors.New("funding_rate must be a fraction per 8 h, e.g. 0.0001")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.funding[venue] == nil {
-		b.funding[venue] = map[Pair]float64{}
-	}
-	b.funding[venue][p] = rate
-	return nil
-}
-
-// Funding is the funding rate p has on venue.
-func (b *Book) Funding(venue string, p Pair) float64 {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if r, ok := b.funding[venue][p]; ok {
-		return r
-	}
-	if r, ok := b.funding[Wildcard][p]; ok {
-		return r
-	}
-	return DefaultFunding
-}
-
-// nextSettlement is the next 00:00, 08:00 or 16:00 UTC after t.
-func nextSettlement(t time.Time) time.Time { return alignDown(t, fundingInterval).Add(fundingInterval) }
 
 // binancePremium serves /fapi/v1/premiumIndex (what ccxt reads for mark price and funding
 // rate): one symbol as an object, none as an array of the modelled pairs. Mark and index
@@ -69,7 +26,7 @@ func (b *Book) binancePremium(q url.Values) (int, []byte, bool) {
 		rows = append(rows, map[string]any{
 			"symbol": Wire("binance", p, true), "markPrice": num(px), "indexPrice": num(px), "estimatedSettlePrice": num(px),
 			"lastFundingRate": num(b.Funding("binance", p)), "interestRate": "0.00010000",
-			"nextFundingTime": ms(nextSettlement(now)), "time": ms(now),
+			"nextFundingTime": ms(b.schedule("binance", p).Next(now)), "time": ms(now),
 		})
 	}
 	switch {
@@ -131,11 +88,13 @@ func (b *Book) okxMarkPrice(q url.Values) (int, []byte, bool) {
 // okxFundingRate serves /api/v5/public/funding-rate (a swap's instId, or ANY for all).
 func (b *Book) okxFundingRate(q url.Values) (int, []byte, bool) {
 	now, rows := b.Now(), []map[string]string{}
-	at, next := nextSettlement(now), nextSettlement(now).Add(fundingInterval)
 	for _, in := range b.okxInstruments(q, true) {
 		if _, ok := b.Price("okx", in.p, now); !ok {
 			continue
 		}
+		sched := b.schedule("okx", in.p)
+		at := sched.Next(now)
+		next := sched.Next(at)
 		rate := num(b.Funding("okx", in.p))
 		rows = append(rows, map[string]string{
 			"instType": "SWAP", "instId": Wire("okx", in.p, true), "method": "current_period", "fundingRate": rate,

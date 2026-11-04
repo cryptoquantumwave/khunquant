@@ -3,7 +3,9 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +45,15 @@ type Order struct {
 	CreatedAt time.Time              `json:"createdAt"`
 	UpdatedAt time.Time              `json:"updatedAt"`
 	Params    map[string]interface{} `json:"params,omitempty"`
+
+	// The ledger's own bookkeeping (orderbook.go). All of it is optional in a stored
+	// state: an order without it is a plain filled or open order.
+	ClientID   string    `json:"clientId,omitempty"`
+	Market     string    `json:"market,omitempty"` // spot | futures
+	Price      float64   `json:"price,omitempty"`  // the limit price; 0 for a market order
+	ReduceOnly bool      `json:"reduceOnly,omitempty"`
+	Reserved   float64   `json:"reserved,omitempty"` // held for the unfilled part
+	EvalAt     time.Time `json:"evalAt,omitzero"`    // the price path was checked up to here
 }
 
 // Market represents a market with contract size and precision info.
@@ -233,6 +244,13 @@ func (sm *StateManager) SnapshotAsSeed(venue string) {
 	}
 
 	sm.seeds[venue] = seed
+}
+
+// Keys lists the state keys in order.
+func (sm *StateManager) Keys() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return slices.Sorted(maps.Keys(sm.venueStates))
 }
 
 // Reset restores a venue to its seeded state (initial state).

@@ -237,6 +237,16 @@ func (b *Book) MarkPrice(venue, wireSymbol string) (float64, bool) {
 	return b.Price(venue, p, b.now())
 }
 
+// MarkPriceAt is the simulator's PriceHistory: the price a venue's wire symbol had at t,
+// so a limit order's fill is dated to when the price crossed it.
+func (b *Book) MarkPriceAt(venue, wireSymbol string, t time.Time) (float64, bool) {
+	p, _, ok := ParseWire(venue, wireSymbol)
+	if !ok {
+		return 0, false
+	}
+	return b.Price(venue, p, t)
+}
+
 // Entry is one row of Snapshot.
 type Entry struct {
 	Venue  string  `json:"venue"`

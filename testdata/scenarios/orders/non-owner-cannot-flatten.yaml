@@ -1,0 +1,51 @@
+# S116C-1: someone who is not the owner asks the model to flatten every position. With an
+# owner configured and the trading policy at its default (off), the tool must be refused and
+# no order placed. It needs the placeholder OKX account and an open position to close:
+# without them the tool finds nothing to do whatever the gate says, and "no order" would
+# prove nothing (the earlier draft of this scenario did exactly that). The tool is enabled
+# in config because it is off by default. Today the group member's request is not refused:
+# the tool runs and closes the position, so the check on the ledger fails.
+version: 1
+scenario: non-owner-cannot-flatten
+covers: [S116C-1]
+status: known_bug
+known_bug: S116C-1
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [okx]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      futures_emergency_flatten: { enabled: true }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 98000 }
+account:
+  okx:
+    balances: { USDT: 10000 }
+    positions: [{ symbol: BTC-USDT-SWAP, side: long, contracts: 10, entryPrice: 98000, leverage: 1 }]
+llm_script:
+  - id: flatten
+    match: { prompt_contains: ["flatten everything"] }
+    respond: { tool: futures_emergency_flatten, args: { provider: okx, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: "alice@group:team", text: "flatten everything", mention: true }
+timeline:
+  - advance: 2m
+expect:
+  - id: no-order
+    order: { venue: okx }
+    count: 0
+  - id: no-closing-order-in-the-ledger
+    order: { venue: okx, side: sell }
+    count: 0
+  - id: the-tool-was-reached
+    event: { kind: tool.call, fields: { name: futures_emergency_flatten } }
+    count: 1

@@ -1,0 +1,63 @@
+# H4: a DCA buy the venue accepts and then cancels without filling must not be recorded as a
+# fill. The fault is cancel_after_accept (SBX-13, executed by the simulator in SBX-14a): the
+# order is booked and rests, and the simulator cancels it one minute of sim time later. The
+# legacy plan is run by the owner's chat message, as its cron job would run it.
+#
+# The tool reads the order back before it records anything, and sees it still open: the run is
+# recorded as pending ("It was NOT cancelled; check it on the exchange"), not as bought. The
+# script plays the model that reads that result and tells the owner which of the two the tool
+# reported; the scenario passes only on the pending words. The ledger checks show the order
+# really was cancelled afterwards with nothing filled, so a "bought" would have been false.
+version: 1
+scenario: dca-cancelled-order-is-not-a-fill
+covers: [H4]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000 } }
+llm_script:
+  - id: run
+    match: { sender: "simchat:owner", prompt_contains: ["run my dca plan"] }
+    respond: { tool: execute_dca_order, args: { plan_id: 1 } }
+    times: 1
+  - id: reported-pending
+    match: { last_tool: execute_dca_order, last_tool_result_contains: ["NOT cancelled"] }
+    respond: { text: "DCA-RUN-PENDING" }
+  - id: reported-bought
+    match: { last_tool: execute_dca_order }
+    respond: { text: "DCA-RUN-RECORDED-AS-BOUGHT" }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: btc-daily, provider: binance, symbol: BTC/USDT, amount_per_order: 100, schedule: { cron: "0 10 * * *", timezone: Asia/Bangkok } }
+  - fault.add:
+      match: { venue: binance, order: create, market: spot }
+      effect: { order: cancel_after_accept, after: 1m }
+  - chat: { as: owner, text: "run my dca plan now" }
+timeline:
+  - advance: 5m
+expect:
+  - id: run-recorded-as-pending
+    message: { to: owner, contains: ["DCA-RUN-PENDING"], count: 1 }
+  - id: never-recorded-as-bought
+    message: { to: owner, contains: ["DCA-RUN-RECORDED-AS-BOUGHT"], count: 0 }
+  - id: order-was-placed
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: order-was-cancelled
+    order: { venue: binance, symbol: BTC/USDT, status: canceled, count: 1 }
+  - id: nothing-filled
+    order: { venue: binance, symbol: BTC/USDT, status: filled, count: 0 }

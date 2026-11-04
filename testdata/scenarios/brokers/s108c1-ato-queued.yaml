@@ -1,0 +1,74 @@
+# S108C-1: a mandate DCA of 200 shares of PTT comes due at 08:30, before the market opens.
+# 200 shares is a board lot, so the adapter sends an at-the-open (ATO) order, and Settrade
+# queues it until the 10:00 auction: the order is open, nothing matched, when the run looks
+# back at it. That run must not be recorded as "nothing was bought" (which would let the next
+# slot buy again, doubling the position past the cap): it is recorded as an order that exists
+# and is not done, its whole value counted against the mandate, and the next slot asks the
+# owner before it buys anything.
+#
+# The cap: 20 000 THB per period (a week). One run of 200 x 30 THB is 6 000 THB, the order
+# held while queued 6 600 (the last price + 10%).
+version: 1
+scenario: s108c1-ato-queued
+covers: [S108C-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T08:00:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    # A key-less Bitkub account: the only thing in the lab that can say what a baht is worth
+    # in dollars (a stock broker cannot price a currency pair), and the mandate's limits are in
+    # USD. It has no credentials, so it can read a public ticker and place nothing.
+    exchanges: { bitkub: { enabled: true, accounts: [{ name: main }] } }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+  USDT/THB: { venue: bitkub, model: set, price: 35 }
+account:
+  settrade: { balances: { THB: 1000000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-daily, provider: settrade, symbol: PTT/THB, amount_per_order: 200, amount_unit: base, schedule: { cron: "30 8 * * *", timezone: Asia/Bangkok }, propose_mandate: true, mandate_months: 1, mandate_max_per_period: 20000, mandate_period: week }
+  - chat.press:
+      on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
+      action: approve
+timeline:
+  - advance: 26h
+expect:
+  - id: first-order-placed-at-0830
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 1 }
+    within: { from: "25m", to: "40m" }
+  - id: it-was-queued-as-an-ato
+    event: { kind: exchange.order, fields: { venue: settrade, event: create, type: market, amount: 200, status: open }, count: 1 }
+    within: { from: "25m", to: "40m" }
+  - id: it-filled-at-the-auction
+    event: { kind: exchange.order, fields: { venue: settrade, event: fill, status: filled, filled: 200 }, count: 1 }
+    within: { from: "1h55m", to: "2h5m" }
+  - id: first-run-not-recorded-as-nothing-bought
+    # The approval's own confirmation says "Nothing was bought by this approval"; only a run's
+    # verdict has the colon.
+    message: { to: owner, contains: ["Nothing was bought:"], count: 0 }
+    within: { from: "0m", to: "23h" }
+  - id: owner-told-the-order-is-still-open
+    message: { to: owner, contains: ["the order is still open"], count: 1 }
+    within: { from: "25m", to: "2h" }
+  - id: next-slot-buys-nothing-and-says-why
+    message: { to: owner, contains: ["Nothing was bought", "an earlier run could not be proven"], count: 1 }
+    within: { from: "23h", to: "26h" }
+  - id: next-slot-places-nothing
+    order: { venue: settrade, count: 1 }
+    within: { from: "0m", to: "26h" }

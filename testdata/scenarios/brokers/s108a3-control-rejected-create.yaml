@@ -1,0 +1,48 @@
+# Control for s108a3-webull-reconcile. The same Webull mandate DCA, but every create is REJECTED
+# (not written, not lost) for the whole run. Nothing is ever booked, so there is no market order
+# to find again: the main scenario's "one order" is the venue's booking surviving a lost answer,
+# not what any run of this plan produces. (A one-shot reject would only be retried and bought,
+# which is why this one has no limit.)
+version: 1
+scenario: s108a3-control-rejected-create
+covers: [S108A-3]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T21:00:00+07:00", mode: manual }
+instance:
+  accounts: [webull]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "23:00" }
+market:
+  AAPL/USD: { venue: webull, model: set, price: 150 }
+account:
+  webull: { balances: { USD: 1000000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: aapl-daily, provider: webull, symbol: AAPL/USD, amount_per_order: 2, amount_unit: base, schedule: { cron: "30 21 * * *", timezone: Asia/Bangkok }, propose_mandate: true, mandate_months: 1, mandate_max_per_period: 5000, mandate_period: week }
+  - chat.press:
+      on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
+      action: approve
+  - fault.add:
+      match: { venue: webull, order: create }
+      effect: { order: reject, code: bad_request }
+timeline:
+  - advance: 2h
+expect:
+  - id: a-rejected-create-books-no-order
+    event: { kind: exchange.order, fields: { venue: webull, event: create, type: market }, count: 0 }
+  - id: the-reject-fired
+    event: { kind: fault.fired, fields: { venue: webull, effect: reject, order_op: create } }

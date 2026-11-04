@@ -1,0 +1,59 @@
+# H1: a Settrade DCA of 10 shares (an odd lot, under the 100-share board lot) reaches its cron
+# slot. An odd lot cannot be an at-the-open order, so the order must be a Limit with a price.
+# The DCA tool sends a market order with no price; the adapter must price it from its own
+# quote. A market order sent to Settrade as it stands (or an ATO) is refused by the venue
+# (SBX-ODD-LOT-PRICETYPE), so the check is that an order was placed, as a priced Limit, and
+# filled: 10 shares at the quote (30 THB), inside the morning session.
+#
+# The control, in the other file of this pair (h1-control-board-lot-dca.yaml): the same plan
+# for 200 shares is a market order, an ATO, and queues for the afternoon auction, so the
+# odd-lot rule (and not the plan, the clock or the cron) is what puts a price on this one.
+#
+# Legacy path: the plan's cron job wakes the scripted model, which calls execute_dca_order.
+version: 1
+scenario: h1-settrade-odd-lot-dca
+covers: [H1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+account:
+  settrade: { balances: { THB: 100000 } }
+llm_script:
+  - id: legacy-buy
+    match: { turn: cron_legacy, prompt_contains: ["[DCA-AUTO]"] }
+    respond: { tool: execute_dca_order, args: { plan_id: 1 } }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-odd-lot, provider: settrade, symbol: PTT/THB, amount_per_order: 10, amount_unit: base, schedule: { cron: "0 11 * * *", timezone: Asia/Bangkok } }
+timeline:
+  - advance: 3h
+expect:
+  - id: one-order-placed
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 1 }
+    within: { from: "1h50m", to: "2h10m" }
+  - id: it-is-a-priced-limit-of-10-shares
+    event: { kind: exchange.order, fields: { venue: settrade, event: create, type: limit, amount: 10 }, count: 1 }
+  - id: it-filled-at-the-quote
+    event: { kind: exchange.order, fields: { venue: settrade, event: fill, status: filled, filled: 10, avg: 30 }, count: 1 }
+  - id: not-an-ato
+    event: { kind: exchange.order, fields: { venue: settrade, type: market }, count: 0 }

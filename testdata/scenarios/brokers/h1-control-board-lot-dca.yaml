@@ -1,0 +1,50 @@
+# Control for h1-settrade-odd-lot-dca. The same plan, clock and cron, for 200 shares (two board
+# lots) instead of 10. A board lot may be an at-the-open order, so it stays a market order with
+# no price (queued for the afternoon auction): the 10-share scenario's priced Limit comes from
+# the odd-lot rule and nothing else. Without this, "it is a limit" would also pass if every
+# Settrade DCA were turned into a limit order.
+version: 1
+scenario: h1-control-board-lot-dca
+covers: [H1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+account:
+  settrade: { balances: { THB: 100000 } }
+llm_script:
+  - id: legacy-buy
+    match: { turn: cron_legacy, prompt_contains: ["[DCA-AUTO]"] }
+    respond: { tool: execute_dca_order, args: { plan_id: 1 } }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-board-lot, provider: settrade, symbol: PTT/THB, amount_per_order: 200, amount_unit: base, schedule: { cron: "0 11 * * *", timezone: Asia/Bangkok } }
+timeline:
+  - advance: 3h
+expect:
+  - id: one-order-placed
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 1 }
+    within: { from: "1h50m", to: "2h10m" }
+  - id: it-is-an-ato-market-order-of-200-shares
+    event: { kind: exchange.order, fields: { venue: settrade, event: create, type: market, amount: 200 }, count: 1 }
+  - id: it-is-not-a-priced-limit
+    event: { kind: exchange.order, fields: { venue: settrade, type: limit }, count: 0 }

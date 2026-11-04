@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,11 +205,11 @@ func (sim *StatefulSimulator) simBinanceFetchPositions(state *VenueState, r *htt
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
 
-	sim.refreshMarks("binance", state)
+	rs := sim.risksNow("binance", state)
 	var positions []map[string]interface{}
-	for _, pos := range state.Positions {
-		if pos.Contracts > 0 {
-			positions = append(positions, sim.binancePositionToWireFormat(pos))
+	for _, sym := range slices.Sorted(maps.Keys(state.Positions)) {
+		if pos := state.Positions[sym]; pos.Contracts > 0 {
+			positions = append(positions, sim.binancePositionToWireFormat(pos, rs[sym]))
 		}
 	}
 
@@ -253,16 +256,40 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 		BracketPosition          int64  `json:"bracketPosition"`
 	}
 
+	// Every position's profit and maintenance margin come from the same maths as positionRisk
+	// (margin.go); the USDT wallet is the settlement asset.
+	rs := sim.risksNow("binance", state)
+	var positions []FuturesPosition
+	upnl, maint := 0.0, 0.0
+	for _, sym := range slices.Sorted(maps.Keys(state.Positions)) {
+		if pos := state.Positions[sym]; pos.Contracts > 0 {
+			r := rs[sym]
+			upnl, maint = upnl+r.UPnL, maint+r.Maint
+			margin := formatNumber(math.Abs(pos.base()) * pos.MarkPrice / float64(max(pos.Leverage, 1)))
+			positions = append(positions, FuturesPosition{
+				Symbol:                   pos.Symbol,
+				InitialMargin:            margin,
+				MaintMargin:              formatNumber(r.Maint),
+				OpenOrderInitialMargin:   "0",
+				PositionInitialMargin:    margin,
+				Positionamt:              signedAmt(pos), // contracts x contractSize, in base currency
+				SymbolPrice:              formatNumber(pos.MarkPrice),
+				UnrealizedProfit:         formatNumber(r.UPnL),
+				MicroUnitAmountRemaining: 0,
+				BracketPosition:          0,
+			})
+		}
+	}
+
 	var assets []FuturesAsset
 	totalWalletBalance := 0.0
 	availableBalance := 0.0
-
-	for asset, bal := range state.Balances {
+	for _, asset := range slices.Sorted(maps.Keys(state.Balances)) {
+		bal := state.Balances[asset]
 		total := bal.Free + bal.Locked
 		totalWalletBalance += total
 		availableBalance += bal.Free
-
-		assets = append(assets, FuturesAsset{
+		a := FuturesAsset{
 			Asset:                  asset,
 			WalletBalance:          formatNumber(total),
 			AvailableBalance:       formatNumber(bal.Free),
@@ -275,29 +302,12 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 			CrossUnPnl:             "0",
 			UnrealizedProfit:       "0",
 			MaxWithdrawAmount:      formatNumber(bal.Free),
-		})
-	}
-
-	// Build positions array (empty for now, but structured for completeness)
-	sim.refreshMarks("binance", state)
-	var positions []FuturesPosition
-	for _, pos := range state.Positions {
-		if pos.Contracts > 0 {
-			// Position amount is contracts * contractSize (base currency units)
-			positionAmt := signedAmt(pos)
-			positions = append(positions, FuturesPosition{
-				Symbol:                   pos.Symbol,
-				InitialMargin:            "0",
-				MaintMargin:              "0",
-				OpenOrderInitialMargin:   "0",
-				PositionInitialMargin:    "0",
-				Positionamt:              positionAmt,
-				SymbolPrice:              formatNumber(pos.MarkPrice),
-				UnrealizedProfit:         "0",
-				MicroUnitAmountRemaining: 0,
-				BracketPosition:          0,
-			})
 		}
+		if asset == "USDT" {
+			a.MarginBalance, a.MaintenanceMargin = formatNumber(total+upnl), formatNumber(maint)
+			a.CrossUnPnl, a.UnrealizedProfit = formatNumber(upnl), formatNumber(upnl)
+		}
+		assets = append(assets, a)
 	}
 
 	// Binance futures account response
@@ -306,12 +316,14 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 		"positions":                    positions,
 		"totalWalletBalance":           formatNumber(totalWalletBalance),
 		"availableBalance":             formatNumber(availableBalance),
-		"totalUnrealizedProfit":        "0",
+		"totalUnrealizedProfit":        formatNumber(upnl),
+		"totalMaintMargin":             formatNumber(maint),
+		"totalMarginBalance":           formatNumber(totalWalletBalance + upnl),
 		"totalMarginRequired":          "0",
 		"totalPositionInitialMargin":   "0",
 		"totalOpenOrderInitialMargin":  "0",
 		"totalCrossWalletBalance":      formatNumber(totalWalletBalance),
-		"totalCrossUnPnl":              "0",
+		"totalCrossUnPnl":              formatNumber(upnl),
 		"availableBalanceForOpenOrder": formatNumber(availableBalance),
 		"canDeposit":                   true,
 		"canTrade":                     true,
@@ -495,11 +507,11 @@ func (sim *StatefulSimulator) simOKXFetchPositions(state *VenueState, r *http.Re
 		return sim.okxErrorResponse("51000", "invalid query string"), true
 	}
 
-	sim.refreshMarks("okx", state)
+	rs := sim.risksNow("okx", state)
 	var positions []map[string]interface{}
-	for _, pos := range state.Positions {
-		if pos.Contracts > 0 {
-			positions = append(positions, sim.okxPositionToWireFormat(pos))
+	for _, sym := range slices.Sorted(maps.Keys(state.Positions)) {
+		if pos := state.Positions[sym]; pos.Contracts > 0 {
+			positions = append(positions, sim.okxPositionToWireFormat(pos, rs[sym]))
 		}
 	}
 
@@ -683,8 +695,13 @@ func positionSideOf(order *Order) string {
 	return "BOTH"
 }
 
-// binancePositionToWireFormat converts a Position to Binance wire format.
-func (sim *StatefulSimulator) binancePositionToWireFormat(pos *Position) map[string]interface{} {
+// binancePositionToWireFormat converts a Position to Binance wire format. r is its risk
+// (margin.go); the zero value, for a position with no mark, shows nothing known.
+func (sim *StatefulSimulator) binancePositionToWireFormat(pos *Position, r legRisk) map[string]interface{} {
+	mode, iso, notional := "cross", "0", math.Abs(pos.base())*pos.MarkPrice
+	if pos.isolated() {
+		mode, iso = "isolated", formatNumber(r.Base)
+	}
 	return map[string]interface{}{
 		"symbol":       pos.Symbol,
 		"positionSide": strings.ToUpper(pos.Side),
@@ -692,18 +709,22 @@ func (sim *StatefulSimulator) binancePositionToWireFormat(pos *Position) map[str
 		// ccxt keeps a position only when its entryPrice is above zero, so a wire without
 		// one reads back as no position at all (a short left open after a failed hedge
 		// looked flat to the recovery that was meant to close it).
-		"entryPrice":       formatNumber(pos.EntryPrice),
-		"markPrice":        formatNumber(pos.MarkPrice),
-		"notional":         signedNotional(pos),
-		"liquidationPrice": "0",
-		"initialMargin":    "0",
-		"maintMargin":      "0",
-		"unrealizedProfit": "0",
+		"entryPrice": formatNumber(pos.EntryPrice),
+		"markPrice":  formatNumber(pos.MarkPrice),
+		"notional":   signedNotional(pos),
+		// ccxt reads unRealizedProfit (capital R) and drops a liquidationPrice of 0; it derives
+		// the margin ratio itself from the leverageBracket's rate and this liquidation price.
+		"liquidationPrice": formatNumber(r.Liq),
+		"initialMargin":    formatNumber(notional / float64(max(pos.Leverage, 1))),
+		"maintMargin":      formatNumber(r.Maint),
+		"unRealizedProfit": formatNumber(r.UPnL),
+		"isolatedMargin":   iso,
+		"isolatedWallet":   iso,
 		"realizedProfit":   "0",
 		"leverage":         pos.Leverage,
 		"maxNotionalValue": "0",
-		"marginType":       "cross",
-		"isolatedCreated":  false,
+		"marginType":       mode,
+		"isolatedCreated":  pos.isolated(),
 		"updateTime":       pos.UpdatedAt.UnixMilli(),
 	}
 }
@@ -730,16 +751,43 @@ func (sim *StatefulSimulator) binanceErrorResponse(httpStatus int, code int, msg
 	}
 }
 
-// okxPositionToWireFormat converts a Position to OKX wire format.
-func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position) map[string]interface{} {
+// okxPositionToWireFormat converts a Position to OKX wire format. r is its risk
+// (margin.go). ccxt (v4.5.85) ignores mgnRatio and derives the ratio itself as mmr over
+// the position's collateral: imr + upl for cross, margin for isolated. imr and margin
+// therefore carry the cushion that backs the position (floored above zero), so that
+// ratio is the fraction of it that maintenance takes, 1 at the liquidation price.
+// mgnRatio is OKX's own convention, equity over maintenance, for a reader of the wire.
+func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position, r legRisk) map[string]interface{} {
+	mode, margin, imr := "cross", "", formatNumber(r.cushion()-r.UPnL)
+	if pos.isolated() {
+		mode, margin, imr = "isolated", formatNumber(r.cushion()), ""
+	}
+	liq, coverage := "", ""
+	if r.Liq > 0 {
+		liq = formatNumber(r.Liq)
+	}
+	if r.Maint > 0 {
+		coverage = formatNumber(r.Equity() / r.Maint)
+	}
 	return map[string]interface{}{
-		"instId":  pos.Symbol,
-		"posSide": pos.Side,
-		"pos":     formatNumber(pos.Contracts),
-		"avgPx":   formatNumber(pos.EntryPrice),
-		"markPx":  formatNumber(pos.MarkPrice),
-		"lever":   pos.Leverage,
-		"uPL":     "0",
+		"instId":      pos.Symbol,
+		"instType":    "SWAP",
+		"ccy":         "USDT",
+		"posSide":     pos.Side,
+		"pos":         formatNumber(pos.Contracts),
+		"avgPx":       formatNumber(pos.EntryPrice),
+		"markPx":      formatNumber(pos.MarkPrice),
+		"lever":       pos.Leverage,
+		"upl":         formatNumber(r.UPnL),
+		"liqPx":       liq,
+		"mgnMode":     mode,
+		"mgnRatio":    coverage,
+		"mmr":         formatNumber(r.Maint),
+		"imr":         imr,
+		"margin":      margin,
+		"notionalUsd": formatNumber(math.Abs(pos.base()) * pos.MarkPrice),
+		"cTime":       strconv.FormatInt(pos.UpdatedAt.UnixMilli(), 10),
+		"uTime":       strconv.FormatInt(pos.UpdatedAt.UnixMilli(), 10),
 	}
 }
 

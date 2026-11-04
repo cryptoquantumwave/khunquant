@@ -49,7 +49,7 @@ func Group(sim *sandbox.StatefulSimulator) lab.Group {
 		Ops: []lab.Op{
 			{Name: "seed", Description: "set free balances and put positions; by default the result is what sandbox_reset_simulator returns to",
 				Args: json.RawMessage(`{` + argVenue + `,"balances":{"type":"object","description":"asset -> free amount"},` +
-					`"positions":{"type":"array","items":{"type":"object"},"description":"[{symbol (wire), side long|short, contracts, entryPrice, leverage}]; the market must exist"},` +
+					`"positions":{"type":"array","items":{"type":"object"},"description":"[{symbol (wire), side long|short, contracts, entryPrice, leverage[, marginMode cross|isolated, maintRate, isolatedMargin]}]; the market must exist"},` +
 					`"replace":{"type":"boolean","description":"clear balances and positions first"},` +
 					`"baseline":{"type":"boolean","description":"default true"}}`),
 				Required: []string{"venue"}, Run: run(sim, seed)},
@@ -128,8 +128,15 @@ func positions(st *sandbox.VenueState, ps []sandbox.Position) ([]*sandbox.Positi
 			return nil, lab.Errorf(lab.CodeBadArgs, "position %q: side must be long or short", p.Symbol)
 		case !(p.Contracts > 0) || p.EntryPrice < 0 || p.Leverage < 0:
 			return nil, lab.Errorf(lab.CodeBadArgs, "position %q: contracts must be > 0, entryPrice and leverage >= 0", p.Symbol)
+		case p.MaintRate != 0 && !(p.MaintRate > 0 && p.MaintRate < 1), !(p.Isolated >= 0) || math.IsInf(p.Isolated, 0):
+			return nil, lab.Errorf(lab.CodeBadArgs, "position %q: maintRate must be 0 (the market's) or in (0, 1), isolatedMargin a finite amount >= 0", p.Symbol)
 		}
 		p.Side = side
+		mode := strings.ToLower(p.MarginMode)
+		if mode != "" && mode != "cross" && mode != "isolated" {
+			return nil, lab.Errorf(lab.CodeBadArgs, "position %q: marginMode must be cross or isolated", p.Symbol)
+		}
+		p.MarginMode = mode
 		p.ContractSize = cmp.Or(p.ContractSize, m.ContractSize)
 		p.Leverage = cmp.Or(p.Leverage, st.Leverage[p.Symbol])
 		p.MarkPrice = cmp.Or(p.MarkPrice, p.EntryPrice) // the venue refreshes it from the price source

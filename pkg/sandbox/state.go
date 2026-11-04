@@ -29,6 +29,12 @@ type Position struct {
 	MarkPrice     float64   `json:"markPrice"`
 	UnrealisedPnL float64   `json:"unrealisedPnL"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+
+	// Margining (margin.go). All optional in a seed: cross, the market's maintenance rate
+	// and an isolated margin of entry notional / leverage.
+	MarginMode string  `json:"marginMode,omitempty"`     // cross | isolated
+	MaintRate  float64 `json:"maintRate,omitempty"`      // a fraction in (0, 1); 0 takes the market's
+	Isolated   float64 `json:"isolatedMargin,omitempty"` // USDT backing an isolated position
 }
 
 // Order represents an open or closed order.

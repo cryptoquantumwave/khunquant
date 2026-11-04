@@ -187,6 +187,10 @@ func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Reques
 	// Fetch markets (exchangeInfo, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/exchangeInfo") || strings.HasPrefix(path, "/fapi/v3/exchangeInfo")):
 		return sim.simBinanceFetchExchangeInfo(state, r)
+	case method == "POST" && key == "binance" && ep == "marginType":
+		return sim.simBinanceAccountSetting(state, r)
+	case method == "GET" && key == "binance" && ep == "leverageBracket":
+		return sim.simBinanceLeverageBracket(state, r)
 	default:
 		return nil, false // fall through to fixture store
 	}

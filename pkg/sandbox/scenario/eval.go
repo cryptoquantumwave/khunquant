@@ -276,9 +276,10 @@ func shorthand(fields map[string]any, table map[string]string) (paths, rest map[
 // orderPaths are the order-create endpoints of a venue in the request log (SBX-14a's
 // exchange.order replaces this, and adds symbol, side and the rest).
 var orderPaths = map[string][]string{
-	"binance": {"/fapi/v1/order", "/fapi/v3/order", "/api/v3/order"},
-	"okx":     {"/api/v5/trade/order"},
-	"bitkub":  {"/api/v3/market/place-bid", "/api/v3/market/place-ask"},
+	"binance":  {"/fapi/v1/order", "/fapi/v3/order", "/api/v3/order"},
+	"okx":      {"/api/v5/trade/order"},
+	"bitkub":   {"/api/v3/market/place-bid", "/api/v3/market/place-ask"},
+	"settrade": {"/api/seos/v3/"}, // the only POST under it is an order create (login is /api/oam)
 }
 
 func (v *env) planOf(e *Expectation) (*plan, error) {

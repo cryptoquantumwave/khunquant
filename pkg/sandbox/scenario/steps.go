@@ -51,6 +51,9 @@ func (s *runState) apply(ctx context.Context) error {
 		if a.Baseline != nil {
 			args["baseline"] = *a.Baseline
 		}
+		if len(a.Options) > 0 {
+			args["options"] = a.Options
+		}
 		if _, err := call(ctx, s.c, "account", "seed", args); err != nil {
 			return fmt.Errorf("account %s: %w", key, err)
 		}

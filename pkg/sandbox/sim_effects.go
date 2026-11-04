@@ -98,8 +98,9 @@ func (sim *StatefulSimulator) reschedule(now time.Time) {
 	for _, key := range sim.stateManager.Keys() {
 		for _, o := range sim.stateManager.GetState(key).OpenOrders {
 			consider(o.CancelAt)
+			consider(o.AuctionAt) // an at-the-open order: the clock stops at its auction, nothing polls
 			if !o.Hold && o.Price > 0 {
-				consider(now.Add(restWatch))
+				consider(sim.restWake(key, now))
 			}
 		}
 		// The next funding settlement of an open position, so the clock stops there and the

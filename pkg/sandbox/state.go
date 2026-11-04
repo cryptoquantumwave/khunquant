@@ -65,6 +65,7 @@ type Order struct {
 	VisibleAt  time.Time `json:"visibleAt,omitzero"` // lookups and listings miss it until then
 	CancelAt   time.Time `json:"cancelAt,omitzero"`  // the simulator cancels it at this time
 	EvalAt     time.Time `json:"evalAt,omitzero"`    // the price path was checked up to here
+	AuctionAt  time.Time `json:"auctionAt,omitzero"` // an at-the-open order fills at the price of this instant (Settrade ATO)
 }
 
 // Trade is one spot fill, for myTrades. Fees are not modelled.

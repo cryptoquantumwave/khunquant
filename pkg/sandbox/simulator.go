@@ -49,6 +49,11 @@ type StatefulSimulator struct {
 	journal func(kind, subject string, payload any)
 	wake    func(at time.Time)
 	wakeAt  time.Time // the wake armed and not yet due
+
+	// The equity venues (sim_settrade.go) exist only in a lab: a simulator built bare, as an
+	// unlocked gateway's is, serves their fixtures. Guarded by mu.
+	equities bool
+	options  map[string]VenueOptions
 }
 
 // SetClock makes order, fill and account timestamps read now (the lab passes its sim
@@ -145,7 +150,6 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 	sim.mu.Lock()
 	defer sim.mu.Unlock()
 
-	// Only handle Binance and OKX for now.
 	switch venue {
 	case "binance":
 		sim.advanceLocked(time.Time{}) // what fell due since the last request
@@ -153,6 +157,12 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 	case "okx":
 		sim.advanceLocked(time.Time{})
 		return sim.respondOKX(method, path, r)
+	case "settrade":
+		if !sim.equities {
+			return nil, false // no lab: the fixtures answer, as they always did
+		}
+		sim.advanceLocked(time.Time{}) // the auction or day's end that has come since the last request
+		return sim.respondSettrade(method, path, r)
 	default:
 		return nil, false // fall through to fixture store
 	}
@@ -888,6 +898,9 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 		default:
 			return false
 		}
+
+	case "settrade": // the order routes; the cash and portfolio routes fall through until seeded
+		return settradeOrderPath(path)
 
 	default:
 		return false

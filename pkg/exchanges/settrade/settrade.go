@@ -20,6 +20,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
@@ -137,6 +138,9 @@ type SettradeClient struct {
 	tokenExpiry  time.Time
 }
 
+// ntpSync is syncNTPOffset; a test replaces it to see whether it is called.
+var ntpSync = syncNTPOffset
+
 // syncNTPOffset queries an NTP server and returns the offset (NTP − local) in ms.
 // Returns 0 on any error so callers can proceed with local time.
 func syncNTPOffset() int64 {
@@ -197,7 +201,12 @@ func NewSettradeClient(cfg config.SettradeExchangeAccount) (*SettradeClient, err
 		return nil, fmt.Errorf("settrade: %w", err)
 	}
 
-	ntpOffset := syncNTPOffset()
+	// The NTP query is a raw UDP dial to a public pool: neither the sandbox round tripper nor
+	// the egress guard (HTTP transports only) covers it, so a sandboxed client never makes it.
+	var ntpOffset int64
+	if on, _ := sandbox.GlobalState(); !on && !sandbox.Locked() {
+		ntpOffset = ntpSync()
+	}
 	if ntpOffset != 0 {
 		logger.DebugCF("settrade", "NTP offset applied", map[string]any{"offset_ms": ntpOffset})
 	}

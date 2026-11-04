@@ -96,6 +96,7 @@ type AccountSeed struct {
 	Positions []map[string]any   `yaml:"positions,omitempty"`
 	Replace   bool               `yaml:"replace,omitempty"`
 	Baseline  *bool              `yaml:"baseline,omitempty"`
+	Options   map[string]any     `yaml:"options,omitempty"` // the venue's knobs (settrade: auction_open, auction_afternoon)
 }
 
 // Issue is one problem with a scenario; Path is a JSON pointer into the document.

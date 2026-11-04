@@ -94,6 +94,7 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	state := sandbox.NewStateManager()
 	sandbox.SeedDevDefaults(store, state)
 	sim := sandbox.NewStatefulSimulator(state)
+	sim.EnableEquityVenues() // the lab, and only the lab, simulates Settrade and Webull
 
 	srv := sandbox.NewServer(store)
 	srv.AvoidPort(opts.AvoidPort)

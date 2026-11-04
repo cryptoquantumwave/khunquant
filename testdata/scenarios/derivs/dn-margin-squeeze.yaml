@@ -1,0 +1,77 @@
+# SBX-14b: a delta-neutral plan (spot long, USDT-M short) while the price keeps rising and the
+# funding rate turns negative. The wire-level twin of the replay cases dn_margin_squeeze and
+# funding_flip: the plan's health reads the short through the real Binance routes
+# (positionRisk, premiumIndex), so its liquidation distance and funding come from the same
+# price path and rate the ticker serves.
+#
+# The numbers. The simulator margins a futures leg at its full notional, so the wallet that
+# backs the short is its futures balance, 520 USDT, only just more than the leg needs. The
+# cross liquidation price of the short is about twice the entry and does not move with the
+# mark: as the price climbs the distance to it falls through the plan's 25 % line
+# (margin_danger) and its half (margin_critical, 12.5 %). The price is taken from 98000 to
+# 190000 in 3 h; the plan's health is judged every 15 minutes, and the run reads the first
+# margin_danger at +2h31m and the first margin_critical at +3h01m. The funding rate goes
+# negative at +20m; the first funding_negative is the first judgement after the plan opens.
+version: 1
+scenario: dn-margin-squeeze
+covers: [SBX-14b]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000, funding_rate: 0.0001 }
+account:
+  binance: { balances: { USDT: 520 } }
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+timeline:
+  - run_until: "+20m"
+  - market.set: { symbol: BTC/USDT, venue: binance, funding_rate: -0.0005 }
+  - market.path: { symbol: BTC/USDT, venue: binance, to: 190000, over: 3h, shape: linear }
+  - run_until: "+3h30m"
+expect:
+  - id: the-short-was-opened
+    order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }
+  - id: funding-turned-negative
+    event: { kind: trigger.candidate, trigger: dn_health, fields: { event.payload.DedupKey: funding_negative } }
+    within: { from: "+20m", to: "+1h20m" }
+  - id: no-margin-alarm-before-the-squeeze
+    event: { kind: trigger.candidate, trigger: dn_health, fields: { event.payload.DedupKey: margin_ } }
+    count: 0
+    within: { from: "+0m", to: "+2h20m" }
+  - id: margin-danger
+    event: { kind: trigger.candidate, trigger: dn_health, fields: { event.payload.DedupKey: margin_danger } }
+    within: { from: "+2h20m", to: "+2h50m" }
+  - id: margin-critical
+    event: { kind: trigger.candidate, trigger: dn_health, fields: { event.payload.DedupKey: margin_critical } }
+    within: { from: "+2h50m", to: "+3h15m" }

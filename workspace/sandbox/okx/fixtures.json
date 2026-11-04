@@ -138,5 +138,161 @@
         ]
       }
     }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v5/public/instruments",
+    "response": {
+      "status": 200,
+      "body": {
+        "code": "0",
+        "msg": "",
+        "data": [
+          {
+            "instType": "SPOT",
+            "instId": "BTC-USDT",
+            "baseCcy": "BTC",
+            "quoteCcy": "USDT",
+            "minSz": "0.00001",
+            "lotSz": "0.00000001",
+            "tickSz": "0.1",
+            "state": "live"
+          },
+          {
+            "instType": "SPOT",
+            "instId": "ETH-USDT",
+            "baseCcy": "ETH",
+            "quoteCcy": "USDT",
+            "minSz": "0.0001",
+            "lotSz": "0.000001",
+            "tickSz": "0.01",
+            "state": "live"
+          }
+        ]
+      }
+    },
+    "query": {
+      "instType": "SPOT"
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v5/public/instruments",
+    "response": {
+      "status": 200,
+      "body": {
+        "code": "0",
+        "msg": "",
+        "data": [
+          {
+            "instType": "SWAP",
+            "instId": "BTC-USDT-SWAP",
+            "settleCcy": "USDT",
+            "ctType": "linear",
+            "ctVal": "1",
+            "ctValCcy": "BTC",
+            "minSz": "0.01",
+            "lotSz": "0.01",
+            "tickSz": "0.1",
+            "state": "live"
+          },
+          {
+            "instType": "SWAP",
+            "instId": "ETH-USDT-SWAP",
+            "settleCcy": "USDT",
+            "ctType": "linear",
+            "ctVal": "1",
+            "ctValCcy": "ETH",
+            "minSz": "0.1",
+            "lotSz": "0.1",
+            "tickSz": "0.1",
+            "state": "live"
+          }
+        ]
+      }
+    },
+    "query": {
+      "instType": "SWAP"
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v5/public/instruments",
+    "response": {
+      "status": 200,
+      "body": {
+        "code": "0",
+        "msg": "",
+        "data": [
+          {
+            "instType": "FUTURES",
+            "instId": "BTC-USD-240329",
+            "settleCcy": "USD",
+            "ctType": "inverse",
+            "ctVal": "100",
+            "ctValCcy": "USD",
+            "minSz": "1",
+            "lotSz": "1",
+            "tickSz": "0.1",
+            "state": "live"
+          },
+          {
+            "instType": "FUTURES",
+            "instId": "ETH-USD-240329",
+            "settleCcy": "USD",
+            "ctType": "inverse",
+            "ctVal": "10",
+            "ctValCcy": "USD",
+            "minSz": "1",
+            "lotSz": "1",
+            "tickSz": "0.1",
+            "state": "live"
+          }
+        ]
+      }
+    },
+    "query": {
+      "instType": "FUTURES"
+    }
+  },
+  {
+    "method": "GET",
+    "path_prefix": "/api/v5/public/instruments",
+    "response": {
+      "status": 200,
+      "body": {
+        "code": "0",
+        "msg": "",
+        "data": [
+          {
+            "instType": "OPTION",
+            "instId": "BTC-USD-240329-40000-C",
+            "settleCcy": "USD",
+            "ctType": "option",
+            "ctVal": "100",
+            "ctValCcy": "USD",
+            "minSz": "1",
+            "lotSz": "1",
+            "tickSz": "0.1",
+            "state": "live"
+          },
+          {
+            "instType": "OPTION",
+            "instId": "ETH-USD-240329-2000-P",
+            "settleCcy": "USD",
+            "ctType": "option",
+            "ctVal": "10",
+            "ctValCcy": "USD",
+            "minSz": "1",
+            "lotSz": "1",
+            "tickSz": "0.1",
+            "state": "live"
+          }
+        ]
+      }
+    },
+    "query": {
+      "instType": "OPTION"
+    }
   }
 ]

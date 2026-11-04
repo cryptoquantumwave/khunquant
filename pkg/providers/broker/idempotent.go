@@ -400,6 +400,18 @@ func clientIDSpec(p Provider, req *OrderRequest) (key string, maxLen int, ok boo
 	return key, maxLen, true
 }
 
+// CanTagClientOrderID reports whether PlaceOrderIdempotent would attach a client
+// order ID to req on p, so that a lost answer can be settled by a lookup by that ID.
+// False means a lost answer can only be settled by the order's shape and the
+// position. It reads nothing from the exchange and sends nothing.
+func CanTagClientOrderID(p Provider, req OrderRequest) bool {
+	req.Side = strings.ToLower(strings.TrimSpace(req.Side))
+	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
+	req.Market = strings.ToLower(strings.TrimSpace(req.Market))
+	_, _, ok := clientIDSpec(p, &req)
+	return ok
+}
+
 // plainOrder: a market or limit order with no trigger parameter, the only kinds
 // whose client-ID field and fetch endpoint are the ones established.
 func plainOrder(req *OrderRequest) bool {

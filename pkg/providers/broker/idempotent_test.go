@@ -873,3 +873,25 @@ func TestCCXTErrorType(t *testing.T) {
 		t.Error("IsOrderNotFound")
 	}
 }
+
+// CanTagClientOrderID is what a caller asks before relying on a lookup by client order
+// ID: true only for a capable adapter and a plain (market or limit, untriggered) order.
+func TestCanTagClientOrderID(t *testing.T) {
+	ex := newExch(newClock())
+	req := broker.OrderRequest{Market: broker.OrderMarketFutures, Symbol: "BTC/USDT:USDT", Type: "Market", Side: "BUY", Amount: 1}
+
+	if !broker.CanTagClientOrderID(capFut{newFut(ex)}, req) {
+		t.Error("a capable futures adapter takes a client order ID on a plain order (the case of the request is not significant)")
+	}
+	if broker.CanTagClientOrderID(newFut(ex), req) {
+		t.Error("an adapter that is not capable cannot tag the order")
+	}
+	if broker.CanTagClientOrderID(nil, req) {
+		t.Error("no provider cannot tag the order")
+	}
+	trig := req
+	trig.Params = map[string]any{"stopPrice": 1.0}
+	if broker.CanTagClientOrderID(capFut{newFut(ex)}, trig) {
+		t.Error("a conditional order is not one whose client ID field and lookup are established")
+	}
+}

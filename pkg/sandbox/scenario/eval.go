@@ -340,9 +340,24 @@ func (v *env) planOf(e *Expectation) (*plan, error) {
 			if _, ok := f["status"]; !ok {
 				rest["event"] = "create"
 			}
-			keep := pathsKeep(rest)
-			return &plan{[]string{"exchange.order"}, func(en *labjournal.Entry, doc map[string]any) bool {
-				return doc["event"] != "effect" && keep(en, doc) // an effect marks a create already counted
+			return &plan{[]string{"exchange.order"}, func(_ *labjournal.Entry, doc map[string]any) bool {
+				if doc["event"] == "effect" { // marks a create already counted
+					return false
+				}
+				for p, want := range rest {
+					got, ok := labjournal.Lookup(doc, p)
+					// Identifiers are compared whole: BTC/USDT is not BTC/USDT:USDT, which a
+					// substring match (right for message text) would take it for.
+					if s, isStr := want.(string); isStr {
+						neg := strings.HasPrefix(s, "!")
+						if (ok && fmt.Sprint(got) == strings.TrimPrefix(s, "!")) == neg {
+							return false
+						}
+					} else if !matches(got, ok, want) {
+						return false
+					}
+				}
+				return true
 			}, describe("order", f)}, nil
 		}
 		return &plan{[]string{"exchange.req"}, func(en *labjournal.Entry, doc map[string]any) bool {

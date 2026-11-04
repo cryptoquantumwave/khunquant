@@ -50,5 +50,8 @@ func TestEval_OrderExpectationsReadTheLedger(t *testing.T) {
 	f.check(`order: {venue: okx, status: canceled, count: 1}`, true)
 	f.check(`order: {venue: okx, status: open, count: 2}`, true)
 	f.check(`order: {venue: binance, symbol: "BTC/USDT:USDT", count: 0}`, true)
+	// A symbol is compared whole: the spot pair is not the swap that contains it.
+	f.check(`order: {venue: okx, symbol: "BTC/USDT", count: 0}`, true)
+	f.check(`order: {venue: okx, symbol: "!BTC/USDT:USDT", count: 0}`, true)
 	f.check(`order: {venue: okx, side: sell, count: 2}`, false)
 }

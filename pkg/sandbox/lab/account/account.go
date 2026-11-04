@@ -20,7 +20,7 @@ import (
 
 // SeedArgs is the request of "seed". Only binance and okx have a simulator today.
 type SeedArgs struct {
-	Venue     string             `json:"venue"`              // binance | okx
+	Venue     string             `json:"venue"`              // binance | binance.spot (its spot wallet) | okx
 	Balances  map[string]float64 `json:"balances,omitempty"` // asset -> free
 	Positions []sandbox.Position `json:"positions,omitempty"`
 	Replace   bool               `json:"replace,omitempty"`  // clear balances and positions first
@@ -28,7 +28,7 @@ type SeedArgs struct {
 }
 
 const (
-	argVenue = `"venue":{"type":"string","enum":["binance","okx"]}`
+	argVenue = `"venue":{"type":"string","enum":["binance","binance.spot","okx"]}`
 	argTail  = `"status":{"type":"string","enum":["open","closed","all"],"description":"default all"},` +
 		`"symbol":{"type":"string","description":"wire symbol: BTCUSDT on binance, BTC-USDT-SWAP on okx"}`
 )
@@ -44,7 +44,7 @@ type request struct {
 func Group(sim *sandbox.StatefulSimulator) lab.Group {
 	return lab.Group{
 		Name: "account",
-		Description: "Seed and read the simulated venues' accounts (binance, okx; one account each). " +
+		Description: "Seed and read the simulated venues' accounts (binance, binance.spot, okx; one account each). " +
 			"Prices are not set here: see sandbox_market.",
 		Ops: []lab.Op{
 			{Name: "seed", Description: "set free balances and put positions; by default the result is what sandbox_reset_simulator returns to",
@@ -70,11 +70,11 @@ func run(sim *sandbox.StatefulSimulator, op func(*sandbox.StatefulSimulator, req
 			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 		}
 		switch r.Venue {
-		case "binance", "okx":
+		case "binance", "binance.spot", "okx":
 		case "":
 			return nil, lab.Errorf(lab.CodeBadArgs, "venue is required")
 		default: // GetState would create state for any name
-			return nil, lab.Errorf(lab.CodeUnavailable, "venue %q has no simulator account (binance and okx do)", r.Venue)
+			return nil, lab.Errorf(lab.CodeUnavailable, "venue %q has no simulator account (binance, binance.spot and okx do)", r.Venue)
 		}
 		sim.Advance(time.Time{}) // a read shows what has fallen due (a cancel, a crossed limit)
 		return op(sim, r)

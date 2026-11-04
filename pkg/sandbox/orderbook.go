@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,6 +86,7 @@ const (
 type orderSpec struct {
 	Market, Symbol, Side, Type, ClientID, PosSide string
 	Amount, Price                                 float64
+	QuoteAmount                                   float64 // a spot market buy sized in the quote asset (OKX tgtCcy quote_ccy)
 	ReduceOnly                                    bool
 }
 
@@ -144,13 +146,26 @@ func direction(sp orderSpec, pos *Position) (dir string, closing bool) {
 // create_reports_fill rule makes the create response claim.
 func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	sim, st := b.sim, b.st
-	m, known := st.Markets[sp.Symbol]
-	if !known {
-		return nil, nil, &reject{kind: "symbol"}
+	spot := sp.Market == "spot"
+	cs, base, quote := 1.0, "", ""
+	if spot {
+		var ok bool
+		if base, quote, ok = splitSpot(b.venue, sp.Symbol); !ok {
+			return nil, nil, &reject{kind: "symbol"}
+		}
+	} else {
+		m, known := st.Markets[sp.Symbol]
+		if !known {
+			return nil, nil, &reject{kind: "symbol"}
+		}
+		cs = m.ContractSize
 	}
-	cs, last := m.ContractSize, sim.markPrice(b.venue, sp.Symbol, st)
+	last := sim.markPrice(b.venue, sp.Symbol, st)
 	if !(last > 0) {
 		return nil, nil, &reject{kind: "symbol", detail: "no price for " + sp.Symbol + " yet (sandbox_market sets one)"}
+	}
+	if sp.QuoteAmount > 0 {
+		sp.Amount = sp.QuoteAmount / last
 	}
 	px := last
 	if sp.Type == "limit" {
@@ -159,17 +174,27 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	if sp.ClientID != "" && st.openByClient(sp.ClientID) != nil {
 		return nil, nil, &reject{kind: "duplicate"}
 	}
-	pos := st.Positions[sp.Symbol]
-	dir, closing := direction(sp, pos)
-	var need float64
-	switch {
-	case closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
-		return nil, nil, &reject{kind: "reduce"}
-	case !closing && pos != nil && pos.Contracts > 0 && pos.Side != dir:
-		return nil, nil, &reject{kind: "side", detail: "both sides of one symbol are not modelled"}
-	case !closing:
-		if need = sp.Amount * cs * px; st.Balances["USDT"].Free < need {
+	asset, need, dir, closing := "USDT", 0.0, "", false
+	if spot { // a buy holds the quote asset, a sell the base
+		asset, need = quote, sp.Amount*px
+		if sp.Side == "sell" {
+			asset, need = base, sp.Amount
+		}
+		if st.Balances[asset].Free < need {
 			return nil, nil, &reject{kind: "funds"}
+		}
+	} else {
+		pos := st.Positions[sp.Symbol]
+		dir, closing = direction(sp, pos)
+		switch {
+		case closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
+			return nil, nil, &reject{kind: "reduce"}
+		case !closing && pos != nil && pos.Contracts > 0 && pos.Side != dir:
+			return nil, nil, &reject{kind: "side", detail: "both sides of one symbol are not modelled"}
+		case !closing:
+			if need = sp.Amount * cs * px; st.Balances[asset].Free < need {
+				return nil, nil, &reject{kind: "funds"}
+			}
 		}
 	}
 
@@ -177,22 +202,25 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	var eff OrderEffect
 	var fired bool
 	if sim.effects != nil {
-		eff, fired = sim.effects.OrderEffect(OrderCreate, OrderInfo{Venue: b.venue, Market: "futures", Symbol: sp.Symbol, Side: sp.Side,
+		eff, fired = sim.effects.OrderEffect(OrderCreate, OrderInfo{Venue: b.venue, Market: sp.Market, Symbol: sp.Symbol, Side: sp.Side,
 			Type: sp.Type, ClientID: sp.ClientID, ReduceOnly: sp.ReduceOnly, Amount: sp.Amount})
 	}
 
 	id := sim.stateManager.NextOrderID(b.key)
 	now := sim.clock()
 	o = &Order{ID: id, Symbol: sp.Symbol, OrderType: sp.Type, Side: sp.Side, Amount: sp.Amount, CreatedAt: now, UpdatedAt: now, EvalAt: now,
-		ClientID: cmp.Or(sp.ClientID, "sbx"+id), Market: "futures", ReduceOnly: sp.ReduceOnly, Reserved: need,
+		ClientID: cmp.Or(sp.ClientID, "sbx"+id), Market: sp.Market, ReduceOnly: sp.ReduceOnly, Reserved: need,
 		Params: map[string]interface{}{"posSide": sp.PosSide, "dir": dir, "closing": closing}}
+	if sp.QuoteAmount > 0 {
+		o.Params["quoteSz"] = sp.QuoteAmount
+	}
 	o.Status = nativeStates[b.venue][stNew]
 	if sp.Type == "limit" {
 		o.Price = sp.Price
 	}
-	bal := st.Balances["USDT"]
+	bal := st.Balances[asset]
 	bal.Free, bal.Locked = bal.Free-need, bal.Locked+need
-	st.Balances["USDT"] = bal
+	st.Balances[asset] = bal
 	st.OpenOrders[id] = o
 	b.emit("create", o, "")
 
@@ -246,11 +274,17 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 	if !(qty > 0) {
 		return
 	}
-	o.Reserved -= o.Reserved * qty / rem
-	cs := st.Markets[o.Symbol].ContractSize
+	take := o.Reserved * qty / rem
+	o.Reserved -= take
+	cs := 1.0
+	if o.Market != "spot" {
+		cs = st.Markets[o.Symbol].ContractSize
+	}
 	dir, _ := o.Params["dir"].(string)
 	closing, _ := o.Params["closing"].(bool)
 	switch pos := st.Positions[o.Symbol]; {
+	case o.Market == "spot":
+		b.settleSpot(o, qty, px, take, at)
 	case closing && pos != nil && pos.Side == dir: // margin comes back with the profit or loss
 		n := math.Min(qty, pos.Contracts)
 		pnl := n * cs * (px - pos.EntryPrice)
@@ -289,9 +323,15 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 // close ends an unfilled remainder: the reservation is released, the order moves to the
 // closed map as cancelled or expired.
 func (b book) close(o *Order, to ordState, at time.Time) {
-	bal := b.st.Balances["USDT"]
+	asset := "USDT"
+	if base, quote, _ := splitSpot(b.venue, o.Symbol); o.Market == "spot" {
+		if asset = base; o.Side == "buy" {
+			asset = quote
+		}
+	}
+	bal := b.st.Balances[asset]
 	bal.Locked, bal.Free = math.Max(0, bal.Locked-o.Reserved), bal.Free+o.Reserved
-	b.st.Balances["USDT"] = bal
+	b.st.Balances[asset] = bal
 	o.Reserved, o.UpdatedAt = 0, at
 	b.finish(o, to)
 	b.emit("cancel", o, "")
@@ -318,28 +358,50 @@ func (b book) emit(event string, o *Order, effect string) {
 		OrderID: o.ID, ClientID: o.ClientID, ReduceOnly: o.ReduceOnly, Effect: effect})
 }
 
-// unifiedSymbol is the order's symbol as ccxt writes it.
-func unifiedSymbol(venue string, o *Order) string {
-	var base, quote string
-	switch venue {
-	case "okx":
-		parts := strings.Split(strings.TrimSuffix(o.Symbol, "-SWAP"), "-")
-		if len(parts) != 2 {
-			return o.Symbol
-		}
-		base, quote = parts[0], parts[1]
-	default:
-		for _, q := range []string{"FDUSD", "USDT", "USDC", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR"} {
-			if b, ok := strings.CutSuffix(o.Symbol, q); ok && b != "" {
-				base, quote = b, q
-				break
-			}
-		}
-		if quote == "" {
-			return o.Symbol
+// settleSpot moves a spot fill through the balances: the paying side's held share is
+// released (a buy gets back what its price improved by), the other side is credited, and
+// the fill is a trade.
+func (b book) settleSpot(o *Order, qty, px, held float64, at time.Time) {
+	st := b.st
+	base, quote, _ := splitSpot(b.venue, o.Symbol)
+	pay, get, paid, got := quote, base, qty*px, qty
+	if o.Side == "sell" {
+		pay, get, paid, got = base, quote, qty, qty*px
+	}
+	p := st.Balances[pay]
+	p.Locked, p.Free = math.Max(0, p.Locked-held), p.Free+math.Max(0, held-paid)
+	st.Balances[pay] = p
+	g := st.Balances[get]
+	g.Free += got
+	st.Balances[get] = g
+	st.Trades = append(st.Trades, Trade{ID: strconv.Itoa(len(st.Trades) + 1), OrderID: o.ID, Symbol: o.Symbol, Side: o.Side, Price: px, Amount: qty, Time: at})
+}
+
+// spotQuotes are the quote assets of a Binance spot symbol, the longest suffix first.
+var spotQuotes = []string{"FDUSD", "USDT", "USDC", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR"}
+
+// splitSpot reads a venue's spot symbol (BTCUSDT, BTC-USDT) as base and quote.
+func splitSpot(venue, sym string) (base, quote string, ok bool) {
+	if venue == "okx" {
+		base, quote, ok = strings.Cut(sym, "-")
+		return base, quote, ok && base != "" && quote != "" && !strings.Contains(quote, "-")
+	}
+	for _, q := range spotQuotes {
+		if b, found := strings.CutSuffix(sym, q); found && b != "" {
+			return b, q, true
 		}
 	}
-	if o.Market == "spot" {
+	return "", "", false
+}
+
+// unifiedSymbol is the order's symbol as ccxt writes it.
+func unifiedSymbol(venue string, o *Order) string {
+	sym := strings.TrimSuffix(o.Symbol, "-SWAP")
+	base, quote, ok := splitSpot(venue, sym)
+	switch {
+	case !ok:
+		return o.Symbol
+	case o.Market == "spot":
 		return base + "/" + quote
 	}
 	return base + "/" + quote + ":" + quote

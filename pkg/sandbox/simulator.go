@@ -157,17 +157,24 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Request) (*Response, bool) {
 	state := sim.stateManager.GetState("binance")
 
-	// The order endpoints match the whole path (v1 or v3); the rest by prefix, as before.
-	ep := fapiEndpoint(path)
+	// The order endpoints match the whole path (v1 or v3, or the spot API); the rest by
+	// prefix, as before. The futures wallet is the "binance" state, the spot one "binance.spot".
+	key, ep := binanceEndpoint(path)
 	switch {
 	case method == "POST" && ep == "order":
-		return sim.simBinanceCreateOrder(state, r)
+		return sim.simBinanceCreateOrder(key, r)
 	case method == "GET" && ep == "order":
-		return sim.simBinanceFetchOrder(state, r)
+		return sim.simBinanceFetchOrder(key, r)
 	case method == "DELETE" && ep == "order":
-		return sim.simBinanceCancelOrder(state, r)
+		return sim.simBinanceCancelOrder(key, r)
 	case method == "GET" && (ep == "openOrders" || ep == "allOrders"):
-		return sim.simBinanceListOrders(state, r, ep == "allOrders")
+		return sim.simBinanceListOrders(key, r, ep == "allOrders")
+	case method == "GET" && key == binanceSpot && ep == "myTrades":
+		return sim.simBinanceMyTrades(r)
+	// The spot account is the simulator's once its wallet has been seeded or traded; before
+	// that the recorded fixture answers, as it always did.
+	case method == "GET" && key == binanceSpot && ep == "account" && sim.spotLive():
+		return sim.simBinanceSpotAccount(r)
 	// Fetch positions (positionRisk is Binance's positions endpoint, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):
 		return sim.simBinanceFetchPositions(state, r)
@@ -766,12 +773,12 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 	switch venue {
 	case "binance":
 		// Binance futures endpoints: /fapi/v1/ and /fapi/v3/
-		ep := fapiEndpoint(path)
+		key, ep := binanceEndpoint(path)
 		switch {
 		// The order endpoints, by exact path (as respondBinance matches them)
 		case (method == "POST" || method == "GET" || method == "DELETE") && ep == "order":
 			return true
-		case method == "GET" && (ep == "openOrders" || ep == "allOrders"):
+		case method == "GET" && (ep == "openOrders" || ep == "allOrders" || (key == binanceSpot && ep == "myTrades")):
 			return true
 		// Fetch positions
 		case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/positionRisk") || strings.HasPrefix(path, "/fapi/v3/positionRisk")):

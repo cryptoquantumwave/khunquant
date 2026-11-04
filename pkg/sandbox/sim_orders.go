@@ -3,7 +3,9 @@ package sandbox
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,15 +14,22 @@ import (
 // The venue-facing half of the order ledger: Binance and OKX order endpoints parsed into
 // orderSpecs and answered from the ledger's orders in each venue's wire format.
 
-// fapiEndpoint is the endpoint name of a Binance futures path (/fapi/v1|v3/<ep>), or "".
-// The spot API (/api/v3/) is not the futures wallet's and is not routed here.
-func fapiEndpoint(path string) string {
+// binanceSpot is the state key of Binance's spot wallet; the futures one is "binance".
+const binanceSpot = "binance.spot"
+
+// binanceEndpoint reads a Binance order-API path as the state key it belongs to and the
+// endpoint name: /fapi/v1|v3/<ep> is the futures wallet, /api/v3/<ep> the spot one. A path
+// of neither shape has no endpoint.
+func binanceEndpoint(path string) (key, ep string) {
 	for _, p := range [...]string{"/fapi/v1/", "/fapi/v3/"} {
 		if ep, ok := strings.CutPrefix(path, p); ok {
-			return ep
+			return "binance", ep
 		}
 	}
-	return ""
+	if ep, ok := strings.CutPrefix(path, "/api/v3/"); ok {
+		return binanceSpot, ep
+	}
+	return "", ""
 }
 
 // numArg reads a request number: finite and not negative, else not ok (NaN and Inf parse).
@@ -59,14 +68,26 @@ func conditional(t string) bool {
 	return strings.HasPrefix(t, "stop") || strings.HasPrefix(t, "take_profit") || strings.HasPrefix(t, "trailing") || t == "limit_maker"
 }
 
-// simBinanceCreateOrder handles POST /fapi/v1|v3/order (parameters in the query, the body or both).
-func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.Request) (*Response, bool) {
+// binanceMarket names the market of a state key.
+func binanceMarket(key string) string {
+	if key == binanceSpot {
+		return "spot"
+	}
+	return "futures"
+}
+
+// simBinanceCreateOrder handles POST order (parameters in the query, the body or both) of
+// the futures wallet (/fapi/) or the spot one (/api/v3/).
+func (sim *StatefulSimulator) simBinanceCreateOrder(key string, r *http.Request) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.binanceErrorResponse(400, -1000, "invalid request"), true
 	}
 	f := r.FormValue
-	sp := orderSpec{Market: "futures", Symbol: f("symbol"), Side: strings.ToLower(f("side")), Type: strings.ToLower(f("type")),
-		ClientID: f("newClientOrderId"), PosSide: strings.ToLower(f("positionSide")), ReduceOnly: strings.EqualFold(f("reduceOnly"), "true")}
+	sp := orderSpec{Market: binanceMarket(key), Symbol: f("symbol"), Side: strings.ToLower(f("side")), Type: strings.ToLower(f("type")),
+		ClientID: f("newClientOrderId")}
+	if key != binanceSpot {
+		sp.PosSide, sp.ReduceOnly = strings.ToLower(f("positionSide")), strings.EqualFold(f("reduceOnly"), "true")
+	}
 	if sp.PosSide == "both" {
 		sp.PosSide = ""
 	}
@@ -83,7 +104,12 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 		return sim.binanceReject(&reject{kind: "side"}), true
 	}
 	var ok bool
-	if sp.Amount, ok = numArg(f("quantity")); !ok || sp.Amount <= 0 {
+	// A spot market buy may be sized in the quote asset (quoteOrderQty) instead.
+	if q := f("quoteOrderQty"); key == binanceSpot && sp.Type == "market" && sp.Side == "buy" && q != "" && f("quantity") == "" {
+		if sp.QuoteAmount, ok = numArg(q); !ok || sp.QuoteAmount <= 0 {
+			return sim.binanceErrorResponse(400, -1013, "Invalid quantity."), true
+		}
+	} else if sp.Amount, ok = numArg(f("quantity")); !ok || sp.Amount <= 0 {
 		return sim.binanceErrorResponse(400, -1013, "Invalid quantity."), true
 	}
 	if sp.Type == "limit" {
@@ -91,13 +117,18 @@ func (sim *StatefulSimulator) simBinanceCreateOrder(state *VenueState, r *http.R
 			return sim.binanceErrorResponse(400, -1013, "Invalid price."), true
 		}
 	}
-	o, reported, rj := sim.book("binance").place(sp)
+	o, reported, rj := sim.book(key).place(sp)
 	if rj != nil {
 		return sim.binanceReject(rj), true
 	}
 	wire := sim.binanceOrderToWireFormat(o)
 	if reported != nil { // create_reports_fill: the order is filled, the answer says otherwise
-		wire["executedQty"], wire["cumQuote"], wire["status"], wire["avgPrice"] = formatNumber(*reported), "0", "NEW", "0"
+		wire["executedQty"], wire["status"], wire["avgPrice"] = formatNumber(*reported), "NEW", "0"
+		if key == binanceSpot {
+			wire["cummulativeQuoteQty"] = "0"
+		} else {
+			wire["cumQuote"] = "0"
+		}
 	}
 	return jsonResponse(200, wire), true
 }
@@ -111,11 +142,11 @@ func (sim *StatefulSimulator) binanceLookup(b book, r *http.Request) (o *Order, 
 const binanceNeedID = "Mandatory parameter 'orderId' or 'origClientOrderId' must be sent."
 
 // simBinanceFetchOrder handles GET /fapi/v1|v3/order.
-func (sim *StatefulSimulator) simBinanceFetchOrder(state *VenueState, r *http.Request) (*Response, bool) {
+func (sim *StatefulSimulator) simBinanceFetchOrder(key string, r *http.Request) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
-	o, missing := sim.binanceLookup(sim.book("binance"), r)
+	o, missing := sim.binanceLookup(sim.book(key), r)
 	switch {
 	case missing:
 		return sim.binanceErrorResponse(400, -1102, binanceNeedID), true
@@ -126,11 +157,11 @@ func (sim *StatefulSimulator) simBinanceFetchOrder(state *VenueState, r *http.Re
 }
 
 // simBinanceCancelOrder handles DELETE /fapi/v1|v3/order.
-func (sim *StatefulSimulator) simBinanceCancelOrder(state *VenueState, r *http.Request) (*Response, bool) {
+func (sim *StatefulSimulator) simBinanceCancelOrder(key string, r *http.Request) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
-	b := sim.book("binance")
+	b := sim.book(key)
 	o, missing := sim.binanceLookup(b, r)
 	switch {
 	case missing:
@@ -144,11 +175,11 @@ func (sim *StatefulSimulator) simBinanceCancelOrder(state *VenueState, r *http.R
 }
 
 // simBinanceListOrders handles GET openOrders, and allOrders (open and closed).
-func (sim *StatefulSimulator) simBinanceListOrders(state *VenueState, r *http.Request, all bool) (*Response, bool) {
+func (sim *StatefulSimulator) simBinanceListOrders(key string, r *http.Request, all bool) (*Response, bool) {
 	if err := r.ParseForm(); err != nil {
 		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
 	}
-	b, now, symbol := sim.book("binance"), sim.clock(), r.FormValue("symbol")
+	b, now, symbol := sim.book(key), sim.clock(), r.FormValue("symbol")
 	list := b.list(false, symbol, now)
 	if all {
 		list = append(list, b.list(true, symbol, now)...)
@@ -166,7 +197,7 @@ func (sim *StatefulSimulator) simBinanceListOrders(state *VenueState, r *http.Re
 // all prices/quantities are strings. This format must match exactly for CCXT to parse.
 func (sim *StatefulSimulator) binanceOrderToWireFormat(order *Order) map[string]interface{} {
 	orderID, _ := strconv.ParseInt(order.ID, 10, 64) // Binance's orderId is a number
-	return map[string]interface{}{
+	w := map[string]interface{}{
 		"orderId":       orderID,
 		"clientOrderId": order.ClientID,
 		"symbol":        order.Symbol,
@@ -176,14 +207,67 @@ func (sim *StatefulSimulator) binanceOrderToWireFormat(order *Order) map[string]
 		"executedQty":   formatNumber(order.Filled),
 		"cumQuote":      formatNumber(order.Cost),
 		"avgPrice":      formatNumber(order.Average),
-		"positionSide":  positionSideOf(order),
 		"side":          strings.ToUpper(order.Side),      // "BUY" or "SELL"
 		"type":          strings.ToUpper(order.OrderType), // "MARKET" or "LIMIT"
 		"timeInForce":   "GTC",
-		"reduceOnly":    order.ReduceOnly,
 		"time":          order.CreatedAt.UnixMilli(),
 		"updateTime":    order.UpdatedAt.UnixMilli(),
 	}
+	if order.Market == "spot" {
+		// The spot API spells the quote total its own way, and ccxt reads a cumQuote (or a
+		// positionSide) as a contract order: it would resolve BTCUSDT to the swap.
+		w["cummulativeQuoteQty"], w["transactTime"] = w["cumQuote"], w["time"]
+		delete(w, "cumQuote")
+		return w
+	}
+	w["positionSide"], w["reduceOnly"] = positionSideOf(order), order.ReduceOnly
+	return w
+}
+
+// spotLive says whether the spot wallet has anything in it (a seed or a trade). The spot
+// account is the simulator's only then; before it the recorded fixture answers.
+func (sim *StatefulSimulator) spotLive() bool {
+	if !slices.Contains(sim.stateManager.Keys(), binanceSpot) {
+		return false
+	}
+	st := sim.stateManager.GetState(binanceSpot)
+	return len(st.Balances) > 0 || len(st.Trades) > 0 || len(st.OpenOrders)+len(st.ClosedOrders) > 0
+}
+
+// simBinanceSpotAccount handles GET /api/v3/account: the spot balances.
+func (sim *StatefulSimulator) simBinanceSpotAccount(r *http.Request) (*Response, bool) {
+	st := sim.stateManager.GetState(binanceSpot)
+	rows := make([]map[string]string, 0, len(st.Balances))
+	for _, asset := range slices.Sorted(maps.Keys(st.Balances)) {
+		b := st.Balances[asset]
+		rows = append(rows, map[string]string{"asset": asset, "free": formatNumber(b.Free), "locked": formatNumber(b.Locked)})
+	}
+	return jsonResponse(200, map[string]any{"makerCommission": 0, "takerCommission": 0, "canTrade": true, "canWithdraw": true, "canDeposit": true,
+		"accountType": "SPOT", "updateTime": sim.clock().UnixMilli(), "balances": rows, "permissions": []string{"SPOT"}}), true
+}
+
+// simBinanceMyTrades handles GET /api/v3/myTrades: the spot fills of one symbol.
+func (sim *StatefulSimulator) simBinanceMyTrades(r *http.Request) (*Response, bool) {
+	if err := r.ParseForm(); err != nil {
+		return sim.binanceErrorResponse(400, -1000, "invalid query string"), true
+	}
+	symbol := r.FormValue("symbol")
+	if symbol == "" {
+		return sim.binanceErrorResponse(400, -1102, "Mandatory parameter 'symbol' was not sent, was empty/null, or malformed."), true
+	}
+	_, quote, _ := splitSpot("binance", symbol)
+	out := []map[string]any{}
+	for _, t := range sim.stateManager.GetState(binanceSpot).Trades {
+		if t.Symbol != symbol {
+			continue
+		}
+		id, _ := strconv.ParseInt(t.ID, 10, 64)
+		oid, _ := strconv.ParseInt(t.OrderID, 10, 64)
+		out = append(out, map[string]any{"symbol": symbol, "id": id, "orderId": oid, "orderListId": -1, "price": formatNumber(t.Price),
+			"qty": formatNumber(t.Amount), "quoteQty": formatNumber(t.Price * t.Amount), "commission": "0", "commissionAsset": quote,
+			"time": t.Time.UnixMilli(), "isBuyer": t.Side == "buy", "isMaker": false, "isBestMatch": true})
+	}
+	return jsonResponse(200, out), true
 }
 
 // okxOrderReq is the part of an OKX order request the ledger reads. Numbers and booleans
@@ -193,7 +277,8 @@ type okxOrderReq struct {
 	Side       string `json:"side"`
 	PosSide    string `json:"posSide"`
 	OrdType    string `json:"ordType"`
-	Sz         string `json:"sz"` // contracts for a swap
+	Sz         string `json:"sz"` // contracts for a swap, the base (or quote, see TgtCcy) amount for spot
+	TgtCcy     string `json:"tgtCcy"`
 	Px         string `json:"px"`
 	ClOrdID    string `json:"clOrdId"`
 	OrdID      string `json:"ordId"`
@@ -225,8 +310,13 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 	if !ok {
 		return sim.okxErrorResponse("51000", "invalid JSON"), true
 	}
+	// A spot instrument is BASE-QUOTE; a swap carries a -SWAP suffix.
+	spot := strings.Count(req.InstID, "-") == 1
 	sp := orderSpec{Market: "futures", Symbol: req.InstID, Side: req.Side, Type: req.OrdType, ClientID: req.ClOrdID, PosSide: req.PosSide,
 		ReduceOnly: req.ReduceOnly == true || req.ReduceOnly == "true"}
+	if spot {
+		sp.Market, sp.PosSide, sp.ReduceOnly = "spot", "", false
+	}
 	if sp.PosSide == "net" {
 		sp.PosSide = ""
 	}
@@ -243,8 +333,16 @@ func (sim *StatefulSimulator) simOKXCreateOrder(state *VenueState, r *http.Reque
 	case sp.Type != "market" && sp.Type != "limit":
 		return bad("ordType is market or limit (conditional and post-only types are not simulated)")
 	}
-	if sp.Amount, ok = numArg(req.Sz); !ok || sp.Amount <= 0 {
+	size, ok := numArg(req.Sz)
+	if !ok || size <= 0 {
 		return bad("sz is not a positive number")
+	}
+	// OKX sizes a spot market buy in the quote asset unless tgtCcy says base_ccy, which is
+	// what ccxt sends by default.
+	if spot && sp.Type == "market" && sp.Side == "buy" && req.TgtCcy != "base_ccy" {
+		sp.QuoteAmount = size
+	} else {
+		sp.Amount = size
 	}
 	if sp.Type == "limit" {
 		if sp.Price, ok = numArg(req.Px); !ok || sp.Price <= 0 {

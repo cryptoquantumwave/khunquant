@@ -280,6 +280,7 @@ var orderPaths = map[string][]string{
 	"okx":      {"/api/v5/trade/order"},
 	"bitkub":   {"/api/v3/market/place-bid", "/api/v3/market/place-ask"},
 	"settrade": {"/api/seos/v3/"}, // the only POST under it is an order create (login is /api/oam)
+	"webull":   {"/openapi/trade/order/place"},
 }
 
 func (v *env) planOf(e *Expectation) (*plan, error) {

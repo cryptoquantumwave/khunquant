@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -99,6 +100,23 @@ func armSandboxLock(lk sandbox.LockOptions) error {
 	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
 }
 
+// readPlaceholderVenues reads the venues that get a placeholder account; none when the
+// home records none.
+func readPlaceholderVenues(home string) ([]string, error) {
+	b, err := os.ReadFile(filepath.Join(home, sandbox.AccountsFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", sandbox.AccountsFile, err)
+	}
+	var venues []string
+	if err := json.Unmarshal(b, &venues); err != nil {
+		return nil, fmt.Errorf("%s is not a JSON list of venues: %w", sandbox.AccountsFile, err)
+	}
+	return venues, nil
+}
+
 // enforceLockedConfig forces the invariants of a locked config. It runs on the
 // config loaded at start and on every reloaded one, before anything is built from
 // it. It returns an error for what it cannot fix: a workspace or fixtures directory
@@ -146,6 +164,19 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	// Legacy providers are merged into model_list at provider creation, after this
 	// runs, and carry their own proxy. Only model_list is allowed under the lock.
 	cfg.Providers = config.ProvidersConfig{}
+
+	// The placeholder accounts a scenario asked for. They are set here, in memory, on every
+	// load and reload, and replace whatever the file says about those venues: the
+	// credentials never reach disk (SaveConfig is refused) and a patch cannot widen their
+	// permissions or swap the account. The list is in the home, which the instance's file
+	// tools (confined to the workspace) cannot write.
+	venues, err := readPlaceholderVenues(home)
+	if err != nil {
+		return err
+	}
+	if err := sandbox.ApplyPlaceholderAccounts(cfg, venues); err != nil {
+		return err
+	}
 
 	// A loopback proxy such as socks5://127.0.0.1:1080 would still forward to the
 	// internet, so no proxy survives. Accounts are edited by index: ranging by value

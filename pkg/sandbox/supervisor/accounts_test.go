@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 func accountHome(t *testing.T, accounts ...string) string {
@@ -20,21 +21,31 @@ func accountHome(t *testing.T, accounts ...string) string {
 	return home
 }
 
-// The reason for the rule: a merge patch replaces the accounts array whole. The
-// placeholder credentials still pair with an account named main, but its permissions are
-// gone, and no permissions means every scope.
-func TestAccounts_PatchWouldWidenPermissions(t *testing.T) {
+// A patch that gets past CheckAccountPatch (written to the file directly here) does not
+// change the account the locked gateway builds: the overlay replaces the venue's accounts
+// whole, so the permissions stay the narrow list. The file itself never held a credential.
+func TestAccounts_OverlayWinsOverAPatchedFile(t *testing.T) {
 	home := accountHome(t, "okx")
-	if _, err := patchConfigFile(home, map[string]any{"exchanges": map[string]any{"okx": map[string]any{"accounts": []any{map[string]any{"name": "main"}}}}}); err != nil {
+	if _, err := patchConfigFile(home, map[string]any{"exchanges": map[string]any{"okx": map[string]any{"accounts": []any{map[string]any{"name": "main"}, map[string]any{"name": "x"}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.LoadConfig(filepath.Join(home, "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	acc, _ := cfg.Exchanges.OKX.ResolveAccount("main")
-	if acc.APIKey.String() == "" || !acc.HasPermission(config.ScopeTransfer) {
-		t.Fatalf("account after the patch = key %q permissions %v: the pairing or the default changed, so revisit CheckAccountPatch", acc.APIKey.String(), acc.Permissions)
+	if acc, _ := cfg.Exchanges.OKX.ResolveAccount("main"); acc.APIKey.String() != "" || !acc.HasPermission(config.ScopeTransfer) {
+		t.Fatalf("the patched file account = key %q permissions %v; the premise of this test changed", acc.APIKey.String(), acc.Permissions)
+	}
+	venues, err := readAccounts(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sandbox.ApplyPlaceholderAccounts(cfg, venues); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := cfg.Exchanges.OKX.ResolveAccount("")
+	if len(cfg.Exchanges.OKX.Accounts) != 1 || acc.HasPermission(config.ScopeTransfer) || acc.APIKey.String() != sandbox.PlaceholderKey {
+		t.Fatalf("after the overlay: %d accounts, %+v", len(cfg.Exchanges.OKX.Accounts), acc)
 	}
 }
 
@@ -95,12 +106,21 @@ func TestUp_PlaceholderAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The venue is recorded for the lock to act on; the files hold no account or credential.
+	if got, err := readAccounts(info.Home); err != nil || !slices.Equal(got, []string{"okx"}) {
+		t.Fatalf("recorded venues = %v, %v", got, err)
+	}
 	cfg, err := config.LoadConfig(filepath.Join(info.Home, "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if acc, ok := cfg.Exchanges.OKX.ResolveAccount(""); !ok || acc.APIKey.String() == "" || !cfg.Exchanges.OKX.Enabled {
-		t.Fatalf("okx after Up = enabled %v, %+v", cfg.Exchanges.OKX.Enabled, acc)
+	if len(cfg.Exchanges.OKX.Accounts) != 0 {
+		t.Fatalf("the config file holds accounts: %+v", cfg.Exchanges.OKX.Accounts)
+	}
+	for _, name := range []string{"config.json", ".security.yml"} {
+		if raw, err := os.ReadFile(filepath.Join(info.Home, name)); err != nil || strings.Contains(string(raw), "NOT-A-REAL") {
+			t.Errorf("%s: %v (holds a placeholder credential: %v)", name, err, strings.Contains(string(raw), "NOT-A-REAL"))
+		}
 	}
 	if _, err := sup.PatchConfig(context.Background(), "acct-ok", map[string]any{"exchanges": map[string]any{"okx": map[string]any{"accounts": []any{}}}}); err == nil {
 		t.Error("PatchConfig replaced the placeholder account of a running instance")
@@ -115,8 +135,8 @@ func TestAccounts_RecordedInTheHome(t *testing.T) {
 	if err != nil || !slices.Equal(got, []string{"binance", "okx"}) {
 		t.Fatalf("readAccounts = %v, %v", got, err)
 	}
-	if info, err := os.Stat(filepath.Join(home, accountsFile)); err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("%s: %v %v", accountsFile, info, err)
+	if info, err := os.Stat(filepath.Join(home, sandbox.AccountsFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("%s: %v %v", sandbox.AccountsFile, info, err)
 	}
 	if got, err := readAccounts(accountHome(t)); err != nil || got != nil {
 		t.Errorf("a home with no accounts reads %v, %v", got, err)

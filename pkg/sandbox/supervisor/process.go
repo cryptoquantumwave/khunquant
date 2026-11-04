@@ -104,7 +104,7 @@ func prepareHome(home, name string, port int, fixtures []fixtureFile, accounts .
 			return fmt.Errorf("sandbox up: copy %s fixtures: %w", f.venue, err)
 		}
 	}
-	if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port, Accounts: accounts}); err != nil {
+	if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
 		return fmt.Errorf("sandbox up: %w", err)
 	}
 	if err := writeAccounts(home, accounts); err != nil {

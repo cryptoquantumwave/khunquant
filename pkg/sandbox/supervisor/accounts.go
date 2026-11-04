@@ -11,15 +11,13 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
-// The placeholder accounts of an instance (sandbox.ProfileOptions.Accounts) are written
-// by the profile alone. A config patch must not touch the accounts of such a venue: a
-// merge patch replaces an array whole, so an `accounts: [{name: main}]` keeps the
-// placeholder credentials (they pair with the account by name) but drops its permissions
-// list, and an empty list means every scope, transfers included.
-
-// accountsFile records the venues of an instance that have a placeholder account, so a
-// patch applied later (by another process) is checked against them too.
-const accountsFile = ".sandbox-accounts"
+// The placeholder accounts of an instance are put in by the locked gateway
+// (sandbox.ApplyPlaceholderAccounts, on every load and reload) for the venues recorded in
+// sandbox.AccountsFile, so a config patch cannot change them: whatever it says about those
+// accounts is replaced. CheckAccountPatch refuses such a patch early and clearly instead of
+// letting it be silently overridden. (A merge patch replaces an array whole, so without the
+// overlay an `accounts: [{name: main}]` would drop the permissions list, and an empty list
+// means every scope, transfers included.)
 
 // CheckAccounts refuses a venue that has no simulator, and a venue named twice.
 func CheckAccounts(venues []string) error {
@@ -39,12 +37,12 @@ func writeAccounts(home string, venues []string) error {
 		return nil
 	}
 	b, _ := json.Marshal(venues)
-	return os.WriteFile(filepath.Join(home, accountsFile), b, 0o600)
+	return os.WriteFile(filepath.Join(home, sandbox.AccountsFile), b, 0o600)
 }
 
 // readAccounts lists the venues recorded for the home; none if there is no record.
 func readAccounts(home string) ([]string, error) {
-	b, err := os.ReadFile(filepath.Join(home, accountsFile))
+	b, err := os.ReadFile(filepath.Join(home, sandbox.AccountsFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

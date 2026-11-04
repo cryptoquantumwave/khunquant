@@ -1,0 +1,58 @@
+# Control for s108c1-ato-queued. The same mandate, caps and cron shape, but the plan buys 10
+# shares (an odd lot, so a priced Limit) at 11:00, inside the morning session. The order fills as
+# it is placed, so the run is proven: no "still open" notice, no stop, and the next day's slot
+# buys again. The main scenario's refusal of the second buy is therefore caused by the order that
+# was still open (the 08:30 ATO queued for the auction), not by the mandate, the cap or the plan.
+# (A 200-share order is an ATO whatever the hour, so it cannot be the in-session control.)
+version: 1
+scenario: s108c1-control-in-session
+covers: [S108C-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T10:30:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    # A key-less Bitkub account: the only thing in the lab that can say what a baht is worth
+    # in dollars (a stock broker cannot price a currency pair), and the mandate's limits are in
+    # USD. It has no credentials, so it can read a public ticker and place nothing.
+    exchanges: { bitkub: { enabled: true, accounts: [{ name: main }] } }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+  USDT/THB: { venue: bitkub, model: set, price: 35 }
+account:
+  settrade: { balances: { THB: 1000000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-daily, provider: settrade, symbol: PTT/THB, amount_per_order: 10, amount_unit: base, schedule: { cron: "0 11 * * *", timezone: Asia/Bangkok }, propose_mandate: true, mandate_months: 1, mandate_max_per_period: 20000, mandate_period: week }
+  - chat.press:
+      on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
+      action: approve
+timeline:
+  - advance: 26h
+expect:
+  - id: first-order-placed-at-1100
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 1 }
+    within: { from: "25m", to: "40m" }
+  - id: it-filled-at-once
+    event: { kind: exchange.order, fields: { venue: settrade, event: fill, status: filled, filled: 10 }, count: 1 }
+    within: { from: "25m", to: "40m" }
+  - id: nothing-is-left-open
+    message: { to: owner, contains: ["the order is still open"], count: 0 }
+  - id: the-next-slot-buys-again
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 2 }
+    within: { from: "0m", to: "26h" }

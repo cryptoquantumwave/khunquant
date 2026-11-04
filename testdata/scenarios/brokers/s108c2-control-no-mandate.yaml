@@ -1,0 +1,55 @@
+# Control for s108c2-settrade-expired-mandate-orders. The same plan with NO mandate: the
+# scheduled job runs from the first Monday (execute_dca_order four times before Nov 20), and
+# there is no expiry notice. So the main scenario's "the job stood down while the mandate lived"
+# is the mandate's doing, not an artefact of the plan, the clock or the script.
+version: 1
+scenario: s108c2-control-no-mandate
+covers: [S108C-2]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    # A key-less Bitkub account: the only thing in the lab that can say what a baht is worth
+    # in dollars (a stock broker cannot price a currency pair), and the mandate's limits are in
+    # USD. It has no credentials, so it can read a public ticker and place nothing.
+    exchanges: { bitkub: { enabled: true, accounts: [{ name: main }] } }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+  USDT/THB: { venue: bitkub, model: set, price: 35 }
+account:
+  settrade: { balances: { THB: 1000000 } }
+llm_script:
+  - id: legacy-buy
+    match: { turn: cron_legacy, prompt_contains: ["[DCA-AUTO]"] }
+    respond: { tool: execute_dca_order, args: { plan_id: 1 } }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-daily, provider: settrade, symbol: PTT/THB, amount_per_order: 10, amount_unit: base, schedule: { cron: "0 11 * * 1", timezone: Asia/Bangkok } }
+timeline:
+  - advance: 840h
+expect:
+  - id: the-job-buys-every-monday-from-the-start
+    event: { kind: tool.call, fields: { name: execute_dca_order } }
+    within: { from: "0h", to: "743h" }
+    count: 4
+  - id: no-mandate-so-no-expiry-notice
+    message: { to: owner, contains: ["mandate expired"], count: 0 }

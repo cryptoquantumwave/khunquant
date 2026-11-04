@@ -1,0 +1,74 @@
+# S108C-2 on Settrade. The Binance version of this (dca/expired-mandate-returns-to-job) has no
+# credentialed account in the lab, so it can only read the job's tool.call. Settrade is
+# simulated and credentialed, so the order itself is checked: while the mandate lives the
+# mandate run buys (10 shares at 11:00 on a Monday, a priced Limit that fills as it is placed);
+# when it expires the plan goes back to its scheduled job, whose turn calls execute_dca_order,
+# and that order reaches the venue.
+# Mondays only, five orders in all, on purpose: the product's order limiter (a token bucket of 5
+# per provider, read on the WALL clock) is spent by the sixth order of a run that lasts seconds
+# of real time whatever the sim date, so a daily plan cannot be run for a month here. Mondays
+# also avoid the weekend-order case (an order placed on a weekend waits for Monday, and a mandate
+# run that finds an earlier order open stops: S108C-1).
+# The mandate lasts a month from 2026-10-20 09:00 (to 2026-11-20 09:00): four Monday runs
+# (Oct 26, Nov 2, 9, 16), then Mon Nov 23 is the job's.
+version: 1
+scenario: s108c2-settrade-expired-mandate-orders
+covers: [S108C-2]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [settrade]
+  config:
+    # A key-less Bitkub account: the only thing in the lab that can say what a baht is worth
+    # in dollars (a stock broker cannot price a currency pair), and the mandate's limits are in
+    # USD. It has no credentials, so it can read a public ticker and place nothing.
+    exchanges: { bitkub: { enabled: true, accounts: [{ name: main }] } }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  PTT/THB: { venue: settrade, model: set, price: 30 }
+  USDT/THB: { venue: bitkub, model: set, price: 35 }
+account:
+  settrade: { balances: { THB: 1000000 } }
+llm_script:
+  - id: legacy-buy
+    match: { turn: cron_legacy, prompt_contains: ["[DCA-AUTO]"] }
+    respond: { tool: execute_dca_order, args: { plan_id: 1 } }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: ptt-daily, provider: settrade, symbol: PTT/THB, amount_per_order: 10, amount_unit: base, schedule: { cron: "0 11 * * 1", timezone: Asia/Bangkok }, propose_mandate: true, mandate_months: 1, mandate_max_per_period: 20000, mandate_period: week }
+  - chat.press:
+      on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
+      action: approve
+timeline:
+  - advance: 840h
+expect:
+  - id: the-mandate-buys-on-weekdays-while-it-lives
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 4 }
+    within: { from: "0h", to: "743h" }
+  - id: the-job-buys-after-expiry
+    order: { venue: settrade, symbol: PTT/THB, side: buy, count: 1 }
+    within: { from: "744h", to: "840h" }
+  - id: told-once
+    message: { to: owner, contains: ["mandate expired", "back on its scheduled job"], count: 1 }
+    within: { from: "744h", to: "840h" }
+  - id: job-stood-down-while-the-mandate-lived
+    event: { kind: tool.call, fields: { name: execute_dca_order } }
+    within: { from: "0h", to: "743h" }
+    count: 0

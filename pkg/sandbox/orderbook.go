@@ -57,6 +57,7 @@ var (
 		"okx":     {"live", "partially_filled", "filled", "canceled", "canceled"},
 		// Settrade's order status: S queued or open, M matched, C cancelled or expired.
 		"settrade": {"S", "P", "M", "C", "C"},
+		"webull":   {"SUBMITTED", "PARTIAL_FILLED", "FILLED", "CANCELLED", "CANCELLED"},
 	}
 	// journalStates are the one vocabulary of the journal, so a scenario names a status once.
 	journalStates = [5]string{"open", "partially_filled", "filled", "canceled", "expired"}
@@ -96,6 +97,7 @@ type orderSpec struct {
 	// than its price, the room an at-the-open order needs for the auction price.
 	AuctionAt, CancelAt time.Time
 	ReserveUp           float64
+	DupClientOK         bool // a client ID already on an open order is accepted (Webull's default)
 }
 
 // book is the ledger of one state key ("binance", "okx"), valid while sim.mu is held.
@@ -179,7 +181,7 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	if sp.Type == "limit" {
 		px = sp.Price
 	}
-	if sp.ClientID != "" && st.openByClient(sp.ClientID) != nil {
+	if sp.ClientID != "" && !sp.DupClientOK && st.openByClient(sp.ClientID) != nil {
 		return nil, nil, &reject{kind: "duplicate"}
 	}
 	asset, need, dir, closing := "USDT", 0.0, "", false
@@ -409,6 +411,9 @@ func (b book) settleSpot(o *Order, qty, px, held float64, at time.Time) {
 	st.Trades = append(st.Trades, Trade{ID: strconv.Itoa(len(st.Trades) + 1), OrderID: o.ID, Symbol: o.Symbol, Side: o.Side, Price: px, Amount: qty, Time: at})
 }
 
+// equityQuote is the quote asset of an equity venue, whose wire symbol is the bare ticker.
+var equityQuote = map[string]string{"settrade": "THB", "webull": "USD"}
+
 // spotQuotes are the quote assets of a Binance spot symbol, the longest suffix first.
 var spotQuotes = []string{"FDUSD", "USDT", "USDC", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR"}
 
@@ -418,8 +423,8 @@ func splitSpot(venue, sym string) (base, quote string, ok bool) {
 		base, quote, ok = strings.Cut(sym, "-")
 		return base, quote, ok && base != "" && quote != "" && !strings.Contains(quote, "-")
 	}
-	if venue == "settrade" { // an equity's wire symbol is the ticker (PTT); it trades against THB
-		return sym, "THB", sym != "" && !strings.ContainsAny(sym, "/-_ ")
+	if quote, equity := equityQuote[venue]; equity { // an equity's wire symbol is its ticker (PTT, AAPL)
+		return sym, quote, sym != "" && !strings.ContainsAny(sym, "/-_ ")
 	}
 	for _, q := range spotQuotes {
 		if b, found := strings.CutSuffix(sym, q); found && b != "" {
@@ -442,14 +447,17 @@ func unifiedSymbol(venue string, o *Order) string {
 	return base + "/" + quote + ":" + quote
 }
 
-// openByClient is the open order carrying the client ID (open-only uniqueness).
+// openByClient is the open order carrying the client ID: the only one where IDs are unique
+// among open orders, and the newest where a venue lets one repeat (Webull), so a lookup
+// never depends on map order.
 func (st *VenueState) openByClient(cid string) *Order {
+	var best *Order
 	for _, o := range st.OpenOrders {
-		if o.ClientID == cid {
-			return o
+		if o.ClientID == cid && (best == nil || orderBefore(best, o) < 0) {
+			best = o
 		}
 	}
-	return nil
+	return best
 }
 
 // find looks an order up by exchange ID or, failing that, client ID (the open order

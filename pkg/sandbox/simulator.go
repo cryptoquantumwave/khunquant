@@ -163,6 +163,12 @@ func (sim *StatefulSimulator) Respond(venue, method, path string, r *http.Reques
 		}
 		sim.advanceLocked(time.Time{}) // the auction or day's end that has come since the last request
 		return sim.respondSettrade(method, path, r)
+	case "webull":
+		if !sim.equities {
+			return nil, false
+		}
+		sim.advanceLocked(time.Time{})
+		return sim.respondWebull(method, path, r)
 	default:
 		return nil, false // fall through to fixture store
 	}
@@ -901,6 +907,9 @@ func SimulatorOwnedPath(venue, method, path string) bool {
 
 	case "settrade": // the order routes; the cash and portfolio routes fall through until seeded
 		return settradeOrderPath(path)
+
+	case "webull": // the order routes; the balance and positions routes fall through until seeded
+		return webullOrderPath(method, path)
 
 	default:
 		return false

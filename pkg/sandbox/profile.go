@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 )
@@ -18,7 +19,8 @@ type ProfileOptions struct {
 // channel off, simchat on for everyone) with workspace and fixtures inside Home, the gateway on 127.0.0.1:Port, sandbox
 // and dev MCP on without tokens, and exec, MCP, heartbeat and the web owner route off.
 // The model is "sim/scripted": answers come from rules the lab scripts, never an LLM.
-// The result already satisfies the gateway's locked-config overlay.
+// The result already satisfies the gateway's locked-config overlay. It has no exchange
+// account: a scenario that asks for one gets it from the lock (ApplyPlaceholderAccounts).
 func Profile(o ProfileOptions) (*config.Config, error) {
 	if !filepath.IsAbs(o.Home) {
 		return nil, fmt.Errorf("sandbox profile: home %q is not an absolute path", o.Home)
@@ -64,4 +66,51 @@ func WriteProfile(o ProfileOptions) (string, error) {
 		return "", fmt.Errorf("sandbox profile: write config: %w", err)
 	}
 	return path, nil
+}
+
+// The placeholder account of a simulated venue. The values are constants that cannot be a
+// real credential (a venue issues keys of its own shape). They exist in memory only: the
+// locked gateway puts them into the config it loaded (ApplyPlaceholderAccounts), on every
+// load and reload, and the lock refuses every config write, so they never reach disk.
+const (
+	PlaceholderAccountName = "main"
+	PlaceholderKey         = "sbx-placeholder-NOT-A-REAL-KEY"
+	PlaceholderSecret      = "sbx-placeholder-NOT-A-REAL-SECRET"
+	PlaceholderPassphrase  = "sbx-placeholder-NOT-A-REAL-PASSPHRASE"
+
+	// AccountsFile, in the instance home (outside the workspace the instance's file
+	// tools are confined to), names the venues that get a placeholder account, one JSON
+	// list. The supervisor writes it when it creates the home.
+	AccountsFile = ".sandbox-accounts"
+)
+
+// AccountVenues are the venues a placeholder account can be asked for: those the
+// simulator serves.
+var AccountVenues = []string{"binance", "okx"}
+
+// ApplyPlaceholderAccounts makes each venue in venues enabled with exactly the
+// placeholder account: name main, the constant credentials, and the scopes market_data
+// and trade (never transfer: an empty list would mean every scope). Whatever accounts the
+// config held for the venue are replaced, so a patch can neither widen the permissions nor
+// swap the account. A venue with no simulator is an error.
+func ApplyPlaceholderAccounts(cfg *config.Config, venues []string) error {
+	for _, v := range venues {
+		acc := config.ExchangeAccount{
+			Name:        PlaceholderAccountName,
+			APIKey:      *config.NewSecureString(PlaceholderKey),
+			Secret:      *config.NewSecureString(PlaceholderSecret),
+			Permissions: []config.PermissionScope{config.ScopeMarketData, config.ScopeTrade},
+		}
+		switch v {
+		case "binance":
+			cfg.Exchanges.Binance.Enabled = true
+			cfg.Exchanges.Binance.Accounts = []config.ExchangeAccount{acc}
+		case "okx":
+			cfg.Exchanges.OKX.Enabled = true
+			cfg.Exchanges.OKX.Accounts = []config.OKXExchangeAccount{{ExchangeAccount: acc, Passphrase: *config.NewSecureString(PlaceholderPassphrase)}}
+		default:
+			return fmt.Errorf("no placeholder account for %q (only %s have a simulator)", v, strings.Join(AccountVenues, ", "))
+		}
+	}
+	return nil
 }

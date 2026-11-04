@@ -76,6 +76,10 @@ type ClockSpec struct {
 type InstanceSpec struct {
 	Config    map[string]any    `yaml:"config,omitempty"`
 	Workspace map[string]string `yaml:"workspace,omitempty"` // path under <home>/workspace -> content
+	// Accounts asks the sandbox profile for a placeholder exchange account on these
+	// venues (binance, okx), so tools find them configured. The scenario never carries a
+	// credential: the profile writes constants that cannot be real.
+	Accounts []string `yaml:"accounts,omitempty"`
 }
 
 // MarketInit is the starting price model of one symbol. Model names the market op

@@ -1,0 +1,63 @@
+# S108A-2: opening the same delta-neutral plan twice must open it once: one dn.open workflow
+# and one order per leg, not two positions. (This is P0B-5.)
+#
+# The design asks for both calls in one model answer. That cannot run in the lab today: the
+# open tool waits up to 60 s of wall time (deltaneutral.OpenWait) for its workflow, the
+# second call's workflow is held until the sim clock moves 2 s, and a step's settle gives up
+# at 25 s, so the turn never settles and the clock never moves. The two calls are made one
+# after the other instead, which is the same user mistake without the race.
+version: 1
+scenario: dn-open-twice-opens-once
+covers: [S108A-2, P0B-5]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+llm_script:
+  - id: open-again
+    match: { sender: "simchat:owner", prompt_contains: ["open the plan again"] }
+    respond: { tool: open_delta_neutral_position, args: { plan_id: 1, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+  - chat: { as: owner, text: "open the plan again" }
+timeline:
+  - advance: 10m
+expect:
+  - id: one-open-workflow
+    workflow: { kind: dn.open }
+    count: 1
+  - id: one-spot-buy
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: one-futures-short
+    order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }

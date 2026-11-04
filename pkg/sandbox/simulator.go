@@ -187,6 +187,10 @@ func (sim *StatefulSimulator) respondBinance(method, path string, r *http.Reques
 	// Fetch markets (exchangeInfo, v1 or v3)
 	case method == "GET" && (strings.HasPrefix(path, "/fapi/v1/exchangeInfo") || strings.HasPrefix(path, "/fapi/v3/exchangeInfo")):
 		return sim.simBinanceFetchExchangeInfo(state, r)
+	case method == "POST" && key == "binance" && ep == "marginType":
+		return sim.simBinanceAccountSetting(state, r)
+	case method == "GET" && key == "binance" && ep == "leverageBracket":
+		return sim.simBinanceLeverageBracket(state, r)
 	default:
 		return nil, false // fall through to fixture store
 	}
@@ -280,7 +284,7 @@ func (sim *StatefulSimulator) simBinanceFetchAccount(state *VenueState, r *http.
 	for _, pos := range state.Positions {
 		if pos.Contracts > 0 {
 			// Position amount is contracts * contractSize (base currency units)
-			positionAmt := formatNumber(pos.Contracts * pos.ContractSize)
+			positionAmt := signedAmt(pos)
 			positions = append(positions, FuturesPosition{
 				Symbol:                   pos.Symbol,
 				InitialMargin:            "0",
@@ -682,9 +686,16 @@ func positionSideOf(order *Order) string {
 // binancePositionToWireFormat converts a Position to Binance wire format.
 func (sim *StatefulSimulator) binancePositionToWireFormat(pos *Position) map[string]interface{} {
 	return map[string]interface{}{
-		"symbol":           pos.Symbol,
-		"positionSide":     strings.ToUpper(pos.Side),
-		"positionAmt":      formatNumber(pos.Contracts * pos.ContractSize),
+		"symbol":       pos.Symbol,
+		"positionSide": strings.ToUpper(pos.Side),
+		"positionAmt":  signedAmt(pos),
+		// ccxt keeps a position only when its entryPrice is above zero, so a wire without
+		// one reads back as no position at all (a short left open after a failed hedge
+		// looked flat to the recovery that was meant to close it).
+		"entryPrice":       formatNumber(pos.EntryPrice),
+		"markPrice":        formatNumber(pos.MarkPrice),
+		"notional":         signedNotional(pos),
+		"liquidationPrice": "0",
 		"initialMargin":    "0",
 		"maintMargin":      "0",
 		"unrealizedProfit": "0",

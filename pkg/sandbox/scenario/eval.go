@@ -330,11 +330,35 @@ func (v *env) planOf(e *Expectation) (*plan, error) {
 	case "order":
 		venue, _ := f["venue"].(string)
 		if OrderJournalKind(f) == "exchange.order" {
+			// An order is journaled once per transition (create, fill, cancel). Asked for by
+			// what it is, it counts once, at its creation; asked for by status, it counts
+			// the transitions into that status.
 			rest := map[string]any{}
 			for k, v := range f {
 				rest[k] = v
 			}
-			return &plan{[]string{"exchange.order"}, pathsKeep(rest), describe("order", f)}, nil
+			if _, ok := f["status"]; !ok {
+				rest["event"] = "create"
+			}
+			return &plan{[]string{"exchange.order"}, func(_ *labjournal.Entry, doc map[string]any) bool {
+				if doc["event"] == "effect" { // marks a create already counted
+					return false
+				}
+				for p, want := range rest {
+					got, ok := labjournal.Lookup(doc, p)
+					// Identifiers are compared whole: BTC/USDT is not BTC/USDT:USDT, which a
+					// substring match (right for message text) would take it for.
+					if s, isStr := want.(string); isStr {
+						neg := strings.HasPrefix(s, "!")
+						if (ok && fmt.Sprint(got) == strings.TrimPrefix(s, "!")) == neg {
+							return false
+						}
+					} else if !matches(got, ok, want) {
+						return false
+					}
+				}
+				return true
+			}, describe("order", f)}, nil
 		}
 		return &plan{[]string{"exchange.req"}, func(en *labjournal.Entry, doc map[string]any) bool {
 			status, _ := doc["status"].(float64)

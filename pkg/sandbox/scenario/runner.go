@@ -115,7 +115,7 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 
 	info, err := r.Sup.Up(ctx, supervisor.UpOptions{
 		FixturesFrom: r.FixturesFrom, ClockStart: f.Clock.Start, ClockMode: "manual", ClockResolution: f.Clock.Resolution,
-		ConfigPatch: f.Instance.Config, Workspace: f.Instance.Workspace,
+		ConfigPatch: f.Instance.Config, Workspace: f.Instance.Workspace, Accounts: f.Instance.Accounts,
 	})
 	if err != nil {
 		res.Infra = "instance did not start: " + err.Error()

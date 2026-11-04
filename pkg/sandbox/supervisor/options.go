@@ -33,6 +33,11 @@ type UpOptions struct {
 	// sandbox_instance can carry them. CheckConfigPatch and CheckWorkspacePath apply.
 	ConfigPatch map[string]any    `json:"-"`
 	Workspace   map[string]string `json:"-"`
+
+	// Accounts are the venues the profile gives a placeholder exchange account (see
+	// sandbox.ProfileOptions). Like ConfigPatch it is for Go callers only: a flag or an MCP
+	// argument would let a tool caller turn on a venue the instance never configured.
+	Accounts []string `json:"-"`
 }
 
 // OptionField describes one generated option of UpOptions.

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -184,6 +185,9 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err := checkOverlay(o.ConfigPatch, o.Workspace); err != nil {
 		return Info{}, err
 	}
+	if err := cmp.Or(CheckAccounts(o.Accounts), CheckAccountPatch(o.ConfigPatch, o.Accounts)); err != nil {
+		return Info{}, err
+	}
 	home, err := instanceHome(s.cfg.TmpDir, name)
 	if err != nil {
 		return Info{}, err
@@ -260,7 +264,7 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 			_ = os.RemoveAll(in.home)
 		}
 	}()
-	if err := prepareHome(in.home, in.name, port, fixtures); err != nil {
+	if err := prepareHome(in.home, in.name, port, fixtures, o.Accounts...); err != nil {
 		return err
 	}
 	if len(o.ConfigPatch) > 0 {

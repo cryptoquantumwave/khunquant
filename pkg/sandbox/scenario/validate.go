@@ -141,6 +141,12 @@ func (v *validator) instance() {
 		}
 	}
 	v.patch("/instance/config", v.f.Instance.Config)
+	if err := supervisor.CheckAccounts(v.f.Instance.Accounts); err != nil {
+		v.addf("/instance/accounts", "%v", err)
+	}
+	if err := supervisor.CheckAccountPatch(v.f.Instance.Config, v.f.Instance.Accounts); err != nil {
+		v.addf("/instance/config/exchanges", "%v", err)
+	}
 }
 
 func (v *validator) patch(base string, cfg map[string]any) {
@@ -266,6 +272,9 @@ func (v *validator) step(p string, s *Step, spec stepSpec) {
 			v.addf(p, "config.patch takes a partial config")
 		}
 		v.patch(p, args)
+		if err := supervisor.CheckAccountPatch(args, v.f.Instance.Accounts); err != nil {
+			v.addf(p+"/exchanges", "%v", err)
+		}
 	default:
 		if err != nil {
 			v.addf(p, "%v", err)

@@ -95,7 +95,7 @@ func listFixtures(dir string) ([]fixtureFile, error) {
 
 // prepareHome fills a fresh instance home: the marker, the fixtures under
 // workspace/sandbox, and the sandbox profile (config.json and .security.yml).
-func prepareHome(home, name string, port int, fixtures []fixtureFile) error {
+func prepareHome(home, name string, port int, fixtures []fixtureFile, accounts ...string) error {
 	if err := os.WriteFile(filepath.Join(home, instanceMarker), []byte(name+"\n"), 0o600); err != nil {
 		return fmt.Errorf("sandbox up: write marker: %w", err)
 	}
@@ -106,6 +106,9 @@ func prepareHome(home, name string, port int, fixtures []fixtureFile) error {
 	}
 	if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
 		return fmt.Errorf("sandbox up: %w", err)
+	}
+	if err := writeAccounts(home, accounts); err != nil {
+		return fmt.Errorf("sandbox up: record accounts: %w", err)
 	}
 	return nil
 }

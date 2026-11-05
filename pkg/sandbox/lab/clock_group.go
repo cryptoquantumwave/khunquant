@@ -170,22 +170,35 @@ func (l *Lab) clockSetMode(_ context.Context, args json.RawMessage) (any, error)
 	if a.Scale != nil && m != simclock.ModeScaled {
 		return nil, Errorf(CodeBadArgs, "scale applies to scaled mode only")
 	}
+	if a.Scale != nil && (!(*a.Scale > 0) || *a.Scale > 1e9) {
+		return nil, Errorf(CodeBadArgs, "scale %v must be > 0 and at most 1e9", *a.Scale)
+	}
+	var res *time.Duration
 	if a.Resolution != nil {
 		d, err := parseDur("resolution", *a.Resolution)
 		if err != nil {
 			return nil, err
 		}
-		if err := l.Clock.SetResolution(d); err != nil {
-			return nil, Errorf(CodeBadArgs, "%v", err)
+		if d < 0 {
+			return nil, Errorf(CodeBadArgs, "resolution %v must be >= 0", d)
 		}
+		res = &d
+	}
+	// Everything is checked before anything changes, and the mode goes first: a realtime
+	// clock refuses a scale, and a refused switch (ErrBusy during an advance) then leaves
+	// the clock as it was.
+	if err := l.Clock.SetMode(m); err != nil {
+		return nil, fmt.Errorf("set_mode: %w", err)
 	}
 	if a.Scale != nil {
 		if err := l.Clock.SetScale(*a.Scale); err != nil {
 			return nil, Errorf(CodeBadArgs, "%v", err)
 		}
 	}
-	if err := l.Clock.SetMode(m); err != nil {
-		return nil, fmt.Errorf("set_mode: %w", err)
+	if res != nil {
+		if err := l.Clock.SetResolution(*res); err != nil {
+			return nil, Errorf(CodeBadArgs, "%v", err)
+		}
 	}
 	saveClock(l.ClockPath(), l.Clock)
 	return l.clockState(), nil

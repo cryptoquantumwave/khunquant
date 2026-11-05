@@ -136,19 +136,20 @@ var rejects = map[string]struct {
 }
 
 // position side of an order, and whether it closes: a hedge-mode posSide names the
-// position; in one-way mode the order closes when it opposes the position held.
+// position; in one-way mode the order closes when it opposes the position held. Reduce-only
+// does not make an order close: one on the position's own side is refused (place).
 func direction(sp orderSpec, pos *Position) (dir string, closing bool) {
 	own := "long"
 	if sp.Side == "sell" {
 		own = "short"
 	}
 	if sp.PosSide == "long" || sp.PosSide == "short" {
-		return sp.PosSide, sp.PosSide != own || sp.ReduceOnly
+		return sp.PosSide, sp.PosSide != own
 	}
 	if pos != nil && pos.Contracts > 0 && (pos.Side == "long" || pos.Side == "short") {
-		return pos.Side, pos.Side != own || sp.ReduceOnly
+		return pos.Side, pos.Side != own
 	}
-	return own, sp.ReduceOnly
+	return own, false
 }
 
 // place validates a create against the ledger and, if it passes, books it: reservation,
@@ -197,7 +198,8 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 		pos := st.Positions[sp.Symbol]
 		dir, closing = direction(sp, pos)
 		switch {
-		case closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
+		// A reduce-only order that would open or add (the venues refuse it), or a close of nothing.
+		case sp.ReduceOnly && !closing, closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
 			return nil, nil, &reject{kind: "reduce"}
 		case !closing && pos != nil && pos.Contracts > 0 && pos.Side != dir:
 			return nil, nil, &reject{kind: "side", detail: "both sides of one symbol are not modelled"}

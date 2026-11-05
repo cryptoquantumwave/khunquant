@@ -1,11 +1,15 @@
 package scenario
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 // Helpers on journal kinds, shared by Validate and the runner.
@@ -54,6 +58,69 @@ var PayloadPaths = map[string]map[string]string{
 		"trigger": "event.payload.Candidate.TriggerID", "severity": "event.payload.Candidate.Severity",
 		"subject": "event.payload.Candidate.Subject", "disposition": "event.payload.Disposition", "reason": "event.payload.Reason",
 	},
+}
+
+// shape is what a journal payload holds below one path: the keys of an object, each with
+// a shape of its own. A nil shape declares nothing below it (a scalar, a tool's
+// arguments, a bus event's own payload), so a path may go on from there unchecked.
+type shape map[string]shape
+
+// has says whether the dotted path can exist in a payload of this shape.
+func (s shape) has(path string) bool {
+	for _, seg := range strings.Split(path, ".") {
+		if s == nil {
+			return true
+		}
+		next, ok := s[seg]
+		if !ok {
+			return false
+		}
+		s = next
+	}
+	return true
+}
+
+func (s shape) keys() string { return strings.Join(slices.Sorted(maps.Keys(s)), ", ") }
+
+// jsonShape is the top level of a struct type's JSON form.
+func jsonShape(t reflect.Type) shape {
+	s := shape{}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if f.IsExported() && name != "-" {
+			s[cmp.Or(name, f.Name)] = nil
+		}
+	}
+	return s
+}
+
+// observerShape is the payload of every entry the bus observer writes (event.<kind>,
+// workflow.step, proposal, policy.decision): {"recordable", "event": {...}}, or the
+// envelope alone with payload_dropped.
+var observerShape = shape{"recordable": nil, "payload_dropped": nil, "event": jsonShape(reflect.TypeFor[events.Event]())}
+
+// payloadShapes are the payloads of the other journal kinds whose producer writes a fixed
+// shape. A kind that is in neither declares no paths.
+var payloadShapes = map[string]shape{
+	// the gateway's tool tap (cmd/khunquant/internal/gateway/sandbox_lab_tap.go)
+	"tool.call": {"name": nil, "origin": nil, "sender": nil, "turn_kind": nil, "is_error": nil, "args": nil, "args_truncated": nil, "args_error": nil},
+	// the gateway's journalConfigReload
+	"config.reload": {"ok": nil, "error": nil},
+	// the fault injector's record (fault.KindFired)
+	"fault.fired":    {"rule_id": nil, "effect": nil, "venue": nil, "method": nil, "path": nil, "order_op": nil, "symbol": nil, "turn": nil, "caller": nil},
+	"exchange.req":   jsonShape(reflect.TypeFor[sandbox.ReqInfo]()),
+	"exchange.order": jsonShape(reflect.TypeFor[sandbox.OrderEntry]()),
+}
+
+// payloadShape is the payload a journal kind's entries have, when it is declared.
+func payloadShape(kind string) (shape, bool) {
+	switch {
+	case strings.HasPrefix(kind, "event."), kind == "workflow.step", kind == "proposal", kind == "policy.decision":
+		return observerShape, true
+	}
+	s, ok := payloadShapes[kind]
+	return s, ok
 }
 
 // OrderJournalKind is the kind an order expectation reads: exchange.order when it asks

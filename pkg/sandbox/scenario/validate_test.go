@@ -231,6 +231,68 @@ func TestValidate_ExpectIsRequired(t *testing.T) {
 	}
 }
 
+// An expectation that cannot fail checks nothing. Each of these would pass whatever the run
+// did: a modifier that is dropped or always holds, a path, state or value the journal never
+// holds (which matches nothing, and an absence count reads that as success). 161-1, 182-2.
+func TestValidate_VacuousExpectationsAreRefused(t *testing.T) {
+	check := func(expr string) []Issue {
+		t.Helper()
+		return Validate(parseString(t, base+"expect:\n  - "+expr+"\n"), nil)
+	}
+	for _, c := range []struct{ expr, path, want string }{
+		// modifiers
+		{`{message: {to: owner, count: 1}, within: {from: "+30m", unitl: "+35m"}}`, "/expect/0/within/unitl", "unknown field for within"},
+		{`{message: {to: owner, count: 1, within: {from: "+30m", unitl: "+35m"}}}`, "/expect/0/within/unitl", "unknown field for within"},
+		{`{message: {to: owner}, count: [1]}`, "/expect/0/count", "one value"},
+		{`{message: {to: owner, count: 0}, during: {from: "22:00"}}`, "/expect/0/during", "one value"},
+		{`{decision: {trigger: move_vs_vol}, count: ">= 0"}`, "/expect/0/count", "checks nothing"},
+		// payload paths
+		{`event: {kind: tool.call, fields: {nme: install_skill}, count: 0}`, "/expect/0/event/fields/nme", "no tool.call entry has this path"},
+		{`event: {kind: tool.call, fields: {nme: "!install_skill"}}`, "/expect/0/event/fields/nme", "no tool.call entry has this path"},
+		{`event: {kind: trigger.candidate, fields: {"evnt.payload.Severity": critical}, count: 0}`, "/expect/0/event/fields/evnt.payload.Severity", "no event.trigger.candidate entry"},
+		{`event: {kind: llm.call, fields: {turn: proactive}, count: 0}`, "/expect/0/event/fields/turn", "not declared"},
+		{`event: {kind: tool.call, fields: name, count: 0}`, "/expect/0/event/fields", "mapping"},
+		// closed sets
+		{`{workflow: {kind: dca.execute, state: compelted}, count: 0}`, "/expect/0/workflow/state", "must be one of"},
+		{`{decision: {disposition: dorp}, count: 0}`, "/expect/0/decision/disposition", "must be one of"},
+		{`order: {venue: binanceth, count: 0}`, "/expect/0/order/venue", "must be one of binance, bitkub, okx"},
+		{`order: {venue: "!okx", count: 0}`, "/expect/0/order/venue", "must be one of"},
+		{`order: {venue: binance, status: closed, count: 0}`, "/expect/0/order/status", "must be one of"},
+		{`order: {venue: binance, status: cancelled, count: 0}`, "/expect/0/order/status", "must be one of"},
+		{`order: {venue: okx, side: short, count: 0}`, "/expect/0/order/side", "must be one of buy, sell"},
+		{`order: {venue: okx, side: "!long", count: 0}`, "/expect/0/order/side", "must be one of buy, sell"},
+		{`order: {venue: binance, symbol: BTCUSDT, count: 0}`, "/expect/0/order/symbol", "unified symbol"},
+		{`order: {venue: okx, symbol: BTC-USDT-SWAP, count: 0}`, "/expect/0/order/symbol", "unified symbol"},
+		{`order: {venue: binance.spot, side: buy, count: 0}`, "/expect/0/order/venue", "must be one of binance, okx"},
+		{`order: {client_id: 12345, count: 0}`, "/expect/0/order/client_id", "string"},
+		{`order: {venue: okx, reduce_only: ture, count: 0}`, "/expect/0/order/reduce_only", "true or false"},
+	} {
+		if got := issueAt(check(c.expr), c.path); !strings.Contains(got, c.want) {
+			t.Errorf("%s: issue at %s = %q, want %q", c.expr, c.path, got, c.want)
+		}
+	}
+	// What the producers write is still accepted, in absence counts too.
+	for _, ok := range []string{
+		`{message: {to: owner, count: 1}, within: {from: "+30m", to: "+35m"}}`,
+		`{message: {to: owner, count: "<= 2"}}`,
+		`event: {kind: tool.call, fields: {name: install_skill}, count: 0}`,
+		`event: {kind: tool.call, fields: {"args.symbol": "BTC/USDT"}, count: 0}`,
+		`event: {kind: trigger.candidate, fields: {"event.payload.Severity": critical}, count: 0}`,
+		`event: {kind: config.reload, fields: {ok: false}, count: 0}`,
+		`event: {kind: fault.fired, fields: {effect: create_reports_fill}}`,
+		`event: {kind: exchange.order, fields: {wire: BTCUSDT}, count: 0}`,
+		`event: {kind: llm.call, fields: {turn: proactive}, count: 1}`,
+		`{workflow: {kind: dn.open, state: succeeded}, count: 1}`,
+		`decision: {disposition: "!drop"}`,
+		`order: {venue: okx, symbol: "!BTC/USDT:USDT", side: sell, status: partially_filled, client_id: "12345", reduce_only: false, count: 0}`,
+		`order: {venue: bitkub, count: 0}`,
+	} {
+		if issues := check(ok); len(issues) != 0 {
+			t.Errorf("%s refused: %v", ok, issues)
+		}
+	}
+}
+
 // event.* covers every name, so a misspelt kind would match nothing and make a count of
 // zero pass for ever: the kind is checked against the bus's own list.
 func TestValidate_EventKindMustExist(t *testing.T) {

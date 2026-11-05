@@ -378,3 +378,49 @@ func TestEval_UntilRefusesAMisspeltEventKind(t *testing.T) {
 		}
 	}
 }
+
+// The until form drops no key either: a misspelt end under within would leave the window
+// open, so it is refused.
+func TestEval_UntilRefusesAnUnknownWithinKey(t *testing.T) {
+	v := newEnv(nil, evalStart, ict)
+	until := func(within map[string]any) error {
+		_, err := v.untilOptions(map[string]any{"until": map[string]any{"message": map[string]any{"to": "owner"}, "within": within}})
+		return err
+	}
+	if err := until(map[string]any{"from": "+1m", "unitl": "+5m"}); err == nil || !strings.Contains(err.Error(), "unitl") {
+		t.Errorf("a misspelt end: %v", err)
+	}
+	if err := until(map[string]any{"from": "+1m", "to": "+5m"}); err != nil {
+		t.Errorf("from and to: %v", err)
+	}
+}
+
+// "!x" holds on an entry whose value at the path lacks x, never on one without the path:
+// else a misspelt path would match every entry (161-1).
+func TestEval_NegationNeedsThePath(t *testing.T) {
+	f := newEvalFixture(t)
+	f.publish(events.Event{Kind: events.KindTriggerCandidate, Source: events.Source{Component: "engine"},
+		Payload: proactive.Candidate{TriggerID: "price_cross:7", Subject: "BTC/USDT", Severity: proactive.SeverityWarning}})
+	f.check(`event: {kind: trigger.candidate, fields: {"event.payload.TriggerID": "!move_vs_vol"}}`, true)
+	f.check(`event: {kind: trigger.candidate, fields: {"event.payload.TriggerID": "!price_cross"}}`, false)
+	// The event carries no attrs: no entry has the path, so none matches.
+	f.check(`event: {kind: trigger.candidate, fields: {"event.attrs.window": "!1h"}}`, false)
+}
+
+// A probe whose call failed has no answer to compare, whatever equals says: it fails. An
+// error's text could otherwise hold the very word equals looks for (161-1).
+func TestEval_ProbeFailsWhenItsCallFails(t *testing.T) {
+	f := newEvalFixture(t)
+	// A call that answers is read as before.
+	f.check(`probe: {alert_job_exists: dca-btc, equals: false}`, true)
+	f.check(`probe: {dn_plan_status: 1, equals: ok}`, true)
+
+	// The tool ran and answered with an error ("the tool said no").
+	r := f.check(`probe: {dn_plan_status: fail_tool, equals: "said no"}`, false)
+	if !strings.Contains(r.Got, "call failed") {
+		t.Errorf("got %q, want it to say the call failed", r.Got)
+	}
+	// No answer at all: the instance is gone. (The id has no digit: an error names 127.0.0.1.)
+	f.in.srv.Close()
+	f.check(`probe: {alert_job_exists: dca-btc, equals: false}`, false)
+}

@@ -49,6 +49,9 @@ type Expectation struct {
 	kinds []string // every key that is not id or a modifier
 	dups  []string // modifiers given both inside and beside the kind mapping
 	bad   string
+	// modIssues are modifier parts that would be dropped (a key under within other than
+	// from and to, a count that is not one value), each at a path below the expectation.
+	modIssues []Issue
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler.
@@ -105,6 +108,9 @@ func (e *Expectation) setModifier(k string, v *yaml.Node) error {
 		if *cur != "" {
 			e.dups = append(e.dups, k)
 		}
+		if v.Kind != yaml.ScalarNode { // its Value is "": the default, which checks less than written
+			e.modIssues = append(e.modIssues, Issue{"/" + k, "must be one value, not a list or a mapping"})
+		}
 		*cur = v.Value
 	}
 	switch k {
@@ -121,6 +127,13 @@ func (e *Expectation) setModifier(k string, v *yaml.Node) error {
 		var w Window
 		if err := v.Decode(&w); err != nil {
 			return fmt.Errorf("within: %w", err)
+		}
+		// Decode drops a key it does not know, so a misspelt end (unitl) would leave the
+		// window open.
+		for i := 0; v.Kind == yaml.MappingNode && i+1 < len(v.Content); i += 2 {
+			if key := v.Content[i].Value; key != "from" && key != "to" {
+				e.modIssues = append(e.modIssues, Issue{"/within/" + esc(key), "unknown field for within (one of: from, to)"})
+			}
 		}
 		e.Within = &w
 	}

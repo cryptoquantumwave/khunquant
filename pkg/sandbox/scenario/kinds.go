@@ -1,6 +1,12 @@
 package scenario
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+)
 
 // stepSpec says what a step kind is served by. Group and Op name the lab op that runs it
 // ("" op: the group has one op), PR the plan that adds it, Req the arguments it cannot
@@ -82,6 +88,28 @@ var expectSpec = map[string]struct {
 	"web":      {[]string{"host"}, "web.req"},
 	"logs":     {[]string{"level", "allow"}, ""},
 }
+
+// The values the journal holds where the set is closed, for Validate's value checks.
+var (
+	// orderStatuses are the statuses of an exchange.order entry: journalStates in
+	// pkg/sandbox/orderbook.go (unexported), never a venue's own word such as closed.
+	orderStatuses = []string{"open", "partially_filled", "filled", "canceled", "expired"}
+	// orderSides are an order's sides; a position's long and short are not journaled.
+	orderSides = []string{"buy", "sell"}
+	// unifiedSymbolRE is an exchange.order symbol: BTC/USDT for spot, BTC/USDT:USDT for a
+	// swap, never the venue's wire form (BTCUSDT, BTC-USDT-SWAP).
+	unifiedSymbolRE = regexp.MustCompile(`^[A-Z0-9]+/[A-Z0-9]+(:[A-Z0-9]+)?$`)
+	// workflowStates are the statuses inspect workflows reports, which state is compared with whole.
+	workflowStates = []string{
+		string(journal.StatusPending), string(journal.StatusRunning), string(journal.StatusWaiting),
+		string(journal.StatusSucceeded), string(journal.StatusFailed), string(journal.StatusCancelled),
+	}
+	// dispositions are attention's decisions (event.payload.Disposition).
+	dispositions = []string{
+		string(proactive.DispDrop), string(proactive.DispLog), string(proactive.DispDigest),
+		string(proactive.DispNotify), string(proactive.DispEscalate),
+	}
+)
 
 // probeGroup is the lab group a probe is read through.
 var probeGroup = map[string]struct{ group, pr string }{

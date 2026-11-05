@@ -43,7 +43,7 @@ type AdvanceSummary struct {
 	From        time.Time     `json:"from"`
 	Target      time.Time     `json:"target"`
 	Reached     time.Time     `json:"reached"`
-	Done        bool          `json:"done"` // Reached == Target
+	Done        bool          `json:"done"` // Reached == Target, and its last settle was not cut
 	Steps       int           `json:"steps"`
 	TimersFired int           `json:"timers_fired"`
 	Wall        time.Duration `json:"wall"`
@@ -207,7 +207,9 @@ func ceilTo(t time.Time, res time.Duration) time.Time {
 // resolution quantum that holds a timer, then a last step to target. After every step
 // it calls the OnStep hook and then settle (when non-nil), so the components can react
 // before time moves on. It returns Done:false, with no error, when ctx ends first (the
-// wall budget); a settle error ends it with that error. Refused outside manual mode.
+// wall budget), also when it ends inside the settle after the last step: the clock is at
+// target then, but that step has not settled. A settle error ends it with that error.
+// Refused outside manual mode.
 func (s *Sim) Advance(ctx context.Context, target time.Time, settle func(context.Context) error) (AdvanceSummary, error) {
 	if !s.opMu.TryLock() {
 		return AdvanceSummary{}, ErrBusy
@@ -232,11 +234,12 @@ func (s *Sim) step(ctx context.Context, target time.Time, settle func(context.Co
 	s.mu.Lock()
 	sum.From, sum.Target = s.now, target
 	s.mu.Unlock()
+	cut := false // the wall budget ended inside a settle
 	defer func() {
 		s.mu.Lock()
 		sum.Reached = s.now
 		s.mu.Unlock()
-		sum.Done = !sum.Reached.Before(target)
+		sum.Done = !sum.Reached.Before(target) && !cut
 		sum.Wall = time.Since(t0)
 	}()
 	for ctx.Err() == nil {
@@ -273,6 +276,7 @@ func (s *Sim) step(ctx context.Context, target time.Time, settle func(context.Co
 		if settle != nil {
 			if err := settle(ctx); err != nil {
 				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					cut = true
 					return sum, nil // the wall budget ran out inside the settle
 				}
 				return sum, fmt.Errorf("simclock: settle at %s: %w", st.At.Format(time.RFC3339), err)

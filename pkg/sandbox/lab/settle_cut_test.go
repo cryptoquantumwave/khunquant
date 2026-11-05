@@ -101,6 +101,51 @@ func TestClockAdvance_SettlesBeforeMovingAfterACut(t *testing.T) {
 	}
 }
 
+// The budget can also end inside the settle after the last step, with the clock already at
+// the target: that step never finished settling. The call says done:false, not done:true,
+// and the next call to the same target settles before it answers done:true, so a caller
+// that loops on done:false (the runner, sandbox_run_until) never reads over the cut step.
+func TestClockAdvance_CutLastSettleIsNotDone(t *testing.T) {
+	l := manualLab(t)
+	target := clockT0.Add(2 * time.Minute)
+	l.Clock.After(time.Minute) // a step before the last one
+	callCtx, cut := context.WithCancel(context.Background())
+	defer cut()
+
+	wasCut, settledAfter := false, 0
+	l.Settle = func(ctx context.Context) error {
+		switch {
+		case !wasCut && !l.Clock.Now().Before(target): // after the last step: the budget ends in here
+			wasCut = true
+			cut()
+			return ctx.Err()
+		case wasCut:
+			settledAfter++
+		}
+		return nil
+	}
+	args := json.RawMessage(`{"to":"` + target.Format(time.RFC3339) + `"}`)
+	first, err := l.clockAdvance(callCtx, args)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	b, _ := json.Marshal(first)
+	if !wasCut || !l.Clock.Now().Equal(target) {
+		t.Fatalf("first call: %s, cut %v: the premise is a cut settle with the clock at the target", b, wasCut)
+	}
+	if contains(string(b), `"done":true`) {
+		t.Fatalf("first call: %s; want done:false, the last step never settled", b)
+	}
+
+	second, err := l.clockAdvance(context.Background(), args)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if b, _ := json.Marshal(second); settledAfter == 0 || !contains(string(b), `"done":true`) {
+		t.Fatalf("second call: %s after %d settles; want the cut step settled, then done:true", b, settledAfter)
+	}
+}
+
 // A budget that ends in the settle before moving moves nothing and says done:false; a
 // settle that fails on its own cap there is an error, as one after a step is, and nothing
 // moved either.

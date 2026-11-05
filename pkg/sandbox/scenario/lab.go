@@ -149,17 +149,19 @@ func journalHead(ctx context.Context, c *labclient.Client) (seq int64, drops uin
 }
 
 // advanceTo moves the clock to target in calls of at most wall each (until deadline, if set) (the instance
-// answers done:false when the budget ends) and settles after every step inside them. A
-// settle that did not pass comes back as a *SettleError.
+// answers done:false when the budget ends) and settles after every step inside them. It
+// calls until the instance answers done:true: a call cut inside the settle of its last
+// step answers done:false with the clock already at target, and the next call settles
+// that step before it answers. A settle that did not pass comes back as a *SettleError.
 func advanceTo(ctx context.Context, c *labclient.Client, target time.Time, wall time.Duration, deadline time.Time) error {
 	since, _, err := journalHead(ctx, c)
 	if err != nil {
 		return err
 	}
+	if now, err := clockNow(ctx, c); err != nil || !now.Before(target) {
+		return err
+	}
 	for {
-		if now, err := clockNow(ctx, c); err != nil || !now.Before(target) {
-			return err
-		}
 		raw, err := call(ctx, c, "clock", "advance", map[string]any{"to": target.Format(time.RFC3339Nano), "wall_budget": wall.String()})
 		if err != nil {
 			var le *labclient.Error

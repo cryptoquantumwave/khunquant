@@ -54,6 +54,11 @@ setup:
 timeline:
   - advance: 10m
 expect:
+  # The control: both opens reached the tool (the setup call, and the model's call the
+  # open-again rule makes). Without it, a chat turn that never ran would pass as "opened once".
+  - id: both-opens-ran
+    event: { kind: tool.call, fields: { name: open_delta_neutral_position } }
+    count: 2
   - id: one-open-workflow
     workflow: { kind: dn.open }
     count: 1

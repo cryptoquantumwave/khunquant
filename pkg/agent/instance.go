@@ -512,6 +512,12 @@ func populateCandidateProvidersFromNames(
 	}
 }
 
+// AgentWorkspace is the workspace directory an agent's tools are built on, by the same
+// rule the agent registry uses. The sandbox lock checks every one of them.
+func AgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	return resolveAgentWorkspace(agentCfg, defaults)
+}
+
 // resolveAgentWorkspace determines the workspace directory for an agent.
 func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {

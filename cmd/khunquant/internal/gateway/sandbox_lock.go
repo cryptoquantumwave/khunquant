@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
+	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
@@ -173,13 +174,23 @@ func readPlaceholderVenues(home string) ([]string, error) {
 // enforceLockedConfig forces the invariants of a locked config. It runs on the
 // config loaded at start and on every reloaded one, before anything is built from
 // it. It returns an error for what it cannot fix: a workspace or fixtures directory
-// outside the instance home, or a model the lock does not allow.
+// outside the instance home, an agent workspace that is the home itself, or a model
+// the lock does not allow.
 func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	home := config.HomeDir()
 
 	workspace := cfg.WorkspacePath()
-	if !sandbox.PathInside(home, workspace) {
-		return fmt.Errorf("agents.defaults.workspace %q is outside the instance home", workspace)
+	if !workspaceInHome(home, workspace) {
+		return fmt.Errorf("agents.defaults.workspace %q is not a directory inside the instance home", workspace)
+	}
+	// Every agent's tools are built on its own workspace, and the default agent's is
+	// where the shared proactive database opens. Each must be inside the home, or a
+	// relaxed list would open the developer's real ~/.khunquant from a locked instance.
+	for i := range cfg.Agents.List {
+		ws := agent.AgentWorkspace(&cfg.Agents.List[i], &cfg.Agents.Defaults)
+		if !workspaceInHome(home, ws) {
+			return fmt.Errorf("agents.list[%d] (%q) workspace %q is not a directory inside the instance home", i, cfg.Agents.List[i].ID, ws)
+		}
 	}
 	fixtures := cfg.Debug.Sandbox.FixturesDir
 	if fixtures == "" {
@@ -212,6 +223,18 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	cfg.Tools.Exec.Enabled = false // also stops cron command jobs
 	cfg.Tools.MCP.Enabled = false
 	cfg.Tools.MCP.Servers = nil
+	// The file tools stay in their workspace whatever the instance config says. Without
+	// this an overlay could let the agent read the real ~/.khunquant secrets or write the
+	// config.json a production gateway on the same machine hot-reloads.
+	cfg.Agents.Defaults.RestrictToWorkspace = true
+	cfg.Agents.Defaults.AllowReadOutsideWorkspace = false
+	cfg.Tools.AllowReadPaths = nil
+	cfg.Tools.AllowWritePaths = nil
+	// No hardware from a locked instance.
+	cfg.Tools.I2C.Enabled = false
+	cfg.Tools.SPI.Enabled = false
+	cfg.Tools.Serial.Enabled = false
+	cfg.Devices.Enabled = false
 	// proactive.owner.web_is_owner is left as configured. The profile writes false; an
 	// instance that sets true (to exercise owner-level sandbox_manage) opens nothing
 	// new: pico and every other real channel are refused under the lock, so the only
@@ -225,7 +248,8 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	// load and reload, and replace whatever the file says about those venues: the
 	// credentials never reach disk (SaveConfig is refused) and a patch cannot widen their
 	// permissions or swap the account. The list is in the home, which the instance's file
-	// tools (confined to the workspace) cannot write.
+	// tools cannot write: they are confined (forced above) to workspaces that are
+	// directories inside the home, never the home itself.
 	venues, err := readPlaceholderVenues(home)
 	if err != nil {
 		return err
@@ -263,4 +287,10 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 		ex.Webull.Accounts[i].Proxy = ""
 	}
 	return nil
+}
+
+// workspaceInHome reports whether ws is inside home and is not home itself: a workspace
+// at the home would hold config.json, .security.yml and the accounts record.
+func workspaceInHome(home, ws string) bool {
+	return sandbox.PathInside(home, ws) && !sandbox.PathInside(ws, home)
 }

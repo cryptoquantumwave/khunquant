@@ -10,11 +10,13 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
 
-// acceptanceQuiescers are the names the plan requires on a locked instance.
+// acceptanceQuiescers are the names the plan requires on a locked instance, and the three
+// sim-clock loops it left out (heartbeat, alerts, lossguard).
 var acceptanceQuiescers = []string{
 	"engine", "perception", "outbox", "bus", "channels", "agent", "cognition", "cron", "notify", "orderfeed",
 	"worldmodel", "journal", "approval", "mandate_sync", "feedback", "policy", "replay", "reflection", "hindsight",
 	"intents", "simchat", "exchange_sim", "gateway.reload", "generation", "labjournal",
+	"heartbeat", "alerts", "lossguard",
 }
 
 func labIdle(t *testing.T, f *lockedFixture) map[string]bool {

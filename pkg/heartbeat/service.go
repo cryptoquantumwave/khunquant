@@ -104,6 +104,9 @@ type HeartbeatService struct {
 	cancel context.CancelFunc // ends ctx
 
 	running atomic.Bool // a run is in flight
+	// ticking: the schedule took a due tick (or Start has not seen its first timer armed)
+	// and has not re-armed its timer yet (for Idle).
+	ticking atomic.Int32
 
 	// runWithoutTasks: a run happens even when HEARTBEAT.md lists no task of the
 	// owner's (guarded by mu). A sweep heartbeat has work that does not depend on
@@ -273,6 +276,7 @@ func (hs *HeartbeatService) Start() error {
 	hs.done = make(chan struct{})
 	hs.wake = make(chan struct{}, 1)
 	hs.ctx, hs.cancel = context.WithCancel(context.Background())
+	hs.ticking.Add(1) // until runLoop has armed its first timer
 	go hs.runLoop(hs.stopChan, hs.wake, hs.done)
 
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
@@ -391,6 +395,7 @@ func (hs *HeartbeatService) runLoop(stop <-chan struct{}, wake <-chan struct{}, 
 	}
 
 	t := hs.clock.NewTimer(delay)
+	hs.ticking.Add(-1) // armed (Start raised it)
 	defer func() { t.Stop() }()
 	rearm := func(d time.Duration) {
 		t.Stop()
@@ -413,6 +418,9 @@ func (hs *HeartbeatService) runLoop(stop <-chan struct{}, wake <-chan struct{}, 
 			}
 			rearm(next.Sub(now))
 		case <-t.C():
+			// Busy from the moment the tick is taken, before the prompt is read and the
+			// start is saved, until the next run's timer is armed.
+			hs.ticking.Add(1)
 			fired := hs.clock.Now()
 			hs.executeHeartbeat()
 			anchor = fired
@@ -423,8 +431,16 @@ func (hs *HeartbeatService) runLoop(stop <-chan struct{}, wake <-chan struct{}, 
 				hs.logInfof("Skipped %d heartbeat tick(s) that came due while a heartbeat was still running", skipped)
 			}
 			rearm(next.Sub(now))
+			hs.ticking.Add(-1)
 		}
 	}
+}
+
+// Idle is true when no run is in flight and the schedule's timer is armed: from the
+// moment the schedule takes a due tick until it has re-armed, the service is busy. The
+// next run is a timer. It changes nothing; only the sandbox lab calls it.
+func (hs *HeartbeatService) Idle() bool {
+	return hs.ticking.Load() == 0 && !hs.running.Load()
 }
 
 // lastRun is when the last heartbeat run started, zero when unknown.

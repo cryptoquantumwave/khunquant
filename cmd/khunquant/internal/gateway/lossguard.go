@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -45,7 +46,12 @@ type lossGuardSampler struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	sampling atomic.Int32 // samples in progress, the first one raised by start (lab settle)
 }
+
+// idle is true when no equity sample is being taken. The next sample is a timer.
+func (s *lossGuardSampler) idle() bool { return s.sampling.Load() == 0 }
 
 // startLossGuard applies the loss-day time zone from cfg and, when a daily loss
 // limit is set, starts the equity sampler. It returns nil when no sampler runs
@@ -140,6 +146,7 @@ func (s *lossGuardSampler) start() {
 	logger.InfoCF("lossguard", "Daily loss guard sampling equity",
 		map[string]any{"interval": s.interval.String(), "accounts": len(s.tracked)})
 
+	s.sampling.Add(1) // the first sample, which run takes at once
 	go s.run(ctx, s.done)
 }
 
@@ -170,6 +177,7 @@ func (s *lossGuardSampler) Stop() {
 func (s *lossGuardSampler) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	s.sampleOnce(ctx) // first sample immediately, so the guard is armed with data
+	s.sampling.Add(-1) // raised by start
 	next := s.after
 	if next == nil {
 		//simclock:wall no After was given (a test): the wall ticker
@@ -182,7 +190,9 @@ func (s *lossGuardSampler) run(ctx context.Context, done chan struct{}) {
 		case <-ctx.Done():
 			return
 		case <-next(s.interval):
+			s.sampling.Add(1)
 			s.sampleOnce(ctx)
+			s.sampling.Add(-1)
 		}
 	}
 }

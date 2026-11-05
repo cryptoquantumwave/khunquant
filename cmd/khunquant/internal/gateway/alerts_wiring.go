@@ -58,6 +58,11 @@ type alertRuntime struct {
 	cron atomic.Pointer[cron.CronService]
 	reg  atomic.Pointer[triggers.Registry]
 
+	// For idle (the lab's settle): a plan tool's debounce window is open, and passes of
+	// the maintenance loop are running.
+	debouncing atomic.Bool
+	working    atomic.Int32
+
 	mu         sync.Mutex
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -320,28 +325,46 @@ func (a *alertRuntime) loop(ctx context.Context, reg *triggers.Registry, cs *cro
 		if dnTimer != nil {
 			dnTimer.Stop()
 		}
+		a.debouncing.Store(false)
 	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-syncT.C():
+			a.working.Add(1)
 			syncT.Rearm()
 			a.sync(ctx, reg, cs, false)
+			a.working.Add(-1)
 		case <-cmpT.C():
+			a.working.Add(1)
 			cmpT.Rearm()
 			a.compare(reg)
+			a.working.Add(-1)
 		case <-a.dn.wake: // nil channel (no plan store) blocks forever
 			if dnPass == nil {
-				//simclock:wall a plan-tool debounce window: the settle waits for it (SBX-09 counts it busy)
+				//simclock:wall a plan-tool debounce window: the settle waits for it (idle counts it busy)
 				dnTimer = time.NewTimer(a.dn.debounce)
 				dnPass = dnTimer.C
+				a.debouncing.Store(true)
 			}
+			a.dn.requested.Store(false)
 		case <-dnPass:
+			a.working.Add(1) // before debouncing clears: the pass is never unseen
 			dnPass, dnTimer = nil, nil
+			a.debouncing.Store(false)
 			a.syncDN(ctx, reg, cs)
+			a.working.Add(-1)
 		}
 	}
+}
+
+// idle is true when the maintenance loop has no pass running and none waiting: no plan
+// tool's request pending, no debounce window open (it is wall time, 3 s by default, so a
+// settle waits for it) and no sync or comparison in progress. The hourly sync and the
+// daily comparison are timers. It changes nothing; only the sandbox lab calls it.
+func (a *alertRuntime) idle() bool {
+	return a.working.Load() == 0 && !a.debouncing.Load() && !a.dn.requested.Load() && len(a.dn.wake) == 0
 }
 
 // requestDNSync is what the delta-neutral plan tools call after they changed a plan's

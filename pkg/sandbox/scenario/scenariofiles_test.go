@@ -102,3 +102,17 @@ func TestScenarioFiles_ScriptedOnlyInPR(t *testing.T) {
 		}
 	}
 }
+
+// The PR job runs the active scripted files; with none it would be green having run
+// nothing (164-3).
+func TestScenarioFiles_HasActive(t *testing.T) {
+	active := 0
+	for _, f := range committedScenarios(t) {
+		if !f.IsKnownBug() && f.LLMMode() == "scripted" {
+			active++
+		}
+	}
+	if active == 0 {
+		t.Fatal("no active scripted scenario under testdata/scenarios: the Scenarios job would run nothing")
+	}
+}

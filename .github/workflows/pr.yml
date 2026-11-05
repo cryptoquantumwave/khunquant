@@ -2,6 +2,10 @@ name: PR
 
 on:
   pull_request: { }
+  # Also on every push to main: a PR can be merged before its checks finish (#180 and #182
+  # were), so main itself is tested after each merge.
+  push:
+    branches: [ main ]
 
 # Least privilege: every job below only checks out the repo and runs local
 # tooling (lint, tests, govulncheck, frontend build, a non-pushing Docker
@@ -72,11 +76,40 @@ jobs:
       - name: Run go test
         run: go test ./...
 
+  # The real-binary end-to-end tests of the Sandbox Lab (supervisor, MCP, clock, faults,
+  # accounts: the tests gated by KQ_SANDBOX_E2E_BIN) and the race detector over the lab, the
+  # gateway and the supervisor. Plain `go test ./...` in "Tests" skips the first and never
+  # runs the second, so the lock's end-to-end proofs and every race claim were local only.
+  # Serial (-p 1): each package starts gateways of its own.
+  sandbox-e2e:
+    name: Sandbox E2E and race
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # `make build` runs go generate and writes build/khunquant, the binary the E2E tests start.
+      - name: Build once
+        run: make build
+
+      - name: End-to-end on the real binary, with the race detector
+        env:
+          KQ_SANDBOX_E2E_BIN: ${{ github.workspace }}/build/khunquant
+        run: go test -p 1 -race -timeout 30m ./pkg/sandbox/... ./cmd/khunquant/internal/sandboxlab/... ./cmd/khunquant/internal/gateway/...
+
   # Lab scenarios: every active scripted file under testdata/scenarios, run serially from
   # one prebuilt binary and without network. Not part of "Tests" (a lab run needs a built
   # binary, a wall-time budget and a network namespace, none of which belong inside
-  # `go test`), so a failure here names the scenario run, not a Go test. Not a required
-  # check until a maintainer adds it to branch protection.
+  # `go test`), so a failure here names the scenario run, not a Go test. It gates merges only
+  # once a maintainer makes it a required check in branch protection.
   scenarios:
     name: Scenarios
     runs-on: ubuntu-latest
@@ -106,6 +139,8 @@ jobs:
       - name: Run active scenarios without network
         run: |
           sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)"
+          # A run that never started writes no report: that is not a pass.
+          test -s scenarios-report.md || { echo "::error::no scenario report: the run did not start"; exit 1; }
 
       # The report says which expectation failed, with the journal around it. Without this
       # step a red run could not be read after the log scrolled away.

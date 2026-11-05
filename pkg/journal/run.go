@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
@@ -64,37 +65,52 @@ func (r *run) renewLoop() {
 			return // the engine returned from Run: let a stuck step's lease run out
 		case <-e.clock.After(interval):
 		}
-		select {
-		case <-r.stopRenew:
-			return
-		default:
-		}
-		now := e.clock.Now()
-		if now.UnixMilli() >= r.leaseEnd.Load() {
-			r.loseLease("the lease ran out before it could be renewed")
+		// A workflow whose step waits on a timer (WaitTimer) does not count for Idle;
+		// its renewal is work, so it counts on its own.
+		e.renewing.Add(1)
+		stop := r.renewOnce(interval)
+		e.renewing.Add(-1)
+		if stop {
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.dbCtx, interval)
-		ok, err := e.st.renew(ctx, r.f, now, e.opt.lease)
-		cancel()
-		if err != nil {
-			r.loseLease("renewal failed: " + err.Error())
-			return
-		}
-		if !ok {
-			// Either another runner took the workflow, or this one just suspended,
-			// finished or released it and has not stopped the renewer yet.
-			qctx, qcancel := context.WithTimeout(r.dbCtx, interval)
-			mine, qerr := e.st.releasedByOwner(qctx, r.f)
-			qcancel()
-			if qerr == nil && mine {
-				return
-			}
-			r.loseLease("another runner owns the workflow")
-			return
-		}
-		r.leaseEnd.Store(ms(now.Add(e.opt.lease)))
 	}
+}
+
+// renewOnce is one pass of renewLoop after its timer fired. It returns true when the loop
+// must stop.
+func (r *run) renewOnce(interval time.Duration) (stop bool) {
+	e := r.e
+	select {
+	case <-r.stopRenew:
+		return true
+	default:
+	}
+	now := e.clock.Now()
+	if now.UnixMilli() >= r.leaseEnd.Load() {
+		r.loseLease("the lease ran out before it could be renewed")
+		return true
+	}
+	ctx, cancel := context.WithTimeout(r.dbCtx, interval)
+	ok, err := e.st.renew(ctx, r.f, now, e.opt.lease)
+	cancel()
+	if err != nil {
+		r.loseLease("renewal failed: " + err.Error())
+		return true
+	}
+	if !ok {
+		// Either another runner took the workflow, or this one just suspended,
+		// finished or released it and has not stopped the renewer yet.
+		qctx, qcancel := context.WithTimeout(r.dbCtx, interval)
+		mine, qerr := e.st.releasedByOwner(qctx, r.f)
+		qcancel()
+		if qerr == nil && mine {
+			return true
+		}
+		r.loseLease("another runner owns the workflow")
+		return true
+	}
+	r.leaseEnd.Store(ms(now.Add(e.opt.lease)))
+	return false
 }
 
 // execute claims id and runs its workflow function until it finishes, suspends,
@@ -132,9 +148,10 @@ func (e *Engine) execute(ctx context.Context, id string) {
 
 	stepCtx, cancel := e.stepContext()
 	r := &run{
-		e: e, f: f, wf: wf, dbCtx: dbCtx, engineCtx: ctx, stepCtx: stepCtx, cancelStep: cancel,
+		e: e, f: f, wf: wf, dbCtx: dbCtx, engineCtx: ctx, cancelStep: cancel,
 		stopRenew: make(chan struct{}), renewDone: make(chan struct{}),
 	}
+	r.stepCtx = context.WithValue(stepCtx, runKey{}, r) // WaitTimer finds the run here
 	r.leaseEnd.Store(ms(now.Add(e.opt.lease)))
 	go r.renewLoop()
 

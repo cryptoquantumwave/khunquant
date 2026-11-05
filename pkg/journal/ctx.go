@@ -393,6 +393,28 @@ func (c *Ctx) Now() time.Time {
 	return fromMS(ms(now))
 }
 
+// runKey is the key under which a step function's context carries its run.
+type runKey struct{}
+
+// WaitTimer waits until ch delivers or ctx ends, and reports whether ch delivered. A step
+// function waits on a timer with it (the pause between two reads of an order): while it
+// waits, its workflow does not count as busy for Engine.Idle, because a wait for a timer
+// is not work, and in a sandbox lab's manual clock mode the timer fires only once the
+// engine reads idle. Pass a timer that is already armed (clock.After(d) in the call). With
+// a context that is not a step function's it is a plain select.
+func WaitTimer(ctx context.Context, ch <-chan time.Time) bool {
+	if r, ok := ctx.Value(runKey{}).(*run); ok {
+		unpark := r.e.park(r.wf.ID)
+		defer unpark()
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ch:
+		return true
+	}
+}
+
 // SleepUntil suspends the workflow until t. The wake time is journaled, so a
 // restart during the sleep neither restarts nor shortens it, and the engine
 // resumes the workflow when it is due without holding a worker meanwhile. It

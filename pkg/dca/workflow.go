@@ -730,10 +730,8 @@ func (d *Deps) verify(ctx context.Context, in ExecInput, placed Fill) Fill {
 		if iv == 0 {
 			iv = time.Second
 		}
-		select {
-		case <-ctx.Done():
+		if !journal.WaitTimer(ctx, d.clock().After(iv)) { // a timer, not work: the step is idle meanwhile
 			return last
-		case <-d.clock().After(iv):
 		}
 	}
 	return last

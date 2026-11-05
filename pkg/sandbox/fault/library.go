@@ -60,6 +60,12 @@ var library = map[string]map[string]libEntry{
 // libraryAlias lets a venue that speaks another's API use that venue's errors.
 var libraryAlias = map[string]string{"binanceth": "binance"}
 
+// servedVenue says whether the sandbox serves venue: a venue of the library, or an alias.
+func servedVenue(venue string) bool {
+	_, ok := library[libVenue(venue)]
+	return ok
+}
+
 // generic is the three errors of the venues whose clients are untyped: the status alone
 // drives them (429 and 5xx are retried, and a 5xx on an order has an unknown outcome).
 func generic(body func(status int, name string) string) map[string]libEntry {

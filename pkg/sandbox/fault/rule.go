@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 )
 
@@ -199,6 +201,9 @@ func (i *Injector) validateMatch(m Match, llm bool, kind string) error {
 	if m.Venue != venueAny && !venueRE.MatchString(m.Venue) {
 		return fmt.Errorf("match.venue %q is not a venue name", m.Venue)
 	}
+	if !llm && m.Venue != venueAny && !servedVenue(m.Venue) {
+		return fmt.Errorf("match.venue %q is not a venue the sandbox serves: the rule would never fire", m.Venue)
+	}
 	if llm {
 		if m.Method != "" || m.PathPrefix != "" || m.Order != "" || m.Market != "" || m.Symbol != "" || m.Side != "" || m.ReduceOnly != nil {
 			return errors.New("an llm rule matches on turn and caller only")
@@ -225,6 +230,19 @@ func (i *Injector) validateMatch(m Match, llm bool, kind string) error {
 		// The simulator asks about an order once, when it is created: a rule for another
 		// operation would never fire.
 		return fmt.Errorf("%s applies to create only", kind)
+	}
+	// What only an order request carries is seen only where requests are classified as
+	// orders, and order-state effects only where the simulator keeps an order ledger.
+	// Anywhere else the rule would be stored and never fire.
+	orderMatch := m.Order != "" || m.Market != "" || m.Symbol != "" || m.Side != "" || m.ReduceOnly != nil
+	switch {
+	case m.Venue == venueAny:
+	case (orderMatch || kind == "reject" || kind == "written_then_timeout") && !classifiesOrders(m.Venue):
+		return fmt.Errorf("match.venue %q has no order classifier: order, market, symbol, side, reduce_only, reject and written_then_timeout never match there", m.Venue)
+	case kindLayer[kind] == layerOrder && !slices.Contains(sandbox.AccountVenues, m.Venue):
+		return fmt.Errorf("%s needs a venue whose simulator keeps orders (%s)", kind, strings.Join(sandbox.AccountVenues, ", "))
+	case m.Symbol != "" && m.Venue == "binanceth":
+		return errors.New("match.symbol is not supported on binanceth: its wire symbols are not parsed")
 	}
 	return nil
 }

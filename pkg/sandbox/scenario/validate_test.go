@@ -39,6 +39,9 @@ func TestStep_OneKindKeyPlusAt(t *testing.T) {
 		{"workspace dotdot", "instance: {workspace: {\"../x\": a}}\n", "/instance/workspace/..~1x", ".."},
 		{"workspace absolute", "instance: {workspace: {\"/etc/x\": a}}\n", "/instance/workspace/~1etc~1x", "relative"},
 		{"workspace ok", "instance: {workspace: {\"memory/a.md\": a}}\n", "", ""},
+		// cli passes every owner gate whatever proactive.owner says; no chat turn can carry it (140-1).
+		{"call_tool as cli", "timeline:\n  - {call_tool: {name: get_ticker, as: cli}}\n", "/timeline/0/call_tool/as", "local console"},
+		{"call_tool as owner", "timeline:\n  - {call_tool: {name: get_ticker, as: owner}}\n", "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

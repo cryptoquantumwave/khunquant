@@ -287,6 +287,9 @@ func (v *validator) step(p string, s *Step, spec stepSpec) {
 			return
 		}
 		v.required(p, spec, args)
+		if s.Kind == "call_tool" && args["as"] == "cli" {
+			v.addf(p+"/as", "cli is the local console: it passes every owner gate whatever proactive.owner says, and no chat turn can carry it; use owner or a persona")
+		}
 		for _, k := range []string{"wall_cap", "timeout_wall"} {
 			if str, ok := args[k].(string); ok {
 				if d, err := time.ParseDuration(str); err != nil || d <= 0 {

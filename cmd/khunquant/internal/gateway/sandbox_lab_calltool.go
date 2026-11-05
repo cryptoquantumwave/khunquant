@@ -60,7 +60,7 @@ func callToolGroup(shared *sharedResources) lab.Group {
 			Description: "call a tool",
 			Args: json.RawMessage(`{"name":{"type":"string","description":"tool name, e.g. set_price_alert"},` +
 				`"args":{"type":"object","description":"the tool's arguments"},` +
-				`"as":{"type":"string","description":"owner (default: the configured owner route) | cli (the local console) | <persona> (simchat:<persona> in dm:<persona>) | <persona>@group:<g>"},` +
+				`"as":{"type":"string","description":"owner (default: the configured owner route) | cli (the local console: owner-equivalent, it passes every owner gate whatever proactive.owner says, and no chat turn can carry it; scenarios refuse it) | <persona> (simchat:<persona> in dm:<persona>) | <persona>@group:<g>"},` +
 				`"chat":{"type":"string","description":"override the chat id"}}`),
 			Required: []string{"name"},
 			Run:      func(ctx context.Context, raw json.RawMessage) (any, error) { return callTool(ctx, shared, raw) },

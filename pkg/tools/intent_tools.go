@@ -385,7 +385,7 @@ func (t *CreateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult(fmt.Sprintf("nothing was stored: %v", err))
 	}
 	requestCompile(t.comp)
-	return NewToolResult(describeIntent(stored, time.Now(), resolveCompiler(t.comp)))
+	return NewToolResult(describeIntent(stored, t.store.Now(), resolveCompiler(t.comp)))
 }
 
 // parseExpected reads the expected argument. It checks the shape and the bounds; the
@@ -546,7 +546,7 @@ func (t *UpdateIntentTool) Execute(ctx context.Context, args map[string]any) *To
 	if err != nil {
 		return ErrorResult(intentErrorText(err))
 	}
-	return NewToolResult(describeIntent(done, time.Now(), resolveCompiler(t.comp)))
+	return NewToolResult(describeIntent(done, t.store.Now(), resolveCompiler(t.comp)))
 }
 
 func actionPast(action string) string {
@@ -710,7 +710,7 @@ func (t *ListIntentsTool) Execute(ctx context.Context, args map[string]any) *Too
 			return ErrorResult(fmt.Sprintf("could not read the intents: %v", err))
 		}
 	}
-	now := time.Now()
+	now := t.store.Now()
 	var out []listedIntent
 	more := 0
 	for _, it := range rows {

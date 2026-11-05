@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
@@ -20,6 +21,7 @@ var processClockSetters = []func(now func() time.Time){
 	broker.GlobalLossTracker.SetClock,
 	orderfeed.SetClock,
 	tools.SetClock,
+	agent.SetProcessClock, // the agent's profile and intent store
 	func(now func() time.Time) { alertNow = now },
 	func(now func() time.Time) { legacyJobs.now = now },
 	func(now func() time.Time) { processNow = now },

@@ -29,8 +29,11 @@ const (
 )
 
 // SetClock makes the store read the time from now (nil restores time.Now). It
-// affects this Store value only; it is for tests.
+// affects this Store value only; the gateway passes its shared clock.
 func (s *Store) SetClock(now func() time.Time) { s.now = now }
+
+// Now is the store's time: what CreateIntent and the expiry read.
+func (s *Store) Now() time.Time { return s.clock() }
 
 func (s *Store) clock() time.Time {
 	//simclock:wall the default when no clock is injected

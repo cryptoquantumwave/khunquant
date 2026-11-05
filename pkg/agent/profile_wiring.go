@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
@@ -15,6 +16,31 @@ import (
 
 // profileOpenTimeout bounds opening the database and migrating it at startup.
 const profileOpenTimeout = 15 * time.Second
+
+// processClock is the clock the agent's profile and intent store reads: nil (time.Now)
+// until the gateway binds its shared clock. A store reads it on every call, so a store
+// opened before the bind, or by a reload, follows it.
+var processClock atomic.Pointer[func() time.Time]
+
+// SetProcessClock makes the agent's profile and intent store read now instead of the
+// wall clock. It is process-wide and bound once by the gateway at start-up, next to the
+// other process clocks (a locked gateway passes its sim clock); nil restores time.Now.
+func SetProcessClock(now func() time.Time) {
+	if now == nil {
+		processClock.Store(nil)
+		return
+	}
+	processClock.Store(&now)
+}
+
+// ProcessNow is the time the agent's profile and intent store reads.
+func ProcessNow() time.Time {
+	if now := processClock.Load(); now != nil {
+		return (*now)()
+	}
+	//simclock:wall the default when no clock is bound
+	return time.Now()
+}
 
 // DefaultAgentWorkspace is the workspace of the default ("main") agent: the one
 // the shared proactive database lives under and the profile belongs to. It is
@@ -74,6 +100,9 @@ func openProfileStore(cfg *config.Config) *intent.Store {
 			map[string]any{"error": err.Error()})
 		return nil
 	}
+	// The same ledger the gateway's stores write on its shared clock: a store on the wall
+	// clock would expire, by today's date, intents a locked instance dated in sim time.
+	store.SetClock(ProcessNow)
 	if _, err := store.ImportIfEmpty(ctx, filepath.Join(workspace, "USER.md")); err != nil {
 		// The store works; only the seed failed. Keep the tools.
 		logger.WarnCF("agent", "Could not seed the profile from USER.md",

@@ -4,7 +4,7 @@ name: Sandbox Scenarios
 # documents a defect that is still open and stays red until the change that fixes it flips
 # it to active, so a red scenario here is expected: this workflow reports which are still
 # red (and which now pass, because a fix forgot to flip its status). The PR job "Scenarios"
-# in pr.yml gates the active set.
+# in pr.yml runs the active set on every PR; it gates merges once it is a required check.
 #
 # Kept apart from nightly.yml: that workflow's release job holds contents: write,
 # packages: write and the registry secrets. This one reads the repository and nothing else.
@@ -39,6 +39,11 @@ jobs:
       - name: Validate every scenario
         run: ./build/khunquant sandbox run --validate-only testdata/scenarios
 
+      # The namespace on its own first: below, exit 1 is read as "an open known bug", and a
+      # failing sudo or unshare also exits 1, which would turn a run that never started green.
+      - name: Check the network namespace
+        run: sudo unshare --net -- true
+
       # Same namespace as the PR job. Exit 1 (an expectation failed) is what an open known
       # bug does and is not an error here; 2 (an invalid scenario) and 3 (infrastructure)
       # are, and fail the job. The report goes to the job summary. A known bug whose scenario
@@ -51,6 +56,10 @@ jobs:
         run: |
           code=0
           sudo -E unshare --net -- sh -c 'ip link set lo up && exec sudo -E -u "$1" ./build/khunquant sandbox run --timeout 5m --report scenarios-report.md testdata/scenarios' sh "$(id -un)" || code=$?
+          if [ ! -s scenarios-report.md ]; then
+            echo "::error::no scenario report (exit $code): the run did not start"
+            exit 1
+          fi
           if [ -f scenarios-report.md ]; then
             cat scenarios-report.md >> "$GITHUB_STEP_SUMMARY"
             { grep -rl '^status: known_bug' testdata/scenarios || true; } | sort | while read -r f; do

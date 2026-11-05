@@ -19,11 +19,18 @@ type PatchIssue struct {
 
 // deniedPaths are config keys the supervisor and the lock own. A patch that names one
 // is refused before it is written: the gateway port or token would strand the supervisor,
-// and the sandbox switch and fixtures directory belong to the lock. (The gateway
-// re-enforces the rest on every reload: a non-sim model or a workspace outside the home
-// exits the instance with code 3. A real chat channel is only not built there, so
+// the sandbox switch and fixtures directory belong to the lock, and the file-tool
+// confinement and hardware switches are forced by it. (The gateway re-enforces the rest on
+// every reload: a non-sim model, or a workspace in agents.defaults or agents.list that is
+// not a directory inside the home, exits the instance with code 3; the confinement and
+// hardware keys are overwritten. A real chat channel is only not built there, so
 // CheckConfigPatch refuses it itself.)
-var deniedPaths = [][]string{{"gateway"}, {"debug", "sandbox"}, {"agents", "defaults", "workspace"}, {"providers"}}
+var deniedPaths = [][]string{
+	{"gateway"}, {"debug", "sandbox"}, {"agents", "defaults", "workspace"}, {"providers"},
+	{"agents", "defaults", "restrict_to_workspace"}, {"agents", "defaults", "allow_read_outside_workspace"},
+	{"tools", "allow_read_paths"}, {"tools", "allow_write_paths"},
+	{"tools", "i2c"}, {"tools", "spi"}, {"tools", "serial"}, {"devices"},
+}
 
 // deniedKeys is deniedPaths as joined keys, for lookup.
 var deniedKeys = func() map[string]bool {

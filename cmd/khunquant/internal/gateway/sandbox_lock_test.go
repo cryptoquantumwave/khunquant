@@ -51,10 +51,16 @@ func TestLockOptionsFromEnv(t *testing.T) {
 		t.Fatalf("options = %+v", lk)
 	}
 
-	t.Setenv("KQ_SANDBOX_ALLOW_HOSTS", " a.example , ,b.example")
-	if lk, _ = lockOptionsFromEnv(); len(lk.AllowHosts) != 2 || lk.AllowHosts[0] != "a.example" || lk.AllowHosts[1] != "b.example" {
-		t.Fatalf("allow hosts = %v", lk.AllowHosts)
+	// The egress opening is exactly the inner model's API host, and only for record/live
+	// (see TestLockAllowHostsAreExact).
+	t.Setenv("KQ_SANDBOX_LLM", "live")
+	t.Setenv("KQ_SANDBOX_LLM_MODEL", "anthropic-messages/claude-sonnet-4.6")
+	t.Setenv("KQ_SANDBOX_ALLOW_HOSTS", " api.anthropic.com ")
+	if lk, err = lockOptionsFromEnv(); err != nil || len(lk.AllowHosts) != 1 || lk.AllowHosts[0] != "api.anthropic.com" {
+		t.Fatalf("allow hosts = %v, %v", lk.AllowHosts, err)
 	}
+	t.Setenv("KQ_SANDBOX_LLM", "")
+	t.Setenv("KQ_SANDBOX_LLM_MODEL", "")
 	t.Setenv("KQ_SANDBOX_ALLOW_HOSTS", "")
 
 	// newInstanceHome pointed HOME at a temp dir, so these "real" homes are temp dirs

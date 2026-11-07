@@ -158,7 +158,7 @@ func TestUpDown_FakeGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"HOME", "KHUNQUANT_CONFIG", "KHUNQUANT_HOME", "KQ_SANDBOX_INSTANCE", "KQ_SANDBOX_LOCKED",
+	want := []string{"HOME", "KHUNQUANT_CONFIG", "KHUNQUANT_HOME", "KQ_SANDBOX_INSTANCE", "KQ_SANDBOX_LOCKED", "KQ_SANDBOX_SEED", // the seed derived from the instance name
 		"KQ_SANDBOX_TOKEN", "LANG", "PATH", "TMPDIR", "TZ"}
 	sort.Strings(want)
 	if got := strings.Split(string(envKeys), "\n"); strings.Join(got, ",") != strings.Join(want, ",") {

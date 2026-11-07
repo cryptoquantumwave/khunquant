@@ -15,15 +15,20 @@ func TestApplyLLMMode(t *testing.T) {
 		return &config.Config{ModelList: []config.ModelConfig{{ModelName: "sim", Model: "sim/scripted"}}}
 	}
 	cfg := mk()
-	if err := applyLLMMode(cfg, ""); err != nil || cfg.ModelList[0].Model != "sim/scripted" {
+	if err := applyLLMMode(cfg, "", ""); err != nil || cfg.ModelList[0].Model != "sim/scripted" {
 		t.Fatalf("unset: %v, %q", err, cfg.ModelList[0].Model)
 	}
-	if err := applyLLMMode(cfg, "replay"); err != nil || cfg.ModelList[0].Model != "sim/replay" {
+	if err := applyLLMMode(cfg, "replay", ""); err != nil || cfg.ModelList[0].Model != "sim/replay" {
 		t.Fatalf("replay: %v, %q", err, cfg.ModelList[0].Model)
 	}
-	for _, bad := range []string{"live", "record", "REPLAY", "sim/replay"} {
-		if err := applyLLMMode(mk(), bad); err == nil {
-			t.Errorf("mode %q must be refused by this build", bad)
+	live := mk()
+	if err := applyLLMMode(live, "live", "anthropic-messages/claude-sonnet-4.6"); err != nil || live.ModelList[0].Model != "sim/live:anthropic-messages/claude-sonnet-4.6" {
+		t.Fatalf("live: %v, %q", err, live.ModelList[0].Model)
+	}
+	for _, c := range [][2]string{{"REPLAY", ""}, {"sim/replay", ""}, {"replay", "openai/x"}, {"scripted", "openai/x"},
+		{"live", ""}, {"record", "claude-cli/x"}, {"live", "codex-cli/x"}, {"live", "x"}} {
+		if err := applyLLMMode(mk(), c[0], c[1]); err == nil {
+			t.Errorf("mode %q with inner %q must be refused", c[0], c[1])
 		}
 	}
 	if got := simModeOf(cfg); got != sim.ModeReplay {
@@ -37,7 +42,7 @@ func TestApplyLLMMode(t *testing.T) {
 func TestSeedFromEnv(t *testing.T) {
 	env := func(v string) func(string) string {
 		return func(k string) string {
-			if k == envSeed {
+			if k == sandbox.EnvSeed {
 				return v
 			}
 			return ""

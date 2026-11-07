@@ -408,7 +408,7 @@ func TestUpOptionFields_AreTagged(t *testing.T) {
 		}
 		flags = append(flags, f.Flag)
 	}
-	if strings.Join(flags, ",") != "name,fixtures-from,clock-start,clock-mode,clock-resolution" {
+	if strings.Join(flags, ",") != "name,fixtures-from,clock-start,clock-mode,clock-resolution,llm,llm-model,llm-budget,seed" {
 		t.Errorf("options = %v", flags)
 	}
 }

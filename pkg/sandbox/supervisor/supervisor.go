@@ -44,6 +44,9 @@ type Config struct {
 	MaxInstances int           // 1 when zero (SBX-18 raises it)
 	ReadyTimeout time.Duration // 60s when zero, wall time
 	TermGrace    time.Duration // SIGTERM grace before SIGKILL; 15s when zero
+	// Getenv is where a record or live start reads its key, allowlist and prices (os.Getenv
+	// when nil). A test supplies its own, so it never sees the developer's shell.
+	Getenv func(string) string
 
 	// PreArgs and ExtraArgs let a test re-execute its own binary as a fake gateway:
 	// they go before "gateway" and after "--sandbox-locked". The supervisor adds
@@ -158,6 +161,9 @@ func New(cfg Config) (*Supervisor, error) {
 		cfg.MinFreeBytes = mb << 20
 	}
 	cfg.MaxInstances = max(cfg.MaxInstances, 1)
+	if cfg.Getenv == nil {
+		cfg.Getenv = os.Getenv
+	}
 	if cfg.ReadyTimeout <= 0 {
 		cfg.ReadyTimeout = defaultReadyTimeout
 	}
@@ -178,7 +184,7 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err := validEnv(o.Env); err != nil {
 		return Info{}, err
 	}
-	env, err := o.childEnvOf()
+	env, err := o.childEnvOf(name, s.cfg.Getenv)
 	if err != nil {
 		return Info{}, err
 	}

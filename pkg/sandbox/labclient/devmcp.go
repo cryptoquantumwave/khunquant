@@ -27,6 +27,11 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 // server answers with plain JSON (no SSE stream), so a session costs three requests and
 // survives no restart that would have to be detected.
 func (c *Client) devSession(ctx context.Context) (*mcp.ClientSession, error) {
+	if c.gate != nil { // a dev-MCP call waits out a restart like any other (client.go)
+		if err := c.gate(ctx); err != nil {
+			return nil, err
+		}
+	}
 	hc := &http.Client{Timeout: callTimeout, Transport: bearer{c.token, c.hc.Transport}, CheckRedirect: c.hc.CheckRedirect}
 	t := &mcp.StreamableClientTransport{Endpoint: c.base + devMCPPath, HTTPClient: hc, DisableStandaloneSSE: true, MaxRetries: -1}
 	return mcp.NewClient(&mcp.Implementation{Name: "khunquant-sandbox", Version: "1"}, nil).Connect(ctx, t, nil)

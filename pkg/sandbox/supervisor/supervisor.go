@@ -16,15 +16,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/crash"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 )
 
 const (
-	defaultTermGrace = 15 * time.Second
-	defaultMinFreeMB = 1024
-	defaultLogTail   = 200
-	maxLogTail       = 2000
-	maxLogRead       = 1 << 20 // the end of gateway.log that Logs reads
+	defaultTermGrace   = 15 * time.Second
+	defaultRestartWait = 60 * time.Second
+	defaultMinFreeMB   = 1024
+	defaultLogTail     = 200
+	maxLogTail         = 2000
+	maxLogRead         = 1 << 20 // the end of gateway.log that Logs reads
 )
 
 var (
@@ -43,7 +45,10 @@ type Config struct {
 	MinFreeBytes uint64        // memory floor; KQ_SANDBOX_MIN_FREE_MB (default 1024 MiB) when zero
 	MaxInstances int           // 1 when zero (SBX-18 raises it)
 	ReadyTimeout time.Duration // 60s when zero, wall time
-	TermGrace    time.Duration // SIGTERM grace before SIGKILL; 15s when zero
+	// RestartWait is how long a call through this supervisor's client waits for an instance
+	// that is restarting (wall time; 60s when zero). A `restart kill_at` can set its own.
+	RestartWait time.Duration
+	TermGrace   time.Duration // SIGTERM grace before SIGKILL; 15s when zero
 	// Getenv is where a record or live start reads its key, allowlist and prices (os.Getenv
 	// when nil). A test supplies its own, so it never sees the developer's shell.
 	Getenv func(string) string
@@ -54,12 +59,15 @@ type Config struct {
 	PreArgs, ExtraArgs []string
 }
 
-// RestartMode says how Restart stops the process. The set is open (SBX-20 adds kill_at).
+// RestartMode says how Restart stops the process. The set is open.
 type RestartMode string
 
 const (
 	RestartGraceful RestartMode = "graceful" // SIGTERM, then SIGKILL after TermGrace
 	RestartKill     RestartMode = "kill"     // SIGKILL at once
+	// RestartKillAt arms a crash point (Supervisor.KillAt): the instance dies when a step
+	// reaches it, and is restarted by the supervisor. It is not a mode of Restart.
+	RestartKillAt RestartMode = "kill_at"
 )
 
 // State is where an instance is in its life. The set is open.
@@ -80,6 +88,12 @@ const (
 	ExitKilled        ExitReason = "killed"         // a kill the supervisor asked for (137)
 	ExitLockInvariant ExitReason = "lock_invariant" // exit 3: the gateway refused to run unlocked
 	ExitCrashed       ExitReason = "crashed"
+	// ExitCrashPoint: SIGKILL (code 137) with a crash marker, the death `restart kill_at`
+	// armed. The supervisor restarts the instance.
+	ExitCrashPoint ExitReason = "crash_point"
+	// ExitUnexpectedKill: SIGKILL with no marker and none asked for (the OOM killer, a stray
+	// kill -9). It is reported, and the instance is not restarted as if it were planned.
+	ExitUnexpectedKill ExitReason = "unexpected_kill"
 )
 
 // Info is the public view of an instance. It carries no token.
@@ -93,6 +107,13 @@ type Info struct {
 	LastExit   *int       `json:"last_exit,omitempty"`   // exit code of the previous process (137 after a kill)
 	ExitReason ExitReason `json:"exit_reason,omitempty"` // why it ended; exit 3 is lock_invariant, not a crash
 	StartedAt  time.Time  `json:"started_at"`
+	// Crash is the last crash at a point (the marker the process left); CrashRestarts counts
+	// them; Armed is the crash point armed and not yet fired; RestartError is why an
+	// automatic restart after a crash failed.
+	Crash         *crash.Marker `json:"crash,omitempty"`
+	CrashRestarts int           `json:"crash_restarts,omitempty"`
+	Armed         string        `json:"armed,omitempty"`
+	RestartError  string        `json:"restart_error,omitempty"`
 
 	token string
 }
@@ -108,6 +129,7 @@ type instance struct {
 	// Fixed once the instance is registered.
 	name, home, token, logPath string
 	env                        map[string]string
+	cfg                        Config // the supervisor's, for the restart after a crash
 
 	// url, port and client change with each attempt of Up, under mu; a Restart keeps them.
 	url    string
@@ -121,6 +143,14 @@ type instance struct {
 	lastExit  *int
 	reason    ExitReason
 	startedAt time.Time
+
+	// A restart after a crash at a point (killat.go).
+	restarting    bool          // the instance is down and about to be, or being, started again
+	armed         string        // the crash point armed and not yet fired
+	wait          time.Duration // wait_wall of the last `restart kill_at`; 0 takes cfg.RestartWait
+	crash         *crash.Marker
+	crashRestarts int
+	restartErr    string
 }
 
 // Supervisor starts, restarts and stops locked sandbox instances of a prebuilt binary.
@@ -170,6 +200,9 @@ func New(cfg Config) (*Supervisor, error) {
 	if cfg.TermGrace <= 0 {
 		cfg.TermGrace = defaultTermGrace
 	}
+	if cfg.RestartWait <= 0 {
+		cfg.RestartWait = defaultRestartWait
+	}
 	return &Supervisor{cfg: cfg, pickPort: freePort, instances: map[string]*instance{}}, nil
 }
 
@@ -198,7 +231,7 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	in := &instance{name: name, home: home, env: env, logPath: filepath.Join(home, logName), state: StateStarting}
+	in := &instance{name: name, home: home, env: env, logPath: filepath.Join(home, logName), state: StateStarting, cfg: s.cfg}
 	in.opMu.Lock() // before it is visible: a Restart or Down must wait for the start
 	defer in.opMu.Unlock()
 	if err := s.register(in); err != nil {
@@ -255,6 +288,7 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 	if err != nil {
 		return err
 	}
+	client.SetGate(in.gate) // a call waits out a restart (killat.go)
 	in.mu.Lock()
 	in.port, in.url, in.client = port, url, client
 	in.mu.Unlock()
@@ -330,13 +364,16 @@ func (in *instance) start(ctx context.Context, cfg Config) error {
 	}
 	in.mu.Lock()
 	in.p, in.state, in.startedAt, in.asked = p, StateStarting, time.Now(), ""
+	if in.restarting {
+		in.state = StateRestarting // it is a restart until the new process is ready
+	}
 	in.mu.Unlock()
 	go in.watch(p)
 
 	in.mu.Lock()
 	client, port := in.client, in.port
 	in.mu.Unlock()
-	if err := waitReady(ctx, client, p.exited, cfg.ReadyTimeout); err != nil {
+	if err := waitReady(ctx, client.Ungated(), p.exited, cfg.ReadyTimeout); err != nil {
 		killGroup(p.cmd.Process.Pid)
 		_ = p.cmd.Process.Kill()
 		<-p.exited
@@ -366,6 +403,7 @@ func (in *instance) watch(p *proc) {
 	}
 	code := p.code
 	in.lastExit = &code
+	resume := false
 	switch {
 	case in.asked != "":
 		in.reason = in.asked
@@ -373,11 +411,25 @@ func (in *instance) watch(p *proc) {
 		in.reason = ExitLockInvariant
 	case code == 0:
 		in.reason = ExitStopped
+	case code == exitSIGKILL:
+		// SIGKILL nobody here asked for: a crash at a point when the process left its
+		// marker, else an unexpected kill (reported, not restarted).
+		if m := readMarker(in.home); m != nil && !m.WallTime.Before(in.startedAt) { // not one an earlier process left
+			in.reason, in.crash, resume = ExitCrashPoint, m, true
+			in.crashRestarts++
+		} else {
+			in.reason = ExitUnexpectedKill
+		}
 	default:
 		in.reason = ExitCrashed
 	}
-	in.asked = ""
-	if in.state == StateRunning {
+	in.asked, in.armed = "", ""
+	switch {
+	case resume:
+		in.state, in.restarting = StateRestarting, true
+		killGroup(p.cmd.Process.Pid) // selfKill ended the gateway only: its children must not outlive it
+		go in.resume(p)
+	case in.state == StateRunning:
 		in.state = StateExited
 	}
 }
@@ -429,6 +481,7 @@ func (in *instance) info() Info {
 	i := Info{
 		Name: in.name, Home: in.home, GatewayURL: in.url, LogPath: in.logPath, State: in.state,
 		ExitReason: in.reason, StartedAt: in.startedAt, token: in.token,
+		Crash: in.crash, CrashRestarts: in.crashRestarts, Armed: in.armed, RestartError: in.restartErr,
 	}
 	if in.p != nil {
 		i.PID = in.p.cmd.Process.Pid
@@ -482,6 +535,9 @@ func (s *Supervisor) WaitRunning(ctx context.Context, name string) (Info, error)
 		}
 		switch i.State {
 		case StateRunning:
+			if in, lerr := s.lookup(name); lerr == nil && in.dead() { // died; the watcher has not classified it yet
+				break
+			}
 			return i, nil
 		case StateExited:
 			return i, fmt.Errorf("sandbox: instance %q has exited (%s)", i.Name, i.ExitReason)
@@ -514,8 +570,11 @@ func (s *Supervisor) List() []Info {
 // same HOME, on the same port and with the same token. An instance that has already
 // exited is started again.
 func (s *Supervisor) Restart(ctx context.Context, name string, mode RestartMode) (Info, error) {
+	if mode == RestartKillAt {
+		return Info{}, errors.New("sandbox: restart kill_at arms a crash point and returns; it is Supervisor.KillAt, not a Restart")
+	}
 	if mode != RestartGraceful && mode != RestartKill {
-		return Info{}, fmt.Errorf("sandbox: unknown restart mode %q (graceful or kill)", mode)
+		return Info{}, fmt.Errorf("sandbox: unknown restart mode %q (graceful, kill or kill_at)", mode)
 	}
 	in, err := s.lookup(name)
 	if err != nil {
@@ -524,8 +583,13 @@ func (s *Supervisor) Restart(ctx context.Context, name string, mode RestartMode)
 	in.opMu.Lock()
 	defer in.opMu.Unlock()
 	in.mu.Lock()
-	in.state = StateRestarting
+	in.state, in.restarting = StateRestarting, true
 	in.mu.Unlock()
+	defer func() { // calls wait for the restart, whichever way it ends
+		in.mu.Lock()
+		in.restarting = false
+		in.mu.Unlock()
+	}()
 	if err := in.stop(mode, s.cfg.TermGrace); err != nil {
 		return Info{}, err
 	}

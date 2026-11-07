@@ -267,8 +267,9 @@ func TestSupervisor_Exit3IsLockInvariant(t *testing.T) {
 	}
 }
 
-// A process that dies on its own is a crash, whatever the signal.
-func TestSupervisor_UnrequestedKillIsACrash(t *testing.T) {
+// A SIGKILL nobody asked for and that left no crash marker is reported as an unexpected
+// kill, and is not restarted as if it were planned.
+func TestSupervisor_UnrequestedKillIsReported(t *testing.T) {
 	sup := newFake(t, sandboxEnv(t))
 	inst, err := sup.Up(context.Background(), UpOptions{Name: "crash", FixturesFrom: repoFixtures(t)})
 	if err != nil {
@@ -276,8 +277,8 @@ func TestSupervisor_UnrequestedKillIsACrash(t *testing.T) {
 	}
 	_ = syscall.Kill(inst.PID, syscall.SIGKILL)
 	waitFor(t, "the instance to exit", func() bool { return sup.List()[0].State == StateExited })
-	if got := sup.List()[0]; got.ExitReason != ExitCrashed || got.LastExit == nil || *got.LastExit != 137 {
-		t.Errorf("after an outside SIGKILL: %+v, want last_exit 137 crashed", got)
+	if got := sup.List()[0]; got.ExitReason != ExitUnexpectedKill || got.LastExit == nil || *got.LastExit != 137 || got.CrashRestarts != 0 {
+		t.Errorf("after an outside SIGKILL: %+v, want last_exit 137 unexpected_kill and no crash restart", got)
 	}
 	// An exited instance can be started again.
 	if after, err := sup.Restart(context.Background(), "crash", RestartGraceful); err != nil || after.State != StateRunning {

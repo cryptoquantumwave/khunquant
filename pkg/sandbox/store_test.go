@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -427,13 +428,21 @@ func TestBackwardCompatibilityWithSeededFixtures(t *testing.T) {
 		t.Skipf("no fixtures loaded, skipping backward compatibility test")
 	}
 
-	// For each loaded fixture, assert it still resolves with nil query.
+	// For each loaded fixture, assert it still resolves with its own query (none for the
+	// seeded ones; a query-scoped fixture is looked up by the query it is scoped to).
 	for _, venue := range venues {
 		fixtures := store.GetFixtures(venue)
 		for _, fixture := range fixtures {
-			result := store.FindFixture(venue, fixture.Method, fixture.PathPrefix, nil)
+			var q url.Values
+			for k, v := range fixture.Query {
+				if q == nil {
+					q = url.Values{}
+				}
+				q.Set(k, v)
+			}
+			result := store.FindFixture(venue, fixture.Method, fixture.PathPrefix, q)
 			if result == nil {
-				t.Errorf("fixture not found: %s %s %s (query=nil)", venue, fixture.Method, fixture.PathPrefix)
+				t.Errorf("fixture not found: %s %s %s (query=%v)", venue, fixture.Method, fixture.PathPrefix, q)
 				continue
 			}
 			// Verify the body is identical (byte-for-byte).

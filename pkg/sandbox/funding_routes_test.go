@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,10 +51,8 @@ func TestIncomeFixtureFallthrough(t *testing.T) {
 	}
 }
 
-// ccxt's fetchFundingHistory reads the ledger from Binance income. The OKX route (bills and
-// bills-archive, type 8) is read raw: the recorded SPOT instruments fixture also lists
-// BTC-USDT-SWAP, so ccxt cannot resolve an OKX swap row by id (a fixture defect, not this
-// route's).
+// ccxt's fetchFundingHistory reads the ledger from Binance income and from OKX bills (type
+// 8); both are read through the real ccxt, and the OKX bills and bills-archive routes raw.
 func TestFunding_HistoryCCXT(t *testing.T) {
 	url := ccxtRig(t, func(sm *sandbox.StateManager) {
 		sm.GetState("binance").Income = twoPayments("BTCUSDT")
@@ -81,6 +80,30 @@ func TestFunding_HistoryCCXT(t *testing.T) {
 		t.Errorf("amounts sum to %v, want -0.75", sum)
 	}
 
+	// The OKX swap is one market by id now that the SPOT instruments answer lists only spot rows
+	// (it listed BTC-USDT-SWAP as well, and ccxt could not tell the two rows apart).
+	ok := ccxt.NewOkx(map[string]any{"apiKey": "sbx-test-api-key-0001", "secret": "sbx-test-secret-0001", "password": "sbx-test-pass-0001"})
+	if err := sandbox.RewriteExchangeURLs("okx", ok, url); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ok.LoadMarkets(); err != nil {
+		t.Fatal(err)
+	}
+	okHist, err := ok.FetchFundingHistory(ccxt.WithFetchFundingHistorySymbol("BTC/USDT:USDT"))
+	if err != nil || len(okHist) != 2 {
+		t.Fatalf("okx FetchFundingHistory = %d rows, %v, want the 2 payments", len(okHist), err)
+	}
+	sum = 0
+	for _, h := range okHist {
+		if h.Amount == nil || h.Timestamp == nil {
+			t.Fatalf("okx row %+v lacks an amount or a time", h)
+		}
+		sum += *h.Amount
+	}
+	if sum != -0.75 {
+		t.Errorf("okx amounts sum to %v, want -0.75", sum)
+	}
+
 	for _, route := range []string{"bills", "bills-archive"} {
 		got := getBody(t, url+"/__sbx__/okx/www.okx.com/api/v5/account/"+route+"?type=8&instType=SWAP&ccy=USDT")
 		// Newest first: the 0.75 received (subType 174) before the 1.5 paid (173).
@@ -91,6 +114,24 @@ func TestFunding_HistoryCCXT(t *testing.T) {
 	}
 	if got := getBody(t, url+"/__sbx__/okx/www.okx.com/api/v5/account/bills?type=2"); strings.Contains(got, "balChg") {
 		t.Errorf("another bill type got funding rows: %s", got)
+	}
+}
+
+// Each instType of the recorded OKX instruments answers its own rows and no other: the SPOT
+// answer listed BTC-USDT-SWAP too, so one market id came back twice.
+func TestOKXInstrumentsFixture_EachTypeListsOnlyItsRows(t *testing.T) {
+	url := ccxtRig(t, func(*sandbox.StateManager) {})
+	for _, typ := range []string{"SPOT", "SWAP", "FUTURES", "OPTION"} {
+		got := getBody(t, url+"/__sbx__/okx/www.okx.com/api/v5/public/instruments?instType="+typ)
+		lists := func(typ string) bool { return regexp.MustCompile(`"instType":\s*"` + typ + `"`).MatchString(got) }
+		if !lists(typ) {
+			t.Errorf("%s answer lists no %s row: %s", typ, typ, got)
+		}
+		for _, other := range []string{"SPOT", "SWAP", "FUTURES", "OPTION"} {
+			if other != typ && lists(other) {
+				t.Errorf("%s answer also lists %s rows", typ, other)
+			}
+		}
 	}
 }
 

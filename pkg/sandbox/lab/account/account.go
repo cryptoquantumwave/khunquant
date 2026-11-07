@@ -87,8 +87,9 @@ func seed(sim *sandbox.StatefulSimulator, r request) (any, error) {
 			return nil, lab.Errorf(lab.CodeBadArgs, "balance %q: want a non-empty asset and a finite amount >= 0", a)
 		}
 	}
+	now := sim.Now() // a seeded position is dated by the sim clock, not the wall
 	err := sim.Mutate(r.Venue, func(st *sandbox.VenueState) error {
-		ps, err := positions(st, r.Positions) // checked before anything is written
+		ps, err := positions(st, r.Positions, now) // checked before anything is written
 		if err != nil {
 			return err
 		}
@@ -116,7 +117,7 @@ func seed(sim *sandbox.StatefulSimulator, r request) (any, error) {
 // positions validates ps against the venue's markets and returns copies to store. A
 // position is keyed by wire symbol, which must be a market; the contract size comes
 // from it unless given, because the venue's wire format multiplies by it.
-func positions(st *sandbox.VenueState, ps []sandbox.Position) ([]*sandbox.Position, error) {
+func positions(st *sandbox.VenueState, ps []sandbox.Position, now time.Time) ([]*sandbox.Position, error) {
 	out := make([]*sandbox.Position, 0, len(ps))
 	for _, p := range ps {
 		m, ok := st.Markets[p.Symbol]
@@ -141,7 +142,7 @@ func positions(st *sandbox.VenueState, ps []sandbox.Position) ([]*sandbox.Positi
 		p.Leverage = cmp.Or(p.Leverage, st.Leverage[p.Symbol])
 		p.MarkPrice = cmp.Or(p.MarkPrice, p.EntryPrice) // the venue refreshes it from the price source
 		if p.UpdatedAt.IsZero() {
-			p.UpdatedAt = time.Now()
+			p.UpdatedAt = now
 		}
 		if p.ContractSize <= 0 {
 			return nil, lab.Errorf(lab.CodeBadArgs, "position %q: the market has no contract size, give contractSize", p.Symbol)

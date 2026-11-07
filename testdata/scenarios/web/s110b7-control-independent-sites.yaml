@@ -1,0 +1,58 @@
+# Control for s110b7-fake-news. The same story, on two sites that really are two sites
+# (wire-one.example and wire-two.example, two registrable domains of two owners). Here the
+# news source's corroboration rule is meant to deliver, and it does: the owner gets the news
+# notice. So the main scenario's key check, "no news message reaches the owner", is the one
+# thing that tells a corroborated story from two pages of one author; it can fail, and in this
+# control it would. It also shows the pipeline (search, fetch, parse, trigger, attention,
+# delivery) is whole under SimWeb, so a fix to the github.io case must keep this passing.
+version: 1
+scenario: s110b7-control-independent-sites
+covers: [S110B-7]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-26T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      cognition: { enabled: true }
+      news: { enabled: true, interval_minutes: 10 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 1 } }
+web:
+  - search: "BTC news"
+    results:
+      - { title: "Exchange hacked, BTC withdrawals frozen", url: "https://wire-one.example/news/btc-exchange-hack", description: "Breaking." }
+      - { title: "BTC exchange hack confirmed", url: "https://wire-two.example/news/btc-exchange-hack", description: "Confirmed." }
+  - url_pattern: "wire-one.example/news/*"
+    body: "<html><body><h1>Major exchange hacked</h1><p>Attackers drained the hot wallets of a major exchange today. BTC withdrawals are frozen.</p></body></html>"
+  - url_pattern: "wire-two.example/news/*"
+    body: "<html><body><h1>Exchange hack confirmed</h1><p>A major exchange confirmed that attackers drained its hot wallets today. BTC withdrawals are frozen.</p></body></html>"
+llm_script:
+  - id: parse
+    match: { complete: news }
+    respond:
+      text: '{"asset":"BTC","relevant":true,"direction":"down","magnitude":"high","event_type":"hack","published_at":"2026-10-26T01:00:00Z","summary":"A major exchange was hacked and BTC withdrawals are frozen."}'
+timeline:
+  - run_until: "+90m"
+expect:
+  - id: news-searched
+    web: { host: api.search.brave.com, count: ">= 1" }
+  - id: news-fetched-both-pages
+    web: { host: wire-, count: ">= 2" }
+  - id: news-parsed-both-pages
+    llm: { turn: complete }
+    count: ">= 2"
+  - id: the-corroborated-story-is-delivered
+    message: { to: owner, contains: ["News"], count: 1 }

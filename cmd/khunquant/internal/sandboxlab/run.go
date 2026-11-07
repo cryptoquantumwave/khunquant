@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
@@ -64,9 +65,10 @@ type checked struct {
 func (c checked) ok() bool { return c.Error == "" && len(c.Issues) == 0 }
 
 // checkScenario parses data, expands its matrix and validates every combination (caps
-// nil: static checks only). A file whose llm is not the wanted one (llm "" wants any) is
-// skipped before it is validated, so a live scenario never fails a scripted-only run. A
-// parse failure is reported in Error. The parsed scenario is returned for running.
+// nil: static checks only). Every file is validated, whatever its llm: a live scenario that
+// a pull-request run will not start is still checked. A valid file whose llm is not the
+// wanted one (see llmWanted) is marked Skipped. A parse failure is reported in Error. The
+// parsed scenario is returned for running.
 func checkScenario(file string, data []byte, caps *scenario.Caps, llm string) (checked, *scenario.File) {
 	c := checked{File: file, Issues: []scenario.Issue{}}
 	f, err := scenario.Parse(strings.NewReader(string(data)))
@@ -75,10 +77,6 @@ func checkScenario(file string, data []byte, caps *scenario.Caps, llm string) (c
 		return c, nil
 	}
 	c.Scenario = f.Scenario
-	if llm != "" && f.LLMMode() != llm {
-		c.Skipped = "filtered: llm " + f.LLMMode()
-		return c, f
-	}
 	files, err := scenario.Expand(f)
 	if err != nil {
 		c.Error = err.Error()
@@ -93,7 +91,22 @@ func checkScenario(file string, data []byte, caps *scenario.Caps, llm string) (c
 			}
 		}
 	}
+	if c.ok() && !llmWanted(llm, f.LLMMode()) {
+		c.Skipped = "filtered: llm " + f.LLMMode()
+	}
 	return c, f
+}
+
+// llmWanted says whether --llm selects a scenario of this llm mode: "" and all select
+// every one, offline the two that need no model API and no key, anything else that mode.
+func llmWanted(filter, mode string) bool {
+	switch filter {
+	case "", "all":
+		return true
+	case "offline":
+		return mode == "scripted" || mode == "replay"
+	}
+	return filter == mode
 }
 
 // scenarioFiles lists the YAML files named by paths: a file as it is, a directory by
@@ -131,11 +144,11 @@ func scenarioFiles(paths []string) ([]string, error) {
 }
 
 type runOptions struct {
-	validateOnly, jsonOut, keep           bool
-	runs                                  int
-	report, binary, llm, fixtures, budget string
-	seed                                  int
-	settleCap, timeout                    time.Duration
+	validateOnly, jsonOut, keep       bool
+	runs                              int
+	report, binary, llm, fixtures     string
+	llmModel, budget, seed, cassettes string
+	settleCap, timeout                time.Duration
 }
 
 func newRunCommand() *cobra.Command {
@@ -145,15 +158,11 @@ func newRunCommand() *cobra.Command {
 		Short: "Run scenario files against fresh locked sandbox instances",
 		Long: "Run (or, with --validate-only, only check) scenario files, one fresh locked instance per run, one at a time.\n" +
 			"A path is a file or a directory; the default is " + scenario.DefaultDir + ". --llm picks the files by their llm\n" +
-			"field (scripted by default; \"all\" for every file). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
+			"field (offline by default: scripted and replay, which need no model API and no key; live needs " + sandbox.EnvLLMKey + ",\n" +
+			sandbox.EnvLLMModels + " and --llm-model, --llm-budget, and is skipped without a key). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
 			"Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.",
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			cmd.SilenceUsage, cmd.SilenceErrors = true, true
-			for _, name := range []string{"llm-budget", "seed"} {
-				if cmd.Flags().Changed(name) {
-					return &exitError{exitInvalid, "--" + name + " belongs to the live-model runner (SBX-16), which this build lacks"}
-				}
-			}
 			return runScenarios(cmd, o, paths)
 		},
 	}
@@ -164,12 +173,14 @@ func newRunCommand() *cobra.Command {
 	f.IntVar(&o.runs, "runs", 0, "Runs per scenario (default: the file's runs)")
 	f.StringVar(&o.report, "report", "", "Write the Markdown report to this file")
 	f.StringVar(&o.binary, "binary", "", "khunquant binary to start instances from (default: this one)")
-	f.StringVar(&o.llm, "llm", "scripted", "Run the files whose llm is scripted, replay, live or all")
+	f.StringVar(&o.llm, "llm", "offline", "Run the files whose llm is scripted, replay, live, offline (scripted and replay) or all")
 	f.StringVar(&o.fixtures, "fixtures-from", "", "Directory holding <venue>/fixtures.json (default: ./workspace/sandbox)")
 	f.DurationVar(&o.settleCap, "settle-cap", 0, "Wall time a settle between steps may take before the run fails (default 10s)")
 	f.DurationVar(&o.timeout, "timeout", defaultTimeout, "Wall cap of one scenario, all its runs; over it is an infrastructure failure, exit 3 (0: none)")
-	f.StringVar(&o.budget, "llm-budget", "", "Budget of a live run (SBX-16)")
-	f.IntVar(&o.seed, "seed", 0, "Seed of a live run (SBX-16)")
+	f.StringVar(&o.llmModel, "llm-model", "", "Live runs: the real model, <protocol>/<model>")
+	f.StringVar(&o.budget, "llm-budget", "", "Live runs: spending cap per instance, e.g. 2USD or 200000tok (required for live)")
+	f.StringVar(&o.seed, "seed", "", "Seed of the instances' nonces and ids (default: derived from each instance name; 0: none)")
+	f.StringVar(&o.cassettes, "cassettes", "", "Directory of <scenario>.jsonl cassettes for replay scenarios (default: testdata/cassettes)")
 	return cmd
 }
 
@@ -186,9 +197,7 @@ func loadAll(cmd *cobra.Command, paths []string, llm string) ([]loaded, error) {
 	if err != nil {
 		return nil, &exitError{exitInvalid, err.Error()}
 	}
-	if llm == "all" {
-		llm = ""
-	}
+
 	var items []loaded
 	ids := map[string]string{}
 	out, bad := cmd.OutOrStdout(), 0
@@ -204,8 +213,8 @@ func loadAll(cmd *cobra.Command, paths []string, llm string) ([]loaded, error) {
 		ids[c.Scenario] = file
 		items = append(items, loaded{c, f})
 		switch {
-		case c.Skipped != "":
-			fmt.Fprintf(out, "skip    %s (%s)\n", file, c.Skipped)
+		case c.Skipped != "" && c.ok():
+			fmt.Fprintf(out, "skip    %s (valid; %s)\n", file, c.Skipped)
 		case c.ok():
 			fmt.Fprintf(out, "ok      %s\n", file)
 		default:
@@ -242,7 +251,8 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 		return &exitError{exitInfra, err.Error()}
 	}
 	defer func() { _ = closeSup(context.WithoutCancel(ctx)) }()
-	runner := &scenario.Runner{Sup: sup, Timeout: o.timeout, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr()}
+	runner := &scenario.Runner{Sup: sup, Timeout: o.timeout, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr(),
+		CassetteDir: o.cassettes, LLMModel: o.llmModel, LLMBudget: o.budget, Seed: o.seed}
 
 	var reports []*scenario.Report
 	var md strings.Builder
@@ -262,6 +272,10 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 		md.WriteString(rep.Markdown() + "\n")
 		exit = worse(exit, rep.ExitCode())
 		if !o.jsonOut {
+			if rep.Skipped != "" { // say why: a skipped live scenario is not a passed one
+				fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%s)\n", rep.Verdict(), rep.Scenario, rep.Skipped)
+				continue
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%d of %d runs)\n", rep.Verdict(), rep.Scenario, rep.Passed, len(rep.Runs))
 			if rep.ExitCode() != 0 {
 				fmt.Fprint(cmd.OutOrStdout(), rep.Markdown())

@@ -41,7 +41,8 @@ type File struct {
 	Status    Status                 `yaml:"status,omitempty"`
 	KnownBug  string                 `yaml:"known_bug,omitempty"`
 	LLM       string                 `yaml:"llm"`
-	Level     string                 `yaml:"level"` // wire (default) | event; recorded only in v1
+	Miss      string                 `yaml:"miss,omitempty"` // replay only: a request the cassette lacks fails (error, default) or goes to llm_script (scripted)
+	Level     string                 `yaml:"level"`          // wire (default) | event; recorded only in v1
 	Runs      int                    `yaml:"runs,omitempty"`
 	PassRate  float64                `yaml:"pass_rate,omitempty"`
 	Matrix    map[string][]string    `yaml:"matrix,omitempty"`

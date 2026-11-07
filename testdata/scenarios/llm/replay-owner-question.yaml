@@ -1,0 +1,25 @@
+# SBX-16: a scenario whose model is replayed from a cassette, so it runs in every pull
+# request with no model API and no key. The cassette is testdata/cassettes/<scenario>.jsonl,
+# recorded from the fake model provider the end-to-end test starts on loopback (never from a
+# real model): TestE2E_LLMRecordThenReplay rewrites it when KQ_SANDBOX_RECORD_CASSETTE=1 and
+# otherwise replays the committed one three times and compares the journals.
+#
+# A request the cassette lacks (a changed system prompt, a new tool) fails the run and names
+# its key, so a stale cassette reads as one. Re-record it, or set `miss: scripted` to let the
+# scripted rules answer what it lacks.
+version: 1
+scenario: replay-owner-question
+covers: [SBX-16]
+llm: replay
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+setup:
+  - chat: { as: owner, text: "is my watchlist quiet today?" }
+timeline:
+  - advance: 2m
+expect:
+  - id: owner-gets-the-recorded-answer
+    message: { to: owner, contains: ["watchlist is quiet"], count: 1 }
+  - id: one-user-turn
+    llm: { turn: user }
+    count: 1

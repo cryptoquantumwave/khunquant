@@ -97,11 +97,15 @@ func (v *validator) header() {
 		v.addf("/status", "must be active or known_bug")
 	}
 	switch f.LLM {
-	case "", "scripted":
-	case "replay", "live":
-		v.addf("/llm", "llm: %s is not supported by this runner (SBX-16)", f.LLM)
+	case "", "scripted", "replay", "live":
 	default:
 		v.addf("/llm", "must be scripted, replay or live")
+	}
+	switch {
+	case f.Miss != "" && f.LLM != "replay":
+		v.addf("/miss", "only allowed with llm: replay")
+	case f.Miss != "" && f.Miss != "error" && f.Miss != "scripted":
+		v.addf("/miss", "must be error or scripted")
 	}
 	if !slices.Contains([]string{"", "wire", "event"}, f.Level) {
 		v.addf("/level", "must be wire or event")

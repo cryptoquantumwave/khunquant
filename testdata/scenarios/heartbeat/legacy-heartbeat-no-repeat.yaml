@@ -1,0 +1,38 @@
+# H9 / S110B-1: a legacy heartbeat must not tell the owner the same thing every half hour.
+# After #110 an automatic heartbeat cannot write memory/, so the ledger the v1 template
+# relies on does not work (S110B-1); v2 asks the model to read its own history instead. Both
+# are expected to go red at the head of #116, which is why this documents a known bug.
+#
+# This one talks to the real model. It runs only with `--llm live` and needs
+# KQ_SANDBOX_LLM_KEY, KQ_SANDBOX_LLM_MODELS, --llm-model and --llm-budget; without a key the
+# runner skips it ("live: no key") and does not fail. It is checked by --validate-only like
+# any other file. The nightly job that runs it is opt-in: .github/workflows/sandbox-live.yml.
+version: 1
+scenario: legacy-heartbeat-no-repeat
+covers: [H9, S110B-1]
+status: known_bug
+known_bug: H9
+llm: live
+runs: 5
+pass_rate: 0.8
+base: stack-head
+matrix:
+  template:
+    - "# Heartbeat tasks\n- If SOL moved more than 5% in the last hour, tell the owner. Keep a ledger of what you already reported in memory/heartbeat-ledger.md and never report the same move twice.\n"
+    - "# Heartbeat tasks\n- If SOL moved more than 5% in the last hour, tell the owner once. Look at your earlier messages in this session and do not repeat a move you already reported.\n"
+level: wire
+clock: { start: "2026-10-20T09:30:00+07:00", mode: manual }
+instance:
+  config: { heartbeat: { enabled: true, interval: 30 } } # proactive off: the legacy path
+  workspace: { HEARTBEAT.md: "${template}" }
+market:
+  SOL/USDT: { venue: binance, model: set, price: 180 }
+timeline:
+  - at: "+0m"
+    market.path: { symbol: SOL/USDT, to: 165.6, over: 30m, shape: linear } # -8%, then flat
+  - run_until: "next 08:00"
+expect:
+  - id: quiet-at-night
+    message: { to: owner, during: "22:00-07:00", count: 0 }
+  - id: reported-at-most-twice
+    message: { to: owner, contains: ["SOL"], count: "<= 2" }

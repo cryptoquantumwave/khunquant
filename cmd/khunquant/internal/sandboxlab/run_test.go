@@ -107,7 +107,7 @@ func TestRunCLI_DefaultDirAndEmpty(t *testing.T) {
 
 func TestScenarioTool_Validate(t *testing.T) {
 	h := newHarness(t)
-	inline := strings.ReplaceAll(goodScenario, "%ID%", "inline-one") + "llm: live\n"
+	inline := strings.ReplaceAll(goodScenario, "%ID%", "inline-one") + "llm: turbo\n"
 	out := h.must("sandbox_scenario", map[string]any{"op": "validate", "inline": inline})
 	var res struct {
 		Valid      bool `json:"valid"`
@@ -117,7 +117,7 @@ func TestScenarioTool_Validate(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatal(err)
 	}
-	if res.Valid || !res.StaticOnly || len(res.Issues) != 1 || res.Issues[0].Path != "/llm" || !strings.Contains(res.Issues[0].Msg, "SBX-16") {
+	if res.Valid || !res.StaticOnly || len(res.Issues) != 1 || res.Issues[0].Path != "/llm" || !strings.Contains(res.Issues[0].Msg, "scripted, replay or live") {
 		t.Fatalf("result = %s", out)
 	}
 	if _, isErr := h.call("sandbox_scenario", map[string]any{"op": "validate"}); !isErr {

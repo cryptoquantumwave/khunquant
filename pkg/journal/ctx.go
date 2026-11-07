@@ -242,7 +242,7 @@ func (c *Ctx) runStep(seq int, row *stepRow, name string, out any, fn func(conte
 			}
 			return c.halted(haltSuspend, ErrSuspended)
 		}
-		eng.callHook(pointBeforeStarted, c.wf.ID, name, 0)
+		eng.callHook(pointBeforeStarted, &c.wf, name, 0)
 		br, err := eng.st.beginStep(db, f, now, seq, name, row != nil)
 		if err != nil {
 			return c.storeErr(err)
@@ -255,13 +255,13 @@ func (c *Ctx) runStep(seq int, row *stepRow, name string, out any, fn func(conte
 			c.ended(StatusFailed, br.failed)
 			return c.halted(haltFailed, fmt.Errorf("%w: %s", ErrTooManyAttempts, br.failed))
 		}
-		eng.callHook(pointAfterStarted, c.wf.ID, name, br.attempt)
+		eng.callHook(pointAfterStarted, &c.wf, name, br.attempt)
 		c.stepEvent(name, seq, br.attempt, StepStarted, 0)
 
 		val, ferr, pnc := c.call(fn, seq, br.attempt, br.firstAt)
 		done := eng.clock.Now()
 		dur := done.Sub(now)
-		eng.callHook(pointAfterFn, c.wf.ID, name, br.attempt)
+		eng.callHook(pointAfterFn, &c.wf, name, br.attempt)
 
 		if pnc != nil {
 			msg := "panic in step: " + pnc.text
@@ -328,7 +328,7 @@ func (c *Ctx) runStep(seq int, row *stepRow, name string, out any, fn func(conte
 		if err := eng.st.finishStep(db, f, done, seq, b, "", ""); err != nil {
 			return c.storeErr(err)
 		}
-		eng.callHook(pointAfterOutput, c.wf.ID, name, br.attempt)
+		eng.callHook(pointAfterOutput, &c.wf, name, br.attempt)
 		c.stepEvent(name, seq, br.attempt, StepSucceeded, dur)
 		return decodeOutput(name, b, out)
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lockflag"
 )
 
 // LockOptions configures the sandbox process lock.
@@ -46,7 +47,8 @@ func Lock(opts LockOptions) error {
 	}
 	opts.AllowHosts = append([]string(nil), opts.AllowHosts...)
 	lockOpts, locked = opts, true
-	randsrc.Arm() // lets the lab seed the nonce source; no other caller arms it
+	randsrc.Arm()  // lets the lab seed the nonce source; no other caller arms it
+	lockflag.Set() // the leaf the workflow journal reads (see lockflag)
 
 	globalStateMu.Lock()
 	globalEnabled, globalBaseURL = true, ""
@@ -103,6 +105,7 @@ func ResetLockForTest() {
 	defer lockMu.Unlock()
 	lockOpts, locked = LockOptions{}, false
 	randsrc.ResetForTest()
+	lockflag.ResetForTest()
 	globalStateMu.Lock()
 	globalEnabled, globalBaseURL = false, ""
 	globalStateMu.Unlock()

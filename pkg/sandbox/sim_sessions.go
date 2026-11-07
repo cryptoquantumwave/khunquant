@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -31,6 +32,9 @@ type setDay struct{ open, afternoon time.Duration }
 type VenueOptions struct {
 	AuctionOpen      string // settrade: "HH:MM" Asia/Bangkok, default 10:00
 	AuctionAfternoon string // settrade: default 14:30
+
+	RejectDuplicateClientID bool    // webull: a repeated client_order_id is refused (default: it makes a second order)
+	ListSeed                *uint64 // webull: seeds the order of its listings (default 1)
 }
 
 // timeOfDay reads "HH:MM".
@@ -71,7 +75,7 @@ func (o VenueOptions) day() (setDay, error) {
 
 // SetVenueOptions sets a venue's options; a venue with none is refused.
 func (sim *StatefulSimulator) SetVenueOptions(venue string, o VenueOptions) error {
-	if venue != "settrade" {
+	if venue != "settrade" && venue != "webull" {
 		return fmt.Errorf("venue %q has no options", venue)
 	}
 	if _, err := o.day(); err != nil {
@@ -94,6 +98,18 @@ func ParseVenueOptions(venue string, m map[string]any) (VenueOptions, error) {
 	for k, v := range m {
 		s, isStr := v.(string)
 		switch {
+		case venue == "webull" && k == "reject_duplicate_client_id":
+			b, isBool := v.(bool)
+			if !isBool {
+				return o, fmt.Errorf("option %s: want true or false", k)
+			}
+			o.RejectDuplicateClientID = b
+		case venue == "webull" && k == "list_seed":
+			n, ok := wholeNumber(v)
+			if !ok {
+				return o, fmt.Errorf("option %s: want a whole number >= 0", k)
+			}
+			o.ListSeed = &n
 		case venue == "settrade" && k == "auction_open" && isStr:
 			o.AuctionOpen = s
 		case venue == "settrade" && k == "auction_afternoon" && isStr:
@@ -106,6 +122,24 @@ func ParseVenueOptions(venue string, m map[string]any) (VenueOptions, error) {
 	}
 	_, err := o.day()
 	return o, err
+}
+
+// wholeNumber reads a JSON or YAML number that is an integer in [0, 2^53).
+func wholeNumber(v any) (uint64, bool) {
+	var f float64
+	switch n := v.(type) {
+	case float64:
+		f = n
+	case int:
+		f = float64(n)
+	case int64:
+		f = float64(n)
+	case uint64:
+		f = float64(n)
+	default:
+		return 0, false
+	}
+	return uint64(f), finite(f) && f >= 0 && f < 1<<53 && f == math.Trunc(f)
 }
 
 // setDay is the simulator's SET day. Callers hold sim.mu.

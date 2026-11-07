@@ -20,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/notify"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive/engine"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
@@ -254,6 +255,14 @@ func buildDCAFlow(d assemblyDeps, ns *notify.Service) *dcaFlowRuntime {
 		},
 		Tell:  dcaTeller(ns),
 		Clock: d.Shared.clk(),
+	}
+	if sandbox.Locked() {
+		// A lab's clock moves only when an advance steps it, and each step settles first. A
+		// run that waits a sim second to read its order back again (an at-the-open order is
+		// not filled yet) would hold that settle for good: the timer it waits for is the next
+		// step. So the order is read back at once, five times, and the run ends with the order
+		// still open, which is the same outcome after four sim seconds less.
+		deps.PollInterval = -1
 	}
 	// The owner's autonomy setting for mandated buys (T2) is checked by the workflow
 	// itself, whatever proactive.policy.mode is: a mandated run is not a tool call.

@@ -224,6 +224,17 @@ func (sim *StatefulSimulator) settradeList(r *http.Request) *Response {
 
 // settradeAccountInfo is accountInfoResponse: the cash held (reserved or not) and what is
 // free to buy with.
+// avgCost sums the buys on record per symbol: the cost and the volume they were made of.
+func avgCost(st *VenueState) (cost, vol map[string]float64) {
+	cost, vol = map[string]float64{}, map[string]float64{}
+	for _, t := range st.Trades {
+		if t.Side == "buy" {
+			cost[t.Symbol], vol[t.Symbol] = cost[t.Symbol]+t.Price*t.Amount, vol[t.Symbol]+t.Amount
+		}
+	}
+	return cost, vol
+}
+
 func (sim *StatefulSimulator) settradeAccountInfo() *Response {
 	cash := sim.stateManager.GetState("settrade").Balances["THB"]
 	return jsonResponse(200, map[string]any{"cashBalance": cash.Free + cash.Locked, "lineAvailable": cash.Free,
@@ -235,12 +246,7 @@ func (sim *StatefulSimulator) settradeAccountInfo() *Response {
 // holding) and the profit at the market price.
 func (sim *StatefulSimulator) settradePortfolio() *Response {
 	st := sim.stateManager.GetState("settrade")
-	cost, vol := map[string]float64{}, map[string]float64{}
-	for _, t := range st.Trades {
-		if t.Side == "buy" {
-			cost[t.Symbol], vol[t.Symbol] = cost[t.Symbol]+t.Price*t.Amount, vol[t.Symbol]+t.Amount
-		}
-	}
+	cost, vol := avgCost(st)
 	items := []map[string]any{}
 	for _, sym := range slices.Sorted(maps.Keys(st.Balances)) {
 		held := st.Balances[sym]

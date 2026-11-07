@@ -23,7 +23,7 @@ import (
 const (
 	reload   = `"reload_markets":{"type":"boolean","description":"also drop the cached exchange clients so the next ones reload markets (default false)"}`
 	symVenue = `"symbol":{"type":"string","description":"BASE/QUOTE, e.g. BTC/USDT (a spot market and its USDT swap share it)"},` +
-		`"venue":{"type":"string","enum":["binance","okx","bitkub","settrade","*"],"description":"default *: every venue without a model of its own"}`
+		`"venue":{"type":"string","enum":["binance","okx","bitkub","settrade","webull","*"],"description":"default *: every venue without a model of its own"}`
 )
 
 // Options are what the group needs from the instance.

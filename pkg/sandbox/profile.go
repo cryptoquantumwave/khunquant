@@ -86,6 +86,11 @@ const (
 	PlaceholderAccountNo = "SBX-ACCOUNT-0001"
 	PlaceholderPIN       = "000000"
 
+	// A Webull account is the key and secret, a region and the account the orders are for (the
+	// client would resolve it from the account list otherwise). The session of its 2FA
+	// login is the fixtures' NORMAL token, kept in the instance's workspace.
+	PlaceholderWebullAccountID = "SBX-WEBULL-0001"
+
 	// AccountsFile, in the instance home (outside the workspace the instance's file
 	// tools are confined to), names the venues that get a placeholder account, one JSON
 	// list. The supervisor writes it when it creates the home.
@@ -100,7 +105,7 @@ var PlaceholderSettradeSecret = base64.StdEncoding.EncodeToString([]byte("SBX-PL
 
 // AccountVenues are the venues a placeholder account can be asked for: those the
 // simulator serves.
-var AccountVenues = []string{"binance", "okx", "settrade"}
+var AccountVenues = []string{"binance", "okx", "settrade", "webull"}
 
 // ApplyPlaceholderAccounts makes each venue in venues enabled with exactly the
 // placeholder account: name main, the constant credentials, and the scopes market_data
@@ -127,6 +132,9 @@ func ApplyPlaceholderAccounts(cfg *config.Config, venues []string) error {
 			cfg.Exchanges.Settrade.Enabled = true
 			cfg.Exchanges.Settrade.Accounts = []config.SettradeExchangeAccount{{ExchangeAccount: acc, BrokerID: PlaceholderBrokerID,
 				AppCode: PlaceholderAppCode, AccountNo: PlaceholderAccountNo, PIN: *config.NewSecureString(PlaceholderPIN)}}
+		case "webull":
+			cfg.Exchanges.Webull.Enabled = true
+			cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{{ExchangeAccount: acc, AccountID: PlaceholderWebullAccountID, Region: "th"}}
 		default:
 			return fmt.Errorf("no placeholder account for %q (only %s have a simulator)", v, strings.Join(AccountVenues, ", "))
 		}

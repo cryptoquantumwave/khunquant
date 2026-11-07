@@ -18,20 +18,21 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
 
-// SeedArgs is the request of "seed". Only binance, okx and settrade have a simulator today.
+// SeedArgs is the request of "seed". Only binance, okx, settrade and webull have a simulator today.
 type SeedArgs struct {
-	Venue     string             `json:"venue"`              // binance | binance.spot (its spot wallet) | okx | settrade
+	Venue     string             `json:"venue"`              // binance | binance.spot (its spot wallet) | okx | settrade | webull
 	Balances  map[string]float64 `json:"balances,omitempty"` // asset -> free
 	Positions []sandbox.Position `json:"positions,omitempty"`
 	Replace   bool               `json:"replace,omitempty"`  // clear balances and positions first
 	Baseline  *bool              `json:"baseline,omitempty"` // default true: a reset returns to this seed
 	// Options are the venue's knobs (settrade: auction_open, auction_afternoon as HH:MM
-	// Asia/Bangkok); an unknown key is refused. An equity venue's holdings are balances.
+	// Asia/Bangkok; webull: reject_duplicate_client_id, list_seed); an unknown key is
+	// refused. An equity venue's holdings are balances.
 	Options map[string]any `json:"options,omitempty"`
 }
 
 const (
-	argVenue = `"venue":{"type":"string","enum":["binance","binance.spot","okx","settrade"]}`
+	argVenue = `"venue":{"type":"string","enum":["binance","binance.spot","okx","settrade","webull"]}`
 	argTail  = `"status":{"type":"string","enum":["open","closed","all"],"description":"default all"},` +
 		`"symbol":{"type":"string","description":"wire symbol: BTCUSDT on binance, BTC-USDT-SWAP on okx"}`
 )
@@ -47,7 +48,7 @@ type request struct {
 func Group(sim *sandbox.StatefulSimulator) lab.Group {
 	return lab.Group{
 		Name: "account",
-		Description: "Seed and read the simulated venues' accounts (binance, binance.spot, okx, settrade; one account each). " +
+		Description: "Seed and read the simulated venues' accounts (binance, binance.spot, okx, settrade, webull; one account each). " +
 			"Prices are not set here: see sandbox_market.",
 		Ops: []lab.Op{
 			{Name: "seed", Description: "set free balances and put positions; by default the result is what sandbox_reset_simulator returns to",
@@ -55,7 +56,7 @@ func Group(sim *sandbox.StatefulSimulator) lab.Group {
 					`"positions":{"type":"array","items":{"type":"object"},"description":"[{symbol (wire), side long|short, contracts, entryPrice, leverage[, marginMode cross|isolated, maintRate, isolatedMargin]}]; the market must exist"},` +
 					`"replace":{"type":"boolean","description":"clear balances and positions first"},` +
 					`"baseline":{"type":"boolean","description":"default true"},` +
-					`"options":{"type":"object","description":"settrade: auction_open (default 10:00), auction_afternoon (14:30), HH:MM Asia/Bangkok; its holdings are balances, e.g. {THB: 1000000, PTT: 500}"}}`),
+					`"options":{"type":"object","description":"settrade: auction_open (default 10:00), auction_afternoon (14:30), HH:MM Asia/Bangkok; webull: reject_duplicate_client_id (default false), list_seed (default 1); an equity venue's holdings are balances, e.g. {THB: 1000000, PTT: 500}"}}`),
 				Required: []string{"venue"}, Run: run(sim, seed)},
 			{Name: "get", Description: "balances, positions and order counts of a venue",
 				Args: json.RawMessage(`{` + argVenue + `}`), Required: []string{"venue"}, Run: run(sim, get)},
@@ -74,11 +75,11 @@ func run(sim *sandbox.StatefulSimulator, op func(*sandbox.StatefulSimulator, req
 			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 		}
 		switch r.Venue {
-		case "binance", "binance.spot", "okx", "settrade":
+		case "binance", "binance.spot", "okx", "settrade", "webull":
 		case "":
 			return nil, lab.Errorf(lab.CodeBadArgs, "venue is required")
 		default: // GetState would create state for any name
-			return nil, lab.Errorf(lab.CodeUnavailable, "venue %q has no simulator account (binance, binance.spot, okx and settrade do)", r.Venue)
+			return nil, lab.Errorf(lab.CodeUnavailable, "venue %q has no simulator account (binance, binance.spot, okx, settrade and webull do)", r.Venue)
 		}
 		sim.Advance(time.Time{}) // a read shows what has fallen due (a cancel, a crossed limit)
 		return op(sim, r)
@@ -95,8 +96,8 @@ func seed(sim *sandbox.StatefulSimulator, r request) (any, error) {
 	if len(r.Options) > 0 && err != nil {
 		return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 	}
-	if r.Venue == "settrade" && len(r.Positions) > 0 {
-		return nil, lab.Errorf(lab.CodeBadArgs, "settrade has no positions: seed holdings as balances, e.g. {PTT: 500}")
+	if (r.Venue == "settrade" || r.Venue == "webull") && len(r.Positions) > 0 {
+		return nil, lab.Errorf(lab.CodeBadArgs, "%s has no positions: seed holdings as balances, e.g. {PTT: 500}", r.Venue)
 	}
 	now := sim.Now() // a seeded position is dated by the sim clock, not the wall
 	err = sim.Mutate(r.Venue, func(st *sandbox.VenueState) error {

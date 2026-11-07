@@ -8,7 +8,7 @@ import (
 )
 
 // equitySimFiles are the files that answer Settrade (and Webull) with errors of their own.
-var equitySimFiles = []string{"sim_settrade.go"}
+var equitySimFiles = []string{"sim_settrade.go", "sim_webull.go"}
 
 // No real broker code is invented: every code the equity simulators send is an upper-case,
 // dash-separated literal that starts with SBX-, which no venue uses.

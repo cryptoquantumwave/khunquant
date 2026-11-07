@@ -81,6 +81,9 @@ func (b *Book) render(venue, path string, q url.Values) (int, []byte, bool) {
 	if venue == "settrade" {
 		return b.settradeQuote(path, q)
 	}
+	if venue == "webull" && path == "/openapi/market-data/stock/snapshot" {
+		return b.webullSnapshot(q)
+	}
 	return 0, nil, false
 }
 

@@ -1,0 +1,64 @@
+# S108A-3: a Webull order whose answer was lost must be found again, not placed twice. The
+# mandate DCA buy goes through broker.PlaceOrderIdempotent. Its first create is written by the
+# venue and the answer is lost (written_then_timeout, once); the run retries, reconciles by the
+# client order id, finds the order it already placed, and so books ONE market order.
+#
+# What this scenario does not do, and why. The plan's version of this bug had 12 open orders on
+# the account and a reconcile reading one 10-row page. The client now asks for the largest page
+# (100) and treats a full page as unable to show absence (7cbd839b), so this tree does not have
+# that defect, and the 12-order paging case is covered where it can be set up: the Go test
+# TestWebull_ReconcileReadsOnePage (pkg/exchanges/webull), which is therefore not gated. A
+# scenario cannot rest 12 orders on the account: the only way to place a resting order is
+# create_order, whose market-status gate reads the WALL clock (time.Now in
+# webull.GetMarketStatus), so it would pass or fail with the hour the suite runs at. The
+# mandate buy has no such gate. So this is the lost-answer half, at the wire, and it is active.
+#
+# The control (s108a3-control-rejected-create.yaml): the same run with the create rejected
+# instead of lost books no market order, so the count here is the venue's booking and not an
+# artefact of the plan.
+version: 1
+scenario: s108a3-webull-reconcile
+covers: [S108A-3]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T21:00:00+07:00", mode: manual }
+instance:
+  accounts: [webull]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+      mandates: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "23:00" }
+market:
+  AAPL/USD: { venue: webull, model: set, price: 150 }
+account:
+  webull: { balances: { USD: 1000000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_dca_plan
+      args: { plan_name: aapl-daily, provider: webull, symbol: AAPL/USD, amount_per_order: 2, amount_unit: base, schedule: { cron: "30 21 * * *", timezone: Asia/Bangkok }, propose_mandate: true, mandate_months: 1, mandate_max_per_period: 5000, mandate_period: week }
+  - chat.press:
+      on: { to: "dm:owner", contains: ["Allow KhunQuant to BUY"] }
+      action: approve
+  - fault.add:
+      match: { venue: webull, order: create }
+      effect: { order: written_then_timeout }
+      when: { times: 1 }
+timeline:
+  - advance: 2h
+expect:
+  - id: the-dca-buy-is-booked-once
+    event: { kind: exchange.order, fields: { venue: webull, event: create, type: market, amount: 2 }, count: 1 }
+  - id: no-second-order
+    order: { venue: webull, symbol: AAPL/USD, side: buy, count: 1 }
+  - id: the-answer-was-really-lost-once
+    event: { kind: fault.fired, fields: { venue: webull, effect: written_then_timeout, order_op: create }, count: 1 }

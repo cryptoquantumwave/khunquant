@@ -13,6 +13,9 @@ import (
 // the unlocked server must not look at it.
 const equityOrderBody = `{"side":"Buy","symbol":"PTT","volume":100,"price":30,"priceType":"Limit","validityType":"Day"}`
 
+// webullOrderBody is a Webull order the lab refuses for want of a price.
+const webullOrderBody = `{"account_id":"A","new_orders":[{"client_order_id":"kq1","instrument_type":"EQUITY","order_type":"MARKET","side":"BUY","symbol":"AAPL","time_in_force":"DAY","quantity":"1"}]}`
+
 func sbxDo(t *testing.T, method, url, body string) (int, string) {
 	t.Helper()
 	req, _ := http.NewRequest(method, url, strings.NewReader(body))
@@ -25,7 +28,7 @@ func sbxDo(t *testing.T, method, url, body string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Settrade (and Webull, with the next PR) are simulated only in a locked lab. The sandbox
+// Settrade and Webull are simulated only in a locked lab. The sandbox
 // server an ordinary gateway runs has the stateful simulator as its responder, and it must
 // leave their routes to the fixtures exactly as before: an order and an orders listing are
 // fixture misses here (this workspace records none for the route), with nothing booked. The
@@ -47,10 +50,19 @@ func TestSettradeWebull_NotSimulatedWhenUnlocked(t *testing.T) {
 	if st, body := sbxDo(t, "GET", srv.BaseURL()+orders, ""); st != http.StatusNotFound || !strings.Contains(body, "no fixture configured") {
 		t.Errorf("unlocked settrade orders listing: %d %s, want the router's fixture miss, not the simulator's empty list", st, body)
 	}
+	const webull = "/__sbx__/webull/api.webull.co.th/openapi/trade/order/"
+	if st, body := sbxDo(t, "POST", srv.BaseURL()+webull+"place", webullOrderBody); st != http.StatusNotFound || !strings.Contains(body, "no fixture configured") {
+		t.Errorf("unlocked webull order: %d %s, want the router's fixture miss", st, body)
+	}
+	if st, body := sbxDo(t, "GET", srv.BaseURL()+webull+"open?account_id=A", ""); st != http.StatusNotFound || !strings.Contains(body, "no fixture configured") {
+		t.Errorf("unlocked webull open orders: %d %s, want the router's fixture miss, not the simulator's empty list", st, body)
+	}
 	var booked int
-	sim.Read("settrade", func(st *sandbox.VenueState) { booked = len(st.OpenOrders) + len(st.ClosedOrders) })
+	for _, venue := range []string{"settrade", "webull"} {
+		sim.Read(venue, func(st *sandbox.VenueState) { booked += len(st.OpenOrders) + len(st.ClosedOrders) })
+	}
 	if booked != 0 {
-		t.Errorf("the unlocked simulator booked %d settrade orders", booked)
+		t.Errorf("the unlocked simulator booked %d equity orders", booked)
 	}
 
 	locked := newLockedFixture(t)
@@ -60,5 +72,11 @@ func TestSettradeWebull_NotSimulatedWhenUnlocked(t *testing.T) {
 	}
 	if st, body := sbxDo(t, "GET", base+orders, ""); st != http.StatusOK || strings.TrimSpace(body) != "[]" {
 		t.Errorf("locked settrade orders listing: %d %s, want the simulator's empty list", st, body)
+	}
+	if st, body := sbxDo(t, "POST", base+webull+"place", webullOrderBody); st != http.StatusBadRequest || !strings.Contains(body, `"error_code":"SBX-`) {
+		t.Errorf("locked webull order: %d %s, want the simulator's SBX- refusal (no price yet)", st, body)
+	}
+	if st, body := sbxDo(t, "GET", base+webull+"open?account_id=A", ""); st != http.StatusOK || strings.TrimSpace(body) != "[]" {
+		t.Errorf("locked webull open orders: %d %s, want the simulator's empty list", st, body)
 	}
 }

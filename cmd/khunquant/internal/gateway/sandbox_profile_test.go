@@ -53,6 +53,9 @@ func TestProfile_Invariants(t *testing.T) {
 	loaded.Gateway.ManagementToken = lk.Token
 	loaded.Providers = config.ProvidersConfig{}
 	loaded.Tools.MCP.Servers = nil // the overlay nils the map; an empty map is the same
+	// The web tools are SimWeb's in memory only: the profile on disk has no placeholder key
+	// (checked below), and the overlay sets it.
+	sandbox.ApplyWebConfig(loaded)
 	if !reflect.DeepEqual(loaded, enforced) {
 		lj, _ := json.Marshal(loaded)
 		ej, _ := json.Marshal(enforced)
@@ -67,6 +70,9 @@ func TestProfile_Invariants(t *testing.T) {
 		}
 		if strings.Contains(string(b), lockTestToken) {
 			t.Errorf("%s contains the instance token", name)
+		}
+		if strings.Contains(string(b), sandbox.PlaceholderWebKey) {
+			t.Errorf("%s contains the placeholder web key: it must exist in memory only", name)
 		}
 	}
 	if loaded.Channels.Pico.Enabled || loaded.Channels.Telegram.Enabled {

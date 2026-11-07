@@ -26,7 +26,9 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/marketops"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/webops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simweb"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
 
@@ -61,6 +63,7 @@ const kindConfigReload = "config.reload"
 var labJournalKinds = []string{
 	"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", // simchat
 	"exchange.req",             // the sandbox server's request log
+	simweb.KindReq,             // SimWeb: one web_fetch / web_search request
 	sandbox.KindOrder,          // the simulator's order ledger: create, fill, cancel, effect
 	sandbox.KindFunding,        // a funding payment of an open perpetual position
 	"llm.call", "llm.complete", // the simulated model
@@ -142,6 +145,15 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		j.Append(e)
 	})
 	l.Faults.EnableOrderKinds("partial", "accept_no_fill", "cancel_after_accept", "create_reports_fill", "lookup_lag")
+	// SimWeb answers every venue-web request itself (StageWeb). Its rules persist in
+	// <home>/lab/web.json, outside the workspace the instance's file tools are confined to.
+	w, err := simweb.Open(simweb.Options{Path: filepath.Join(l.Home, "lab", "web.json"), Journal: j, Now: func() time.Time { return l.Now() }})
+	if err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	l.Web = w
+	l.Chain.Set(sandbox.StageWeb, w.Middleware())
 	// Every request the chain sees is journaled (Append never blocks: a full queue drops).
 	l.Chain.Observe(func(i sandbox.ReqInfo) {
 		payload, _ := json.Marshal(i)
@@ -226,6 +238,9 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	}
 	l.OnClose(func() error { sim.Detach(e); return nil })
 	if err := l.AddGroup(faultops.Group(l.Faults)); err != nil {
+		return err
+	}
+	if err := l.AddGroup(webops.Group(l.Web)); err != nil {
 		return err
 	}
 	return l.AddGroup(llmops.Group(e))

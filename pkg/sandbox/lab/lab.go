@@ -20,6 +20,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simclock"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simweb"
 )
 
 // Options configures New.
@@ -56,7 +57,9 @@ type Lab struct {
 	Settle  func(context.Context) error
 	// Faults is the fault injector (nil until the gateway builds it under the lock).
 	Faults *fault.Injector
-	// Later PRs add their components here: Web, Crash, ...
+	// Web is SimWeb, the simulated web (nil until the gateway builds it under the lock).
+	Web *simweb.Store
+	// Later PRs add their components here: Crash, ...
 
 	fixturesDir string
 	token       string

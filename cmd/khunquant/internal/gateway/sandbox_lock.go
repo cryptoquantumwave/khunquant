@@ -178,6 +178,10 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 		return err
 	}
 
+	// web_search and web_fetch are SimWeb's: Brave with the placeholder key, no other
+	// provider. In memory on every load and reload, like the accounts above.
+	sandbox.ApplyWebConfig(cfg)
+
 	// A loopback proxy such as socks5://127.0.0.1:1080 would still forward to the
 	// internet, so no proxy survives. Accounts are edited by index: ranging by value
 	// would change a copy.

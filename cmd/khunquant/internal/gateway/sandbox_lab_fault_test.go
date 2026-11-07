@@ -163,15 +163,29 @@ func TestBeforeLLM_LatencyAndError(t *testing.T) {
 }
 
 // written_then_timeout through the agent's own tool: the simulator creates the Binance
-// futures order, the answer never comes, and the tool (which call_tool answers with
-// is_error: true) reports a failure while sandbox_account orders shows the one order.
-func TestWrittenThenTimeout_ThroughTheFuturesTool(t *testing.T) {
+// futures order and the answer never comes. These tests used to pin the defect: the tool
+// reported "entry order failed" and stopped, so a retry would have doubled a position that
+// stood with no stop-loss. They pin the repair, in both branches. The tool attaches a client
+// order ID, waits out the settle delay (real time: five seconds), and only looks, never
+// places again. The open carries no stop_loss: the simulator cannot place a conditional
+// order (protection on the filled amount is covered in pkg/tools).
+
+const lostAnswerOpen = `{"name":"futures_open_position","as":"owner","args":{"provider":"binance","symbol":"BTC/USDT:USDT","side":"long","leverage":1,"amount":0.001,"confirm":true}}`
+
+// lostAnswerLab builds a locked gateway with a futures-capable Binance test account and the
+// written_then_timeout fault armed for one create, plus any further fault rules.
+func lostAnswerLab(t *testing.T, extraFaults ...string) (f *lockedFixture, countOrders func() int) {
+	t.Helper()
 	prev := faultMaxHold
 	faultMaxHold = 300 * time.Millisecond
 	t.Cleanup(func() { faultMaxHold = prev })
+	// The tool waits broker.ReconcileSettleDelay in wall time before it looks.
+	prevClient := testHTTPClient
+	testHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	t.Cleanup(func() { testHTTPClient = prevClient })
 	broker.ResetInstanceCache() // a client cached by an earlier run points at that run's server
 	t.Cleanup(broker.ResetInstanceCache)
-	f := newLockedFixture(t, ownerConfig, func(c *config.Config) {
+	f = newLockedFixture(t, ownerConfig, func(c *config.Config) {
 		c.Tools.FuturesOpenPosition.Enabled = true
 		c.Exchanges.Binance.Accounts = []config.ExchangeAccount{{Name: "main", APIKey: *config.NewSecureString("sbx-test-api-key-0001"), Secret: *config.NewSecureString("sbx-test-secret-0001")}}
 	})
@@ -180,22 +194,105 @@ func TestWrittenThenTimeout_ThroughTheFuturesTool(t *testing.T) {
 	}
 	// The simulator has no POST /fapi/v1/marginType, which the tool calls first; a fault rule
 	// that answers it stands in (a gap of the simulator, not of this PR).
-	if code, out := labPost(t, f, "fault", `{"op":"add","match":{"venue":"binance","method":"POST","path_prefix":"/fapi/v1/marginType"},"effect":{"body":{"code":200,"msg":"success"}}}`); code != http.StatusOK {
-		t.Fatalf("margin type stand-in = %d %v", code, out)
+	rules := append([]string{
+		`{"op":"add","match":{"venue":"binance","method":"POST","path_prefix":"/fapi/v1/marginType"},"effect":{"body":{"code":200,"msg":"success"}}}`,
+		`{"op":"add","match":{"venue":"binance","order":"create","market":"futures"},"effect":{"order":"written_then_timeout"},"when":{"times":1}}`,
+	}, extraFaults...)
+	for _, r := range rules {
+		if code, out := labPost(t, f, "fault", r); code != http.StatusOK {
+			t.Fatalf("add %s = %d %v", r, code, out)
+		}
 	}
-	if code, out := labPost(t, f, "fault", `{"op":"add","match":{"venue":"binance","order":"create","market":"futures"},"effect":{"order":"written_then_timeout"},"when":{"times":1}}`); code != http.StatusOK {
-		t.Fatalf("add = %d %v", code, out)
+	countOrders = func() int {
+		code, orders := labPost(t, f, "account", `{"op":"orders","venue":"binance"}`)
+		if code != http.StatusOK {
+			t.Fatalf("account orders = %d %v", code, orders)
+		}
+		list, _ := orders["orders"].([]any)
+		return len(list)
 	}
-	code, out := callToolVia(t, f, `{"name":"futures_open_position","as":"owner","args":{"provider":"binance","symbol":"BTC/USDT:USDT","side":"long","leverage":1,"amount":0.001,"confirm":true}}`)
-	t.Logf("futures_open_position = %d %v", code, out)
+	return f, countOrders
+}
+
+// Found: the order is visible to the look by client order ID once the tool has waited, so
+// the normal flow carries on. One entry order, no second create, success naming the lost
+// answer, and the next open is not refused (no marker was set).
+func TestWrittenThenTimeout_ThroughTheFuturesTool_Found(t *testing.T) {
+	f, countOrders := lostAnswerLab(t)
+
+	start := time.Now()
+	code, out := callToolVia(t, f, lostAnswerOpen)
+	t.Logf("futures_open_position = %d %v (%s)", code, out, time.Since(start))
+	text, _ := out["for_llm"].(string)
+	if code != http.StatusOK || out["is_error"] != false {
+		t.Fatalf("the tool answered %d %v, want 200 with is_error: false", code, out)
+	}
+	for _, want := range []string{"answer to the entry order was lost", "found it by its client order ID"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the result must say %q, got: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "OUTCOME UNKNOWN") || strings.Contains(strings.ToLower(text), "entry order failed") {
+		t.Errorf("a found order must not read as unknown or failed: %s", text)
+	}
+	if d := time.Since(start); d < 5*time.Second {
+		t.Errorf("the tool answered after %s, want it to wait out the 5s settle delay before looking", d)
+	}
+	afterFirst := countOrders()
+	t.Logf("simulator orders after the open (the entry): %d", afterFirst)
+	if afterFirst != 1 {
+		t.Fatalf("the simulator holds %d orders, want exactly the one entry (no second create)", afterFirst)
+	}
+
+	// No marker was set, so the next open is not held back; it creates more orders.
+	code, out = callToolVia(t, f, lostAnswerOpen)
+	text, _ = out["for_llm"].(string)
+	if code != http.StatusOK || strings.Contains(text, "refused") || strings.Contains(text, "OUTCOME UNKNOWN") {
+		t.Fatalf("the second open answered %d %v, want it not held back", code, out)
+	}
+	if n := countOrders(); n <= afterFirst {
+		t.Errorf("the second open created nothing: %d -> %d orders", afterFirst, n)
+	}
+}
+
+// Unknown: written_then_timeout plus a lookup lag longer than the settle wait, so the order
+// exists but stays hidden from the look. The result says the outcome is unknown and that no
+// protection was placed; the simulator holds exactly the one order; the next open is
+// refused and creates nothing.
+func TestWrittenThenTimeout_ThroughTheFuturesTool_Unknown(t *testing.T) {
+	f, countOrders := lostAnswerLab(t,
+		`{"op":"add","match":{"venue":"binance","order":"create","market":"futures"},"effect":{"order":"lookup_lag","lag":"30s"},"when":{"times":1}}`)
+
+	start := time.Now()
+	code, out := callToolVia(t, f, lostAnswerOpen)
+	t.Logf("futures_open_position = %d %v (%s)", code, out, time.Since(start))
 	if code != http.StatusOK || out["is_error"] != true {
 		t.Fatalf("the tool answered %d %v, want 200 with is_error: true", code, out)
 	}
-	code, orders := labPost(t, f, "account", `{"op":"orders","venue":"binance"}`)
-	if code != http.StatusOK {
-		t.Fatalf("account orders = %d %v", code, orders)
+	text, _ := out["for_llm"].(string)
+	for _, want := range []string{"OUTCOME UNKNOWN", "may exist", "NO stop-loss or take-profit was placed", "futures_get_positions"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the result must say %q, got: %s", want, text)
+		}
 	}
-	if list, _ := orders["orders"].([]any); len(list) != 1 {
-		t.Fatalf("account orders = %v, want the one order the simulator created", orders)
+	for _, bad := range []string{"entry order failed", "retry"} {
+		if strings.Contains(strings.ToLower(text), bad) {
+			t.Errorf("an unknown outcome must not read as a failure or invite a retry (%q): %s", bad, text)
+		}
+	}
+	if d := time.Since(start); d < 5*time.Second {
+		t.Errorf("the tool answered after %s, want it to wait out the 5s settle delay before looking", d)
+	}
+	if n := countOrders(); n != 1 {
+		t.Fatalf("the simulator holds %d orders, want the one it created", n)
+	}
+
+	code, out = callToolVia(t, f, lostAnswerOpen)
+	text, _ = out["for_llm"].(string)
+	if code != http.StatusOK || out["is_error"] != true || !strings.Contains(text, "refused") || !strings.Contains(text, "has not been settled") {
+		t.Fatalf("the second open answered %d %v, want a refusal while the first is unsettled", code, out)
+	}
+	if n := countOrders(); n != 1 {
+		t.Fatalf("the simulator holds %d orders after the refused open, want still 1", n)
 	}
 }

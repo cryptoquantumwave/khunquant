@@ -37,7 +37,8 @@ func (sim *StatefulSimulator) simBinanceAccountSetting(state *VenueState, _ *htt
 }
 
 // simBinanceLeverageBracket handles GET /fapi/v1/leverageBracket: the one leverage tier ccxt
-// reads to value a position's margin (fetchPositions asks for it). Like exchangeInfo it falls
+// reads to value a position's margin (fetchPositions asks for it); its maintenance rate is the
+// one liquidation uses. Like exchangeInfo it falls
 // through to the fixtures while the simulator has no markets. The tier is as wide as the
 // market's MaxLeverage and has no cap, so it never limits an order the ledger accepts.
 func (sim *StatefulSimulator) simBinanceLeverageBracket(state *VenueState, r *http.Request) (*Response, bool) {
@@ -58,7 +59,7 @@ func (sim *StatefulSimulator) simBinanceLeverageBracket(state *VenueState, r *ht
 			lev = 20
 		}
 		out = append(out, map[string]any{"symbol": symbol, "notionalCoef": 1.0, "brackets": []map[string]any{
-			{"bracket": 1, "initialLeverage": lev, "notionalCap": 1e12, "notionalFloor": 0, "maintMarginRatio": 0.005, "cum": 0.0}}})
+			{"bracket": 1, "initialLeverage": lev, "notionalCap": 1e12, "notionalFloor": 0, "maintMarginRatio": sim.rateFor("binance", &Position{Symbol: symbol}, sim.clock()), "cum": 0.0}}})
 	}
 	return jsonResponse(200, out), true
 }

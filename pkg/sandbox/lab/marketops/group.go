@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +80,8 @@ type req struct {
 	Venue     string   `json:"venue"`
 	Price     *float64 `json:"price"`
 	Funding   *float64 `json:"funding_rate"`
+	Interval  string   `json:"funding_interval"`
+	Maint     *float64 `json:"maint_margin_rate"`
 	To        float64  `json:"to"`
 	Over      string   `json:"over"`
 	Shape     string   `json:"shape"`
@@ -135,11 +139,39 @@ func runAs(b *market.Book, op func(*market.Book, req, market.Pair) error, parse 
 }
 
 func setOp(b *market.Book, a req, p market.Pair) error {
-	if a.Price == nil && a.Funding == nil {
-		return errors.New("set needs a price, a funding_rate or both")
+	if a.Price == nil && a.Funding == nil && a.Interval == "" && a.Maint == nil {
+		return errors.New("set needs a price, a funding_rate, a funding_interval, a maint_margin_rate or some of them")
+	}
+	// Everything is checked before anything is applied, so a refusal changes nothing.
+	var interval time.Duration
+	if a.Interval != "" {
+		d, err := time.ParseDuration(a.Interval)
+		if err != nil || d < market.MinFundingInterval || d > market.MaxFundingInterval {
+			return errors.New("funding_interval must be a duration between 1h and 24h, e.g. 8h")
+		}
+		interval = d
+	}
+	if a.Price != nil && !(*a.Price > 0 && !math.IsInf(*a.Price, 0)) {
+		return fmt.Errorf("price %v is not a positive number", *a.Price)
+	}
+	if a.Maint != nil && !(*a.Maint > 0 && *a.Maint < 1) {
+		return errors.New("maint_margin_rate must be a fraction in (0, 1), e.g. 0.004")
+	}
+	if a.Funding != nil && (math.IsNaN(*a.Funding) || math.IsInf(*a.Funding, 0) || math.Abs(*a.Funding) >= 1) {
+		return errors.New("funding_rate must be a fraction per funding interval, e.g. 0.0001")
 	}
 	if a.Funding != nil {
 		if err := b.SetFunding(a.Venue, p, *a.Funding); err != nil {
+			return err
+		}
+	}
+	if a.Interval != "" {
+		if err := b.SetFundingInterval(a.Venue, p, interval); err != nil {
+			return err
+		}
+	}
+	if a.Maint != nil {
+		if err := b.SetMaintRate(a.Venue, p, *a.Maint); err != nil {
 			return err
 		}
 	}

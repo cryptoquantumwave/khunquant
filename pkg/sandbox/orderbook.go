@@ -291,10 +291,13 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		if dir == "short" {
 			pnl = -pnl
 		}
-		margin := n * cs * pos.EntryPrice
+		// Only what the ledger locked is released: a seeded position never locked its entry
+		// notional, so closing it must not mint that amount (the liquidation path does the same).
 		bal := st.Balances["USDT"]
-		bal.Locked, bal.Free = math.Max(0, bal.Locked-margin), bal.Free+margin+pnl
+		rel := math.Min(bal.Locked, n*cs*pos.EntryPrice)
+		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
+		credit(st, pnl) // a loss takes the free balance first, and never more than the wallet holds
 		if pos.Contracts -= n; pos.Contracts <= 0 {
 			delete(st.Positions, o.Symbol)
 		} else {

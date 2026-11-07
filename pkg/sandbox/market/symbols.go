@@ -23,7 +23,12 @@ func ParsePair(s string) (Pair, error) {
 // Venues the book models. "*" is the wildcard a venue falls back to.
 const Wildcard = "*"
 
-func knownVenue(v string) bool { return v == Wildcard || v == "binance" || v == "okx" || v == "bitkub" }
+func knownVenue(v string) bool {
+	return v == Wildcard || v == "binance" || v == "okx" || v == "bitkub" || v == "settrade"
+}
+
+// equityQuote is the quote asset of an equity venue's wire symbol, which is the bare ticker.
+var equityQuote = map[string]string{"settrade": "THB"}
 
 // binanceQuotes are the quote assets ParseWire recognises (the longest suffix wins).
 var binanceQuotes = []string{"FDUSD", "USDT", "USDC", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR"}
@@ -41,6 +46,10 @@ func Wire(venue string, p Pair, swap bool) string {
 		return p.Base + "-" + p.Quote
 	case "bitkub":
 		return p.Base + "_" + p.Quote
+	case "settrade": // PTT/THB is PTT
+		if p.Quote == equityQuote[venue] {
+			return p.Base
+		}
 	}
 	return ""
 }
@@ -62,6 +71,10 @@ func ParseWire(venue, wire string) (p Pair, swap, ok bool) {
 	case "bitkub":
 		if parts := strings.Split(strings.ToUpper(wire), "_"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
 			return Pair{parts[0], parts[1]}, false, true
+		}
+	case "settrade":
+		if wire != "" && wire == strings.ToUpper(wire) && !strings.ContainsAny(wire, "/-_ ") {
+			return Pair{wire, equityQuote[venue]}, false, true
 		}
 	}
 	return Pair{}, false, false

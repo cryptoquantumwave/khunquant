@@ -80,7 +80,7 @@ func TestApplyPlaceholderAccounts(t *testing.T) {
 	if err := ApplyPlaceholderAccounts(other, []string{"okx"}); err != nil || other.Exchanges.Binance.Enabled {
 		t.Errorf("okx only: %v, binance enabled %v", err, other.Exchanges.Binance.Enabled)
 	}
-	for _, v := range []string{"bitkub", "settrade", "BINANCE", ""} {
+	for _, v := range []string{"bitkub", "webull", "BINANCE", ""} {
 		if err := ApplyPlaceholderAccounts(config.DefaultConfig(), []string{v}); err == nil {
 			t.Errorf("venue %q was accepted", v)
 		}

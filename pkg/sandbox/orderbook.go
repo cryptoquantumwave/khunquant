@@ -55,6 +55,8 @@ var (
 	nativeStates = map[string][5]string{
 		"binance": {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED"},
 		"okx":     {"live", "partially_filled", "filled", "canceled", "canceled"},
+		// Settrade's order status: S queued or open, M matched, C cancelled or expired.
+		"settrade": {"S", "P", "M", "C", "C"},
 	}
 	// journalStates are the one vocabulary of the journal, so a scenario names a status once.
 	journalStates = [5]string{"open", "partially_filled", "filled", "canceled", "expired"}
@@ -88,6 +90,12 @@ type orderSpec struct {
 	Amount, Price                                 float64
 	QuoteAmount                                   float64 // a spot market buy sized in the quote asset (OKX tgtCcy quote_ccy)
 	ReduceOnly                                    bool
+
+	// An equity venue's (Settrade) day: the order fills at the price of AuctionAt (an at-the-open
+	// order) and is cancelled at CancelAt (its trade date's end); a buy reserves ReserveUp more
+	// than its price, the room an at-the-open order needs for the auction price.
+	AuctionAt, CancelAt time.Time
+	ReserveUp           float64
 }
 
 // book is the ledger of one state key ("binance", "okx"), valid while sim.mu is held.
@@ -176,7 +184,7 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	}
 	asset, need, dir, closing := "USDT", 0.0, "", false
 	if spot { // a buy holds the quote asset, a sell the base
-		asset, need = quote, sp.Amount*px
+		asset, need = quote, sp.Amount*px*(1+sp.ReserveUp)
 		if sp.Side == "sell" {
 			asset, need = base, sp.Amount
 		}
@@ -209,7 +217,7 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 	id := sim.stateManager.NextOrderID(b.key)
 	now := sim.clock()
 	o = &Order{ID: id, Symbol: sp.Symbol, OrderType: sp.Type, Side: sp.Side, Amount: sp.Amount, CreatedAt: now, UpdatedAt: now, EvalAt: now,
-		ClientID: cmp.Or(sp.ClientID, "sbx"+id), Market: sp.Market, ReduceOnly: sp.ReduceOnly, Reserved: need,
+		ClientID: cmp.Or(sp.ClientID, "sbx"+id), Market: sp.Market, ReduceOnly: sp.ReduceOnly, Reserved: need, AuctionAt: sp.AuctionAt, CancelAt: sp.CancelAt,
 		Params: map[string]interface{}{"posSide": sp.PosSide, "dir": dir, "closing": closing}}
 	if sp.QuoteAmount > 0 {
 		o.Params["quoteSz"] = sp.QuoteAmount
@@ -241,7 +249,9 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 		}
 		b.emit("effect", o, eff.Kind)
 	}
-	marketable := sp.Type == "market" || (sp.Side == "buy" && last <= sp.Price) || (sp.Side == "sell" && last >= sp.Price)
+	// Nothing fills while the venue is shut, and an at-the-open order waits for its auction.
+	marketable := sim.tradable(b.venue, now) && ((sp.Type == "market" && sp.AuctionAt.IsZero()) ||
+		(sp.Side == "buy" && last <= sp.Price) || (sp.Side == "sell" && last >= sp.Price))
 	if !o.Hold && (marketable || force) {
 		b.firstFill(o, px, now)
 	}
@@ -261,6 +271,25 @@ func (b book) firstFill(o *Order, px float64, at time.Time) {
 	if o.OrderType == "market" && o.Filled < o.Amount {
 		b.close(o, stExpired, at)
 	}
+}
+
+// auctionFill fills an at-the-open order at the price of its auction instant, not of the
+// time anybody looked. A buy whose price rose past what it reserved is cancelled, as the
+// venue refuses it for want of funds; so is an order with no price to fill at.
+func (b book) auctionFill(o *Order, at time.Time) {
+	px, ok := 0.0, false
+	if h, isH := b.sim.prices.(PriceHistory); isH {
+		px, ok = h.MarkPriceAt(b.venue, o.Symbol, at)
+	}
+	if !ok {
+		px = b.sim.markPrice(b.venue, o.Symbol, b.st)
+	}
+	o.AuctionAt = time.Time{}
+	if !(px > 0) || (o.Side == "buy" && px*o.Amount > o.Reserved*(1+1e-9)) {
+		b.close(o, stCanceled, at)
+		return
+	}
+	b.firstFill(o, px, at)
 }
 
 // fill books qty of o at px: its share of the reservation, the position or the balances,
@@ -389,6 +418,9 @@ func splitSpot(venue, sym string) (base, quote string, ok bool) {
 		base, quote, ok = strings.Cut(sym, "-")
 		return base, quote, ok && base != "" && quote != "" && !strings.Contains(quote, "-")
 	}
+	if venue == "settrade" { // an equity's wire symbol is the ticker (PTT); it trades against THB
+		return sym, "THB", sym != "" && !strings.ContainsAny(sym, "/-_ ")
+	}
 	for _, q := range spotQuotes {
 		if b, found := strings.CutSuffix(sym, q); found && b != "" {
 			return b, q, true
@@ -473,15 +505,18 @@ func (b book) list(closed bool, symbol string, now time.Time) []*Order {
 // resting limit orders whose price was crossed, each at its own time, oldest event first.
 func (b book) advance(now time.Time) {
 	type event struct {
-		o      *Order
-		at     time.Time
-		cancel bool
+		o               *Order
+		at              time.Time
+		cancel, auction bool
 	}
 	var evs []event
 	for _, o := range b.st.OpenOrders {
 		e := event{o: o}
 		if !o.CancelAt.IsZero() && !o.CancelAt.After(now) {
 			e.at, e.cancel = o.CancelAt, true
+		}
+		if a := o.AuctionAt; !a.IsZero() && !a.After(now) && !o.Hold && (e.at.IsZero() || a.Before(e.at)) {
+			e.at, e.cancel, e.auction = a, false, true
 		}
 		if !o.Hold && o.Price > 0 {
 			if t, ok := b.crossing(o, now); ok && (e.at.IsZero() || t.Before(e.at)) {
@@ -496,9 +531,12 @@ func (b book) advance(now time.Time) {
 	}
 	slices.SortFunc(evs, func(x, y event) int { return cmp.Or(x.at.Compare(y.at), orderBefore(x.o, y.o)) })
 	for _, e := range evs {
-		if e.cancel {
+		switch {
+		case e.cancel:
 			b.close(e.o, stCanceled, e.at)
-		} else {
+		case e.auction:
+			b.auctionFill(e.o, e.at)
+		default:
 			b.firstFill(e.o, e.o.Price, e.at)
 		}
 	}
@@ -520,7 +558,7 @@ func (b book) crossing(o *Order, now time.Time) (time.Time, bool) {
 	hit := func(p float64) bool { return (o.Side == "buy" && p <= o.Price) || (o.Side == "sell" && p >= o.Price) }
 	hist, _ := b.sim.prices.(PriceHistory)
 	if hist == nil {
-		return now, hit(b.sim.markPrice(b.venue, o.Symbol, b.st))
+		return now, hit(b.sim.markPrice(b.venue, o.Symbol, b.st)) && b.sim.tradable(b.venue, now)
 	}
 	step := sampleStep
 	if n := now.Sub(from) / step; n > maxSamples {
@@ -528,7 +566,7 @@ func (b book) crossing(o *Order, now time.Time) (time.Time, bool) {
 	}
 	for t := from.Add(step); ; t = t.Add(step) {
 		t = minTime(t, now)
-		if p, ok := hist.MarkPriceAt(b.venue, o.Symbol, t); ok && hit(p) {
+		if p, ok := hist.MarkPriceAt(b.venue, o.Symbol, t); ok && hit(p) && b.sim.tradable(b.venue, t) {
 			return t, true
 		}
 		if t.Equal(now) {

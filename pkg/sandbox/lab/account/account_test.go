@@ -109,7 +109,7 @@ func TestSeedThenResetReturnsToSeed(t *testing.T) {
 
 func TestSeedUnsupportedVenue(t *testing.T) {
 	r := newRig(t)
-	for _, venue := range []string{"bitkub", "settrade"} {
+	for _, venue := range []string{"bitkub", "webull"} {
 		if _, err := r.call("seed", `{"venue":"`+venue+`","balances":{"USDT":1}}`); code(err) != lab.CodeUnavailable {
 			t.Errorf("seed on %s: err = %v, want unavailable", venue, err)
 		}

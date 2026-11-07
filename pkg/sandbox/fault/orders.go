@@ -35,7 +35,7 @@ var okxOrderPaths = map[string]sandbox.OrderOp{
 
 // ClassifyOrder says whether a request to venue is an order operation and, if so, which
 // order it is about. ok is false for every other request, and for a venue it has no rules
-// for (Settrade and Webull rows arrive with SBX-14c). It reads the request body up to a
+// for. It reads the request body up to a
 // cap and puts it back, so the simulator reads it whole afterwards.
 func ClassifyOrder(venue, method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
 	switch venue {
@@ -43,8 +43,49 @@ func ClassifyOrder(venue, method, path string, r *http.Request) (sandbox.OrderOp
 		return classifyBinance(venue, method, path, r)
 	case "okx":
 		return classifyOKX(method, path, r)
+	case "settrade":
+		return classifySettrade(method, path, r)
 	}
 	return "", sandbox.OrderInfo{}, false
+}
+
+// settradeOrderPath matches the order routes of an account: orders, orders/<no> and
+// orders/<no>/cancel. The bulk cancel (accounts/<no>/cancel) is a cancel too.
+var settradeOrderPath = regexp.MustCompile(`^/api/seos/v3/[^/]+/accounts/[^/]+/(?:orders(?:/[^/]+(/cancel)?)?|(cancel))$`)
+
+func classifySettrade(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
+	m := settradeOrderPath.FindStringSubmatch(path)
+	if m == nil {
+		return "", sandbox.OrderInfo{}, false
+	}
+	var op sandbox.OrderOp
+	switch {
+	case method == http.MethodPatch && (m[1] != "" || m[2] != ""):
+		op = sandbox.OrderCancel
+	case method == http.MethodPost && m[1] == "" && m[2] == "" && strings.HasSuffix(path, "/orders"):
+		op = sandbox.OrderCreate
+	case method == http.MethodGet && strings.HasSuffix(path, "/orders"):
+		op = sandbox.OrderList
+	case method == http.MethodGet && m[1] == "" && m[2] == "":
+		op = sandbox.OrderFetch
+	default:
+		return "", sandbox.OrderInfo{}, false
+	}
+	info := sandbox.OrderInfo{Venue: "settrade", Market: "spot"}
+	switch {
+	case op == sandbox.OrderCreate:
+		var b struct {
+			Symbol, Side, PriceType string
+			Volume                  float64
+		}
+		if json.Unmarshal(bytes.TrimSpace(peekBody(r)), &b) == nil {
+			info.Symbol, info.Side, info.Amount = b.Symbol, strings.ToLower(b.Side), b.Volume
+			info.Type = map[bool]string{true: "limit", false: "market"}[b.PriceType == "Limit"]
+		}
+	case op == sandbox.OrderList && r != nil && r.URL != nil:
+		info.Symbol = r.URL.Query().Get("symbol")
+	}
+	return op, info, true
 }
 
 // peekBody returns up to maxClassifyBody bytes of the request body and restores the body

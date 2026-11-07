@@ -78,6 +78,9 @@ func (b *Book) render(venue, path string, q url.Values) (int, []byte, bool) {
 	case "bitkub/tradingview/history":
 		return b.bitkubHistory(q)
 	}
+	if venue == "settrade" {
+		return b.settradeQuote(path, q)
+	}
 	return 0, nil, false
 }
 

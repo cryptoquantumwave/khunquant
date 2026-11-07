@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,15 +79,28 @@ const (
 	PlaceholderSecret      = "sbx-placeholder-NOT-A-REAL-SECRET"
 	PlaceholderPassphrase  = "sbx-placeholder-NOT-A-REAL-PASSPHRASE"
 
+	// A Settrade account also needs the broker, the app code, the account number and a PIN
+	// (the client refuses to start without them, and to place an order without the PIN).
+	PlaceholderBrokerID  = "SBXBROKER"
+	PlaceholderAppCode   = "SBXAPP"
+	PlaceholderAccountNo = "SBX-ACCOUNT-0001"
+	PlaceholderPIN       = "000000"
+
 	// AccountsFile, in the instance home (outside the workspace the instance's file
 	// tools are confined to), names the venues that get a placeholder account, one JSON
 	// list. The supervisor writes it when it creates the home.
 	AccountsFile = ".sandbox-accounts"
 )
 
+// PlaceholderSettradeSecret is the app secret of the Settrade placeholder: Settrade's is a
+// base64 P-256 scalar, which the client decodes at start, so a constant must be one. It is 32
+// readable bytes, a key nobody issued; the login it signs goes to the fixture, which
+// accepts anything.
+var PlaceholderSettradeSecret = base64.StdEncoding.EncodeToString([]byte("SBX-PLACEHOLDER-NOT-A-REAL-KEY!!"))
+
 // AccountVenues are the venues a placeholder account can be asked for: those the
 // simulator serves.
-var AccountVenues = []string{"binance", "okx"}
+var AccountVenues = []string{"binance", "okx", "settrade"}
 
 // ApplyPlaceholderAccounts makes each venue in venues enabled with exactly the
 // placeholder account: name main, the constant credentials, and the scopes market_data
@@ -108,6 +122,11 @@ func ApplyPlaceholderAccounts(cfg *config.Config, venues []string) error {
 		case "okx":
 			cfg.Exchanges.OKX.Enabled = true
 			cfg.Exchanges.OKX.Accounts = []config.OKXExchangeAccount{{ExchangeAccount: acc, Passphrase: *config.NewSecureString(PlaceholderPassphrase)}}
+		case "settrade":
+			acc.Secret = *config.NewSecureString(PlaceholderSettradeSecret)
+			cfg.Exchanges.Settrade.Enabled = true
+			cfg.Exchanges.Settrade.Accounts = []config.SettradeExchangeAccount{{ExchangeAccount: acc, BrokerID: PlaceholderBrokerID,
+				AppCode: PlaceholderAppCode, AccountNo: PlaceholderAccountNo, PIN: *config.NewSecureString(PlaceholderPIN)}}
 		default:
 			return fmt.Errorf("no placeholder account for %q (only %s have a simulator)", v, strings.Join(AccountVenues, ", "))
 		}

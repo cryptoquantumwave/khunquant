@@ -67,6 +67,7 @@ func buildJournal(d assemblyDeps) *journalRuntime {
 		logger.ErrorCF("gateway", "Workflow engine not started", map[string]any{"error": err.Error()})
 		return nil
 	}
+	attachLabEngine(d, eng)
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &journalRuntime{engine: eng, cancel: cancel, done: make(chan struct{})}
 	go func() {

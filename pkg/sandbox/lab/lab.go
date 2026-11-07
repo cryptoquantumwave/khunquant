@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/crash"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/market"
@@ -63,7 +64,8 @@ type Lab struct {
 	Faults *fault.Injector
 	// Web is SimWeb, the simulated web (nil until the gateway builds it under the lock).
 	Web *simweb.Store
-	// Later PRs add their components here: Crash, ...
+	// Crash is the table of armed crash points (nil until the gateway builds it under the lock).
+	Crash *crash.Arms
 
 	fixturesDir string
 	token       string

@@ -108,6 +108,7 @@ type gatewayServices struct {
 type sandboxStateReseter struct {
 	sm    *sandbox.StateManager
 	store *sandbox.Store
+	after func() // a locked lab saves its world once the reset is done
 }
 
 func (s *sandboxStateReseter) ResetState() error {
@@ -118,6 +119,9 @@ func (s *sandboxStateReseter) ResetState() error {
 			logger.WarnCF("sandbox", fmt.Sprintf("failed to reset venue %s", venue), map[string]any{"error": err.Error()})
 			// Continue resetting other venues even if one fails
 		}
+	}
+	if s.after != nil {
+		s.after()
 	}
 	return nil
 }

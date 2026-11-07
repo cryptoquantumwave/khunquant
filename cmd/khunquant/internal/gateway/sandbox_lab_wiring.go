@@ -16,15 +16,18 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/crash"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/account"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/crashops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/faultops"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/llmops"
@@ -98,7 +101,13 @@ func journalConfigReload(shared *sharedResources, errp *error) {
 // buildLab builds the process-lifetime lab from the enforced config. It starts the
 // sandbox server (which publishes its base URL) and fails when there are no venues.
 func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
-	if err := seedFromEnv(os.Getenv); err != nil {
+	// Every process of one home gets its own number; the seed is mixed with it so a restarted
+	// instance does not mint again the ids its predecessor stored (see lab.MixSeed).
+	boot, err := lab.NextBoot(config.HomeDir())
+	if err != nil {
+		return nil, err
+	}
+	if err := seedFromEnv(os.Getenv, boot); err != nil {
 		return nil, err
 	}
 	l, err := lab.New(context.Background(), lab.Options{
@@ -110,12 +119,12 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		Getenv: os.Getenv,
 		// The gateway binds this port after the server starts: the server must not take it.
 		AvoidPort: cfg.Gateway.Port,
+		// The server starts below, once the whole saved world (the fault rules too) is back.
+		DeferStart: true,
 	})
 	if err != nil {
 		return nil, err
 	}
-	// The simulator stamps orders and fills with lab time, so they match the candle times.
-	l.Sim.SetClock(func() time.Time { return l.Now() })
 	// The journal is opened once per process, here, so a reload never reopens it.
 	j, err := labjournal.Open(labjournal.Options{
 		Path: filepath.Join(l.Home, "lab", "journal.db"),
@@ -128,6 +137,14 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 	l.Journal = j
 	l.DeclareKinds(labJournalKinds...)
 	l.OnClose(j.Close)
+	// A marker the previous process left (it died at an armed crash point) becomes a crash
+	// entry now. The arms live as long as the process; every generation's engine attaches
+	// to them (attachLabEngine). They are never saved, so a restart has none.
+	l.Crash = crash.New(crash.Options{Home: l.Home, Journal: j, Now: func() time.Time { return l.Now() }})
+	if err := l.Crash.ReportPrevious(); err != nil {
+		_ = l.Close()
+		return nil, err
+	}
 	// The fault injector reads lab time through a closure (SBX-07 swaps l.Now) and is built
 	// before the model engine, which asks it. It closes before the server stops, so a held
 	// request does not stall the shutdown.
@@ -152,6 +169,9 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		j.Append(e)
 	})
 	l.Faults.EnableOrderKinds("partial", "accept_no_fill", "cancel_after_accept", "create_reports_fill", "lookup_lag")
+	// The rules and their firing counts outlive the process. They are restored here, before
+	// the server starts, and saved on every change, before the response that caused it.
+	l.Register(l.Faults)
 	// SimWeb answers every venue-web request itself (StageWeb). Its rules persist in
 	// <home>/lab/web.json, outside the workspace the instance's file tools are confined to.
 	w, err := simweb.Open(simweb.Options{Path: filepath.Join(l.Home, "lab", "web.json"), Journal: j, Now: func() time.Time { return l.Now() }})
@@ -166,7 +186,29 @@ func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
 		payload, _ := json.Marshal(i)
 		j.Append(labjournal.Entry{Kind: "exchange.req", Source: "sandbox", Subject: i.Venue, Payload: payload})
 	})
+	if err := l.Restore(); err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	l.Faults.SetOnChange(func() { l.PersistQuiet("faults") })
+	if err := l.Start(context.Background()); err != nil {
+		_ = l.Close()
+		return nil, err
+	}
 	return l, nil
+}
+
+// attachLabEngine gives this generation's workflow engine the process's crash arms. The
+// engine is rebuilt on every reload, so this runs on each one; the arms are the lab's. It
+// does nothing unless the process is locked (shared.lab is nil then), and SetCrashHook
+// refuses an unlocked process too.
+func attachLabEngine(d assemblyDeps, eng *journal.Engine) {
+	if d.Shared == nil || d.Shared.lab == nil || d.Shared.lab.Crash == nil {
+		return
+	}
+	if err := eng.SetCrashHook(d.Shared.lab.Crash.Hook()); err != nil {
+		logger.ErrorCF("gateway", "Crash points are unavailable", map[string]any{"error": err.Error()})
+	}
 }
 
 // startLabObserver subscribes the journal to the shared bus once per process (a second
@@ -246,6 +288,9 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 		}
 		eo.BudgetUSD, eo.BudgetTok = le.BudgetUSD, le.BudgetTok
 		eo.RecordPath = filepath.Join(l.Home, "lab", "cassettes", "record.jsonl")
+		// What the instance spent survives every restart (kill, graceful, crash): a lowered
+		// limit stays lowered and a spent budget stays spent.
+		eo.BudgetStore = filepath.Join(l.Home, "lab", "budget.json")
 	}
 	e, err := sim.NewEngine(eo)
 	if err != nil {
@@ -261,13 +306,16 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(webops.Group(l.Web)); err != nil {
 		return err
 	}
+	if err := l.AddGroup(crashops.Group(l.Crash)); err != nil {
+		return err
+	}
 	return l.AddGroup(llmops.Group(e, l.Home))
 }
 
 // seedFromEnv seeds the nonce source from KQ_SANDBOX_SEED (see pkg/randsrc): a non-zero int64 seeds it, empty
 // or 0 leaves crypto/rand. This is the one place Seed is called; it only works because
 // sandbox.Lock armed the source.
-func seedFromEnv(getenv func(string) string) error {
+func seedFromEnv(getenv func(string) string, boot int64) error {
 	v := getenv(sandbox.EnvSeed)
 	if v == "" {
 		return nil
@@ -279,7 +327,7 @@ func seedFromEnv(getenv func(string) string) error {
 	if seed == 0 {
 		return nil
 	}
-	return randsrc.Seed(seed)
+	return randsrc.Seed(lab.MixSeed(seed, boot))
 }
 
 // simModeOf is the mode of the config's sim model (scripted when it has none).
@@ -469,7 +517,7 @@ func registerLockedSandbox(mux handleMux, s *gatewayServices, l *lab.Lab) error 
 	}
 	s.SandboxServer = l.Server
 	s.SandboxToken = l.Token()
-	s.SimulatorReseter = &sandboxStateReseter{sm: l.State, store: l.Store}
+	s.SimulatorReseter = &sandboxStateReseter{sm: l.State, store: l.Store, after: func() { l.PersistQuiet("exchange") }}
 
 	mountSandboxAPI(mux, s, l.Store, l.FixturesDir())
 

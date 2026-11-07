@@ -122,14 +122,14 @@ func TestProviderModeMustMatchInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { Detach(e) })
-	p, err := NewProvider(ModeScripted)
+	p, err := NewProvider(ModeScripted, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.Chat(context.Background(), user("x"), nil, "m", agentOpts); err == nil || !strings.Contains(err.Error(), "sim/replay") {
 		t.Errorf("a sim/scripted provider on a replay instance = %v", err)
 	}
-	pr, err := NewProvider(ModeReplay)
+	pr, err := NewProvider(ModeReplay, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

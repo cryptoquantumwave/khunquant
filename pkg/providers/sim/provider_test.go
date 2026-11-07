@@ -20,7 +20,7 @@ func lockForTest(t *testing.T) {
 func TestProviderWithoutEngineFails(t *testing.T) {
 	lockForTest(t)
 	attached.Store(nil)
-	p, err := NewProvider(ModeScripted)
+	p, err := NewProvider(ModeScripted, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,12 +35,12 @@ func TestProviderWithoutEngineFails(t *testing.T) {
 func TestNewProviderRefusals(t *testing.T) {
 	sandbox.ResetLockForTest()
 	t.Cleanup(sandbox.ResetLockForTest)
-	if _, err := NewProvider(ModeScripted); err == nil {
+	if _, err := NewProvider(ModeScripted, nil); err == nil {
 		t.Error("NewProvider must fail on an unlocked process")
 	}
 	lockForTest(t)
 	for _, mode := range []string{"", "record", "live", "SCRIPTED"} {
-		if _, err := NewProvider(mode); err == nil {
+		if _, err := NewProvider(mode, nil); err == nil {
 			t.Errorf("mode %q must not build", mode)
 		}
 	}

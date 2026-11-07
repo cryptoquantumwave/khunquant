@@ -76,6 +76,7 @@ var labJournalKinds = []string{
 	"clock.step",  // the sim clock
 	"settle",      // quiescence
 	fault.KindFired,
+	"crash", // crash.KindCrash: the crash a previous process died of, reported by the next one
 	kindConfigReload,
 }
 

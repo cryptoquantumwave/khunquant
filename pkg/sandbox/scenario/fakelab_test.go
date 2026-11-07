@@ -205,6 +205,10 @@ func (f *fakeSup) Restart(_ context.Context, name string, _ supervisor.RestartMo
 	return f.Get(name)
 }
 
+func (f *fakeSup) KillAt(context.Context, string, supervisor.KillAt, time.Duration) (string, error) {
+	return "c1", nil
+}
+
 func (f *fakeSup) WaitRunning(_ context.Context, name string) (supervisor.Info, error) {
 	return f.Get(name)
 }

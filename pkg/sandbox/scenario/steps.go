@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
@@ -128,11 +129,11 @@ func (s *runState) walk(ctx context.Context, phase string, steps []Step) bool {
 			}
 		}
 		s.r.logf("%s: %s", s.f.Scenario, where)
-		if err := s.runStep(ctx, step); err != nil {
+		if err := s.survive(ctx, s.runStep(ctx, step)); err != nil {
 			s.fail(ctx, where, err)
 			return false
 		}
-		if err := settle(ctx, s.c, s.r.settleCap()); err != nil {
+		if err := s.survive(ctx, settle(ctx, s.c, s.r.settleCap())); err != nil {
 			s.fail(ctx, where+", settling", err)
 			return false
 		}
@@ -193,12 +194,14 @@ func (s *runState) runStep(ctx context.Context, step *Step) error {
 	case "config.patch":
 		return s.configPatch(ctx, step)
 	case "restart":
-		v, _ := step.Scalar()
-		if _, err := s.r.Sup.Restart(ctx, s.name, supervisor.RestartMode(v)); err != nil {
+		if v, ok := step.Scalar(); ok {
+			if _, err := s.r.Sup.Restart(ctx, s.name, supervisor.RestartMode(v)); err != nil {
+				return err
+			}
+			_, err := s.r.Sup.WaitRunning(ctx, s.name)
 			return err
 		}
-		_, err := s.r.Sup.WaitRunning(ctx, s.name)
-		return err
+		return s.killAt(ctx, step)
 	}
 	args, err := step.Map()
 	if err != nil {
@@ -339,4 +342,84 @@ func (s *runState) refusedReload(ctx context.Context, why string) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("the reload of the patched config failed: %s", why)
+}
+
+// KillAtOf reads the argument of a `restart` step that arms a crash point:
+// {kill_at: {workflow, step, point, attempt?}, wait_wall?}. An unknown key is an error.
+func KillAtOf(args map[string]any) (supervisor.KillAtRequest, error) {
+	var req supervisor.KillAtRequest
+	b, err := json.Marshal(args)
+	if err != nil {
+		return req, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return req, fmt.Errorf("restart kill_at: %w", err)
+	}
+	if err := req.KillAt.Check(); err != nil {
+		return req, err
+	}
+	_, err = req.Wait()
+	return req, err
+}
+
+// killAt arms the crash point and goes on: the instance dies later, when a step of the
+// workflow reaches it (see survive).
+func (s *runState) killAt(ctx context.Context, step *Step) error {
+	args, err := step.Map()
+	if err != nil {
+		return err
+	}
+	req, err := KillAtOf(args)
+	if err != nil {
+		return err
+	}
+	wait, _ := req.Wait()
+	info, err := s.r.Sup.Get(s.name)
+	if err != nil {
+		return err
+	}
+	if _, err := s.r.Sup.KillAt(ctx, s.name, req.KillAt, wait); err != nil {
+		return err
+	}
+	s.armed, s.crashBase = true, info.CrashRestarts
+	return nil
+}
+
+// survive turns the failure of a call into success when the instance died at the point the
+// run armed: the call was in flight when the process was killed, and the supervisor has
+// restarted (or is restarting) the instance. A lab error, or a transport error from an
+// instance that did not crash at a point, stays an error.
+func (s *runState) survive(ctx context.Context, err error) error {
+	var le *labclient.Error
+	if err == nil || !s.armed || errors.As(err, &le) {
+		return err
+	}
+	deadline := time.Now().Add(s.r.restartWait()) //simclock:wall waiting for the supervisor's restart
+	for {
+		info, gerr := s.r.Sup.Get(s.name)
+		switch {
+		case gerr != nil || info.State == supervisor.StateExited:
+			return err
+		case info.CrashRestarts > s.crashBase && info.State == supervisor.StateRunning:
+			s.armed, s.crashBase = false, info.CrashRestarts
+			return nil
+		case time.Now().After(deadline): //simclock:wall
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(20 * time.Millisecond): //simclock:wall polling the supervisor
+		}
+	}
+}
+
+// restartWait is how long a run gives a crashed instance to be back (wall time).
+func (r *Runner) restartWait() time.Duration {
+	if r.StepWall > 0 {
+		return max(r.StepWall*3, 30*time.Second)
+	}
+	return 60 * time.Second
 }

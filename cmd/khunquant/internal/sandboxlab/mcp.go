@@ -80,7 +80,9 @@ func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 	m.srv.AddTool(&mcp.Tool{
 		Name: "sandbox_instance",
 		Description: "Start, stop, restart and inspect locked sandbox instances of this binary. " +
-			"ops: up, down, list, restart (mode graceful|kill), logs (tail, contains).",
+			"ops: up, down, list, restart (mode graceful|kill|kill_at), logs (tail, contains). " +
+			"restart kill_at {workflow, step, point, attempt?} arms a crash point and returns {armed}: the instance dies by SIGKILL when that step " +
+			"reaches the point and is restarted on the same home; calls wait up to wait_wall for it (default 60s), then fail with instance_restarting.",
 		InputSchema: instanceSchema(),
 	}, m.instanceHandler)
 	m.srv.AddTool(&mcp.Tool{
@@ -122,7 +124,9 @@ func instanceSchema() json.RawMessage {
 	props := map[string]any{
 		"op":        map[string]any{"type": "string", "enum": []string{"up", "down", "list", "restart", "logs"}},
 		"keep_home": map[string]any{"type": "boolean", "description": "down: keep the home (logs, config)"},
-		"mode":      map[string]any{"type": "string", "enum": []string{"graceful", "kill"}, "description": "restart: SIGTERM then SIGKILL, or SIGKILL at once"},
+		"mode":      map[string]any{"type": "string", "enum": []string{"graceful", "kill", "kill_at"}, "description": "restart: SIGTERM then SIGKILL, SIGKILL at once, or arm a crash point (kill_at)"},
+		"kill_at":   killAtSchema(),
+		"wait_wall": map[string]any{"type": "string", "description": "restart kill_at: how long calls wait for the restarted instance, a Go duration (default 60s, at most 10m)"},
 		"tail":      map[string]any{"type": "integer", "description": "logs: last lines, default 200, at most 2000"},
 		"contains":  map[string]any{"type": "string", "description": "logs: only lines containing this"},
 	}
@@ -131,6 +135,20 @@ func instanceSchema() json.RawMessage {
 	}
 	b, _ := json.Marshal(map[string]any{"type": "object", "required": []string{"op"}, "additionalProperties": false, "properties": props})
 	return b
+}
+
+// killAtSchema is the kill_at argument, generated from supervisor.KillAt so the scenario step
+// and this tool cannot disagree about its fields.
+func killAtSchema() map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, f := range supervisor.KillAtFields() {
+		props[f.JSON] = map[string]any{"type": f.Type, "description": f.Desc}
+		if f.JSON != "attempt" {
+			required = append(required, f.JSON)
+		}
+	}
+	return map[string]any{"type": "object", "description": "restart kill_at: the crash point to arm", "required": required, "additionalProperties": false, "properties": props}
 }
 
 func jsonType(k reflect.Kind) string {
@@ -152,6 +170,9 @@ type instanceArgs struct {
 	Mode     string `json:"mode"`
 	Tail     int    `json:"tail"`
 	Contains string `json:"contains"`
+
+	KillAt   *supervisor.KillAt `json:"kill_at"`
+	WaitWall string             `json:"wait_wall"`
 }
 
 func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -180,6 +201,12 @@ func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolReques
 	case "list":
 		return jsonResult(map[string]any{"instances": m.sup.List()}), nil
 	case "restart":
+		if supervisor.RestartMode(a.Mode) == supervisor.RestartKillAt {
+			return m.killAt(ctx, a)
+		}
+		if a.KillAt != nil || a.WaitWall != "" {
+			return errResult("sandbox_instance: kill_at and wait_wall belong to mode kill_at"), nil
+		}
 		info, err := m.sup.Restart(ctx, a.Name, supervisor.RestartMode(a.Mode))
 		if err != nil {
 			return errResult("%v", err), nil
@@ -193,6 +220,23 @@ func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolReques
 		return jsonResult(map[string]any{"lines": lines}), nil
 	}
 	return errResult("sandbox_instance: op must be one of up, down, list, restart, logs (got %q)", a.Op), nil
+}
+
+// killAt arms the crash point and answers {armed}: the crash and the restart happen later,
+// when the workflow reaches the step.
+func (m *mcpServer) killAt(ctx context.Context, a instanceArgs) (*mcp.CallToolResult, error) {
+	if a.KillAt == nil {
+		return errResult("sandbox_instance: restart mode kill_at needs kill_at {workflow, step, point}"), nil
+	}
+	wait, err := supervisor.KillAtRequest{KillAt: *a.KillAt, WaitWall: a.WaitWall}.Wait()
+	if err != nil {
+		return errResult("sandbox_instance: %v", err), nil
+	}
+	id, err := m.sup.KillAt(ctx, a.Name, *a.KillAt, wait)
+	if err != nil {
+		return errResult("%v", err), nil
+	}
+	return jsonResult(map[string]any{"armed": id}), nil
 }
 
 func (m *mcpServer) waitForHandler(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

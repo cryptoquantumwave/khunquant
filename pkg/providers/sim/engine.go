@@ -44,6 +44,12 @@ type EngineOptions struct {
 	TurnInfo func(ctx context.Context) CallInfo
 	Faults   Faults // nil: none
 	Store    string // <HOME>/lab/llm_script.json; "" keeps the script in memory only
+	// Mode is ModeScripted (the default) or ModeReplay. It is fixed at start, from the
+	// instance's model ref: a provider built for another mode is refused (Provider.Chat).
+	Mode string
+	// Home lists the directories (the instance home as written and symlink-resolved) that
+	// the canonical request masks as <HOME>.
+	Home []string
 }
 
 // Engine answers the model calls of one sandbox instance from its script.
@@ -57,6 +63,7 @@ type Engine struct {
 	unmatched int
 	loops     map[string]int // turn id → consecutive tool-call responses
 	callSeq   int64
+	cass      *Cassette // the replay set; nil until cassette_load
 }
 
 // scriptFile is what Store holds.
@@ -90,7 +97,7 @@ func NewEngine(o EngineOptions) (*Engine, error) {
 }
 
 // Mode is the engine's mode.
-func (e *Engine) Mode() string { return ModeScripted }
+func (e *Engine) Mode() string { return cmpOr(e.o.Mode, ModeScripted) }
 
 // Put installs a script: it replaces the rules, or appends to them when replace is
 // false. fallback ("text" or "error", "" keeps the current one) says what a call no rule
@@ -149,7 +156,7 @@ type Script struct {
 func (e *Engine) Script() Script {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Script{Mode: ModeScripted, Fallback: e.fallback, Rules: []RuleStat{}, Unmatched: e.unmatched}
+	s := Script{Mode: e.Mode(), Fallback: e.fallback, Rules: []RuleStat{}, Unmatched: e.unmatched}
 	for _, r := range e.rules {
 		s.Rules = append(s.Rules, RuleStat{Rule: r, Hits: e.hits[r.ID]})
 	}
@@ -159,6 +166,8 @@ func (e *Engine) Script() Script {
 // decision is the outcome of one call.
 type decision struct {
 	rule      string
+	key       string // the canonical request key
+	miss      bool   // replay had no entry for key
 	unmatched bool
 	resp      *protocoltypes.LLMResponse
 	err       error
@@ -170,6 +179,7 @@ func (e *Engine) Chat(ctx context.Context, msgs []protocoltypes.Message, tools [
 ) (*protocoltypes.LLMResponse, error) {
 	ci := e.classify(ctx, tools, options)
 	ci.Model = model
+	key := Key(canonicalize(e.o.Home, msgs, tools, options))
 	if e.o.Faults != nil {
 		delay, err := e.o.Faults.BeforeLLM(ctx, ci)
 		if err == nil && delay > 0 {
@@ -182,11 +192,17 @@ func (e *Engine) Chat(ctx context.Context, msgs []protocoltypes.Message, tools [
 			t.Stop()
 		}
 		if err != nil {
-			e.record(ci, msgs, decision{err: err})
+			e.record(ci, msgs, decision{err: err, key: key})
 			return nil, err
 		}
 	}
-	d := e.answer(ci, msgs)
+	var d decision
+	if e.Mode() == ModeReplay {
+		d = e.replay(ci, msgs, key)
+	} else {
+		d = e.answer(ci, msgs)
+	}
+	d.key = key
 	e.record(ci, msgs, d)
 	return d.resp, d.err
 }
@@ -277,7 +293,10 @@ func (e *Engine) record(ci CallInfo, msgs []protocoltypes.Message, d decision) {
 	if e.o.Journal == nil {
 		return
 	}
-	p := map[string]any{"rule": d.rule, "unmatched": d.unmatched}
+	p := map[string]any{"rule": d.rule, "unmatched": d.unmatched, "key": d.key}
+	if d.miss {
+		p["cassette_miss"] = true
+	}
 	var resp protocoltypes.LLMResponse
 	if d.resp != nil {
 		resp = *d.resp

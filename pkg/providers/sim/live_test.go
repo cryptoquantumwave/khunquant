@@ -179,7 +179,7 @@ func TestLiveUsageMissingUsesTheUpperBound(t *testing.T) {
 	}
 }
 
-func TestLiveErrorChargesInputAndRedactsKey(t *testing.T) {
+func TestLiveErrorChargesTheWholeReservationAndRedactsKey(t *testing.T) {
 	e, j, lo, in := newLiveEngine(t, ModeLive, 100, 0, "")
 	in.resp = func(int) (*protocoltypes.LLMResponse, error) {
 		return nil, errors.New("bad request (400): invalid key " + sentinelKey)
@@ -188,8 +188,15 @@ func TestLiveErrorChargesInputAndRedactsKey(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), sentinelKey) || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("error = %v", err)
 	}
-	if st := e.Budget(); st.SpentTok == 0 || st.Calls != 1 {
-		t.Errorf("a failed call is accounted at its input bound: %+v", st)
+	// The call was admitted at input bytes plus max_tokens (100) at the price; a failed call
+	// may still have produced billed output, so all of that is charged, not the input alone.
+	wantTok, wantUSD := bound(user("go"), nil, map[string]any{"max_tokens": 100}, testPrice)
+	st := e.Budget()
+	if st.Calls != 1 || st.SpentTok != wantTok || st.SpentUSD != wantUSD {
+		t.Errorf("a failed call is charged its reservation (%d tok, %g usd): %+v", wantTok, wantUSD, st)
+	}
+	if inOnly := len(mustJSON(user("go"))); st.SpentTok <= inOnly {
+		t.Errorf("charged %d tokens, no more than the input's %d", st.SpentTok, inOnly)
 	}
 	for _, en := range j.entries() {
 		if strings.Contains(string(en.Payload), sentinelKey) {

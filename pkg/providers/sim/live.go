@@ -161,9 +161,10 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 	resp, err := lo.Inner.Chat(ctx, msgs, tools, lo.InnerModel, options)
 	e.bud.Calls++
 	if err != nil {
-		// The request may have been processed: charge its input at the upper bound.
-		inTok := len(mustJSON(msgs)) + len(mustJSON(tools))
-		e.spendLocked(inTok, float64(inTok)*lo.Price.In/1e6)
+		// The request may have been processed and the model may have produced output before
+		// the call timed out or was cut off, which is billed too: charge the whole reservation
+		// the call was admitted at (input and maximum output, or the dearest call so far).
+		e.spendLocked(reserveTok, reserveUSD)
 		return decision{rule: "live", err: scrub(err, lo.Key), extra: map[string]any{"mode": e.Mode(), "spent_usd": e.bud.SpentUSD}}
 	}
 

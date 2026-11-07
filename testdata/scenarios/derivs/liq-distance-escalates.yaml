@@ -1,0 +1,54 @@
+# SBX-14b: an OKX short perpetual on a rising price. The wire-level twin of the replay case
+# testdata/replay/flash_crash: the liquidation_distance trigger reads the position through the
+# real OKX route (liqPx, markPx, imr, mmr), so the Warning, the Critical and the liquidation
+# itself all come from the same price path the ticker serves.
+#
+# The numbers. Short 0.1 BTC (1 contract of this market is 1 BTC; the lot is 0.1) from 70000
+# on a 3000 USDT cross wallet, maintenance rate 0.4 %: the liquidation price is
+# (0.1 x 70000 + 3000) / (0.1 x 1.004) = 99602, 42 % above the entry. The price climbs
+# linearly to 105000 over 3 h, so the distance (liq - mark) / mark crosses the Warning line
+# (25 %) at 79682, +50m, the Critical line (15 %) at 86610, +86m, and the mark reaches the
+# liquidation price at +152m. The perception source polls an account with a position every
+# 2 minutes of sim time.
+version: 1
+scenario: liq-distance-escalates
+covers: [SBX-14b]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [okx]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 70000 }
+account:
+  okx:
+    balances: { USDT: 3000 }
+    positions: [{ symbol: BTC-USDT-SWAP, side: short, contracts: 0.1, entryPrice: 70000, leverage: 10, marginMode: cross }]
+timeline:
+  - market.path: { symbol: BTC/USDT, to: 105000, over: 3h, shape: linear }
+  - run_until: "+3h30m"
+expect:
+  - id: warning-first
+    decision: { trigger: liquidation_distance, severity: warning }
+    within: { from: "+45m", to: "+80m" }
+  - id: no-critical-before-the-line
+    decision: { trigger: liquidation_distance, severity: critical }
+    count: 0
+    within: { from: "+0m", to: "+80m" }
+  - id: then-critical
+    decision: { trigger: liquidation_distance, severity: critical }
+    within: { from: "+84m", to: "+115m" }
+  - id: then-liquidated
+    event: { kind: exchange.order, fields: { effect: liquidation, wire: BTC-USDT-SWAP, status: filled }, count: 1 }
+    within: { from: "+150m", to: "+160m" }

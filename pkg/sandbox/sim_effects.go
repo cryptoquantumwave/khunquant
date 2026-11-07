@@ -47,8 +47,8 @@ func (sim *StatefulSimulator) SetWake(arm func(at time.Time)) {
 }
 
 // Advance processes what is due at now in every venue: orders that reach their cancel
-// time, and resting limit orders whose price was crossed, each stamped with its own
-// time. A zero now means the simulator's clock. Calling it twice at one now changes
+// time, resting limit orders whose price was crossed, funding payments and liquidations
+// (sim_derivs.go), each stamped with its own time. A zero now means the simulator's clock. Calling it twice at one now changes
 // nothing, so a request, a clock step and a lab read can all call it.
 func (sim *StatefulSimulator) Advance(now time.Time) {
 	sim.mu.Lock()
@@ -60,8 +60,12 @@ func (sim *StatefulSimulator) advanceLocked(now time.Time) {
 	if now.IsZero() {
 		now = sim.clock()
 	}
-	for _, key := range sim.stateManager.Keys() {
+	keys := sim.stateManager.Keys()
+	for _, key := range keys {
 		sim.book(key).advance(now)
+	}
+	for _, key := range keys { // after the orders: a limit fill inside the window is a position by now
+		sim.advanceDerivs(key, now)
 	}
 	if !sim.wakeAt.After(now) {
 		sim.wakeAt = time.Time{}
@@ -69,8 +73,8 @@ func (sim *StatefulSimulator) advanceLocked(now time.Time) {
 	sim.reschedule(now)
 }
 
-// reschedule arms the next wake: the earliest cancel time of an open order, or one
-// restWatch ahead while a limit order rests. An earlier wake already armed is enough:
+// reschedule arms the next wake: the earliest cancel time of an open order, one
+// restWatch ahead while a limit order rests, or the next funding settlement of an open position. An earlier wake already armed is enough:
 // it advances, and arms the next.
 func (sim *StatefulSimulator) reschedule(now time.Time) {
 	if sim.wake == nil {
@@ -88,6 +92,12 @@ func (sim *StatefulSimulator) reschedule(now time.Time) {
 			if !o.Hold && o.Price > 0 {
 				consider(now.Add(restWatch))
 			}
+		}
+		// The next funding settlement of an open position, so the clock stops there and the
+		// payment is made on the mark of that instant. A liquidation needs no stop of its own:
+		// the crossing search dates it, whenever the simulator next runs.
+		if f, ok := sim.nextSettlement(key, now); ok {
+			consider(f)
 		}
 	}
 	if want.IsZero() || (sim.wakeAt.After(now) && !want.Before(sim.wakeAt)) {

@@ -69,6 +69,10 @@ func (b *Book) render(venue, path string, q url.Values) (int, []byte, bool) {
 		return b.okxMarkPrice(q)
 	case "okx/api/v5/public/funding-rate":
 		return b.okxFundingRate(q)
+	case "binance/fapi/v1/fundingRate":
+		return b.binanceFundingRate(q)
+	case "okx/api/v5/public/funding-rate-history":
+		return b.okxFundingHistory(q)
 	case "bitkub/api/v3/market/ticker":
 		return b.bitkubTickers(q)
 	case "bitkub/tradingview/history":

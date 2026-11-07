@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 )
 
 // LockOptions configures the sandbox process lock.
@@ -44,6 +46,7 @@ func Lock(opts LockOptions) error {
 	}
 	opts.AllowHosts = append([]string(nil), opts.AllowHosts...)
 	lockOpts, locked = opts, true
+	randsrc.Arm() // lets the lab seed the nonce source; no other caller arms it
 
 	globalStateMu.Lock()
 	globalEnabled, globalBaseURL = true, ""
@@ -99,6 +102,7 @@ func ResetLockForTest() {
 	lockMu.Lock()
 	defer lockMu.Unlock()
 	lockOpts, locked = LockOptions{}, false
+	randsrc.ResetForTest()
 	globalStateMu.Lock()
 	globalEnabled, globalBaseURL = false, ""
 	globalStateMu.Unlock()

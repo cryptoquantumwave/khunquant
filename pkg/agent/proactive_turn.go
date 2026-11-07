@@ -2,12 +2,12 @@ package agent
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"strconv"
 	"strings"
 	"sync"
@@ -538,7 +538,7 @@ func sanitizeInline(s string, maxRunes int) string {
 // newFenceNonce returns a random token for the candidate fence.
 func newFenceNonce() string {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randsrc.Read(b[:]); err != nil {
 		return strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
 	return hex.EncodeToString(b[:])

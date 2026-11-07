@@ -2,13 +2,13 @@ package approval
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"math"
 	"strings"
 	"unicode"
@@ -41,7 +41,7 @@ func newNonce() string {
 }
 
 func mustRand(b []byte) {
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randsrc.Read(b); err != nil {
 		// crypto/rand does not fail on supported platforms; a proposal whose code
 		// and nonce cannot be random must not exist.
 		panic("approval: no randomness: " + err.Error())

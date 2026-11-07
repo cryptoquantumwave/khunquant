@@ -67,6 +67,7 @@ func (l *Lab) InitClock(getenv func(string) string) error {
 	sim.OnStep(func(s simclock.Step) {
 		if l.Sim != nil {
 			l.Sim.Advance(s.At)
+			l.PersistQuiet("exchange") // what fell due in the step (fills, funding) is the venue's history
 		}
 		if sim.State().Mode == simclock.ModeManual {
 			if j := l.Journal; j != nil {

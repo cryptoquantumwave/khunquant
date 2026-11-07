@@ -37,6 +37,7 @@ type entry struct {
 	from, to time.Time
 	fired    int
 	rng      *rand.Rand
+	src      *rand.PCG // rng's source, so a restart can resume the same draw sequence
 }
 
 // RuleState is a rule with its firing count, for List.
@@ -56,7 +57,8 @@ type Injector struct {
 	rules    []*entry
 	seq      int
 	enabled  map[string]bool
-	classify bool // some HTTP rule looks at the order fields of a request
+	classify bool   // some HTTP rule looks at the order fields of a request
+	onChange func() // called, with no lock held, after the rules or a firing count changed (persist.go)
 
 	held atomic.Int32 // holds in progress, of every kind (hold.go)
 	stop chan struct{}
@@ -109,6 +111,7 @@ func (i *Injector) Add(r Rule) (string, error) {
 	if sym := strings.ToUpper(r.Match.Symbol); r.Match.Market == "" && (strings.Contains(sym, ":") || strings.HasSuffix(sym, "-SWAP")) {
 		r.Match.Market = "futures" // BTC/USDT:USDT and BTC-USDT-SWAP name the swap
 	}
+	defer i.changed() // runs after the unlock below
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if len(i.rules) >= MaxRules {
@@ -125,10 +128,8 @@ func (i *Injector) Add(r Rule) (string, error) {
 	} else if has(r.ID) {
 		return "", fmt.Errorf("a rule with id %q exists already", r.ID)
 	}
-	i.rules = append(i.rules, &entry{
-		Rule: r, kind: kind, ly: kindLayer[kind], pair: pair, from: from, to: to,
-		rng: rand.New(rand.NewPCG(r.When.Seed, 0x9e3779b97f4a7c15)),
-	})
+	src := rand.NewPCG(r.When.Seed, 0x9e3779b97f4a7c15)
+	i.rules = append(i.rules, &entry{Rule: r, kind: kind, ly: kindLayer[kind], pair: pair, from: from, to: to, rng: rand.New(src), src: src})
 	i.refreshLocked()
 	return r.ID, nil
 }
@@ -157,6 +158,7 @@ func (i *Injector) List() []RuleState {
 // Clear removes the rules with these IDs, or every rule when none is given, and returns
 // how many it removed.
 func (i *Injector) Clear(ids ...string) int {
+	defer i.changed()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	before := len(i.rules)
@@ -235,6 +237,7 @@ func (i *Injector) pick(want func(layer) bool, q *request) *fired {
 	i.mu.Unlock()
 	if f != nil {
 		i.record(f, q)
+		i.changed()
 	}
 	return f
 }

@@ -52,10 +52,13 @@ type SearchRule struct {
 	Results []Result `json:"results"`
 }
 
+// Journal is where web.req entries go (labjournal.Journal).
+type Journal interface{ Append(e labjournal.Entry) }
+
 // Options configures Open.
 type Options struct {
 	Path    string // <home>/lab/web.json; empty keeps the rules in memory only
-	Journal interface{ Append(labjournal.Entry) }
+	Journal Journal
 	Now     func() time.Time
 }
 
@@ -64,7 +67,7 @@ type Options struct {
 type Store struct {
 	mu       sync.Mutex
 	path     string
-	journal  interface{ Append(labjournal.Entry) }
+	journal  Journal
 	now      func() time.Time
 	pages    []PageRule // oldest first: the newest match wins
 	searches []SearchRule

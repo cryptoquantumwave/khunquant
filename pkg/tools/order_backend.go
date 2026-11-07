@@ -24,9 +24,11 @@ import (
 // package's; pkg/approval depends on the interface only.
 //
 // Every order that follows from a proposal is placed by PlaceApprovedOrder, which
-// is the only caller of broker.PlaceOrderIdempotent that follows from a proposal (the
-// delta-neutral open, dnExchange.Place, is the other caller in the program, and is not
-// reached from a proposal; TestOrderExecutionCallGraph keeps both lists exact).
+// is the only caller of broker.PlaceOrderIdempotent that follows from a proposal. The
+// others are not reached from one: the delta-neutral legs (dnExchange.Place), the mandated
+// DCA buy (dcaExchange.PlaceMandateBuy) and the futures_open_position tool
+// (placeFuturesEntry, at attempt 1 only, on the user's confirm=true).
+// TestOrderExecutionCallGraph keeps the list exact.
 type ApprovalOrderBackend struct {
 	cfg *config.Config
 	now func() time.Time

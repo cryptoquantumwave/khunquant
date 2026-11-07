@@ -188,7 +188,8 @@ func (t *FuturesOpenPositionTool) Parameters() map[string]any {
 			"take_profit":  map[string]any{"type": "number", "description": "Optional take-profit trigger price."},
 			"params": map[string]any{
 				"type": "object",
-				"description": "Extra CCXT/exchange execution params (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly. " +
+				"description": "Extra CCXT/exchange execution params (optional), e.g. timeInForce, postOnly, reduceOnly. " +
+					"Client order IDs are refused: the tool sets its own, so the entry can be found again if the exchange's answer is lost. " +
 					"Margin and leverage keys are refused unless trading_risk permits them, and unrecognised keys are refused; " +
 					"use the side, leverage and margin_mode arguments rather than passing them here.",
 			},
@@ -245,6 +246,9 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 	if orderType == "limit" && price == nil {
 		return ErrorResult("price is required for limit futures entries")
+	}
+	if paramsCarryClientOrderID(params) {
+		return ErrorResult("params must not carry a client order ID: futures_open_position sets its own, derived from a key unique to the call, so the entry can be found again if the exchange's answer is lost. Nothing was sent.")
 	}
 
 	// Step 2: leverage opt-in
@@ -333,6 +337,29 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	defer endSeq()
 	ctx = seqCtx
 
+	// An earlier entry on this account, symbol and side whose outcome was never settled is
+	// looked at first, and refused while it may have left a position (see
+	// futures_open_reconcile.go). A read: it spends no rate limit token, and no exit tool
+	// goes through it.
+	markKey := unknownEntryKey(t.cfg, providerID, account, symbol, positionSide)
+	if refused := refuseWhileUnknown(ctx, fp, markKey, providerID, symbol, positionSide); refused != nil {
+		return refused
+	}
+	entryReq := broker.OrderRequest{
+		Market: broker.OrderMarketFutures, Symbol: symbol, Type: orderType, Side: entrySide, Amount: amount, Price: price,
+		MarginMode: marginMode, PositionSide: positionSide, Params: params,
+	}
+	// The position before the order: with it a lost answer can be settled by whether the
+	// position moved. An adapter that cannot tag the order with a client order ID has no
+	// other way to tell, so without a reading nothing is sent.
+	posBefore, posErr := snapshotPositions(ctx, fp, symbol)
+	if posErr == nil {
+		before := posBefore.on(positionSide)
+		entryReq.PositionBefore = &before
+	} else if !broker.CanTagClientOrderID(fp, entryReq) {
+		return ErrorResult("cannot read the current position of " + symbol + " on " + providerID + ", which is the only way to tell whether this entry went through if the exchange's answer is lost. Nothing was sent.")
+	}
+
 	// Rate limit: spent only now that the call is confirmed and about to mutate the exchange,
 	// so previews and size/notional refusals above cost nothing.
 	if !broker.DefaultLimiter.Allow(providerID) {
@@ -344,19 +371,10 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 		return ErrorResult(fmt.Sprintf("set leverage failed: %v", err)).WithError(err)
 	}
 
-	// Step 9: place entry order
-	entry, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       symbol,
-		OrderType:    orderType,
-		Side:         entrySide,
-		Amount:       amount,
-		Price:        price,
-		MarginMode:   marginMode,
-		PositionSide: positionSide,
-		Params:       params,
-	})
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("entry order failed: %v", err)).WithError(err)
+	// Step 9: place entry order. A lost answer is looked for, never answered by placing again.
+	entry, lostNote, failed := placeFuturesEntry(ctx, fp, entryReq, markKey, providerID, posBefore)
+	if failed != nil {
+		return failed
 	}
 	entryID := orderID(entry)
 	// Report the accepted entry order to the perception order feed (the amount is a
@@ -413,6 +431,9 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 
 	out := fmt.Sprintf("Futures position entry placed on %s%s:\n  Entry order: %s\n  Symbol:      %s\n  Side:        %s\n  Amount:      %.8g\n  Leverage:    %dx\n  Margin mode: %s\n  Notional:    %.2f USD (from %s)\n",
 		providerID, fillNote, entryID, symbol, positionSide, protectionAmount, lev, marginMode, notional, notionalSource)
+	if lostNote != "" {
+		out += "\n" + lostNote + "\n"
+	}
 	if len(protectiveLines) > 0 {
 		out += "\nProtection orders:\n  " + strings.Join(protectiveLines, "\n  ") + "\n"
 	}

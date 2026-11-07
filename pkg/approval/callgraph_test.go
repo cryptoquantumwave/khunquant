@@ -190,8 +190,10 @@ func assertSites(t *testing.T, what string, got []site, allowed ...string) {
 // TestOrderExecutionCallGraph: there is no path from a model's output to an
 // exchange order except through an approved proposal.
 //
-//	PlaceOrderIdempotent   called only by ApprovalOrderBackend.PlaceApprovedOrder
-//	PlaceApprovedOrder     called only by the place step of approval.order, declared once
+//	PlaceOrderIdempotent   called only by ApprovalOrderBackend.PlaceApprovedOrder, and by
+//	                       the delta-neutral, mandated-DCA and futures_open_position
+//	                       callers named in the allowlist below
+//	PlaceApprovedOrder    called only by the place step of approval.order, declared once
 //	the approval.order workflow is started only by Service.startExecution
 //	startExecution         called only by Decide (right after the owner approved) and
 //	                       Recover (an approved proposal whose start a crash lost)
@@ -221,10 +223,19 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	// (from the gateway's dispatcher, on a live execute_dca candidate of a plan with an
 	// ACTIVE MANDATE the owner approved), and which the kill flag, the mandate check, every
 	// order gate and the throttle precede. A run outside the mandate asks instead.
+	// The fourth caller is the futures_open_position tool: placeFuturesEntry, reached only
+	// from FuturesOpenPositionTool.Execute on a user's confirm=true, after every gate (the
+	// leverage switch, trade permission, the per-account daily loss check, the USD cap)
+	// and the rate limit token, and refused in paper mode by its policy row. It calls at
+	// attempt 1 with a key unique to the call, only to attach a client order ID and
+	// classify a failure; a lost answer is looked for with FindOrder and never placed
+	// again (a retry by a person or the model is a new call, not attempt 2).
 	assertSites(t, "broker.PlaceOrderIdempotent", place,
 		"pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder",
 		"pkg/tools/dca_mandate_exchange.go:dcaExchange.PlaceMandateBuy",
-		"pkg/tools/dn_exchange.go:dnExchange.Place")
+		"pkg/tools/dn_exchange.go:dnExchange.Place",
+		"pkg/tools/futures_open_reconcile.go:placeFuturesEntry")
+	assertSites(t, "placeFuturesEntry", callSites(srcs, "placeFuturesEntry"), "pkg/tools/futures.go:FuturesOpenPositionTool.Execute")
 	assertSites(t, "dca.Exchange.PlaceMandateBuy", callSites(srcs, "PlaceMandateBuy"), "pkg/dca/workflow.go:Deps.place")
 	assertSites(t, "dca.StartExecute", callSites(srcs, "StartExecute"),
 		"cmd/khunquant/internal/gateway/dca_mandate_wiring.go:dcaDispatcher.Dispatch")

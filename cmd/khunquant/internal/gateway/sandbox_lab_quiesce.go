@@ -19,7 +19,12 @@ import (
 //   - the device perception source: it only reacts to real hotplug events, which a lab
 //     does not produce. (The clock and DCA-plan sources do run a pass after a sim-clock
 //     wake, so they are Idlers under "perception".)
-//   - SimWeb: SBX-15 adds it.
+//
+// SimWeb is not a quiescer of its own. Its requests are served by the sandbox server, so
+// "exchange_sim" (Server.Idle counts a request from the moment the handler starts, a held
+// one included) is busy while one is answered. The time before the client has connected is
+// the caller's: a web_fetch inside a tool call is the "agent" quiescer's, and the news
+// source's is "perception"'s.
 //
 // The fault injector's holds: a held HTTP request (latency, timeout, written_then_timeout)
 // is already in flight on the exchange server, so "exchange_sim" covers it; a model call

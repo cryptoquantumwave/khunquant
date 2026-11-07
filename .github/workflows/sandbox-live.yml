@@ -1,0 +1,91 @@
+name: Sandbox Live Scenarios
+
+# Runs the Sandbox Lab scenarios whose model is a real one (llm: live, today H9 / S110B-1,
+# testdata/scenarios/heartbeat/legacy-heartbeat-no-repeat.yaml) against the real model API.
+#
+# INERT UNTIL YOU ENABLE IT. It has no schedule: it runs only when someone starts it from
+# the Actions tab ("Run workflow"), and without the repository secret SANDBOX_LLM_KEY it
+# does nothing but print a notice and succeed. To enable it:
+#   1. Settings > Secrets and variables > Actions > New repository secret, name
+#      SANDBOX_LLM_KEY, value an API key for the model below. Use a key of its own with a
+#      spending limit set at the provider; the budget below is a second, local brake.
+#   2. Run the workflow, or add a `schedule:` trigger here once you have watched a run.
+#
+# Cost control: --llm-budget caps ONE instance (every run of every matrix row is its own
+# instance), and the lab refuses a model call that could pass it. The scenario's `runs: 5`
+# and two matrix rows are ten instances, so the most a dispatch can spend is ten times the
+# budget you pass. The model must be on KQ_SANDBOX_LLM_MODELS and have a known price.
+#
+# The key is read from the secret into the step's environment only; the lab passes it to the
+# instance's gateway process and nowhere else (not a config, not the journal, not a log).
+# The instance's egress guard allows api.anthropic.com and nothing else beyond loopback.
+#
+# This job reads the repository and nothing else. Kept apart from nightly.yml, whose release
+# job holds contents: write and packages: write, and from pr.yml, which never sees a secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llm_budget:
+        description: "Spending cap per instance, e.g. 2USD or 200000tok (ten instances run)"
+        required: true
+        default: "2USD"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Live-model scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the model key
+        id: key
+        env:
+          SANDBOX_LLM_KEY: ${{ secrets.SANDBOX_LLM_KEY }}
+        run: |
+          if [ -z "$SANDBOX_LLM_KEY" ]; then
+            echo "::notice::SANDBOX_LLM_KEY is not set, so no live scenario ran. See the header of this workflow to enable it."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        if: steps.key.outputs.present == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build once
+        if: steps.key.outputs.present == 'true'
+        run: make build
+
+      - name: Validate every scenario
+        if: steps.key.outputs.present == 'true'
+        run: ./build/khunquant sandbox run --validate-only --llm all testdata/scenarios
+
+      # A known_bug scenario is red while its defect is open, so exit 1 (an expectation
+      # failed) is a finding and is not an error here; 2 (invalid) and 3 (infrastructure)
+      # fail the job. The report goes to the job summary.
+      - name: Run live scenarios
+        if: steps.key.outputs.present == 'true'
+        env:
+          KQ_SANDBOX_LLM_KEY: ${{ secrets.SANDBOX_LLM_KEY }}
+          KQ_SANDBOX_LLM_MODELS: claude-sonnet-4.6
+          KQ_SCENARIO_KNOWN_BUGS: "1"
+          LLM_BUDGET: ${{ inputs.llm_budget }}
+        run: |
+          code=0
+          ./build/khunquant sandbox run --llm live --llm-model anthropic-messages/claude-sonnet-4.6 --llm-budget "$LLM_BUDGET" --timeout 50m --report live-report.md testdata/scenarios || code=$?
+          if [ -f live-report.md ]; then cat live-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$code" -ge 2 ]; then exit "$code"; fi

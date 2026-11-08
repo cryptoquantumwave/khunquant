@@ -17,6 +17,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
 )
 
@@ -524,7 +525,7 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 
 	client := p.client
 	if client == nil {
-		client = &http.Client{Timeout: searchTimeout}
+		client = labWebClient(&http.Client{Timeout: searchTimeout})
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -696,7 +697,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	maxResults := 5
 	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > GLM Search
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, perplexityTimeout)
+		client, err := searchClient(opts.Proxy, perplexityTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for Perplexity: %w", err)
 		}
@@ -709,7 +710,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = opts.PerplexityMaxResults
 		}
 	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		client, err := searchClient(opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for Brave: %w", err)
 		}
@@ -718,7 +719,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = opts.BraveMaxResults
 		}
 	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		client, err := searchClient(opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for SearXNG: %w", err)
 		}
@@ -727,7 +728,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = opts.SearXNGMaxResults
 		}
 	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		client, err := searchClient(opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
 		}
@@ -741,7 +742,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = opts.TavilyMaxResults
 		}
 	} else if opts.DuckDuckGoEnabled {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		client, err := searchClient(opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
 		}
@@ -750,7 +751,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			maxResults = opts.DuckDuckGoMaxResults
 		}
 	} else if opts.GLMSearchEnabled && opts.GLMSearchAPIKey != "" {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		client, err := searchClient(opts.Proxy, searchTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for GLM Search: %w", err)
 		}
@@ -906,13 +907,17 @@ func NewWebFetchToolWithProxy(maxChars int, proxy string, fetchLimitBytes int64)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client for web fetch: %w", err)
 	}
-	if transport, ok := client.Transport.(*http.Transport); ok {
+	// Locked, labWebClient (below) sets the loopback-only dialer: every request is first
+	// rewritten to the sandbox server, so the SSRF-safe dialer, which refuses loopback, would
+	// refuse the sandbox. Unlocked it is installed exactly as before.
+	if transport, ok := client.Transport.(*http.Transport); ok && !sandbox.Locked() {
 		dialer := &net.Dialer{
 			Timeout:   15 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}
 		transport.DialContext = newSafeDialContext(dialer)
 	}
+	client = labWebClient(client)
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("stopped after %d redirects", maxRedirects)

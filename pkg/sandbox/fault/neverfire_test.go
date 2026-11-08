@@ -44,6 +44,9 @@ func TestAdd_RefusesRulesThatCanNeverFire(t *testing.T) {
 	if _, err := i.Add(Rule{Match: Match{Venue: "*", Order: "create"}, Effect: status(500)}); err != nil {
 		t.Errorf("a rule for every venue was refused: %v", err)
 	}
+	if _, err := i.Add(Rule{Match: Match{Venue: "web"}, Effect: status(500)}); err != nil {
+		t.Errorf("a rule for the web venue (SimWeb) was refused: %v", err)
+	}
 }
 
 // The refusals follow the code, not a list written beside it: every venue with a simulator

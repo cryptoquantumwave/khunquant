@@ -134,11 +134,11 @@ type panicPublisher struct{}
 
 func (panicPublisher) Publish(Event) { panic("subscriber bug") }
 
-// Import boundary: the standard library, pkg/sqlitex and pkg/logger only.
+// Import boundary: the standard library, pkg/sqlitex, pkg/logger and the lockflag leaf only.
 func TestJournal_ImportBoundary(t *testing.T) {
 	perceptiontest.AssertImports(t, perceptiontest.Boundary{
 		Root:    "pkg/journal",
-		Allowed: []string{"pkg/sqlitex", "pkg/logger"},
+		Allowed: []string{"pkg/sqlitex", "pkg/logger", "pkg/sandbox/lockflag"},
 		Forbidden: []string{
 			"pkg/events", "pkg/perception", "pkg/agent", "pkg/tools", "pkg/providers", "pkg/notify",
 			"pkg/channels", "pkg/attention", "pkg/bus", "pkg/config", "pkg/intent", "pkg/approval",

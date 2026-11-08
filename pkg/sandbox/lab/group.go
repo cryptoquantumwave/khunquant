@@ -143,6 +143,7 @@ func (l *Lab) Call(ctx context.Context, group, op string, args json.RawMessage) 
 		}
 	}()
 	res, err = run(ctx, args)
+	l.persistAll() // an op changes the world (a price, a seeded balance, a rule) before it answers
 	var le *Error
 	if err != nil && !errors.As(err, &le) {
 		err = &Error{Code: CodeFailed, Msg: err.Error()}

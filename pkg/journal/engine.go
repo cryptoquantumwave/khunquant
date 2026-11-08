@@ -48,6 +48,9 @@ type Engine struct {
 	// hook, when set (tests only), is called at the crash points of a step.
 	hook func(point string, workflowID, step string, attempt int)
 
+	// crash is the lab's production crash hook (crashhook.go): set only in a locked process.
+	crash atomic.Pointer[CrashHook]
+
 	// beforeStopping, when set (tests only), is called by Run's own goroutine after
 	// its context has ended and before it raises the stopping flag. It holds that
 	// goroutine back, to show that a stop does not depend on it.
@@ -171,9 +174,12 @@ func (e *Engine) publish(ev Event) {
 	e.opt.publisher.Publish(ev)
 }
 
-func (e *Engine) callHook(point, wf, step string, attempt int) {
+func (e *Engine) callHook(point string, wf *Workflow, step string, attempt int) {
 	if e.hook != nil {
-		e.hook(point, wf, step, attempt)
+		e.hook(point, wf.ID, step, attempt)
+	}
+	if h := e.crash.Load(); h != nil {
+		(*h)(CrashPoint{Point: point, WorkflowID: wf.ID, Kind: wf.Kind, Step: step, Attempt: attempt})
 	}
 }
 

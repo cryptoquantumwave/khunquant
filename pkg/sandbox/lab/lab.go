@@ -33,6 +33,10 @@ type Options struct {
 	Getenv func(string) string
 	// AvoidPort is the gateway's own port: the server must not take it (0: none).
 	AvoidPort int
+	// DeferStart makes New build the lab without starting the server: the caller attaches
+	// the rest of the world (the fault rules), restores it, and calls Start. The server then
+	// serves its first request on a fully restored world.
+	DeferStart bool
 }
 
 // Lab holds the components of one sandbox instance.
@@ -73,6 +77,9 @@ type Lab struct {
 
 	kmu   sync.RWMutex // guards kinds
 	kinds map[string]bool
+
+	pmu   sync.Mutex // guards the list of saved parts (persist.go); each part has its own lock
+	world []*persisted
 }
 
 // New loads the fixtures, seeds the simulator and starts the sandbox server. It
@@ -118,21 +125,41 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }})
 	sim.SetPriceSource(l.Market)
 	l.Chain.Set(sandbox.StageMarket, l.Market.Middleware())
-	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(sim))
+	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(persistingSim{sim, l}))
 	srv.SetResponder(l.Chain)
 	if opts.Getenv != nil {
 		if err := l.InitClock(opts.Getenv); err != nil {
 			return nil, err
 		}
 	}
-	if err := srv.Start(ctx); err != nil {
+	// The exchange and the market outlive the process: they are restored before the server
+	// can answer, after the clock and the simulator's wake exist.
+	sim.SetClock(func() time.Time { return l.Now() }) // the restore re-arms the wake on sim time
+	l.Register(l.Market)
+	l.Register(sim)
+	if err := l.Restore(); err != nil {
 		if l.Clock != nil {
 			_ = l.Clock.Close()
 		}
-		return nil, fmt.Errorf("lab: start sandbox server: %w", err)
+		return nil, err
 	}
-	sandbox.SetInstance(srv)
-	return l, nil
+	if opts.DeferStart {
+		return l, nil
+	}
+	return l, l.Start(ctx)
+}
+
+// Start starts the sandbox server and publishes it as the process's instance. New calls it
+// unless DeferStart was set.
+func (l *Lab) Start(ctx context.Context) error {
+	if err := l.Server.Start(ctx); err != nil {
+		if l.Clock != nil {
+			_ = l.Clock.Close()
+		}
+		return fmt.Errorf("lab: start sandbox server: %w", err)
+	}
+	sandbox.SetInstance(l.Server)
+	return nil
 }
 
 // DeclareKinds records the journal kinds this instance writes, so a scenario that reads

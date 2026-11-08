@@ -44,7 +44,7 @@ func (a *SettradeFullAdapter) Category() broker.AssetCategory { return broker.Ca
 // Morning session: 10:00–12:30; Afternoon session: 14:00–16:30 (Mon–Fri).
 func (a *SettradeFullAdapter) GetMarketStatus(_ context.Context, _ string) (broker.MarketStatus, error) {
 	ict := time.FixedZone("ICT", 7*3600)
-	now := time.Now().In(ict)
+	now := broker.Now().In(ict)
 
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return broker.MarketClosed, nil

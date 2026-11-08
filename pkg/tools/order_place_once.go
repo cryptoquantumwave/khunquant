@@ -64,7 +64,10 @@ type pendingOrder struct {
 // position the tool set out to close. Only the look after an unknown outcome is cut short.
 func sendOrderOnce(ctx context.Context, p broker.Provider, req broker.OrderRequest, tool string) (ccxt.Order, *pendingOrder, error) {
 	idemKey := tool + ":" + uuid.NewString()
-	first := futuresOpenNow()
+	// The broker's own clock: the look compares this instant with the one the placer reads,
+	// which a locked gateway points at its simulated clock (futuresOpenNow stays the wall
+	// clock). Unlocked, broker.Now is time.Now.
+	first := broker.Now()
 	sendCtx := ctx
 	if req.ReduceOnly {
 		sendCtx = context.WithoutCancel(ctx)

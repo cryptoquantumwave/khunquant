@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
@@ -335,14 +336,19 @@ func (v *validator) expects() {
 		for _, k := range e.dups {
 			v.addf(p+"/"+k, "given both inside %s and beside it", e.Kind)
 		}
+		for _, mi := range e.modIssues {
+			v.addf(p+mi.Path, "%s", mi.Msg)
+		}
 		v.modifiers(p, e)
 		v.expectKind(kp, e, spec.Journal)
 	}
 }
 
 func (v *validator) modifiers(p string, e *Expectation) {
-	if _, _, err := (labjournal.Match{Count: e.Count}).Bounds(); err != nil {
+	if lo, hi, err := (labjournal.Match{Count: e.Count}).Bounds(); err != nil {
 		v.addf(p+"/count", "must be 1, \">= 1\", \"<= 2\", \"0\" ...: %v", err)
+	} else if lo == 0 && hi < 0 {
+		v.addf(p+"/count", "%q holds whatever the journal holds, so the expectation checks nothing", e.Count)
 	}
 	if from, to, hasTo, err := e.Within.Bounds(); err != nil {
 		v.addf(p+"/within", "%v", err)
@@ -376,6 +382,12 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 				v.addf(kp+"/"+f, "is a shorthand for event.trigger.candidate and event.attention.decision only; use fields: with a payload path")
 			}
 		}
+		if PayloadPaths[journal]["disposition"] != "" {
+			v.oneOf(kp, e.Fields, "disposition", true, dispositions)
+		}
+		v.payloadFields(kp, e, journal)
+	case "decision":
+		v.oneOf(kp, e.Fields, "disposition", true, dispositions)
 	case "order":
 		journal = OrderJournalKind(e.Fields)
 		for _, f := range []string{"symbol", "side", "reduce_only", "client_id", "status"} {
@@ -383,6 +395,7 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 				v.needKind(kp+"/"+f, "order."+f, "exchange.order")
 			}
 		}
+		v.orderValues(kp, e.Fields, journal)
 	case "probe":
 		n := 0
 		for _, name := range sortedKeys(probeGroup) {
@@ -396,6 +409,7 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 		}
 	case "workflow":
 		v.need(kp, "workflow", stepSpec{Group: "inspect", Op: "workflows", PR: "SBX-05"})
+		v.oneOf(kp, e.Fields, "state", false, workflowStates)
 	case "logs":
 		if lvl, ok := e.Fields["level"].(string); ok && !slices.Contains([]string{"ERROR", "WARN", "INFO"}, lvl) {
 			v.addf(kp+"/level", "must be ERROR, WARN or INFO")
@@ -403,6 +417,81 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 	}
 	if journal != "" {
 		v.needKind(kp, e.Kind, journal)
+	}
+}
+
+// The checks below are on values. A value the journal never holds matches nothing, so
+// with a count of 0 the expectation would pass whatever happened.
+
+// oneOf reports field f of fields when it is given and is not one of values (a "!x"
+// stands for x when neg).
+func (v *validator) oneOf(kp string, fields map[string]any, f string, neg bool, values []string) {
+	raw, ok := fields[f]
+	if !ok {
+		return
+	}
+	s, isStr := raw.(string)
+	if neg {
+		s = strings.TrimPrefix(s, "!")
+	}
+	if !isStr || !slices.Contains(values, s) {
+		v.addf(kp+"/"+f, "must be one of %s", strings.Join(values, ", "))
+	}
+}
+
+// orderValues checks an order expectation's values against what its journal holds: not
+// closed for filled, short for sell, the wire form BTCUSDT or the account key binance.spot.
+func (v *validator) orderValues(kp string, f map[string]any, journal string) {
+	if journal == "exchange.req" { // venue alone: the request log's subject, compared whole and never negated
+		v.oneOf(kp, f, "venue", false, sortedKeys(orderPaths))
+		return
+	}
+	v.oneOf(kp, f, "venue", true, sandbox.AccountVenues)
+	v.oneOf(kp, f, "side", true, orderSides)
+	v.oneOf(kp, f, "status", true, orderStatuses)
+	if raw, ok := f["symbol"]; ok {
+		s, isStr := raw.(string)
+		s = strings.TrimPrefix(s, "!")
+		venue, _ := f["venue"].(string)
+		equityWire := slices.Contains(equityVenues, venue) && equityWireRE.MatchString(s)
+		if !isStr || !(unifiedSymbolRE.MatchString(s) || equityWire) {
+			v.addf(kp+"/symbol", "must be a unified symbol such as BTC/USDT, BTC/USDT:USDT, PTT/THB or AAPL/USD, not the venue's own form")
+		}
+	}
+	if raw, ok := f["client_id"]; ok {
+		if s, isStr := raw.(string); !isStr || strings.TrimPrefix(s, "!") == "" {
+			v.addf(kp+"/client_id", "must be a string (quote a numeric id): the journal holds it as one")
+		}
+	}
+	if raw, ok := f["reduce_only"]; ok {
+		if _, isBool := raw.(bool); !isBool {
+			v.addf(kp+"/reduce_only", "must be true or false")
+		}
+	}
+}
+
+// payloadFields checks the paths under an event expectation's fields: against the payload
+// the journal kind's producer writes. For a kind whose payload is not declared here, a
+// path cannot be checked, so an absence count on it is refused.
+func (v *validator) payloadFields(kp string, e *Expectation, journal string) {
+	raw, ok := e.Fields["fields"]
+	if !ok {
+		return
+	}
+	fields, isMap := raw.(map[string]any)
+	if !isMap {
+		v.addf(kp+"/fields", "must be a mapping of payload path to wanted value")
+		return
+	}
+	s, known := payloadShape(journal)
+	lo, _, err := (labjournal.Match{Count: e.Count}).Bounds()
+	for _, p := range sortedKeys(fields) {
+		switch {
+		case known && !s.has(p):
+			v.addf(kp+"/fields/"+esc(p), "no %s entry has this path (its payload has: %s)", journal, s.keys())
+		case !known && err == nil && lo == 0:
+			v.addf(kp+"/fields/"+esc(p), "the payload of %s is not declared here, so a misspelt path would match nothing and an absence count would pass whatever happened", journal)
+		}
 	}
 }
 

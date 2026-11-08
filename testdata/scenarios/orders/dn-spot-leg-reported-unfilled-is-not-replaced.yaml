@@ -44,6 +44,11 @@ setup:
 timeline:
   - advance: 10m
 expect:
+  # The control: the fault fired on the spot leg. Without it, a rule that stopped matching
+  # would leave the happy path below, which passes and tests nothing.
+  - id: fill-reported-as-none
+    event: { kind: fault.fired, fields: { effect: create_reports_fill } }
+    count: 1
   - id: one-open-workflow
     workflow: { kind: dn.open }
     count: 1

@@ -233,17 +233,19 @@ func strs(v any) []string {
 }
 
 // matches compares a payload value with a wanted one. A wanted string is a substring
-// test ("!x" negates it, and also holds when the path is missing); anything else is
-// equal after JSON.
+// test ("!x" negates it); anything else is equal after JSON. Either way the path must
+// exist: a "!x" that held on a missing path would hold on every entry for a misspelt one.
 func matches(got any, ok bool, want any) bool {
+	if !ok {
+		return false
+	}
 	if s, isStr := want.(string); isStr {
 		neg := strings.HasPrefix(s, "!")
-		has := ok && strings.Contains(fmt.Sprint(got), strings.TrimPrefix(s, "!"))
-		return has != neg
+		return strings.Contains(fmt.Sprint(got), strings.TrimPrefix(s, "!")) != neg
 	}
 	a, _ := json.Marshal(got)
 	b, _ := json.Marshal(want)
-	return ok && string(a) == string(b)
+	return string(a) == string(b)
 }
 
 // pathsKeep keeps entries whose payload satisfies every path -> wanted value.
@@ -352,7 +354,7 @@ func (v *env) planOf(e *Expectation) (*plan, error) {
 					// substring match (right for message text) would take it for.
 					if s, isStr := want.(string); isStr {
 						neg := strings.HasPrefix(s, "!")
-						if (ok && fmt.Sprint(got) == strings.TrimPrefix(s, "!")) == neg {
+						if !ok || (fmt.Sprint(got) == strings.TrimPrefix(s, "!")) == neg {
 							return false
 						}
 					} else if !matches(got, ok, want) {
@@ -464,28 +466,45 @@ func (v *env) evalOther(ctx context.Context, r ExpectResult, e *Expectation, lo,
 // probe reads one value out of the instance through a tool or route the owner has and
 // compares it with equals: alert_job_exists(id) is whether set_price_alert list names
 // the id; dn_plan_status(id) and mandate_status(id) are substring tests of the tool's
-// or route's answer, because their answers are text.
+// or route's answer, because their answers are text. A call that fails (a tool that
+// answers with an error included) fails the probe: no answer says nothing about the
+// value, and an error's text could hold the very word equals looks for.
 func (v *env) probe(ctx context.Context, f map[string]any) (ok bool, want, got string) {
-	ask := func(group, op string, args map[string]any) string {
+	ask := func(group, op string, args map[string]any) (string, error) {
 		raw, err := call(ctx, v.c, group, op, args)
-		if err != nil {
-			return "error: " + err.Error()
+		if err == nil && group == "manage" { // the route's own status: an error answer is no answer either
+			var r struct{ Status int }
+			if json.Unmarshal(raw, &r) == nil && r.Status != 0 && (r.Status < 200 || r.Status > 299) {
+				err = fmt.Errorf("%v answered %d", args["route"], r.Status)
+			}
 		}
-		return string(raw)
+		return string(raw), err
 	}
+	failed := func(err error) string { return "the probe's call failed: " + clip(err.Error()) }
 	switch {
 	case f["alert_job_exists"] != nil:
 		id := fmt.Sprint(f["alert_job_exists"])
-		answer := ask("call_tool", "", map[string]any{"name": "set_price_alert", "args": map[string]any{"action": "list"}, "as": "owner"})
+		want = fmt.Sprintf("alert job %s exists: %v", id, f["equals"] != false)
+		answer, err := ask("call_tool", "", map[string]any{"name": "set_price_alert", "args": map[string]any{"action": "list"}, "as": "owner"})
+		if err != nil {
+			return false, want, failed(err)
+		}
 		has := strings.Contains(answer, id)
-		return has == (f["equals"] != false), fmt.Sprintf("alert job %s exists: %v", id, f["equals"] != false), fmt.Sprintf("exists: %v", has)
+		return has == (f["equals"] != false), want, fmt.Sprintf("exists: %v", has)
 	case f["dn_plan_status"] != nil:
-		answer := ask("call_tool", "", map[string]any{"name": "get_delta_neutral_plan", "args": map[string]any{"plan_id": f["dn_plan_status"]}, "as": "owner"})
-		return strings.Contains(answer, fmt.Sprint(f["equals"])), fmt.Sprintf("plan %v status contains %v", f["dn_plan_status"], f["equals"]), clip(answer)
+		want = fmt.Sprintf("plan %v status contains %v", f["dn_plan_status"], f["equals"])
+		answer, err := ask("call_tool", "", map[string]any{"name": "get_delta_neutral_plan", "args": map[string]any{"plan_id": f["dn_plan_status"]}, "as": "owner"})
+		if err != nil {
+			return false, want, failed(err)
+		}
+		return strings.Contains(answer, fmt.Sprint(f["equals"])), want, clip(answer)
 	case f["mandate_status"] != nil:
-		answer := ask("manage", "", map[string]any{"method": "GET", "route": "/api/proactive/mandates"})
-		return strings.Contains(answer, fmt.Sprint(f["mandate_status"])) && strings.Contains(answer, fmt.Sprint(f["equals"])),
-			fmt.Sprintf("mandate %v with %v", f["mandate_status"], f["equals"]), clip(answer)
+		want = fmt.Sprintf("mandate %v with %v", f["mandate_status"], f["equals"])
+		answer, err := ask("manage", "", map[string]any{"method": "GET", "route": "/api/proactive/mandates"})
+		if err != nil {
+			return false, want, failed(err)
+		}
+		return strings.Contains(answer, fmt.Sprint(f["mandate_status"])) && strings.Contains(answer, fmt.Sprint(f["equals"])), want, clip(answer)
 	}
 	return false, "a probe", "trigger_state has no state view in this build"
 }
@@ -510,6 +529,9 @@ func expectationOf(m map[string]any) (*Expectation, error) {
 	}
 	if _, ok := expectSpec[e.Kind]; !ok || len(e.kinds) != 1 {
 		return nil, errors.New("until takes one expectation: a mapping with one kind key such as message")
+	}
+	if len(e.modIssues) > 0 {
+		return nil, fmt.Errorf("until: %s: %s", strings.TrimPrefix(e.modIssues[0].Path, "/"), e.modIssues[0].Msg)
 	}
 	if e.Kind == "event" {
 		k, _ := e.Fields["kind"].(string)

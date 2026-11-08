@@ -109,6 +109,11 @@ func (b *Book) binanceKlines(q url.Values) (int, []byte, bool) {
 	from, hasStart := queryMS(q, "startTime")
 	if !hasStart {
 		from = alignDown(to, tf).Add(-time.Duration(limit-1) * tf)
+	} else if end := alignDown(from, tf).Add(time.Duration(limit) * tf); end.Before(to) {
+		// Only the first limit bars from startTime are kept: building the rest of the range
+		// up to now, under the book's lock, would be wasted (a startTime in seconds read as
+		// milliseconds is 1970, about 29 million 1m bars).
+		to = end
 	}
 	var rows [][]any
 	for _, bar := range b.Bars("binance", p, tf, from, to) {

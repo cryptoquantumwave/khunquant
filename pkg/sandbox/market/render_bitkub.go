@@ -93,6 +93,11 @@ func (b *Book) bitkubHistory(q url.Values) (int, []byte, bool) {
 	if s, err := strconv.ParseInt(q.Get("to"), 10, 64); err == nil && time.Unix(s, 0).Before(now) {
 		to = time.Unix(s, 0).UTC()
 	}
+	if earliest := to.Add(-time.Duration(maxBitkubBars) * tf); from.Before(earliest) {
+		// Only the last maxBitkubBars are kept, so older ones are not built (the adapter
+		// asks for a week; a caller can ask for years).
+		from = earliest
+	}
 	bars := b.Bars("bitkub", p, tf, from, to)
 	if len(bars) > maxBitkubBars {
 		bars = bars[len(bars)-maxBitkubBars:]

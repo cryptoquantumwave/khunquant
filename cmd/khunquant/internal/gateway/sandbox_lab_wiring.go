@@ -19,6 +19,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -241,7 +242,7 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(l.ClockGroup()); err != nil {
 		return err
 	}
-	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home, ResetClients: exchanges.ResetInstanceCache})); err != nil {
+	if err := l.AddGroup(marketops.Group(l.Market, marketops.Options{Home: l.Home, ResetClients: resetExchangeClients})); err != nil {
 		return err
 	}
 	// The simulator lives as long as the lab, so the account group holds it directly.
@@ -530,4 +531,12 @@ func registerLockedSandbox(mux handleMux, s *gatewayServices, l *lab.Lab) error 
 // registration site.
 func mountSandboxAPI(mux handleMux, s *gatewayServices, store *sandbox.Store, fixturesDir string) {
 	registerSandboxAPI(mux, store, s.SandboxToken, s.SimulatorReseter, fixturesDir, s.labReady)
+}
+
+// resetExchangeClients drops both caches of exchange clients, so reload_markets reaches
+// the ones the agent uses: the market, order and futures tools and perception get theirs
+// from the broker's cache, snapshots and balances from exchanges'.
+func resetExchangeClients() {
+	exchanges.ResetInstanceCache()
+	broker.ResetInstanceCache()
 }

@@ -278,3 +278,31 @@ func TestNew_ClockIsBuiltBeforeTheServerStarts(t *testing.T) {
 		t.Fatal("New accepted a bad clock start")
 	}
 }
+
+// From realtime, the mode an instance gets by default, one call switches to scaled at a
+// given scale, and a refused call changes nothing (148-2).
+func TestClockGroup_ScaledFromRealtime(t *testing.T) {
+	l := manualLab(t)
+	if _, err := call(t, l, `{"op":"set_mode","mode":"realtime"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := call(t, l, `{"op":"set_mode","mode":"scaled","scale":60}`)
+	if err != nil || got["mode"] != "scaled" || got["scale"] != float64(60) {
+		t.Fatalf("set_mode scaled at 60 from realtime = %v, %v", got, err)
+	}
+
+	before, err := call(t, l, `{"op":"get"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, l, `{"op":"set_mode","mode":"scaled","scale":-1,"resolution":"5s"}`); err == nil {
+		t.Fatal("a negative scale was accepted")
+	}
+	after, err := call(t, l, `{"op":"get"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after["resolution"] != before["resolution"] || after["scale"] != before["scale"] {
+		t.Errorf("a refused set_mode changed the clock: %v -> %v", before, after)
+	}
+}

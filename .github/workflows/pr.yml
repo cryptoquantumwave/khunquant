@@ -81,6 +81,21 @@ jobs:
   # gateway and the supervisor. Plain `go test ./...` in "Tests" skips the first and never
   # runs the second, so the lock's end-to-end proofs and every race claim were local only.
   # Serial (-p 1): each package starts gateways of its own.
+  #
+  # Budget: measured locally (Apple M-series, 10 cores) at 339 s with a warm build cache and
+  # 507 s cold, of which the test binaries are about 310 s (the gateway package alone 142 s,
+  # the supervisor and sandboxlab ~50 s each). A 4-vCPU runner compiles with -race perhaps 2-3x
+  # slower and runs the serial tests ~1.5x slower, plus a cold `make build`: an expected
+  # 20-25 min, so 40 min of job time. `-timeout 20m` is per test binary (the slowest is under
+  # 2.5 min here); a hung package then fails with a goroutine dump instead of eating the job.
+  #
+  # No KQ_SANDBOX_MIN_FREE_MB: the supervisor's floor is 1 GiB of MemAvailable on Linux and
+  # a hosted runner has 7 GiB or more, so it is never refused. Not inside `unshare --net`
+  # (unlike "Scenarios"): that job runs scenario files through the binary, whose second layer
+  # of defense is the empty namespace. These are the repo's own Go tests, the same kind as
+  # "Tests" (which has network) and must not dial out by repo rule, the binary's egress guard
+  # is itself under test here, and `go test -race` inside root's namespace would need the
+  # toolchain, module cache and build cache handed across `sudo`.
   sandbox-e2e:
     name: Sandbox E2E and race
     runs-on: ubuntu-latest
@@ -103,7 +118,7 @@ jobs:
       - name: End-to-end on the real binary, with the race detector
         env:
           KQ_SANDBOX_E2E_BIN: ${{ github.workspace }}/build/khunquant
-        run: go test -p 1 -race -timeout 30m ./pkg/sandbox/... ./cmd/khunquant/internal/sandboxlab/... ./cmd/khunquant/internal/gateway/...
+        run: go test -p 1 -race -timeout 20m ./pkg/sandbox/... ./cmd/khunquant/internal/sandboxlab/... ./cmd/khunquant/internal/gateway/...
 
   # Lab scenarios: every active scripted file under testdata/scenarios, run serially from
   # one prebuilt binary and without network. Not part of "Tests" (a lab run needs a built

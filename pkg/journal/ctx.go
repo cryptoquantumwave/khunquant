@@ -258,7 +258,7 @@ func (c *Ctx) runStep(seq int, row *stepRow, name string, out any, fn func(conte
 		eng.callHook(pointAfterStarted, &c.wf, name, br.attempt)
 		c.stepEvent(name, seq, br.attempt, StepStarted, 0)
 
-		val, ferr, pnc := c.call(fn, seq, br.attempt, br.firstAt)
+		val, ferr, pnc := c.call(fn, seq, br.attempt, br.firstAt, br.marked)
 		done := eng.clock.Now()
 		dur := done.Sub(now)
 		eng.callHook(pointAfterFn, &c.wf, name, br.attempt)
@@ -337,7 +337,7 @@ func (c *Ctx) runStep(seq int, row *stepRow, name string, out any, fn func(conte
 type panicInfo struct{ text string }
 
 // call runs the step function with the step context, recovering a panic.
-func (c *Ctx) call(fn func(context.Context, int) (any, error), seq, attempt int, first time.Time) (val any, err error, pnc *panicInfo) {
+func (c *Ctx) call(fn func(context.Context, int) (any, error), seq, attempt int, first time.Time, marked bool) (val any, err error, pnc *panicInfo) {
 	e := c.run.e
 	e.stats.stepsRun.Add(1)
 	c.mu.Lock()
@@ -356,8 +356,42 @@ func (c *Ctx) call(fn func(context.Context, int) (any, error), seq, attempt int,
 			})
 		}
 	}()
-	val, err = fn(c.run.stepCtx, attempt)
+	eff := &Effect{Prior: marked, mark: func(ctx context.Context) error {
+		rn := c.run
+		if err := rn.e.st.markStep(rn.dbCtx, rn.f, rn.e.clock.Now(), seq); err != nil {
+			if errors.Is(err, ErrLeaseLost) {
+				rn.loseLease("a journal write was fenced out")
+			}
+			return err
+		}
+		return nil
+	}}
+	val, err = fn(context.WithValue(c.run.stepCtx, effectKey{}, eff), attempt)
 	return val, err, nil
+}
+
+type effectKey struct{}
+
+// Effect is a step function's write-ahead mark for a side effect it cannot take back (an
+// order sent to an exchange). The function calls Mark right before the send: the mark is
+// committed durably and fenced, so after a crash or a retry the step knows the effect may
+// have happened. A step that never marked provably sent nothing.
+type Effect struct {
+	// Prior: an earlier attempt of this step marked before it sent, so it may have sent.
+	// Always true for a step that was unfinished when the mark column was added.
+	Prior bool
+	mark  func(context.Context) error
+}
+
+// Mark commits the mark. An error means it was not committed and the effect must not
+// happen.
+func (e *Effect) Mark(ctx context.Context) error { return e.mark(ctx) }
+
+// EffectFrom is the Effect of the step function whose context ctx derives from, or nil
+// outside a step.
+func EffectFrom(ctx context.Context) *Effect {
+	e, _ := ctx.Value(effectKey{}).(*Effect)
+	return e
 }
 
 // Now returns the time at which the workflow first asked, the same on every

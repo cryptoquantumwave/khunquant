@@ -112,12 +112,39 @@ func WithOutcome(f func(PlaceOutcome, string)) PlaceOption {
 	return func(p *placer) { p.onOutcome = f }
 }
 
+// WithBeforeSend runs f right before the place call, after every check that can still
+// refuse the request. A journaled caller commits its write-ahead mark there (journal.Effect).
+// If f fails nothing is sent and the call returns ErrInvalidOrderRequest: a definite
+// "not sent". It is not run for a reduce-only order, which an exit must be free to send.
+func WithBeforeSend(f func(context.Context) error) PlaceOption {
+	return func(p *placer) { p.beforeSend = f }
+}
+
+// WithPriorSend says an earlier attempt marked before it sent, so it may have sent the
+// order. A reconcile that finds nothing then does not believe the empty answer, however
+// long ago the first attempt began: a venue's lookup can lag by any amount. It returns
+// ErrReconcileUnproven and places nothing. A found order is still returned. It does not
+// apply to a reduce-only order, whose caller sizes it from the live position.
+func WithPriorSend(prior bool) PlaceOption {
+	return func(p *placer) { p.priorSend = prior }
+}
+
 type placer struct {
-	now       func() time.Time
-	settle    time.Duration
-	slack     time.Duration
-	limit     int
-	onOutcome func(PlaceOutcome, string)
+	now        func() time.Time
+	settle     time.Duration
+	slack      time.Duration
+	limit      int
+	onOutcome  func(PlaceOutcome, string)
+	beforeSend func(context.Context) error
+	priorSend  bool
+}
+
+// emptyNotBelieved reports whether an empty lookup must not be believed for req.
+func (pl *placer) emptyNotBelieved(req *OrderRequest) bool { return pl.priorSend && !req.ReduceOnly }
+
+func (pl *placer) priorSendUnproven(req *OrderRequest, cid string) error {
+	return newOrderError(ErrReconcileUnproven, req, cid, 0,
+		"an earlier attempt may have sent the order and the exchange shows none; its view can lag by any amount, so the absence is not believed; nothing was placed", nil)
 }
 
 func newPlacer(opts []PlaceOption) *placer {
@@ -292,6 +319,12 @@ func (pl *placer) place(ctx context.Context, p Provider, req *OrderRequest, idem
 	if capable {
 		params[key] = cid
 	}
+	if pl.beforeSend != nil && !req.ReduceOnly {
+		if err := pl.beforeSend(ctx); err != nil {
+			return ccxt.Order{}, newOrderError(ErrInvalidOrderRequest, req, cid, 0,
+				"the intent to send could not be recorded; nothing was sent", err)
+		}
+	}
 	order, err := tgt.create(ctx, req, params)
 	if err == nil {
 		if reconciled {
@@ -464,6 +497,9 @@ func (pl *placer) reconcile(ctx context.Context, p Provider, tgt target, req *Or
 			}
 			if err := pl.settled(req, cid, first); err != nil {
 				return ccxt.Order{}, false, err
+			}
+			if pl.emptyNotBelieved(req) {
+				return ccxt.Order{}, false, pl.priorSendUnproven(req, cid)
 			}
 			return ccxt.Order{}, false, nil
 		}
@@ -653,6 +689,9 @@ func (pl *placer) reconcileByListing(ctx context.Context, tgt target, req *Order
 	}
 	if err := pl.settled(req, cid, first); err != nil {
 		return ccxt.Order{}, false, err
+	}
+	if pl.emptyNotBelieved(req) {
+		return ccxt.Order{}, false, pl.priorSendUnproven(req, cid)
 	}
 	return ccxt.Order{}, false, nil
 }

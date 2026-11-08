@@ -25,7 +25,10 @@
 //     than the journaled one fails the workflow with ErrNonDeterministic and runs
 //     nothing further.
 //  3. A step that places an order must send Ctx.IdempotencyKey with it, and must
-//     reconcile when attempt > 1 (below).
+//     reconcile when attempt > 1 (below). It must also commit its write-ahead mark
+//     (EffectFrom(ctx).Mark) right before the send, and on attempt > 1 must not
+//     believe an empty lookup when Effect.Prior says an earlier attempt marked: a
+//     venue's lookup can lag by any amount, so the empty answer is "unknown".
 //  4. A step's output must be JSON-serialisable and at most 64 KB. A workflow's
 //     input is also at most 64 KB. Both are stored in clear text in the database
 //     and show in backups: never put a credential in either. Names of steps and

@@ -1,0 +1,65 @@
+# PHASE3-LOOKUP-LAG control: the process is killed (SIGKILL) right after the second leg's step
+# was journaled as started and BEFORE the step sent anything (kill_at point after_started), on a venue whose lookup lags 30 minutes (lookup_lag).
+# The step had not reached its write-ahead mark, so the restarted attempt knows nothing was sent:
+# it looks, finds nothing, and places the leg once. Expected: one spot buy, one futures short, the
+# open succeeded. This pins the ordinary crash-before-send case, which the mark must not turn
+# into an unknown outcome. Counterpart: phase3-dn-open-second-leg-lookup-lag (killed after the
+# send, where the same empty lookup must NOT be believed).
+version: 1
+scenario: phase3-dn-open-before-send-lag
+covers: [SBX-20, Phase3]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+faults:
+  - match: { venue: binance, order: create, market: spot }
+    effect: { order: lookup_lag, lag: 30m }
+llm_script:
+  - id: open
+    match: { sender: "simchat:owner", prompt_contains: ["open the plan"] }
+    respond: { tool: open_delta_neutral_position, args: { plan_id: 1, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - restart: { kill_at: { workflow: dn.open, step: place_second_leg, point: after_started } }
+  - chat: { as: owner, text: "open the plan" }
+timeline:
+  - advance: 2m # past the dead process's lease (30 s) and grace (10 s)
+  - advance: 10m
+expect:
+  - id: crashed-at-the-second-leg
+    event: { kind: crash, fields: { kind: dn.open, step: place_second_leg, point: after_started }, count: 1 }
+  - id: one-open-workflow
+    workflow: { kind: dn.open, state: succeeded }
+    count: 1
+  - id: one-spot-buy
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: one-futures-short
+    order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }

@@ -458,7 +458,7 @@ func (e *dnExchange) SetLeverage(ctx context.Context, p *deltaneutral.Plan) erro
 // refused), spot through TradingProviderFor, which is a simulation in paper mode.
 func (e *dnExchange) Place(ctx context.Context, p *deltaneutral.Plan, sz deltaneutral.Sizing, o deltaneutral.LegOrder, key string, attempt int, first time.Time) (deltaneutral.Order, error) {
 	var outcome broker.PlaceOutcome
-	opts := []broker.PlaceOption{broker.WithClock(e.now), broker.WithOutcome(func(oc broker.PlaceOutcome, _ string) { outcome = oc })}
+	opts := append([]broker.PlaceOption{broker.WithClock(e.now), broker.WithOutcome(func(oc broker.PlaceOutcome, _ string) { outcome = oc })}, journalSendOptions(ctx)...)
 	req := broker.OrderRequest{Type: "market", Side: o.Side, Amount: o.Amount}
 	var target broker.Provider
 	provider, account, symbol, unit := p.SpotProvider, p.SpotAccount, p.SpotSymbol, orderfeed.UnitBase

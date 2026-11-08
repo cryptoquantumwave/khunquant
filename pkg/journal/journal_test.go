@@ -710,8 +710,8 @@ func TestNew_MigratesAndIsIdempotent(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		n := newNode(t, path, t0, nil)
 		var v int
-		if err := n.db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 1 {
-			t.Fatalf("round %d: journal schema version = %d (%v), want 1", i, v, err)
+		if err := n.db.QueryRow(`SELECT MAX(version) FROM schema_migrations WHERE component = ?`, Component).Scan(&v); err != nil || v != 2 {
+			t.Fatalf("round %d: journal schema version = %d (%v), want 2", i, v, err)
 		}
 	}
 	db := openAt(t, path)

@@ -53,6 +53,16 @@ CREATE TABLE workflow_steps (
 	PRIMARY KEY (workflow_id, seq)
 )`,
 	},
+	{
+		// sent_at_ms is the step's write-ahead mark: the instant its function recorded that it
+		// was about to send an order (Effect.Mark). A step that is unfinished when this
+		// migration runs may already have sent one under the older code, so it is marked too:
+		// a resume then treats it as possibly sent, never as "nothing was sent".
+		Component: Component,
+		Version:   2,
+		SQL: `ALTER TABLE workflow_steps ADD COLUMN sent_at_ms INTEGER;
+UPDATE workflow_steps SET sent_at_ms = started_at_ms WHERE finished_at_ms IS NULL`,
+	},
 }
 
 // store is every SQL statement of the package. A runner's writes are all fenced:
@@ -489,6 +499,20 @@ type beginResult struct {
 	firstAt   time.Time
 	cancelled bool
 	failed    string // set when the workflow was failed instead (attempt limit)
+	marked    bool   // an earlier attempt of the step recorded that it was about to send
+}
+
+// markStep records, durably and fenced, that the running step is about to send. It keeps
+// the first instant when called again.
+func (s *store) markStep(ctx context.Context, f fence, now time.Time, seq int) error {
+	return s.fenced(ctx, "mark_step", f, now, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE workflow_steps SET sent_at_ms = COALESCE(sent_at_ms, ?) WHERE workflow_id = ? AND seq = ?`,
+			ms(now), f.id, seq); err != nil {
+			return fmt.Errorf("journal: mark step: %w", err)
+		}
+		return nil
+	})
 }
 
 // beginStep journals "step seq started, attempt n" before the step function
@@ -519,9 +543,10 @@ func (s *store) beginStep(ctx context.Context, f fence, now time.Time, seq int, 
 		}
 		var attempts, failures int
 		var first int64
+		var sent sql.NullInt64
 		if err := tx.QueryRowContext(ctx,
-			`SELECT attempts, failures, first_started_at_ms FROM workflow_steps WHERE workflow_id = ? AND seq = ? AND name = ?`,
-			f.id, seq, name).Scan(&attempts, &failures, &first); err != nil {
+			`SELECT attempts, failures, first_started_at_ms, sent_at_ms FROM workflow_steps WHERE workflow_id = ? AND seq = ? AND name = ?`,
+			f.id, seq, name).Scan(&attempts, &failures, &first, &sent); err != nil {
 			return fmt.Errorf("journal: read step: %w", err)
 		}
 		if attempts >= MaxStepAttempts {
@@ -533,7 +558,7 @@ func (s *store) beginStep(ctx context.Context, f fence, now time.Time, seq int, 
 			 WHERE workflow_id = ? AND seq = ?`, ms(now), f.id, seq); err != nil {
 			return fmt.Errorf("journal: journal step start: %w", err)
 		}
-		res.attempt, res.failures, res.firstAt = attempts+1, failures, fromMS(first)
+		res.attempt, res.failures, res.firstAt, res.marked = attempts+1, failures, fromMS(first), sent.Valid
 		return nil
 	})
 	return res, err

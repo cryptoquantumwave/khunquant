@@ -81,18 +81,22 @@ func TestE2E_KillAt_DnOpenSecondLeg(t *testing.T) {
 	}
 }
 
-// The known residual, gated until the defect is fixed (delete the gate with the fix): a
-// venue whose lookup lags longer than the settle delay makes the restarted open place the
-// second leg again. Run with KQ_KNOWN_BUG_PHASE3_LAG=1; it fails while the defect is open.
+// A venue whose lookup lags far longer than the settle delay: the open is killed right after it
+// sent the second leg. The step had marked before sending, so the restarted open does not
+// believe the empty lookup and places nothing; the venue holds one order per leg and the owner
+// is told. The controls kill the open before the send, with and without the lag: no mark was
+// written, so the restarted open places the leg once and succeeds. (Was the known bug
+// PHASE3-LOOKUP-LAG, gated by KQ_KNOWN_BUG_PHASE3_LAG; the gate went with the fix.)
 func TestE2E_KillAt_LookupLagVariant(t *testing.T) {
 	bin := e2eBinary(t)
-	if os.Getenv("KQ_KNOWN_BUG_PHASE3_LAG") != "1" {
-		t.Skip("known defect (a lookup that lags past the settle delay lets a restarted open place a leg twice): set KQ_KNOWN_BUG_PHASE3_LAG=1 to reproduce it")
-	}
-	path := filepath.Join(repoRoot(t), "testdata", "scenarios", filepath.FromSlash(lagScenario))
-	out, code := runWithEnv(t, bin, []string{"KQ_SCENARIO_KNOWN_BUGS=1"}, "--runs", "1", path)
-	if code != 0 {
-		t.Fatalf("the restarted open placed the second leg twice: exit %d\n%s", code, out)
+	for _, name := range []string{
+		lagScenario, "crash/phase3-dn-open-before-send.yaml", "crash/phase3-dn-open-before-send-lag.yaml",
+	} {
+		path := filepath.Join(repoRoot(t), "testdata", "scenarios", filepath.FromSlash(name))
+		out, code := runWithEnv(t, bin, nil, "--runs", "1", path)
+		if code != 0 {
+			t.Fatalf("%s: exit %d\n%s", name, code, out)
+		}
 	}
 }
 

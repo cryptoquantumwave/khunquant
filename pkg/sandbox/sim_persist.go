@@ -38,11 +38,43 @@ func (sim *StatefulSimulator) MarshalState() ([]byte, error) {
 	sm := sim.stateManager
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	return sim.dumpLocked()
+}
+
+func (sim *StatefulSimulator) dumpLocked() ([]byte, error) {
+	sm := sim.stateManager
 	d := simDump{Venues: map[string]venueDump{}, Seeds: sm.seeds, Options: sim.options}
 	for key, st := range sm.venueStates {
 		d.Venues[key] = venueDump{State: st, OrderSeq: atomic.LoadInt64(&st.OrderIDSeq), ListSeq: st.ListSeq}
 	}
 	return json.Marshal(d)
+}
+
+// MarshalStateKeyed is MarshalState plus a key that leaves out LastDerivs. LastDerivs is
+// where the derivatives were last settled; it moves to "now" on every answer and every clock
+// step even when nothing happened, so a save keyed on it writes (and fsyncs) the whole world
+// for each step. It is safe to leave out: every funding payment or liquidation changes the
+// state and so is saved together with the LastDerivs it advanced to, and a restart that
+// finds an older LastDerivs replays only stretches in which nothing happened. Both outputs
+// come from one instant under the write locks (LastDerivs is put back before they drop).
+func (sim *StatefulSimulator) MarshalStateKeyed() (state, key []byte, err error) {
+	sim.mu.Lock()
+	defer sim.mu.Unlock()
+	sm := sim.stateManager
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if state, err = sim.dumpLocked(); err != nil {
+		return nil, nil, err
+	}
+	saved := make(map[string]time.Time, len(sm.venueStates))
+	for k, st := range sm.venueStates {
+		saved[k], st.LastDerivs = st.LastDerivs, time.Time{}
+	}
+	key, err = sim.dumpLocked()
+	for k, st := range sm.venueStates {
+		st.LastDerivs = saved[k]
+	}
+	return state, key, err
 }
 
 // RestoreState replaces the venue states with the saved ones and re-arms the wake of the

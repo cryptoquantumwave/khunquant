@@ -24,6 +24,15 @@ type Persistent interface {
 	RestoreState(data []byte) error
 }
 
+// keyedPersistent is a part with bookkeeping that moves on its own (a clock mark that
+// advances with every step but means nothing a client can see). MarshalStateKeyed returns the
+// whole state, which is what is written, and a key that leaves that bookkeeping out, which is
+// what decides whether anything changed. Both come from one instant, so the key always
+// describes the bytes next to it.
+type keyedPersistent interface {
+	MarshalStateKeyed() (state, key []byte, err error)
+}
+
 // errNotReady: the part is not registered or not restored yet (the lab is being built).
 var errNotReady = errors.New("lab: the part is not registered or not restored yet")
 
@@ -35,7 +44,7 @@ var errNotReady = errors.New("lab: the part is not registered or not restored ye
 type persisted struct {
 	p        Persistent
 	mu       sync.Mutex
-	last     []byte // what the file holds, so an unchanged state is not written again
+	last     []byte // what the file holds (or, for a keyed part, its key), so an unchanged state is not written again
 	restored bool
 }
 
@@ -68,11 +77,11 @@ func (l *Lab) Persist(key string) error {
 	if !e.restored { // saving the fresh state would erase the saved one
 		return fmt.Errorf("lab: %s is saved before it was restored: %w", key, errNotReady)
 	}
-	b, err := e.p.MarshalState()
+	b, cmp, err := marshalPart(e.p)
 	if err != nil {
 		return fmt.Errorf("lab: saving %s: %w", key, err)
 	}
-	if bytes.Equal(b, e.last) {
+	if bytes.Equal(cmp, e.last) {
 		return nil
 	}
 	if err := os.MkdirAll(l.WorldDir(), 0o700); err != nil {
@@ -81,8 +90,17 @@ func (l *Lab) Persist(key string) error {
 	if err := fileutil.WriteFileAtomic(l.worldFile(key), b, 0o600); err != nil {
 		return fmt.Errorf("lab: saving %s: %w", key, err)
 	}
-	e.last = b
+	e.last = cmp
 	return nil
+}
+
+// marshalPart is the bytes to write and the bytes that decide whether to write them.
+func marshalPart(p Persistent) (state, cmp []byte, err error) {
+	if k, ok := p.(keyedPersistent); ok {
+		return k.MarshalStateKeyed()
+	}
+	b, err := p.MarshalState()
+	return b, b, err
 }
 
 // part is the registered part called key (nil if none).
@@ -128,7 +146,11 @@ func (l *Lab) restore(e *persisted) error {
 		if err := e.p.RestoreState(b); err != nil {
 			return fmt.Errorf("lab: the saved %s (%s) is not usable: %w", key, l.worldFile(key), err)
 		}
-		e.last = b
+		// What the part would save now decides what counts as unchanged. Failing to
+		// marshal it just means the first save writes.
+		if _, cmp, err := marshalPart(e.p); err == nil {
+			e.last = cmp
+		}
 	}
 	e.restored = true
 	return nil

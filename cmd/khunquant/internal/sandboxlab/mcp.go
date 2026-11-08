@@ -38,6 +38,24 @@ type mcpServer struct {
 
 	mu      sync.Mutex
 	reports map[string]*scenario.Report // the last report of each scenario run through sandbox_scenario
+
+	runMu      sync.Mutex    // one sandbox_scenario run at a time
+	runTimeout time.Duration // wall cap of one run; 0 is defaultTimeout (a test shortens it)
+}
+
+// recoverPanics makes a panic in a handler that call's error. go-sdk runs calls
+// concurrently and does not recover them, so one bad call would end the process without
+// Close and leave the instances' gateways running.
+func recoverPanics(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (res mcp.Result, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				fmt.Fprintf(os.Stderr, "sandbox mcp: %s panicked: %v\n", method, p)
+				res, err = nil, fmt.Errorf("sandbox: %s failed with an internal error", method)
+			}
+		}()
+		return next(ctx, method, req)
+	}
 }
 
 func newMCPCommand() *cobra.Command {
@@ -58,8 +76,12 @@ func newMCPCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			// SIGHUP ends the session through Close like the others, and a closed stdout
+			// becomes EPIPE instead of a SIGPIPE that kills the process: either way the
+			// instances stop instead of outliving the supervisor.
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
+			signal.Ignore(syscall.SIGPIPE)
 			runErr := newMCPServer(sup).Run(ctx, &mcp.StdioTransport{})
 			cctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 			defer cancel()
@@ -77,6 +99,7 @@ func newMCPCommand() *cobra.Command {
 // newMCPServer builds the server over sup; the tools exist before any instance does.
 func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 	m := &mcpServer{sup: sup, srv: mcp.NewServer(&mcp.Implementation{Name: "khunquant-sandbox", Version: "1"}, nil)}
+	m.srv.AddReceivingMiddleware(recoverPanics)
 	m.srv.AddTool(&mcp.Tool{
 		Name: "sandbox_instance",
 		Description: "Start, stop, restart and inspect locked sandbox instances of this binary. " +

@@ -104,6 +104,10 @@ type VenueState struct {
 	Income       []IncomeEntry `json:"income,omitempty"`       // funding payments, oldest first
 	Liquidations []*Order      `json:"liquidations,omitempty"` // the venue's liquidation orders
 	LastDerivs   time.Time     `json:"lastDerivs,omitzero"`    // derivatives are settled up to here
+
+	// ListSeq counts the first-page listings per kind (Webull's open and history), the part of
+	// a listing's order that changes request to request (sim_webull.go). Reset clears it.
+	ListSeq map[string]int64 `json:"-"`
 }
 
 // Seed holds the initial state for resetting via Reset().

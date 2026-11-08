@@ -107,7 +107,7 @@ func checkVenue(venue string) (string, error) {
 		venue = Wildcard
 	}
 	if !knownVenue(venue) {
-		return "", fmt.Errorf("unknown venue %q (binance, okx, bitkub, settrade or *)", venue)
+		return "", fmt.Errorf("unknown venue %q (binance, okx, bitkub, settrade, webull or *)", venue)
 	}
 	return venue, nil
 }

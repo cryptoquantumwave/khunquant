@@ -45,6 +45,8 @@ func ClassifyOrder(venue, method, path string, r *http.Request) (sandbox.OrderOp
 		return classifyOKX(method, path, r)
 	case "settrade":
 		return classifySettrade(method, path, r)
+	case "webull":
+		return classifyWebull(method, path, r)
 	}
 	return "", sandbox.OrderInfo{}, false
 }
@@ -52,6 +54,45 @@ func ClassifyOrder(venue, method, path string, r *http.Request) (sandbox.OrderOp
 // settradeOrderPath matches the order routes of an account: orders, orders/<no> and
 // orders/<no>/cancel. The bulk cancel (accounts/<no>/cancel) is a cancel too.
 var settradeOrderPath = regexp.MustCompile(`^/api/seos/v3/[^/]+/accounts/[^/]+/(?:orders(?:/[^/]+(/cancel)?)?|(cancel))$`)
+
+// webullOrderPaths maps a Webull order route and method to its operation.
+var webullOrderPaths = map[string]sandbox.OrderOp{
+	"POST /openapi/trade/order/place": sandbox.OrderCreate, "POST /openapi/trade/order/cancel": sandbox.OrderCancel,
+	"GET /openapi/trade/order/detail": sandbox.OrderFetch, "GET /openapi/trade/order/open": sandbox.OrderList,
+	"GET /openapi/trade/order/history": sandbox.OrderList,
+}
+
+// classifyWebull reads a place (the first order of new_orders), a cancel (its client_order_id),
+// a detail lookup (the query's) and the two listings.
+func classifyWebull(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
+	op, ok := webullOrderPaths[method+" "+path]
+	if !ok {
+		return "", sandbox.OrderInfo{}, false
+	}
+	info := sandbox.OrderInfo{Venue: "webull", Market: "spot"}
+	if r != nil && r.URL != nil {
+		info.ClientID = r.URL.Query().Get("client_order_id")
+	}
+	var body struct {
+		ClientOrderID string `json:"client_order_id"`
+		NewOrders     []struct {
+			ClientOrderID string `json:"client_order_id"`
+			Symbol        string `json:"symbol"`
+			Side          string `json:"side"`
+			OrderType     string `json:"order_type"`
+			Quantity      string `json:"quantity"`
+		} `json:"new_orders"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(peekBody(r)), &body) == nil {
+		info.ClientID = firstSet(info.ClientID, body.ClientOrderID)
+		if len(body.NewOrders) > 0 {
+			n := body.NewOrders[0]
+			info.ClientID, info.Symbol, info.Side, info.Type = n.ClientOrderID, n.Symbol, strings.ToLower(n.Side), strings.ToLower(n.OrderType)
+			info.Amount, _ = strconv.ParseFloat(n.Quantity, 64)
+		}
+	}
+	return op, info, true
+}
 
 func classifySettrade(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
 	m := settradeOrderPath.FindStringSubmatch(path)

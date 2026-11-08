@@ -90,7 +90,9 @@ func TestCreateOrder_DailyLossBlocksMarginSell(t *testing.T) {
 		t.Errorf("a plain spot sell with allow_margin=true must still pass, got: %+v", plain)
 	}
 	args := lossGuardOrder("BTC/USDT", "sell")
-	args["params"] = map[string]any{"clientOrderId": "abc"}
+	// clientOrderId is refused by create_order itself (it sets its own); timeInForce is
+	// another execution-only param.
+	args["params"] = map[string]any{"timeInForce": "GTC"}
 	if res := tool.Execute(context.Background(), args); res.IsError {
 		t.Errorf("an execution-only param must not gate a spot sell, got: %+v", res)
 	}

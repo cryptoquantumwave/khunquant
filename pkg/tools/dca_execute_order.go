@@ -405,13 +405,24 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	}
 
 	// A market order carries no price: some adapters read a non-nil price as a
-	// limit.
-	order, err := tp.CreateOrder(ctx, plan.Symbol, "market", side, baseAmount, nil, nil)
+	// limit. A lost answer is looked for, never answered by placing again
+	// (order_place_once.go).
+	order, lostNote, pending, err := placeOrderOnce(ctx, tp, broker.OrderRequest{
+		Market: broker.OrderMarketSpot, Symbol: plan.Symbol, Type: "market", Side: side, Amount: baseAmount,
+	}, NameExecuteDCAOrder)
 	if err != nil {
 		if res := a.failReauth(err); res != nil {
 			return res
 		}
 		return a.fail(fmt.Sprintf("order placement failed: %v", err))
+	}
+	if pending != nil {
+		// The order may exist, so this is not a failure: the "unknown" row counts toward
+		// the period cap, and nothing is recorded as bought.
+		msg := pending.unknownText(plan.Provider) + " Nothing was recorded as bought: check the exchange's orders and balances. Do not re-run this plan for the same period. " +
+			pending.clientIDLine()
+		a.record(dcaStatusUnknown, msg)
+		return ErrorResult(fmt.Sprintf("DCA plan %d (%s): %s", planID, plan.Name, msg)).WithError(pending.unknownErr())
 	}
 
 	orderID := ""
@@ -581,6 +592,9 @@ func (t *ExecuteDCAOrderTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	if note != "" {
 		out += "  Note:      " + note + "\n"
+	}
+	if lostNote != "" {
+		out += "\n" + lostNote + "\n"
 	}
 	return UserResult(out)
 }

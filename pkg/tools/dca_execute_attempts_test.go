@@ -454,8 +454,10 @@ type dcaScenario struct {
 func dcaScenarios() []dcaScenario {
 	return []dcaScenario{
 		{name: "completed", status: "completed"},
+		// The exchange's own refusal: nothing was placed. (An error that may hide a placed
+		// order is an unknown outcome, order_place_once_test.go.)
 		{name: "failed-order", status: "failed", reason: "order placement failed", setup: func(t *testing.T, f *dcaFix) {
-			f.mock.orderErr = errors.New("exchange down")
+			f.mock.orderErr = &ccxt.Error{Type: "InvalidOrder", Message: "exchange down"}
 		}},
 		{name: "failed-ticker", status: "failed", reason: "failed to fetch ticker", setup: func(t *testing.T, f *dcaFix) {
 			f.mock.strict = true

@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
@@ -63,7 +65,8 @@ func (t *CreateOrderTool) Parameters() map[string]any {
 			"price":  map[string]any{"type": "number", "description": "Limit price (required for limit orders)."},
 			"params": map[string]any{
 				"type": "object",
-				"description": "Extra provider-specific execution parameters (optional), e.g. clientOrderId, timeInForce, postOnly, reduceOnly, stopPrice. " +
+				"description": "Extra provider-specific execution parameters (optional), e.g. timeInForce, postOnly, reduceOnly, stopPrice. " +
+					"Client order IDs are refused: the tool sets its own, so the order can be found again if the exchange's answer is lost. " +
 					"Parameters that change the trading mode (tdMode, marginMode, leverage, borrow flags) are refused unless trading_risk permits margin or leverage; unrecognised keys are refused.",
 			},
 			"confirm": map[string]any{
@@ -95,6 +98,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	params, paramsErr := sanitizeOrderParams(args["params"], t.cfg.TradingRisk)
 	if paramsErr != nil {
 		return ErrorResult(paramsErr.Error())
+	}
+	if paramsCarryClientOrderID(params) {
+		return ErrorResult("params must not carry a client order ID: create_order sets its own, derived from a key unique to the call, so the order can be found again if the exchange's answer is lost. Nothing was sent.")
 	}
 
 	// Paper mode is not a redirect: every gate below runs identically, and only
@@ -257,7 +263,25 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q — try again in a minute", providerID)).
 			WithError(broker.ErrRateLimited)
 	}
-	order, err := tp.CreateOrder(ctx, symbol, orderType, side, amount, price, params)
+	var (
+		order    ccxt.Order
+		lostNote string
+	)
+	if paper {
+		// A simulated order is made in this process: its answer cannot be lost.
+		order, err = tp.CreateOrder(ctx, symbol, orderType, side, amount, price, params)
+	} else {
+		// A lost answer is looked for, never answered by placing again (order_place_once.go).
+		var pending *pendingOrder
+		order, lostNote, pending, err = placeOrderOnce(ctx, tp, broker.OrderRequest{
+			Market: broker.OrderMarketSpot, Symbol: symbol, Type: orderType, Side: side, Amount: amount, Price: price, Params: params,
+		}, NameCreateOrder)
+		if pending != nil {
+			return ErrorResult(pending.unknownText(providerID) + "\n\n" +
+				fmt.Sprintf("Check %s, %s and the balances before placing this order again: placing it again may double it.\n", NameGetOpenOrders, NameGetOrderHistory) +
+				pending.clientIDLine()).WithError(pending.unknownErr())
+		}
+	}
 	if err != nil {
 		if hint := reauthHint(err, providerID, account); hint != nil {
 			return hint
@@ -291,6 +315,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 	if note := usdEstimateNote(nq, providerID); note != "" {
 		out += "  Value:  " + note + "\n"
+	}
+	if lostNote != "" {
+		out += "\n" + lostNote + "\n"
 	}
 
 	return UserResult(out)

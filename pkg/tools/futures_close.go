@@ -6,9 +6,16 @@ import (
 	"math"
 	"strings"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// exitUnknownAdvice ends the result of an exit whose order's outcome is unknown.
+func exitUnknownAdvice() string {
+	return fmt.Sprintf("It is a reduce-only order, so it cannot add to the position, but placing another exit before checking could take more of the position than was asked. Check %s first.\n", NameFuturesGetPositions)
+}
 
 // --- futures_close_position ---
 
@@ -126,18 +133,19 @@ func (t *FuturesClosePositionTool) execute(ctx context.Context, args map[string]
 		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
-	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       symbol,
-		OrderType:    orderType,
-		Side:         closeSide,
-		Amount:       closeAmount,
-		Price:        limitPrice,
-		PositionSide: positionSide,
-		ReduceOnly:   true,
-		MarginMode:   positionMarginMode,
-	})
+	// A lost answer is looked for, never answered by placing again (order_place_once.go).
+	// The position before the order lets an adapter with no client order ID tell that it
+	// shrank by about the order.
+	before := closeAmount
+	order, lostNote, pending, err := placeOrderOnce(ctx, fp, broker.OrderRequest{
+		Market: broker.OrderMarketFutures, Symbol: symbol, Type: orderType, Side: closeSide, Amount: closeAmount, Price: limitPrice,
+		ReduceOnly: true, MarginMode: positionMarginMode, PositionSide: positionSide, PositionBefore: &before,
+	}, NameFuturesClosePosition)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("futures_close_position failed: %v", err)).WithError(err)
+	}
+	if pending != nil {
+		return ErrorResult(pending.unknownText(providerID) + "\n\n" + exitUnknownAdvice() + pending.clientIDLine()).WithError(pending.unknownErr())
 	}
 	closeID := orderID(order)
 
@@ -152,8 +160,12 @@ func (t *FuturesClosePositionTool) execute(ctx context.Context, args map[string]
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, closeAmount)
 	}
 
-	return UserResult(fmt.Sprintf("Futures close order placed on %s:\n  Order:    %s\n  Symbol:   %s\n  Side:     %s\n  Amount:   %.8g\n  Type:     %s\n  Status:   %s%s\n",
-		providerID, closeID, symbol, closeSide, closeAmount, orderType, status, fillNote))
+	out := fmt.Sprintf("Futures close order placed on %s:\n  Order:    %s\n  Symbol:   %s\n  Side:     %s\n  Amount:   %.8g\n  Type:     %s\n  Status:   %s%s\n",
+		providerID, closeID, symbol, closeSide, closeAmount, orderType, status, fillNote)
+	if lostNote != "" {
+		out += "\n" + lostNote + "\n"
+	}
+	return UserResult(out)
 }
 
 // --- futures_reduce_position ---
@@ -295,18 +307,17 @@ func (t *FuturesReducePositionTool) execute(ctx context.Context, args map[string
 		return ErrorResult(fmt.Sprintf("rate limit exceeded for provider %q", providerID)).WithError(broker.ErrRateLimited)
 	}
 
-	order, err := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-		Symbol:       symbol,
-		OrderType:    orderType,
-		Side:         closeSide,
-		Amount:       finalAmount,
-		Price:        limitPrice,
-		PositionSide: positionSide,
-		ReduceOnly:   true,
-		MarginMode:   posMarginMode,
-	})
+	// A lost answer is looked for, never answered by placing again (order_place_once.go).
+	before := positionSize
+	order, lostNote, pending, err := placeOrderOnce(ctx, fp, broker.OrderRequest{
+		Market: broker.OrderMarketFutures, Symbol: symbol, Type: orderType, Side: closeSide, Amount: finalAmount, Price: limitPrice,
+		ReduceOnly: true, MarginMode: posMarginMode, PositionSide: positionSide, PositionBefore: &before,
+	}, NameFuturesReducePosition)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("futures_reduce_position failed: %v", err)).WithError(err)
+	}
+	if pending != nil {
+		return ErrorResult(pending.unknownText(providerID) + "\n\n" + exitUnknownAdvice() + pending.clientIDLine()).WithError(pending.unknownErr())
 	}
 	closeID := orderID(order)
 	filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, symbol, finalAmount)
@@ -319,8 +330,12 @@ func (t *FuturesReducePositionTool) execute(ctx context.Context, args map[string
 	if partial {
 		fillNote = fmt.Sprintf(" (partial: %.8g / %.8g filled)", filled, finalAmount)
 	}
-	return UserResult(fmt.Sprintf("Futures reduce order placed on %s:\n  Order:    %s\n  Symbol:   %s\n  Reduced:  %.8g (%.2f%%)\n  Side:     %s\n  Type:     %s\n  Status:   %s%s\n",
-		providerID, closeID, symbol, finalAmount, finalAmount/positionSize*100, closeSide, orderType, status, fillNote))
+	out := fmt.Sprintf("Futures reduce order placed on %s:\n  Order:    %s\n  Symbol:   %s\n  Reduced:  %.8g (%.2f%%)\n  Side:     %s\n  Type:     %s\n  Status:   %s%s\n",
+		providerID, closeID, symbol, finalAmount, finalAmount/positionSize*100, closeSide, orderType, status, fillNote)
+	if lostNote != "" {
+		out += "\n" + lostNote + "\n"
+	}
+	return UserResult(out)
 }
 
 // --- futures_emergency_flatten ---
@@ -439,23 +454,12 @@ func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[stri
 		sb.WriteString(fmt.Sprintf("%d orders cancelled\n", len(cancelledOrders)))
 	}
 
-	// Step 2: close each active position
+	// Step 2: close each active position. An order whose answer is lost is looked for
+	// after the loop, once for all of them after a single wait (so the waits cannot eat the
+	// sequence's deadline), and never answered by placing again (order_place_once.go).
 	sb.WriteString("\n  Closing positions:\n")
-	for _, ap := range active {
+	closed := func(ap activePos, order ccxt.Order, lostNote string) {
 		closeSide := futuresCloseSide(ap.side)
-		order, closeErr := fp.CreateFuturesOrder(ctx, broker.FuturesOrderRequest{
-			Symbol:       ap.symbol,
-			OrderType:    "market",
-			Side:         closeSide,
-			Amount:       ap.contracts,
-			PositionSide: ap.side,
-			ReduceOnly:   true,
-			MarginMode:   ap.marginMode,
-		})
-		if closeErr != nil {
-			sb.WriteString(fmt.Sprintf("    %s %s: FAILED — %v\n", ap.side, ap.symbol, closeErr))
-			continue
-		}
 		closeID := orderID(order)
 		filled, status, partial, verifyErr := verifyFuturesFill(ctx, fp, closeID, ap.symbol, ap.contracts)
 		// Flatten closes many positions; each records its own loss.
@@ -465,7 +469,40 @@ func (t *FuturesEmergencyFlattenTool) execute(ctx context.Context, args map[stri
 		if partial {
 			fillNote = fmt.Sprintf(" partial %.8g/%.8g", filled, ap.contracts)
 		}
-		sb.WriteString(fmt.Sprintf("    %s %s: order %s — %s%s\n", ap.side, ap.symbol, closeID, status, fillNote))
+		sb.WriteString(fmt.Sprintf("    %s %s: order %s — %s%s%s\n", ap.side, ap.symbol, closeID, status, fillNote, lostNote))
+	}
+	type lostClose struct {
+		ap activePos
+		po *pendingOrder
+	}
+	var lost []lostClose
+	for _, ap := range active {
+		before := ap.contracts
+		order, po, closeErr := sendOrderOnce(ctx, fp, broker.OrderRequest{
+			Market: broker.OrderMarketFutures, Symbol: ap.symbol, Type: "market", Side: futuresCloseSide(ap.side), Amount: ap.contracts,
+			ReduceOnly: true, MarginMode: ap.marginMode, PositionSide: ap.side, PositionBefore: &before,
+		}, NameFuturesEmergencyFlatten)
+		switch {
+		case closeErr != nil:
+			sb.WriteString(fmt.Sprintf("    %s %s: FAILED — %v\n", ap.side, ap.symbol, closeErr))
+		case po != nil:
+			sb.WriteString(fmt.Sprintf("    %s %s: no clear answer from the exchange, looked for below\n", ap.side, ap.symbol))
+			lost = append(lost, lostClose{ap: ap, po: po})
+		default:
+			closed(ap, order, "")
+		}
+	}
+	if len(lost) > 0 {
+		sb.WriteString("\n  Close orders whose answer was lost:\n")
+		waited := waitSettle(ctx, futuresOpenSettle) == nil
+		for _, l := range lost {
+			if order, _, found := l.po.look(ctx, waited); found {
+				closed(l.ap, order, " (found after the lost answer; nothing was placed twice)")
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("    %s %s: OUTCOME UNKNOWN — the close order may exist, and %s. Check %s before placing another exit. %s\n",
+				l.ap.side, l.ap.symbol, l.po.how, NameFuturesGetPositions, l.po.clientIDLine()))
+		}
 	}
 
 	// Step 3: final position check

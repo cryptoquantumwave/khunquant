@@ -1,9 +1,10 @@
 package tools
 
 import (
-	"errors"
 	"math"
 	"testing"
+
+	ccxt "github.com/ccxt/ccxt/go/v4"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
@@ -57,9 +58,9 @@ func TestOrderFeed_DCAOrderIsPublishedOnlyWhenPlaced(t *testing.T) {
 		t.Errorf("amount = %v, want %v", ev.Amount, want)
 	}
 
-	// A failed placement publishes nothing.
+	// A failed placement (the exchange's own refusal) publishes nothing.
 	store2, mock2, plan2 := newDCAGateFixture(t, "mr204-dca-fail")
-	mock2.orderErr = errors.New("exchange said no")
+	mock2.orderErr = &ccxt.Error{Type: "InvalidOrder", Message: "exchange said no"}
 	if res := NewExecuteDCAOrderTool(config.DefaultConfig(), store2).Execute(testCtx(), map[string]any{"plan_id": float64(plan2)}); !res.IsError {
 		t.Fatal("the failed order was reported as a success")
 	}

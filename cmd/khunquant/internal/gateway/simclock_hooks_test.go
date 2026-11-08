@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/orderfeed"
@@ -81,6 +82,9 @@ func TestBindProcessClock_SimIsSimTime(t *testing.T) {
 	}
 	if !alertNow().Equal(simT0) || !legacyJobs.now().Equal(simT0) {
 		t.Fatal("the alert and legacy-job clocks are not on the sim")
+	}
+	if !agent.ProcessNow().Equal(simT0) {
+		t.Fatalf("the agent's profile and intent store reads %v, want the sim's %v (151-2)", agent.ProcessNow(), simT0)
 	}
 	var mu sync.Mutex
 	var at time.Time

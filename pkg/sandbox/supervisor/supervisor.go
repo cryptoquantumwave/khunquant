@@ -151,6 +151,9 @@ type instance struct {
 	crash         *crash.Marker
 	crashRestarts int
 	restartErr    string
+	// tokenSpent: a restart's readiness poll reached a socket that was not the gateway (the
+	// port was taken), so the token may be known to it. The instance cannot be restarted.
+	tokenSpent bool
 }
 
 // Supervisor starts, restarts and stops locked sandbox instances of a prebuilt binary.
@@ -254,7 +257,6 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	in.token = randomHex(32)
 	for attempt := 1; ; attempt++ {
 		err := s.attempt(ctx, in, o, fixtures)
 		if err == nil {
@@ -284,12 +286,17 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 		return err
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	client, err := labclient.New(url, in.token)
+	// A fresh token per attempt (175-1): a lost port is held by another socket, and the
+	// readiness poll sends it this attempt's token as a bearer, so that token must never
+	// become the instance's. Only a restart keeps a token (see tokenSpent).
+	token := randomHex(32)
+	client, err := labclient.New(url, token)
 	if err != nil {
 		return err
 	}
 	client.SetGate(in.gate) // a call waits out a restart (killat.go)
 	in.mu.Lock()
+	in.token = token
 	in.port, in.url, in.client = port, url, client
 	in.mu.Unlock()
 
@@ -583,6 +590,10 @@ func (s *Supervisor) Restart(ctx context.Context, name string, mode RestartMode)
 	in.opMu.Lock()
 	defer in.opMu.Unlock()
 	in.mu.Lock()
+	if in.tokenSpent {
+		in.mu.Unlock()
+		return Info{}, fmt.Errorf("sandbox: instance %q cannot be restarted: its port was taken during an earlier restart, so its token may have reached another socket; run down and up", in.name)
+	}
 	in.state, in.restarting = StateRestarting, true
 	in.mu.Unlock()
 	defer func() { // calls wait for the restart, whichever way it ends
@@ -596,6 +607,7 @@ func (s *Supervisor) Restart(ctx context.Context, name string, mode RestartMode)
 	if err := in.start(ctx, s.cfg); err != nil {
 		in.mu.Lock()
 		in.state = StateExited
+		in.tokenSpent = errors.Is(err, errPortTaken)
 		in.mu.Unlock()
 		return Info{}, err
 	}
@@ -611,6 +623,12 @@ func (s *Supervisor) Client(name string) (*labclient.Client, error) {
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	// Listed from the start of Up, an instance has no client yet, or one for a gateway
+	// nobody has checked answers locked and ready (143-1, 144-2). A restart is not this:
+	// its state is StateRestarting and the client's gate holds the call (killat.go).
+	if in.client == nil || in.state == StateStarting {
+		return nil, fmt.Errorf("sandbox: instance %q is still starting; try again when it is running", in.name)
+	}
 	return in.client, nil
 }
 
@@ -673,7 +691,10 @@ func (s *Supervisor) Logs(name string, tail int, contains string) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("sandbox logs: %w", err)
 	}
-	data = bytes.ReplaceAll(data, []byte(in.token), []byte("***"))
+	in.mu.Lock()
+	token := in.token
+	in.mu.Unlock()
+	data = bytes.ReplaceAll(data, []byte(token), []byte("***"))
 	var lines []string
 	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		if l != "" && strings.Contains(l, contains) {

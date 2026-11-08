@@ -13,8 +13,8 @@ import (
 )
 
 // idleNames are the methods (and the orderfeed function) that exist only for the lab's
-// settle.
-var idleNames = map[string]bool{"Idle": true, "HindsightIdle": true}
+// settle, including the unexported idle of the gateway loops (alerts, loss guard, DCA sync).
+var idleNames = map[string]bool{"Idle": true, "HindsightIdle": true, "idle": true}
 
 // idleCallers are the places that may reference them besides tests: the lab itself, and
 // the gateway file that registers them.

@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simweb"
 )
 
 // libEntry is a venue's error as it travels on the wire.
@@ -59,6 +60,14 @@ var library = map[string]map[string]libEntry{
 
 // libraryAlias lets a venue that speaks another's API use that venue's errors.
 var libraryAlias = map[string]string{"binanceth": "binance"}
+
+// servedVenue says whether the sandbox serves venue: a venue of the library, an alias, or
+// the web venue SimWeb answers (it has no error library: only its latency and status
+// effects apply).
+func servedVenue(venue string) bool {
+	_, ok := library[libVenue(venue)]
+	return ok || venue == simweb.Venue
+}
 
 // generic is the three errors of the venues whose clients are untyped: the status alone
 // drives them (429 and 5xx are retried, and a 5xx on an order has an unknown outcome).

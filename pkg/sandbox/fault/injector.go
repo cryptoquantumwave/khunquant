@@ -2,6 +2,7 @@ package fault
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -101,9 +102,13 @@ func (i *Injector) Add(r Rule) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	from, to, err := r.When.window(i.now())
+	now := i.now()
+	from, to, err := r.When.window(now)
 	if err != nil {
 		return "", err
+	}
+	if !to.IsZero() && (!to.After(now) || from.Equal(to)) {
+		return "", errors.New("when.to leaves no time for the rule to fire (it is past, or equal to when.from)")
 	}
 	if (kind == "written_then_timeout" || kindLayer[kind] == layerOrder) && r.Match.Order == "" {
 		r.Match.Order = "create"

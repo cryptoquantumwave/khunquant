@@ -33,20 +33,31 @@ var okxOrderPaths = map[string]sandbox.OrderOp{
 	"GET /api/v5/trade/orders-history": sandbox.OrderList, "GET /api/v5/trade/orders-history-archive": sandbox.OrderList,
 }
 
+// orderClassifiers is the table of venues whose order endpoints ClassifyOrder knows. It is
+// the one place a venue is added; classifiesOrders reads it, so Add's refusal of order
+// matches on a venue with no classifier follows the table and cannot go stale.
+var orderClassifiers = map[string]func(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool){
+	"binance": func(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
+		return classifyBinance("binance", method, path, r)
+	},
+	"binanceth": func(method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
+		return classifyBinance("binanceth", method, path, r) // Binance TH speaks Binance's API
+	},
+	"okx":      classifyOKX,
+	"settrade": classifySettrade,
+	"webull":   classifyWebull,
+}
+
+// classifiesOrders says whether ClassifyOrder knows venue's order endpoints.
+func classifiesOrders(venue string) bool { _, ok := orderClassifiers[venue]; return ok }
+
 // ClassifyOrder says whether a request to venue is an order operation and, if so, which
 // order it is about. ok is false for every other request, and for a venue it has no rules
 // for. It reads the request body up to a
 // cap and puts it back, so the simulator reads it whole afterwards.
 func ClassifyOrder(venue, method, path string, r *http.Request) (sandbox.OrderOp, sandbox.OrderInfo, bool) {
-	switch venue {
-	case "binance", "binanceth": // Binance TH speaks Binance's API
-		return classifyBinance(venue, method, path, r)
-	case "okx":
-		return classifyOKX(method, path, r)
-	case "settrade":
-		return classifySettrade(method, path, r)
-	case "webull":
-		return classifyWebull(method, path, r)
+	if c, ok := orderClassifiers[venue]; ok {
+		return c(method, path, r)
 	}
 	return "", sandbox.OrderInfo{}, false
 }

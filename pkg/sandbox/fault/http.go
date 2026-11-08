@@ -25,6 +25,11 @@ func isResponse(l layer) bool { return l == layerResponse }
 func (i *Injector) HandlerWrap() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Every answer closes its connection. Go's client silently resends an idempotent
+			// request (a GET) that fails on a reused connection, so a timeout or a dropped
+			// connection on a kept-alive one would fire, journal and then never reach the
+			// caller. On loopback a fresh connection per request costs nothing.
+			w.Header().Set("Connection", "close")
 			p, err := sandbox.ParseRequest(r.URL.EscapedPath())
 			if err != nil {
 				next.ServeHTTP(w, r)

@@ -97,8 +97,14 @@ var (
 	// orderSides are an order's sides; a position's long and short are not journaled.
 	orderSides = []string{"buy", "sell"}
 	// unifiedSymbolRE is an exchange.order symbol: BTC/USDT for spot, BTC/USDT:USDT for a
-	// swap, never the venue's wire form (BTCUSDT, BTC-USDT-SWAP).
-	unifiedSymbolRE = regexp.MustCompile(`^[A-Z0-9]+/[A-Z0-9]+(:[A-Z0-9]+)?$`)
+	// swap, PTT/THB or BRK.B/USD for an equity (a ticker may hold a dot), never the venue's
+	// wire form (BTCUSDT, BTC-USDT-SWAP).
+	unifiedSymbolRE = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.]*/[A-Z0-9]+(:[A-Z0-9]+)?$`)
+	// equityVenues are the venues whose wire symbol is a bare ticker (orderbook.go
+	// equityQuote). A ticker holding "-", "_" or a space is not split, so the order is
+	// journaled under that wire ticker as it is; equityWireRE accepts those, for these venues only.
+	equityVenues = []string{"settrade", "webull"}
+	equityWireRE = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.]*[-_ ][A-Z0-9._ -]*$`)
 	// workflowStates are the statuses inspect workflows reports, which state is compared with whole.
 	workflowStates = []string{
 		string(journal.StatusPending), string(journal.StatusRunning), string(journal.StatusWaiting),

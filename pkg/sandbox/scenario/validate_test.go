@@ -252,6 +252,16 @@ func TestValidate_VacuousExpectationsAreRefused(t *testing.T) {
 		{`event: {kind: trigger.candidate, fields: {"evnt.payload.Severity": critical}, count: 0}`, "/expect/0/event/fields/evnt.payload.Severity", "no event.trigger.candidate entry"},
 		{`event: {kind: llm.call, fields: {turn: proactive}, count: 0}`, "/expect/0/event/fields/turn", "not declared"},
 		{`event: {kind: tool.call, fields: name, count: 0}`, "/expect/0/event/fields", "mapping"},
+		// kinds added by the later plans: SBX-14b, 15, 16, 20
+		{`event: {kind: exchange.funding, fields: {paymnt: 1}, count: 0}`, "/expect/0/event/fields/paymnt", "no exchange.funding entry has this path"},
+		{`event: {kind: web.req, fields: {hots: attacker.example}, count: 0}`, "/expect/0/event/fields/hots", "no web.req entry has this path"},
+		{`event: {kind: llm.budget, fields: {evnt: refused}, count: 0}`, "/expect/0/event/fields/evnt", "no llm.budget entry has this path"},
+		{`event: {kind: crash, fields: {workflw: dn.open}, count: 0}`, "/expect/0/event/fields/workflw", "no crash entry has this path"},
+		{`event: {kind: llm.complete, fields: {caller: x}, count: 0}`, "/expect/0/event/fields/caller", "not declared"},
+		// equity venues: a bare ticker is never what the ledger holds
+		{`order: {venue: settrade, symbol: PTT, count: 0}`, "/expect/0/order/symbol", "unified symbol"},
+		{`order: {venue: webull, symbol: AAPL, count: 0}`, "/expect/0/order/symbol", "unified symbol"},
+		{`order: {venue: binance, symbol: PTT-R, count: 0}`, "/expect/0/order/symbol", "unified symbol"},
 		// closed sets
 		{`{workflow: {kind: dca.execute, state: compelted}, count: 0}`, "/expect/0/workflow/state", "must be one of"},
 		{`{decision: {disposition: dorp}, count: 0}`, "/expect/0/decision/disposition", "must be one of"},
@@ -286,6 +296,16 @@ func TestValidate_VacuousExpectationsAreRefused(t *testing.T) {
 		`decision: {disposition: "!drop"}`,
 		`order: {venue: okx, symbol: "!BTC/USDT:USDT", side: sell, status: partially_filled, client_id: "12345", reduce_only: false, count: 0}`,
 		`order: {venue: bitkub, count: 0}`,
+		`event: {kind: exchange.funding, fields: {payment: -1.5}, count: 0}`,
+		`event: {kind: web.req, fields: {host: attacker.example, status: 200}, count: 0}`,
+		`event: {kind: llm.budget, fields: {event: refused}, count: 1}`,
+		`event: {kind: crash, fields: {workflow_id: wf_1}, count: 0}`,
+		// the symbols the committed broker scenarios use, and the equity forms around them
+		`order: {venue: settrade, symbol: PTT/THB, side: buy, count: 1}`,
+		`order: {venue: webull, symbol: AAPL/USD, side: buy, count: 1}`,
+		`order: {venue: webull, symbol: BRK.B/USD, count: 0}`,
+		`order: {venue: settrade, symbol: PTT-R, count: 0}`,
+		`order: {venue: settrade, count: 1}`,
 	} {
 		if issues := check(ok); len(issues) != 0 {
 			t.Errorf("%s refused: %v", ok, issues)

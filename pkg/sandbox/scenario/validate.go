@@ -450,8 +450,12 @@ func (v *validator) orderValues(kp string, f map[string]any, journal string) {
 	v.oneOf(kp, f, "side", true, orderSides)
 	v.oneOf(kp, f, "status", true, orderStatuses)
 	if raw, ok := f["symbol"]; ok {
-		if s, isStr := raw.(string); !isStr || !unifiedSymbolRE.MatchString(strings.TrimPrefix(s, "!")) {
-			v.addf(kp+"/symbol", "must be a unified symbol such as BTC/USDT or BTC/USDT:USDT, not the venue's own form")
+		s, isStr := raw.(string)
+		s = strings.TrimPrefix(s, "!")
+		venue, _ := f["venue"].(string)
+		equityWire := slices.Contains(equityVenues, venue) && equityWireRE.MatchString(s)
+		if !isStr || !(unifiedSymbolRE.MatchString(s) || equityWire) {
+			v.addf(kp+"/symbol", "must be a unified symbol such as BTC/USDT, BTC/USDT:USDT, PTT/THB or AAPL/USD, not the venue's own form")
 		}
 	}
 	if raw, ok := f["client_id"]; ok {

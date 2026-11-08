@@ -10,6 +10,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/crash"
 )
 
 // Helpers on journal kinds, shared by Validate and the runner.
@@ -111,6 +112,16 @@ var payloadShapes = map[string]shape{
 	"fault.fired":    {"rule_id": nil, "effect": nil, "venue": nil, "method": nil, "path": nil, "order_op": nil, "symbol": nil, "turn": nil, "caller": nil},
 	"exchange.req":   jsonShape(reflect.TypeFor[sandbox.ReqInfo]()),
 	"exchange.order": jsonShape(reflect.TypeFor[sandbox.OrderEntry]()),
+	// a funding payment of an open perpetual position (SBX-14b)
+	"exchange.funding": jsonShape(reflect.TypeFor[sandbox.FundingEntry]()),
+	// one request SimWeb served (simweb Store.record, a map literal)
+	"web.req": {"method": nil, "url": nil, "host": nil, "path": nil, "query": nil, "status": nil, "rule_id": nil},
+	// the live budget's event (providers/sim budgetEventLocked, a map literal)
+	"llm.budget": {"event": nil, "limit_usd": nil, "limit_tok": nil, "spent_usd": nil, "spent_tok": nil, "calls": nil},
+	// the crash a previous process died of: its marker, reported by the next process
+	"crash": jsonShape(reflect.TypeFor[crash.Marker]()),
+	// llm.call and llm.complete are left undeclared: their payload also carries the keys of
+	// the rule's extra (providers/sim engine.go), so no closed path set exists for them.
 }
 
 // payloadShape is the payload a journal kind's entries have, when it is declared.

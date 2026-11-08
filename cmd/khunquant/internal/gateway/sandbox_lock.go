@@ -75,11 +75,9 @@ func lockOptionsFromEnv() (sandbox.LockOptions, error) {
 		return sandbox.LockOptions{}, errors.New("sandbox lock: KHUNQUANT_CONFIG must be inside KHUNQUANT_HOME")
 	}
 
-	var allow []string
-	for _, h := range strings.Split(os.Getenv("KQ_SANDBOX_ALLOW_HOSTS"), ",") {
-		if h = strings.TrimSpace(h); h != "" {
-			allow = append(allow, h)
-		}
+	allow, err := lockAllowHosts(os.Getenv)
+	if err != nil {
+		return sandbox.LockOptions{}, err
 	}
 	return sandbox.LockOptions{
 		InstanceName: os.Getenv("KQ_SANDBOX_INSTANCE"),
@@ -101,23 +99,55 @@ func armSandboxLock(lk sandbox.LockOptions) error {
 	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
 }
 
-// envLLMMode names the simulated model's mode for the instance (scripted when unset). The
-// profile on disk says sim/scripted; the lock puts the mode in memory, like the placeholder
-// accounts, on every load and reload.
-const envLLMMode = "KQ_SANDBOX_LLM"
+// lockAllowHosts is the egress opening of the lock, and it is exact: no host unless the
+// instance is record or live, and then only the host of the inner model's API base, which
+// the supervisor computed with the same sandbox.LLMInnerHost. scripted and replay open
+// nothing, whatever KQ_SANDBOX_ALLOW_HOSTS says.
+func lockAllowHosts(getenv func(string) string) ([]string, error) {
+	var allow []string
+	for _, h := range strings.Split(getenv(sandbox.EnvAllowHosts), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			allow = append(allow, h)
+		}
+	}
+	mode := getenv(sandbox.EnvLLM)
+	if mode != sim.ModeLive && mode != sim.ModeRecord {
+		if len(allow) > 0 {
+			return nil, fmt.Errorf("sandbox lock: %s is allowed only for a record or live instance", sandbox.EnvAllowHosts)
+		}
+		return nil, nil
+	}
+	want, err := sandbox.LLMInnerHost(getenv(sandbox.EnvLLMModel), getenv(sandbox.EnvLLMAPIBase))
+	if err != nil {
+		return nil, fmt.Errorf("sandbox lock: %s=%s: %w", sandbox.EnvLLM, mode, err)
+	}
+	if len(allow) != 1 || !strings.EqualFold(allow[0], want) {
+		return nil, fmt.Errorf("sandbox lock: %s must be exactly the inner model's API host %q", sandbox.EnvAllowHosts, want)
+	}
+	return allow, nil
+}
 
-// applyLLMMode points every sim model at the instance's mode. mode "" leaves the config.
-func applyLLMMode(cfg *config.Config, mode string) error {
+// applyLLMMode points every sim model at the instance's mode (and inner model). The
+// profile on disk says sim/scripted; the lock puts the mode in memory, like the placeholder
+// accounts, on every load and reload. mode "" leaves the config.
+func applyLLMMode(cfg *config.Config, mode, inner string) error {
 	switch mode {
 	case "":
 		return nil
 	case sim.ModeScripted, sim.ModeReplay:
+		if inner != "" {
+			return fmt.Errorf("%s=%q takes no inner model", sandbox.EnvLLM, mode)
+		}
+	case sim.ModeRecord, sim.ModeLive:
+		if _, _, err := sandbox.SplitInnerModel(inner); err != nil {
+			return fmt.Errorf("%s=%q: %w", sandbox.EnvLLM, mode, err)
+		}
 	default:
-		return fmt.Errorf("%s=%q: not a mode this build runs (scripted, replay)", envLLMMode, mode)
+		return fmt.Errorf("%s=%q: not a mode (scripted, replay, record, live)", sandbox.EnvLLM, mode)
 	}
 	for i := range cfg.ModelList {
 		if protocol, _ := providers.ExtractProtocol(cfg.ModelList[i].Model); protocol == "sim" {
-			cfg.ModelList[i].Model = sim.Ref(mode, "")
+			cfg.ModelList[i].Model = sim.Ref(mode, inner)
 		}
 	}
 	return nil
@@ -170,7 +200,7 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 		}
 		m.Proxy = ""
 	}
-	if err := applyLLMMode(cfg, os.Getenv(envLLMMode)); err != nil {
+	if err := applyLLMMode(cfg, os.Getenv(sandbox.EnvLLM), os.Getenv(sandbox.EnvLLMModel)); err != nil {
 		return err
 	}
 

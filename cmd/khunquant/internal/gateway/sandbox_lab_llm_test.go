@@ -162,7 +162,7 @@ func TestLabLLMScriptsTheFactoryModel(t *testing.T) {
 // detaches the engine.
 func TestLabClosingDetachesTheEngine(t *testing.T) {
 	f := newLockedFixture(t)
-	p, err := sim.NewProvider(sim.ModeScripted)
+	p, err := sim.NewProvider(sim.ModeScripted, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

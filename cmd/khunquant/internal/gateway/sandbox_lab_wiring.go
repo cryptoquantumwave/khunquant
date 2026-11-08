@@ -65,11 +65,11 @@ const kindConfigReload = "config.reload"
 // workflow.step, proposal and policy.decision.
 var labJournalKinds = []string{
 	"chat.in", "chat.out", "chat.edit", "chat.press", "chat.react", "chat.state", // simchat
-	"exchange.req",             // the sandbox server's request log
-	simweb.KindReq,             // SimWeb: one web_fetch / web_search request
-	sandbox.KindOrder,          // the simulator's order ledger: create, fill, cancel, effect
-	sandbox.KindFunding,        // a funding payment of an open perpetual position
-	"llm.call", "llm.complete", // the simulated model
+	"exchange.req",                           // the sandbox server's request log
+	simweb.KindReq,                           // SimWeb: one web_fetch / web_search request
+	sandbox.KindOrder,                        // the simulator's order ledger: create, fill, cancel, effect
+	sandbox.KindFunding,                      // a funding payment of an open perpetual position
+	"llm.call", "llm.complete", "llm.budget", // the simulated model; llm.budget: a live budget lowered, refused or spent
 	"event.*", "workflow.step", "proposal", "policy.decision", // the bus observer
 	"tool.call",   // the tool tap
 	"manage.call", // sandbox_manage
@@ -232,11 +232,21 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if l.Journal != nil {
 		sj = simJournal{l.Journal}
 	}
-	e, err := sim.NewEngine(sim.EngineOptions{
+	eo := sim.EngineOptions{
 		Journal: sj, TurnInfo: simTurnInfo, Faults: llmFaults{l.Faults},
 		Store: filepath.Join(l.Home, "lab", "llm_script.json"),
 		Mode:  simModeOf(cfg), Home: homeMasks(l.Home),
-	})
+	}
+	if eo.Mode == sim.ModeLive || eo.Mode == sim.ModeRecord {
+		// The budget is read here, once, so a config reload cannot start it again from zero.
+		le, err := sim.LiveEnvFrom(os.Getenv)
+		if err != nil {
+			return err
+		}
+		eo.BudgetUSD, eo.BudgetTok = le.BudgetUSD, le.BudgetTok
+		eo.RecordPath = filepath.Join(l.Home, "lab", "cassettes", "record.jsonl")
+	}
+	e, err := sim.NewEngine(eo)
 	if err != nil {
 		return err
 	}
@@ -253,19 +263,17 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	return l.AddGroup(llmops.Group(e, l.Home))
 }
 
-// envSeed is the seed of the nonce source (see pkg/randsrc): a non-zero int64 seeds it, empty
+// seedFromEnv seeds the nonce source from KQ_SANDBOX_SEED (see pkg/randsrc): a non-zero int64 seeds it, empty
 // or 0 leaves crypto/rand. This is the one place Seed is called; it only works because
 // sandbox.Lock armed the source.
-const envSeed = "KQ_SANDBOX_SEED"
-
 func seedFromEnv(getenv func(string) string) error {
-	v := getenv(envSeed)
+	v := getenv(sandbox.EnvSeed)
 	if v == "" {
 		return nil
 	}
 	seed, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
-		return fmt.Errorf("%s=%q is not an integer", envSeed, v)
+		return fmt.Errorf("%s=%q is not an integer", sandbox.EnvSeed, v)
 	}
 	if seed == 0 {
 		return nil

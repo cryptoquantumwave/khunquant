@@ -27,8 +27,8 @@ func Group(e *sim.Engine, home string) lab.Group {
 		Ops: []lab.Op{
 			{
 				Name:        "mode",
-				Description: "the model mode (scripted or replay), fixed when the instance started; set only restates it",
-				Args:        json.RawMessage(`{"set":{"type":"string","enum":["scripted","replay"]}}`),
+				Description: "the model mode (scripted, replay, record or live), fixed when the instance started; set only restates it",
+				Args:        json.RawMessage(`{"set":{"type":"string","enum":["scripted","replay","record","live"]}}`),
 				Run:         modeOp(e),
 			},
 			{
@@ -38,6 +38,14 @@ func Group(e *sim.Engine, home string) lab.Group {
 				Args: json.RawMessage(`{"path":{"type":"string"},"inline":{"type":"array","items":{"type":"object"}},` +
 					`"miss":{"type":"string","enum":["error","scripted"]}}`),
 				Run: cassetteLoadOp(e, home),
+			},
+			{
+				Name: "budget",
+				Description: "a live or record instance's budget: {limit_usd, limit_tok, spent_usd, spent_tok, calls, exhausted}. " +
+					"lower_usd / lower_tok lower a limit (never raise it: the start-time budget is the ceiling); a call that would pass " +
+					"a limit is refused with `sim: live budget exhausted` and journaled as llm.budget",
+				Args: json.RawMessage(`{"lower_usd":{"type":"number"},"lower_tok":{"type":"integer"}}`),
+				Run:  budgetOp(e),
 			},
 			{
 				Name: "script_put",
@@ -68,6 +76,30 @@ func modeOp(e *sim.Engine) lab.OpFunc {
 			return nil, lab.Errorf(lab.CodeUnavailable, "this instance runs %q: the mode is chosen at start (sandbox up --llm), not switched", e.Mode())
 		}
 		return map[string]string{"mode": e.Mode()}, nil
+	}
+}
+
+// budgetOp reports the budget and lowers it; a raise is refused.
+func budgetOp(e *sim.Engine) lab.OpFunc {
+	return func(_ context.Context, args json.RawMessage) (any, error) {
+		var a struct {
+			LowerUSD float64 `json:"lower_usd"`
+			LowerTok int     `json:"lower_tok"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
+		}
+		if m := e.Mode(); m != sim.ModeLive && m != sim.ModeRecord {
+			return nil, lab.Errorf(lab.CodeUnavailable, "this instance runs %q: there is no live model and no budget", m)
+		}
+		if a.LowerUSD == 0 && a.LowerTok == 0 {
+			return e.Budget(), nil
+		}
+		st, err := e.LowerBudget(a.LowerUSD, a.LowerTok)
+		if err != nil {
+			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
+		}
+		return st, nil
 	}
 }
 

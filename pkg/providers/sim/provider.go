@@ -16,10 +16,12 @@ import (
 )
 
 // The modes of the simulated model. scripted answers from ordered match/respond rules,
-// replay from a cassette of recorded answers; record and live come with the next PR.
+// replay from a cassette of recorded answers; record and live call a real model under a budget.
 const (
 	ModeScripted = "scripted"
 	ModeReplay   = "replay"
+	ModeRecord   = "record" // the real model answers and each answer is appended to a cassette
+	ModeLive     = "live"   // the real model answers, under a budget
 )
 
 // attached is the engine every Provider of the process talks to. The model factory's
@@ -46,17 +48,30 @@ func Detach(e *Engine) { attached.CompareAndSwap(e, nil) }
 
 // Provider is what the model factory builds for "sim/<mode>". It holds no state: every
 // call goes to the attached engine, and fails closed when there is none.
-type Provider struct{ mode string }
+type Provider struct {
+	mode string
+	live *LiveOptions // the inner model of record and live
+}
 
-// NewProvider builds the provider for a mode. It refuses outside a locked process.
-func NewProvider(mode string) (*Provider, error) {
+// NewProvider builds the provider for a mode. It refuses outside a locked process. record
+// and live need their inner model; the other modes must not have one.
+func NewProvider(mode string, live *LiveOptions) (*Provider, error) {
 	if !sandbox.Locked() {
 		return nil, errors.New("sim: the simulated model runs only in a sandbox-locked process")
 	}
-	if mode != ModeScripted && mode != ModeReplay {
-		return nil, fmt.Errorf("sim: mode %q is not available (only %q and %q)", mode, ModeScripted, ModeReplay)
+	switch mode {
+	case ModeScripted, ModeReplay:
+		if live != nil {
+			return nil, fmt.Errorf("sim: mode %q takes no inner model", mode)
+		}
+	case ModeRecord, ModeLive:
+		if live == nil || live.Inner == nil {
+			return nil, fmt.Errorf("sim: mode %q needs an inner model", mode)
+		}
+	default:
+		return nil, fmt.Errorf("sim: mode %q is not available (scripted, replay, record, live)", mode)
 	}
-	return &Provider{mode: mode}, nil
+	return &Provider{mode: mode, live: live}, nil
 }
 
 // ParseRef splits what follows "sim/" in a model ref, "replay" or "live:<protocol>/<model>",
@@ -93,5 +108,5 @@ func (p *Provider) Chat(ctx context.Context, msgs []protocoltypes.Message, tools
 	if e.Mode() != p.mode {
 		return nil, fmt.Errorf("sim: this instance runs sim/%s; the model ref says sim/%s", e.Mode(), p.mode)
 	}
-	return e.Chat(ctx, msgs, tools, model, options)
+	return e.ChatWith(ctx, p.live, msgs, tools, model, options)
 }

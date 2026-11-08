@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sync"
 	"time"
@@ -50,6 +51,12 @@ type EngineOptions struct {
 	// Home lists the directories (the instance home as written and symlink-resolved) that
 	// the canonical request masks as <HOME>.
 	Home []string
+	// BudgetUSD and BudgetTok are the start-time limits of a record or live instance (0: no
+	// limit in that dimension). They can only be lowered afterwards.
+	BudgetUSD float64
+	BudgetTok int
+	// RecordPath is the JSONL file record appends to.
+	RecordPath string
 }
 
 // Engine answers the model calls of one sandbox instance from its script.
@@ -64,6 +71,9 @@ type Engine struct {
 	loops     map[string]int // turn id → consecutive tool-call responses
 	callSeq   int64
 	cass      *Cassette // the replay set; nil until cassette_load
+
+	liveMu sync.Mutex // serialises live calls with their accounting; guards bud
+	bud    BudgetState
 }
 
 // scriptFile is what Store holds.
@@ -76,6 +86,7 @@ type scriptFile struct {
 // restart of the instance keeps it; a Store that exists but cannot be read is an error.
 func NewEngine(o EngineOptions) (*Engine, error) {
 	e := &Engine{o: o, fallback: fallbackText, hits: map[string]int{}, loops: map[string]int{}}
+	e.bud.LimitUSD, e.bud.LimitTok = o.BudgetUSD, o.BudgetTok
 	if o.Store == "" {
 		return e, nil
 	}
@@ -169,6 +180,7 @@ type decision struct {
 	key       string // the canonical request key
 	miss      bool   // replay had no entry for key
 	unmatched bool
+	extra     map[string]any // more fields for the journal entry (live: mode, usage, cost)
 	resp      *protocoltypes.LLMResponse
 	err       error
 }
@@ -177,9 +189,17 @@ type decision struct {
 func (e *Engine) Chat(ctx context.Context, msgs []protocoltypes.Message, tools []protocoltypes.ToolDefinition,
 	model string, options map[string]any,
 ) (*protocoltypes.LLMResponse, error) {
+	return e.ChatWith(ctx, nil, msgs, tools, model, options)
+}
+
+// ChatWith is Chat for a provider that carries an inner model (record and live).
+func (e *Engine) ChatWith(ctx context.Context, lo *LiveOptions, msgs []protocoltypes.Message, tools []protocoltypes.ToolDefinition,
+	model string, options map[string]any,
+) (*protocoltypes.LLMResponse, error) {
 	ci := e.classify(ctx, tools, options)
 	ci.Model = model
-	key := Key(canonicalize(e.o.Home, msgs, tools, options))
+	creq := canonicalize(e.o.Home, msgs, tools, options)
+	key := Key(creq)
 	if e.o.Faults != nil {
 		delay, err := e.o.Faults.BeforeLLM(ctx, ci)
 		if err == nil && delay > 0 {
@@ -197,9 +217,12 @@ func (e *Engine) Chat(ctx context.Context, msgs []protocoltypes.Message, tools [
 		}
 	}
 	var d decision
-	if e.Mode() == ModeReplay {
+	switch e.Mode() {
+	case ModeReplay:
 		d = e.replay(ci, msgs, key)
-	} else {
+	case ModeRecord, ModeLive:
+		d = e.live(ctx, lo, msgs, tools, options, creq, key)
+	default:
 		d = e.answer(ci, msgs)
 	}
 	d.key = key
@@ -297,6 +320,7 @@ func (e *Engine) record(ci CallInfo, msgs []protocoltypes.Message, d decision) {
 	if d.miss {
 		p["cassette_miss"] = true
 	}
+	maps.Copy(p, d.extra)
 	var resp protocoltypes.LLMResponse
 	if d.resp != nil {
 		resp = *d.resp

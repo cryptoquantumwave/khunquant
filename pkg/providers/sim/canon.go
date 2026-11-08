@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 )
 
@@ -139,6 +140,9 @@ func (c *canon) text(s string) string {
 			s = strings.ReplaceAll(s, h, "<HOME>")
 		}
 	}
+	for _, m := range buildIdentity() {
+		s = strings.ReplaceAll(s, m[0], m[1])
+	}
 	s = reTimeLine.ReplaceAllString(s, "${1}<TIME>")
 	s = reRuntimeLine.ReplaceAllString(s, "${1}<RUNTIME>")
 	s = reFence.ReplaceAllString(s, "<<<${1}<NONCE>>>>")
@@ -152,6 +156,24 @@ func (c *canon) text(s string) string {
 		c.ids[id] = p
 		return p
 	})
+}
+
+// buildIdentity lists the two headers that print the build, exactly as the agent prints
+// them, with the version masked: getIdentity ("# khunquant 🦞 (%s)", pkg/agent/context.go) and
+// proactiveIdentity ("# khunquant (%s)", pkg/agent/context_proactive.go), where %s is
+// config.FormatVersion(). It differs between `go build` ("dev"), `make build` and commits.
+// Only the printed header is matched: a plain build's "dev" must not be touched in "device"
+// or "/dev/i2c". BuildTime and GoVersion reach no prompt, so they are not masked. Read on
+// every call: a test may change the stamps.
+func buildIdentity() [][2]string {
+	v := config.FormatVersion()
+	if v == "" {
+		return nil
+	}
+	return [][2]string{
+		{"# khunquant 🦞 (" + v + ")", "# khunquant 🦞 (<VERSION>)"},
+		{"# khunquant (" + v + ")", "# khunquant (<VERSION>)"},
+	}
 }
 
 // Key is the sha256 (hex) of the canonical request: the key of a cassette entry.

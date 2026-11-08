@@ -2,13 +2,16 @@ package scenario
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
@@ -36,6 +39,28 @@ type Runner struct {
 	Keep         bool          // keep the home of a run that did not pass
 	FixturesFrom string        // passed to Up (default: the supervisor's)
 	Log          io.Writer     // progress lines; nil: none
+
+	// The simulated model (llm: replay | live). CassetteDir holds <scenario>.jsonl for a
+	// replay scenario; LLMModel, LLMBudget and Seed are passed to Up for a live one, whose
+	// key is read, with Getenv (os.Getenv when nil), from KQ_SANDBOX_LLM_KEY. A live
+	// scenario with no key is skipped ("live: no key"), not failed.
+	CassetteDir string
+	LLMModel    string
+	LLMBudget   string
+	Seed        string
+	Getenv      func(string) string
+}
+
+// liveSkip says why a live scenario cannot run here ("" when it can).
+func (r *Runner) liveSkip() string {
+	get := r.Getenv
+	if get == nil {
+		get = os.Getenv
+	}
+	if get(sandbox.EnvLLMKey) == "" {
+		return "live: no key (" + sandbox.EnvLLMKey + " is not set)"
+	}
+	return ""
 }
 
 // errTimeout is why a scenario's context ended when it ran past Runner.Timeout.
@@ -54,6 +79,12 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Report, error) {
 	if f.IsKnownBug() && !r.KnownBugs {
 		rep.Skipped = "known_bug " + f.KnownBug
 		return rep, nil
+	}
+	if f.LLMMode() == "live" {
+		if why := r.liveSkip(); why != "" {
+			rep.Skipped = why
+			return rep, nil
+		}
 	}
 	files, err := Expand(f)
 	if err != nil {
@@ -91,6 +122,7 @@ type runState struct {
 	f     *File
 	c     *labclient.Client
 	name  string
+	home  string
 	res   *Result
 	start time.Time
 	loc   *time.Location
@@ -116,6 +148,7 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 	info, err := r.Sup.Up(ctx, supervisor.UpOptions{
 		FixturesFrom: r.FixturesFrom, ClockStart: f.Clock.Start, ClockMode: "manual", ClockResolution: f.Clock.Resolution,
 		ConfigPatch: f.Instance.Config, Workspace: f.Instance.Workspace, Accounts: f.Instance.Accounts,
+		LLM: f.LLMMode(), LLMModel: r.liveOnly(f, r.LLMModel), LLMBudget: r.liveOnly(f, r.LLMBudget), Seed: r.Seed,
 	})
 	if err != nil {
 		res.Infra = "instance did not start: " + err.Error()
@@ -133,7 +166,7 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 		}
 	}()
 
-	st := &runState{r: r, f: f, name: info.Name, res: res, start: f.StartTime(), loc: zoneOf(f)}
+	st := &runState{r: r, f: f, name: info.Name, home: info.Home, res: res, start: f.StartTime(), loc: zoneOf(f)}
 	if st.c, err = r.Sup.Client(info.Name); err != nil {
 		res.Infra = err.Error()
 		return res
@@ -163,6 +196,15 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 	st.evaluate(ctx)
 	res.Pass = res.Failure == "" && res.Infra == "" && len(res.Settle) == 0 && allOK(res.Expect)
 	return res
+}
+
+// liveOnly is v for a live scenario and "" for any other: the model and the budget belong
+// to live runs only, and the supervisor refuses them elsewhere.
+func (r *Runner) liveOnly(f *File, v string) string {
+	if f.LLMMode() == "live" {
+		return v
+	}
+	return ""
 }
 
 func allOK(es []ExpectResult) bool {
@@ -269,6 +311,31 @@ func (s *runState) lockLog() string {
 	return ": " + strings.Join(lines, " | ")
 }
 
+// cassetteCheck fails a replay run that had a model call the cassette did not answer, and
+// names the key, so a stale cassette is read as one and never as a failed expectation.
+func (s *runState) cassetteCheck(ctx context.Context) ExpectResult {
+	r := ExpectResult{ID: "cassette_hits", Kind: "implicit", OK: true, Want: "every model call found in the cassette", Got: "every model call found in the cassette"}
+	calls, err := s.env.entriesOf(ctx, []string{"llm.call", "llm.complete"})
+	if err != nil {
+		r.OK, r.Got = false, "the journal could not be read: "+err.Error()
+		return r
+	}
+	var misses []string
+	for _, c := range calls {
+		var p struct {
+			Miss bool   `json:"cassette_miss"`
+			Key  string `json:"key"`
+		}
+		if json.Unmarshal(c.Payload, &p) == nil && p.Miss {
+			misses = append(misses, p.Key)
+		}
+	}
+	if len(misses) > 0 {
+		r.OK, r.Got = false, fmt.Sprintf("%d model call(s) missed the cassette; first key %s (re-record it, or set miss: scripted)", len(misses), misses[0])
+	}
+	return r
+}
+
 // evaluate fills the implicit checks (settled, journal_drops) and the expectations.
 func (s *runState) evaluate(ctx context.Context) {
 	ok := ExpectResult{ID: "settled", Kind: "implicit", OK: true, Want: "every settle passed", Got: "every settle passed"}
@@ -281,6 +348,10 @@ func (s *runState) evaluate(ctx context.Context) {
 	s.res.Expect = append(s.res.Expect, ok)
 
 	_, drops, err := journalHead(ctx, s.c)
+	if s.f.LLMMode() == "replay" && s.f.Miss != "scripted" {
+		s.res.Expect = append(s.res.Expect, s.cassetteCheck(ctx))
+	}
+
 	d := ExpectResult{ID: "journal_drops", Kind: "implicit", OK: err == nil && drops == 0, Want: "0 dropped journal entries", Got: fmt.Sprintf("%d dropped", drops)}
 	if err != nil {
 		d.Got = "the journal could not be read: " + err.Error()

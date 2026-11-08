@@ -64,6 +64,7 @@ type fakeSup struct {
 	onUp     func(n int, i *fakeInstance) // after an instance is built (n from 1)
 	onPatch  func(i *fakeInstance, patch map[string]any) (changed bool, err error)
 	logs     []string
+	upOpts   []supervisor.UpOptions // what each Up was given
 }
 
 func newFakeSup(t *testing.T) *fakeSup {
@@ -91,6 +92,7 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 	}
 	f.mu.Lock()
 	n := len(f.order) + 1
+	f.upOpts = append(f.upOpts, o)
 	f.mu.Unlock()
 	name := fmt.Sprintf("fake-%d", n)
 	home := f.t.TempDir()
@@ -114,7 +116,7 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 		inspect.Group(j, deps), l.ClockGroup(),
 		recorder(l, j, "chat", "send", "press", "react", "outbox", "set_state"),
 		recorder(l, j, "call_tool", ""), recorder(l, j, "market", "set", "path", "shock", "walk", "replay", "delist", "relist"),
-		recorder(l, j, "account", "seed", "get"), recorder(l, j, "llm", "script_put"), recorder(l, j, "manage", ""),
+		recorder(l, j, "account", "seed", "get"), recorder(l, j, "llm", "script_put", "cassette_load"), recorder(l, j, "manage", ""),
 	}
 	for _, g := range groups {
 		if err := l.AddGroup(g); err != nil {

@@ -112,8 +112,15 @@ func TestValidate_RequirementsNamePR(t *testing.T) {
 		t.Errorf("web: %q", got)
 	}
 
-	if got := issueAt(Validate(parseString(t, base+"llm: live\n"), nil), "/llm"); !strings.Contains(got, "SBX-16") {
-		t.Errorf("llm: live: %q", got)
+	for _, ok := range []string{"llm: live\n", "llm: replay\n", "llm: replay\nmiss: scripted\n", "llm: scripted\n"} {
+		if issues := Validate(parseString(t, base+ok), nil); issueAt(issues, "/llm") != "" || issueAt(issues, "/miss") != "" {
+			t.Errorf("%q: %v", ok, issues)
+		}
+	}
+	for in, path := range map[string]string{"llm: turbo\n": "/llm", "miss: error\n": "/miss", "llm: live\nmiss: error\n": "/miss", "llm: replay\nmiss: sometimes\n": "/miss"} {
+		if got := issueAt(Validate(parseString(t, base+in), nil), path); got == "" {
+			t.Errorf("%q must be refused at %s", in, path)
+		}
 	}
 	if got := issueAt(Validate(parseString(t, base+"timeline:\n  - restart: {kill_at: {workflow: dn.open}}\n"), nil), "/timeline/0/restart/kill_at"); !strings.Contains(got, "SBX-20") {
 		t.Errorf("restart kill_at: %q", got)
@@ -175,8 +182,8 @@ func TestValidate_DesignExamples(t *testing.T) {
 		t.Fatalf("Expand = %d, %v", len(files), err)
 	}
 	for _, g := range files {
-		if issues := Validate(g, nil); len(issues) != 1 || issues[0].Path != "/llm" || !strings.Contains(issues[0].Msg, "SBX-16") {
-			t.Errorf("8.3 = %v, want only the llm: live issue", issues)
+		if issues := Validate(g, nil); len(issues) != 0 {
+			t.Errorf("8.3 = %v, want it valid now that live is supported", issues)
 		}
 	}
 }

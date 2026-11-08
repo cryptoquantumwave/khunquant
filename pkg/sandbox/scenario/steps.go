@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,6 +60,11 @@ func (s *runState) apply(ctx context.Context) error {
 			return fmt.Errorf("account %s: %w", key, err)
 		}
 	}
+	if f.LLMMode() == "replay" {
+		if err := s.loadCassette(ctx); err != nil {
+			return fmt.Errorf("cassette: %w", err)
+		}
+	}
 	if len(f.LLMScript) > 0 {
 		if _, err := call(ctx, s.c, "llm", "script_put", map[string]any{"rules": f.LLMScript, "replace": true}); err != nil {
 			return fmt.Errorf("llm_script: %w", err)
@@ -74,6 +81,37 @@ func (s *runState) apply(ctx context.Context) error {
 		}
 	}
 	return settle(ctx, s.c, s.r.settleCap())
+}
+
+// loadCassette copies <CassetteDir>/<scenario>.jsonl into the instance home (a cassette is
+// larger than a lab call's body allows) and has the instance load it. The runner writes
+// into the home from outside; the instance's own file tools are confined to the workspace.
+func (s *runState) loadCassette(ctx context.Context) error {
+	dir := s.r.CassetteDir
+	if dir == "" {
+		dir = filepath.Join("testdata", "cassettes")
+	}
+	src := filepath.Join(dir, s.f.Scenario+".jsonl")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("a replay scenario needs its cassette: %w", err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("%s is empty", src)
+	}
+	rel := filepath.Join("lab", "cassettes", "replay.jsonl")
+	if err := os.MkdirAll(filepath.Join(s.home, filepath.Dir(rel)), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(s.home, rel), data, 0o600); err != nil {
+		return err
+	}
+	args := map[string]any{"path": rel}
+	if s.f.Miss != "" {
+		args["miss"] = s.f.Miss
+	}
+	_, err = call(ctx, s.c, "llm", "cassette_load", args)
+	return err
 }
 
 // walk runs the steps in order: advance to its at, run it, settle, mark where it ended.

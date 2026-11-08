@@ -94,11 +94,11 @@ func TestScenarioFiles_KnownBugHasID(t *testing.T) {
 	}
 }
 
-// Pull request CI has no model to call: nothing that gates may use a live one.
+// Pull request CI has no model to call: nothing that gates may use a live one (replay reads a committed cassette).
 func TestScenarioFiles_ScriptedOnlyInPR(t *testing.T) {
 	for name, f := range committedScenarios(t) {
-		if !f.IsKnownBug() && f.LLMMode() != "scripted" {
-			t.Errorf("%s: an active scenario must use llm: scripted, not %s", name, f.LLMMode())
+		if !f.IsKnownBug() && f.LLMMode() != "scripted" && f.LLMMode() != "replay" {
+			t.Errorf("%s: an active scenario must use llm: scripted or replay (a cassette, no model), not %s", name, f.LLMMode())
 		}
 	}
 }

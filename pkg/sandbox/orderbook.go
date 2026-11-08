@@ -327,7 +327,7 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		// Only what the ledger locked is released: a seeded position never locked its entry
 		// notional, so closing it must not mint that amount (the liquidation path does the same).
 		bal := st.Balances["USDT"]
-		rel := math.Min(st.positionLocked(), n*cs*pos.EntryPrice)
+		rel := math.Min(st.positionLocked(b.venue), n*cs*pos.EntryPrice)
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
 		credit(st, pnl) // a loss takes the free balance first, and never more than the wallet holds
@@ -356,14 +356,30 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 	b.emit("fill", o, "")
 }
 
+// reservedAsset is the asset an open order's reservation is held in: USDT for a futures
+// order, the quote asset for a spot buy, the base asset for a spot sell.
+func reservedAsset(venue string, o *Order) string {
+	if o.Market != "spot" {
+		return "USDT"
+	}
+	base, quote, _ := splitSpot(venue, o.Symbol)
+	if o.Side == "buy" {
+		return quote
+	}
+	return base
+}
+
 // positionLocked is the part of the USDT Locked that positions hold: Locked less what the
-// open orders of this wallet still reserve. A close releases at most this, so a seeded
+// open orders reserving USDT still hold (OKX keeps spot and swap orders in one state, so
+// only the orders reserving USDT count). A close releases at most this, so a seeded
 // position (which locked nothing) cannot be paid out of a resting order's reservation, which
 // the order's cancel would then credit a second time.
-func (st *VenueState) positionLocked() float64 {
+func (st *VenueState) positionLocked(venue string) float64 {
 	held := 0.0
 	for _, o := range st.OpenOrders {
-		held += o.Reserved
+		if reservedAsset(venue, o) == "USDT" {
+			held += o.Reserved
+		}
 	}
 	return math.Max(0, st.Balances["USDT"].Locked-held)
 }
@@ -371,12 +387,7 @@ func (st *VenueState) positionLocked() float64 {
 // close ends an unfilled remainder: the reservation is released, the order moves to the
 // closed map as cancelled or expired.
 func (b book) close(o *Order, to ordState, at time.Time) {
-	asset := "USDT"
-	if base, quote, _ := splitSpot(b.venue, o.Symbol); o.Market == "spot" {
-		if asset = base; o.Side == "buy" {
-			asset = quote
-		}
-	}
+	asset := reservedAsset(b.venue, o)
 	bal := b.st.Balances[asset]
 	bal.Locked, bal.Free = math.Max(0, bal.Locked-o.Reserved), bal.Free+o.Reserved
 	b.st.Balances[asset] = bal

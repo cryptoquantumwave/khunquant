@@ -67,6 +67,15 @@ func NewClawHubRegistry(cfg ClawHubConfig) *ClawHubRegistry {
 		maxResp = cfg.MaxResponseSize
 	}
 
+	transport := &http.Transport{
+		MaxIdleConns:        5,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	// A transport of its own bypasses the default one the sandbox lock guards, so it
+	// takes the guard explicitly. Outside a locked process this changes nothing.
+	utils.GuardTransport(transport)
+
 	return &ClawHubRegistry{
 		baseURL:         baseURL,
 		authToken:       cfg.AuthToken,
@@ -77,12 +86,8 @@ func NewClawHubRegistry(cfg ClawHubConfig) *ClawHubRegistry {
 		maxResponseSize: maxResp,
 		allowUnverified: cfg.AllowUnverified,
 		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        5,
-				IdleConnTimeout:     30 * time.Second,
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }

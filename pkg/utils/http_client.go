@@ -51,12 +51,20 @@ func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, err
 		client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment
 	}
 
-	if egress.Installed() {
-		tr := client.Transport.(*http.Transport)
-		tr.Proxy, tr.DialContext = nil, egress.DialContext(egress.Current())
-	}
+	GuardTransport(client.Transport.(*http.Transport))
 
 	return client, nil
+}
+
+// GuardTransport puts the sandbox egress guard on t when it is installed: no proxy, and
+// a dialer that reaches loopback and the allowed hosts only. Outside a locked process
+// it does nothing. CreateHTTPClient applies it; a client that builds its own transport
+// must call it (TestHTTPTransports_GoThroughTheEgressGuard keeps the list).
+func GuardTransport(t *http.Transport) {
+	if egress.Installed() {
+		t.Proxy, t.DialContext = nil, egress.DialContext(egress.Current())
+		t.Dial, t.DialTLS, t.DialTLSContext = nil, nil, nil //nolint:staticcheck // deprecated hooks must not bypass the guard
+	}
 }
 
 // CreateExchangeHTTPClient creates an HTTP client for exchange/broker requests.

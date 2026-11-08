@@ -497,6 +497,46 @@ func TestPositions_ShortCloseAndReduceOnly(t *testing.T) {
 	}
 }
 
+// A reduce-only order on the position's own side would add to it: the venue refuses it
+// with its reduce-only code and nothing is booked. It used to count as a close, so a
+// reduce-only buy closed a long, in one-way and in hedge mode (178-2). The opposing
+// reduce-only order still closes.
+func TestReduceOnly_WrongSideRefused(t *testing.T) {
+	r := newOrderRig(t)
+	r.bnOrder(t, "side=BUY&type=market&quantity=10")
+	r.okxOrder(t, `"side":"buy","ordType":"market","sz":"10"`)
+	bal := map[string]sandbox.Balance{"binance": r.usdt("binance"), "okx": r.usdt("okx")}
+	for _, q := range []string{
+		"side=BUY&type=market&quantity=4&reduceOnly=true",                   // one-way
+		"side=BUY&type=market&quantity=4&reduceOnly=true&positionSide=LONG", // hedge: positionSide names the long
+	} {
+		if code, out := r.bnOrder(t, q); code != 400 || out["code"] != float64(-2022) || out["msg"] != "ReduceOnly Order is rejected." {
+			t.Errorf("binance %s = %d %v, want 400 -2022 ReduceOnly Order is rejected.", q, code, out)
+		}
+	}
+	if d := okxData(t, r.okxOrder(t, `"side":"buy","ordType":"market","sz":"4","reduceOnly":true`)); d["sCode"] != "51169" {
+		t.Errorf("okx reduce-only buy against a long = %v, want sCode 51169", d)
+	}
+	for _, venue := range []string{"binance", "okx"} {
+		if pos, ok := r.position(venue); !ok || pos.Side != "long" || pos.Contracts != 10 {
+			t.Errorf("%s position %+v (%v), want the 10-contract long untouched", venue, pos, ok)
+		}
+		if open, closed := r.counts(venue); open+closed != 1 {
+			t.Errorf("%s holds %d orders, want only the one that opened the long", venue, open+closed)
+		}
+		if b := r.usdt(venue); b != bal[venue] {
+			t.Errorf("%s USDT %+v -> %+v, want it untouched", venue, bal[venue], b)
+		}
+	}
+	r.bnOrder(t, "side=SELL&type=market&quantity=4&reduceOnly=true")
+	r.okxOrder(t, `"side":"sell","ordType":"market","sz":"4","reduceOnly":true`)
+	for _, venue := range []string{"binance", "okx"} {
+		if pos, _ := r.position(venue); pos.Side != "long" || pos.Contracts != 6 {
+			t.Errorf("%s after a reduce-only sell of 4: %+v, want 6 long", venue, pos)
+		}
+	}
+}
+
 // One scripted sequence on two fresh simulators gives the same orders, IDs and state.
 func TestSimulator_DeterministicReplay(t *testing.T) {
 	run := func() string {

@@ -136,19 +136,20 @@ var rejects = map[string]struct {
 }
 
 // position side of an order, and whether it closes: a hedge-mode posSide names the
-// position; in one-way mode the order closes when it opposes the position held.
+// position; in one-way mode the order closes when it opposes the position held. Reduce-only
+// does not make an order close: one on the position's own side is refused (place).
 func direction(sp orderSpec, pos *Position) (dir string, closing bool) {
 	own := "long"
 	if sp.Side == "sell" {
 		own = "short"
 	}
 	if sp.PosSide == "long" || sp.PosSide == "short" {
-		return sp.PosSide, sp.PosSide != own || sp.ReduceOnly
+		return sp.PosSide, sp.PosSide != own
 	}
 	if pos != nil && pos.Contracts > 0 && (pos.Side == "long" || pos.Side == "short") {
-		return pos.Side, pos.Side != own || sp.ReduceOnly
+		return pos.Side, pos.Side != own
 	}
-	return own, sp.ReduceOnly
+	return own, false
 }
 
 // place validates a create against the ledger and, if it passes, books it: reservation,
@@ -197,7 +198,8 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 		pos := st.Positions[sp.Symbol]
 		dir, closing = direction(sp, pos)
 		switch {
-		case closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
+		// A reduce-only order that would open or add (the venues refuse it), or a close of nothing.
+		case sp.ReduceOnly && !closing, closing && (pos == nil || pos.Contracts <= 0 || pos.Side != dir):
 			return nil, nil, &reject{kind: "reduce"}
 		case !closing && pos != nil && pos.Contracts > 0 && pos.Side != dir:
 			return nil, nil, &reject{kind: "side", detail: "both sides of one symbol are not modelled"}
@@ -325,7 +327,7 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		// Only what the ledger locked is released: a seeded position never locked its entry
 		// notional, so closing it must not mint that amount (the liquidation path does the same).
 		bal := st.Balances["USDT"]
-		rel := math.Min(bal.Locked, n*cs*pos.EntryPrice)
+		rel := math.Min(st.positionLocked(b.venue), n*cs*pos.EntryPrice)
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
 		credit(st, pnl) // a loss takes the free balance first, and never more than the wallet holds
@@ -354,15 +356,38 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 	b.emit("fill", o, "")
 }
 
+// reservedAsset is the asset an open order's reservation is held in: USDT for a futures
+// order, the quote asset for a spot buy, the base asset for a spot sell.
+func reservedAsset(venue string, o *Order) string {
+	if o.Market != "spot" {
+		return "USDT"
+	}
+	base, quote, _ := splitSpot(venue, o.Symbol)
+	if o.Side == "buy" {
+		return quote
+	}
+	return base
+}
+
+// positionLocked is the part of the USDT Locked that positions hold: Locked less what the
+// open orders reserving USDT still hold (OKX keeps spot and swap orders in one state, so
+// only the orders reserving USDT count). A close releases at most this, so a seeded
+// position (which locked nothing) cannot be paid out of a resting order's reservation, which
+// the order's cancel would then credit a second time.
+func (st *VenueState) positionLocked(venue string) float64 {
+	held := 0.0
+	for _, o := range st.OpenOrders {
+		if reservedAsset(venue, o) == "USDT" {
+			held += o.Reserved
+		}
+	}
+	return math.Max(0, st.Balances["USDT"].Locked-held)
+}
+
 // close ends an unfilled remainder: the reservation is released, the order moves to the
 // closed map as cancelled or expired.
 func (b book) close(o *Order, to ordState, at time.Time) {
-	asset := "USDT"
-	if base, quote, _ := splitSpot(b.venue, o.Symbol); o.Market == "spot" {
-		if asset = base; o.Side == "buy" {
-			asset = quote
-		}
-	}
+	asset := reservedAsset(b.venue, o)
 	bal := b.st.Balances[asset]
 	bal.Locked, bal.Free = math.Max(0, bal.Locked-o.Reserved), bal.Free+o.Reserved
 	b.st.Balances[asset] = bal

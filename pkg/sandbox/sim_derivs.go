@@ -163,7 +163,7 @@ func (sim *StatefulSimulator) liquidate(key string, st *VenueState, r legRisk, a
 	fee := r.Rate * math.Abs(r.Qty) * px
 	if !p.isolated() {
 		bal := st.Balances["USDT"]
-		rel := math.Min(bal.Locked, math.Abs(r.Qty)*p.EntryPrice) // what the ledger locked when it opened
+		rel := math.Min(st.positionLocked(key), math.Abs(r.Qty)*p.EntryPrice) // what the ledger locked when it opened
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
 		credit(st, r.Qty*(px-p.EntryPrice)-fee)

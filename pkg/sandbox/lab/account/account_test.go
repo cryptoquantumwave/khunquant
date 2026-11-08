@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -54,6 +57,30 @@ func (r *rig) free(venue, asset string) float64 {
 	r.sim.Read(venue, func(st *sandbox.VenueState) { v = st.Balances[asset].Free })
 	return v
 }
+
+// order sends a Binance futures order request (query "side=SELL&type=market&quantity=10")
+// to the simulator as the venue's server would, and returns the status and the answer.
+func (r *rig) order(method, query string) (int, map[string]any) {
+	r.t.Helper()
+	req := httptest.NewRequest(method, "/fapi/v1/order?symbol=BTCUSDT&"+query, nil)
+	resp, ok := r.sim.Respond("binance", method, "/fapi/v1/order", req)
+	if !ok {
+		r.t.Fatalf("%s order: the simulator did not answer", method)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		r.t.Fatalf("%s order: %s", method, resp.Body)
+	}
+	return resp.Status, out
+}
+
+func (r *rig) usdt() (b sandbox.Balance) {
+	r.sim.Read("binance", func(st *sandbox.VenueState) { b = st.Balances["USDT"] })
+	return b
+}
+
+// near compares money: the ledger multiplies floats in another order than a test's constants.
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 func code(err error) string {
 	var le *lab.Error
@@ -189,5 +216,85 @@ func TestOrdersFilter(t *testing.T) {
 	}
 	if out, _ := r.call("get", `{"venue":"binance"}`); out["open_orders"] != 1.0 || out["closed_orders"] != 2.0 {
 		t.Errorf("get counts = %v / %v, want 1 / 2", out["open_orders"], out["closed_orders"])
+	}
+}
+
+// Closing a seeded position must not release a resting order's reservation. Locked is one
+// pool, and a seeded position locked nothing: #185 capped the close's release at Locked, which
+// still held the order's 300, so the close handed it to free and cancelling the order then
+// credited it again, a gain of 300 (178-1 past #185).
+func TestSeededPositionClose_LeavesARestingOrdersReservation(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.call("seed", `{"venue":"binance","balances":{"USDT":1000},"positions":[`+
+		`{"symbol":"BTCUSDT","side":"long","contracts":10,"entryPrice":40000}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if b := r.usdt(); b.Free != 1000 || b.Locked != 0 {
+		t.Fatalf("after the seed USDT = %+v, want 1000 free and nothing locked (a seed adds no money)", b)
+	}
+	status, rest := r.order("POST", "side=BUY&type=LIMIT&timeInForce=GTC&quantity=10&price=30000") // 10 * 0.001 * 30000 reserved
+	if status != 200 || rest["status"] != "NEW" {
+		t.Fatalf("resting order = %d %v, want NEW", status, rest)
+	}
+	if status, out := r.order("POST", "side=SELL&type=market&quantity=10&reduceOnly=true"); status != 200 || out["status"] != "FILLED" {
+		t.Fatalf("close = %d %v, want FILLED", status, out)
+	}
+	if b := r.usdt(); !near(b.Locked, 300) {
+		t.Fatalf("USDT after the close = %+v, want the resting order's 300 still locked", b)
+	}
+	total := func() float64 { b := r.usdt(); return b.Free + b.Locked }
+	before := total()
+	if status, out := r.order("DELETE", "orderId="+fmt.Sprint(rest["orderId"])); status != 200 {
+		t.Fatalf("cancel = %d %v", status, out)
+	}
+	if got := total() - before; !near(got, 0) {
+		t.Fatalf("cancelling the resting order changed the account by %v, want 0", got)
+	}
+}
+
+// A seed sets free balances and keeps locked: a resting order's reservation stays locked,
+// and cancelling the order afterwards moves it back without adding money. The seed used to
+// zero locked, and the cancel then credited the reservation it had erased (140-4).
+func TestSeedKeepsLocked_CancelAddsNothing(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.call("seed", `{"venue":"binance","balances":{"USDT":1000}}`); err != nil {
+		t.Fatal(err)
+	}
+	// A buy limit under the 50000 mark rests and reserves 10 * 0.001 * 40000.
+	status, placed := r.order("POST", "side=BUY&type=limit&quantity=10&price=40000")
+	if status != 200 || placed["status"] != "NEW" {
+		t.Fatalf("limit = %d %v, want a resting NEW order", status, placed)
+	}
+	if _, err := r.call("seed", `{"venue":"binance","balances":{"USDT":5000}}`); err != nil {
+		t.Fatal(err)
+	}
+	before := r.usdt()
+	if before.Free != 5000 || !near(before.Locked, 400) {
+		t.Errorf("after the reseed USDT = %+v, want 5000 free and the order's 400 still locked", before)
+	}
+	if status, out := r.order("DELETE", fmt.Sprintf("orderId=%v", placed["orderId"])); status != 200 || out["status"] != "CANCELED" {
+		t.Fatalf("cancel = %d %v, want CANCELED", status, out)
+	}
+	after := r.usdt()
+	if got := (after.Free + after.Locked) - (before.Free + before.Locked); !near(got, 0) {
+		t.Fatalf("USDT %+v -> %+v: the cancel changed the account by %v, want 0", before, after, got)
+	}
+}
+
+// replace clears the balances, and an open order's reservation is part of them: it is
+// refused while an order is open (TestSeedPositionsAndReplace replaces with none open).
+func TestSeedReplace_RefusedWhileOrdersAreOpen(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.call("seed", `{"venue":"binance","balances":{"USDT":1000}}`); err != nil {
+		t.Fatal(err)
+	}
+	if status, out := r.order("POST", "side=BUY&type=limit&quantity=10&price=40000"); status != 200 || out["status"] != "NEW" {
+		t.Fatalf("limit = %d %v, want a resting NEW order", status, out)
+	}
+	if _, err := r.call("seed", `{"venue":"binance","replace":true,"balances":{"USDT":5}}`); code(err) != lab.CodeBadArgs {
+		t.Fatalf("replace with an order open: err = %v, want bad_args", err)
+	}
+	if b := r.usdt(); !near(b.Free, 600) || !near(b.Locked, 400) {
+		t.Fatalf("USDT %+v after the refused replace, want it untouched: 600 free, 400 locked", b)
 	}
 }

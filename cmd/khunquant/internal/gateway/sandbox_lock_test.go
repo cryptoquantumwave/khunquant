@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -206,6 +207,20 @@ func TestEnforceLockedConfig(t *testing.T) {
 		cfg.Exchanges.OKX.Accounts = []config.OKXExchangeAccount{{ExchangeAccount: acct}}
 		cfg.Exchanges.Settrade.Accounts = []config.SettradeExchangeAccount{{ExchangeAccount: acct}}
 		cfg.Exchanges.Webull.Accounts = []config.WebullExchangeAccount{{ExchangeAccount: acct}}
+
+		// An overlay that opens the file tools and the hardware (130-1, X-2).
+		cfg.Agents.Defaults.RestrictToWorkspace = false
+		cfg.Agents.Defaults.AllowReadOutsideWorkspace = true
+		cfg.Tools.AllowReadPaths = []string{`.*`}
+		cfg.Tools.AllowWritePaths = []string{`.*`}
+		cfg.Tools.I2C.Enabled, cfg.Tools.SPI.Enabled, cfg.Tools.Serial.Enabled = true, true, true
+		cfg.Devices.Enabled = true
+		// Agents whose workspaces are inside the home are fine, listed or derived.
+		cfg.Agents.List = []config.AgentConfig{
+			{ID: "main", Default: true},
+			{ID: "trader", Workspace: filepath.Join(home, "workspace-trader")},
+			{ID: "scout"},
+		}
 		return cfg
 	}
 
@@ -234,6 +249,15 @@ func TestEnforceLockedConfig(t *testing.T) {
 		}
 		if got, want := cfg.Debug.Sandbox.FixturesDir, filepath.Join(home, "workspace", "sandbox"); got != want {
 			t.Errorf("fixtures_dir = %q, want %q", got, want)
+		}
+		if !cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace {
+			t.Error("the file tools are not confined to their workspace")
+		}
+		if cfg.Tools.AllowReadPaths != nil || cfg.Tools.AllowWritePaths != nil {
+			t.Errorf("allow paths survived: read %v, write %v", cfg.Tools.AllowReadPaths, cfg.Tools.AllowWritePaths)
+		}
+		if cfg.Tools.I2C.Enabled || cfg.Tools.SPI.Enabled || cfg.Tools.Serial.Enabled || cfg.Devices.Enabled {
+			t.Error("hardware tools or devices not forced off")
 		}
 
 		proxies := map[string]string{
@@ -267,6 +291,18 @@ func TestEnforceLockedConfig(t *testing.T) {
 
 	for name, mutate := range map[string]func(*config.Config){
 		"workspace outside home": func(c *config.Config) { c.Agents.Defaults.Workspace = t.TempDir() },
+		"workspace is the home":  func(c *config.Config) { c.Agents.Defaults.Workspace = home },
+		// The shared proactive database opens in the default agent's workspace, so a listed
+		// main agent pointed at a real ~/.khunquant/workspace must be refused (156-1).
+		"listed agent workspace outside home": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "main", Default: true, Workspace: t.TempDir()}}
+		},
+		"listed agent workspace is the home": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: home}}
+		},
+		"listed agent workspace climbs out": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "workspace", "..", "..", "elsewhere")}}
+		},
 		"fixtures outside home":  func(c *config.Config) { c.Debug.Sandbox.FixturesDir = repoSandboxFixtures(t) },
 		"claude-cli model": func(c *config.Config) {
 			c.ModelList = append(c.ModelList, config.ModelConfig{ModelName: "cli", Model: "claude-cli/x"})
@@ -584,4 +620,51 @@ func TestUnlockedGateway_NoLabNoChange(t *testing.T) {
 		t.Fatal("an unlocked reload with the sandbox disabled must stop it")
 	}
 	f.expectStatus("/api/sandbox/status", testSandboxToken, http.StatusNotFound)
+}
+
+// A locked instance's file tools stay in its workspace even when its config asks for the
+// opposite (130-1): the overlay forces the confinement before the agent is built.
+func TestLockedGateway_FileToolsStayInTheWorkspace(t *testing.T) {
+	f := newLockedFixture(t, ownerConfig, func(c *config.Config) {
+		c.Agents.Defaults.RestrictToWorkspace = false
+		c.Agents.Defaults.AllowReadOutsideWorkspace = true
+		c.Tools.AllowReadPaths = []string{`.*`}
+		c.Tools.AllowWritePaths = []string{`.*`}
+	})
+	home := filepath.Dir(f.workspace)
+	outside := filepath.Join(home, "secret.txt")
+	inside := filepath.Join(f.workspace, "note.txt")
+	if err := os.WriteFile(outside, []byte("outside-the-workspace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inside, []byte("inside-the-workspace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	call := func(name string, args map[string]any) map[string]any {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"name": name, "as": "owner", "args": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, out := callToolVia(t, f, string(body))
+		if code != http.StatusOK {
+			t.Fatalf("%s: call_tool answered %d %v", name, code, out)
+		}
+		return out
+	}
+
+	// The control: the tool runs and reads its own workspace.
+	if out := call("read_file", map[string]any{"path": inside}); out["is_error"] == true || !strings.Contains(fmt.Sprint(out["for_llm"]), "inside-the-workspace") {
+		t.Fatalf("read_file inside the workspace = %v, want its content", out)
+	}
+	if out := call("read_file", map[string]any{"path": outside}); out["is_error"] != true || strings.Contains(fmt.Sprint(out["for_llm"]), "outside-the-workspace") {
+		t.Errorf("read_file outside the workspace = %v, want a refusal", out)
+	}
+	escaped := filepath.Join(home, "escaped.txt")
+	if out := call("write_file", map[string]any{"path": escaped, "content": "x"}); out["is_error"] != true {
+		t.Errorf("write_file outside the workspace = %v, want a refusal", out)
+	}
+	if _, err := os.Stat(escaped); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("write_file wrote outside the workspace: stat err = %v", err)
+	}
 }

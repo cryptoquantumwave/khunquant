@@ -43,6 +43,14 @@ func TestCheckConfigPatch(t *testing.T) {
 		{"channels scalar", map[string]any{"channels": "off"}, "channels"},
 		{"simchat null", map[string]any{"channels": map[string]any{"simchat": nil}}, "channels.simchat"},
 		{"simchat scalar", map[string]any{"channels": map[string]any{"simchat": false}}, "channels.simchat"},
+		// The file-tool confinement and the hardware switches belong to the lock (130-1, X-2).
+		{"restrict", map[string]any{"agents": map[string]any{"defaults": map[string]any{"restrict_to_workspace": false}}}, "agents.defaults.restrict_to_workspace"},
+		{"read outside", map[string]any{"agents": map[string]any{"defaults": map[string]any{"allow_read_outside_workspace": true}}}, "agents.defaults.allow_read_outside_workspace"},
+		{"allow read paths", map[string]any{"tools": map[string]any{"allow_read_paths": []any{".*"}}}, "tools.allow_read_paths"},
+		{"allow write paths upper", map[string]any{"Tools": map[string]any{"Allow_Write_Paths": []any{".*"}}}, "Tools.Allow_Write_Paths"},
+		{"serial", map[string]any{"tools": map[string]any{"serial": map[string]any{"enabled": true}}}, "tools.serial"},
+		{"devices", map[string]any{"devices": map[string]any{"enabled": true}}, "devices"},
+		{"tools null", map[string]any{"tools": nil}, "tools"},
 		// What stays allowed.
 		{"web search", map[string]any{"tools": map[string]any{"web_search": map[string]any{"enabled": true}}}, ""},
 		{"agents defaults other key", map[string]any{"agents": map[string]any{"defaults": map[string]any{"model_name": "sim"}}}, ""},

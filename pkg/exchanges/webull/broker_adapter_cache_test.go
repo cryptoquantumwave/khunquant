@@ -5,7 +5,33 @@ import (
 	"testing"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
+
+// TestNewBrokerAdapterSurvivesBrokerCacheReset pins that dropping the broker's provider
+// cache (what the lab's reload_markets does) does not drop the adapter's own cache, and
+// so not the approved token session its Client holds.
+func TestNewBrokerAdapterSurvivesBrokerCacheReset(t *testing.T) {
+	cfg := config.WebullExchangeAccount{
+		ExchangeAccount: config.ExchangeAccount{
+			Name:   "cache-test-broker-reset",
+			APIKey: *config.NewSecureString("test-app-key"),
+			Secret: *config.NewSecureString("test-app-secret"),
+		},
+	}
+	a1, err := newBrokerAdapter(cfg, "")
+	if err != nil {
+		t.Fatalf("newBrokerAdapter #1: %v", err)
+	}
+	broker.ResetInstanceCache()
+	a2, err := newBrokerAdapter(cfg, "")
+	if err != nil {
+		t.Fatalf("newBrokerAdapter #2: %v", err)
+	}
+	if a1 != a2 || a1.client != a2.client {
+		t.Fatal("broker.ResetInstanceCache dropped the Webull adapter and its token session")
+	}
+}
 
 // TestNewBrokerAdapterCachesByAccountName verifies that repeated calls to
 // newBrokerAdapter for the same account name return the exact same instance

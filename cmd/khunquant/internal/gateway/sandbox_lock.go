@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/cmd/khunquant/internal"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/egress"
 )
@@ -100,6 +101,28 @@ func armSandboxLock(lk sandbox.LockOptions) error {
 	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
 }
 
+// envLLMMode names the simulated model's mode for the instance (scripted when unset). The
+// profile on disk says sim/scripted; the lock puts the mode in memory, like the placeholder
+// accounts, on every load and reload.
+const envLLMMode = "KQ_SANDBOX_LLM"
+
+// applyLLMMode points every sim model at the instance's mode. mode "" leaves the config.
+func applyLLMMode(cfg *config.Config, mode string) error {
+	switch mode {
+	case "":
+		return nil
+	case sim.ModeScripted, sim.ModeReplay:
+	default:
+		return fmt.Errorf("%s=%q: not a mode this build runs (scripted, replay)", envLLMMode, mode)
+	}
+	for i := range cfg.ModelList {
+		if protocol, _ := providers.ExtractProtocol(cfg.ModelList[i].Model); protocol == "sim" {
+			cfg.ModelList[i].Model = sim.Ref(mode, "")
+		}
+	}
+	return nil
+}
+
 // readPlaceholderVenues reads the venues that get a placeholder account; none when the
 // home records none.
 func readPlaceholderVenues(home string) ([]string, error) {
@@ -146,6 +169,9 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 			return fmt.Errorf("model_list[%d] %q: auth_method %q is not allowed", i, m.ModelName, m.AuthMethod)
 		}
 		m.Proxy = ""
+	}
+	if err := applyLLMMode(cfg, os.Getenv(envLLMMode)); err != nil {
+		return err
 	}
 
 	cfg.Debug.Sandbox.Enabled = true

@@ -50,8 +50,13 @@ func TestLockedRefusesRealProviders(t *testing.T) {
 	if err != nil || p == nil || id != "scripted" {
 		t.Fatalf("sim/scripted must build under the lock: (%v, %q, %v)", p, id, err)
 	}
-	if _, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: "sim/replay"}); err == nil {
-		t.Error("a sim mode that does not exist yet must be refused")
+	if p, id, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: "sim/replay"}); err != nil || p == nil || id != "replay" {
+		t.Errorf("sim/replay must build under the lock: (%v, %q, %v)", p, id, err)
+	}
+	for _, ref := range []string{"sim/live", "sim/record", "sim/replay:openai/gpt-x", "sim/scripted:openai/gpt-x", "sim/nonsense"} {
+		if _, _, err := CreateProviderFromConfig(&config.ModelConfig{ModelName: "sim", Model: ref}); err == nil {
+			t.Errorf("%s must be refused by this build", ref)
+		}
 	}
 }
 

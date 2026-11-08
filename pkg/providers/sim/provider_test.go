@@ -39,7 +39,7 @@ func TestNewProviderRefusals(t *testing.T) {
 		t.Error("NewProvider must fail on an unlocked process")
 	}
 	lockForTest(t)
-	for _, mode := range []string{"", "replay", "record", "live", "SCRIPTED"} {
+	for _, mode := range []string{"", "record", "live", "SCRIPTED"} {
 		if _, err := NewProvider(mode); err == nil {
 			t.Errorf("mode %q must not build", mode)
 		}

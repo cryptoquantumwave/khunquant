@@ -24,7 +24,7 @@ func newEngine(t *testing.T) *sim.Engine {
 
 func runOp(t *testing.T, e *sim.Engine, op, args string) (any, error) {
 	t.Helper()
-	for _, o := range Group(e).Ops {
+	for _, o := range Group(e, "").Ops {
 		if o.Name == op {
 			return o.Run(context.Background(), json.RawMessage(args))
 		}
@@ -50,7 +50,7 @@ func ask(t *testing.T, e *sim.Engine, text string) (*protocoltypes.LLMResponse, 
 
 func TestGroupIsValid(t *testing.T) {
 	l := &lab.Lab{}
-	if err := l.AddGroup(Group(newEngine(t))); err != nil {
+	if err := l.AddGroup(Group(newEngine(t), "")); err != nil {
 		t.Fatalf("AddGroup: %v", err)
 	}
 }

@@ -39,6 +39,9 @@ func TestPerceptionSources_ImportBoundary(t *testing.T) {
 			// the broker interfaces and no order path: the closure below is checked
 			// against the same forbidden list).
 			"pkg/deltaneutral", "pkg/deltaneutral/planhealth",
+			// The news fence nonce is drawn from randsrc (crypto/rand, seedable only in a
+			// locked sandbox); it is a leaf that imports the standard library only.
+			"pkg/randsrc",
 		},
 		// pkg/dca (the plan store and its order-adjacent gate) is also out of reach: the
 		// DCA plans source reads plans through an interface the gateway implements, so it

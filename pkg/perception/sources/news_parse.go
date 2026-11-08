@@ -1,11 +1,11 @@
 package sources
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"io"
 	"strings"
 	"time"
@@ -72,7 +72,7 @@ func refuse(format string, a ...any) error {
 // newsNonce is a fresh unguessable fence marker.
 func newsNonce() string {
 	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randsrc.Read(b[:]); err != nil {
 		// A fence the article can guess is no fence: fail the parse instead.
 		return ""
 	}

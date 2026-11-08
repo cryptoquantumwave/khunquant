@@ -1,7 +1,7 @@
 package proactive
 
 import (
-	"crypto/rand"
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"sync"
 	"time"
 )
@@ -52,7 +52,7 @@ func NewID() string {
 // error (it aborts the process if the OS source is unusable), so there is no
 // weaker fallback to get wrong here.
 func fillEntropy(e *[entropyLen]byte) {
-	_, _ = rand.Read(e[:])
+	_, _ = randsrc.Read(e[:])
 }
 
 // incrementEntropy adds one to the big-endian 80-bit value and reports false

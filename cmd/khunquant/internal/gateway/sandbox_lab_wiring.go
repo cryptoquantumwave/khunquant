@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/channels"
@@ -17,6 +19,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
+	"github.com/cryptoquantumwave/khunquant/pkg/randsrc"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/fault"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
@@ -94,6 +97,9 @@ func journalConfigReload(shared *sharedResources, errp *error) {
 // buildLab builds the process-lifetime lab from the enforced config. It starts the
 // sandbox server (which publishes its base URL) and fails when there are no venues.
 func buildLab(cfg *config.Config, lk sandbox.LockOptions) (*lab.Lab, error) {
+	if err := seedFromEnv(os.Getenv); err != nil {
+		return nil, err
+	}
 	l, err := lab.New(context.Background(), lab.Options{
 		Home:        config.HomeDir(),
 		FixturesDir: sandbox.ResolveFixturesDir(cfg),
@@ -229,6 +235,7 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	e, err := sim.NewEngine(sim.EngineOptions{
 		Journal: sj, TurnInfo: simTurnInfo, Faults: llmFaults{l.Faults},
 		Store: filepath.Join(l.Home, "lab", "llm_script.json"),
+		Mode:  simModeOf(cfg), Home: homeMasks(l.Home),
 	})
 	if err != nil {
 		return err
@@ -243,7 +250,48 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(webops.Group(l.Web)); err != nil {
 		return err
 	}
-	return l.AddGroup(llmops.Group(e))
+	return l.AddGroup(llmops.Group(e, l.Home))
+}
+
+// envSeed is the seed of the nonce source (see pkg/randsrc): a non-zero int64 seeds it, empty
+// or 0 leaves crypto/rand. This is the one place Seed is called; it only works because
+// sandbox.Lock armed the source.
+const envSeed = "KQ_SANDBOX_SEED"
+
+func seedFromEnv(getenv func(string) string) error {
+	v := getenv(envSeed)
+	if v == "" {
+		return nil
+	}
+	seed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return fmt.Errorf("%s=%q is not an integer", envSeed, v)
+	}
+	if seed == 0 {
+		return nil
+	}
+	return randsrc.Seed(seed)
+}
+
+// simModeOf is the mode of the config's sim model (scripted when it has none).
+func simModeOf(cfg *config.Config) string {
+	for _, m := range cfg.ModelList {
+		if id, ok := strings.CutPrefix(m.Model, "sim/"); ok {
+			mode, _ := sim.ParseRef(id)
+			return mode
+		}
+	}
+	return sim.ModeScripted
+}
+
+// homeMasks is the instance home as written and symlink-resolved (/var vs /private/var),
+// the strings the canonical model request masks.
+func homeMasks(home string) []string {
+	out := []string{home}
+	if r, err := filepath.EvalSymlinks(home); err == nil && r != home {
+		out = append(out, r)
+	}
+	return out
 }
 
 // llmFaults lets the fault injector delay or fail a model call. The wait is made here, in

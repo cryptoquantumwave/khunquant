@@ -7,14 +7,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
 
 // Group script the simulated model and read what it was asked. (What each call asked is
 // in the journal: llm.call and llm.complete.)
-func Group(e *sim.Engine) lab.Group {
+func Group(e *sim.Engine, home string) lab.Group {
 	return lab.Group{
 		Name: "llm",
 		Description: "Script the simulated LLM: ordered match/respond rules answer every model call " +
@@ -22,9 +27,17 @@ func Group(e *sim.Engine) lab.Group {
 		Ops: []lab.Op{
 			{
 				Name:        "mode",
-				Description: "get or set the model mode; only scripted exists yet",
-				Args:        json.RawMessage(`{"set":{"type":"string","enum":["scripted"]}}`),
+				Description: "the model mode (scripted or replay), fixed when the instance started; set only restates it",
+				Args:        json.RawMessage(`{"set":{"type":"string","enum":["scripted","replay"]}}`),
 				Run:         modeOp(e),
+			},
+			{
+				Name: "cassette_load",
+				Description: "replace the replay set: path (a JSONL file inside the instance home) or inline[] (cassette entries), " +
+					"miss: error (default; a request with no entry fails and the journal names its key) or scripted (the rules answer)",
+				Args: json.RawMessage(`{"path":{"type":"string"},"inline":{"type":"array","items":{"type":"object"}},` +
+					`"miss":{"type":"string","enum":["error","scripted"]}}`),
+				Run: cassetteLoadOp(e, home),
 			},
 			{
 				Name: "script_put",
@@ -43,17 +56,80 @@ func Group(e *sim.Engine) lab.Group {
 	}
 }
 
+// modeOp reports the mode. The mode is the instance's, fixed at start by --llm (it
+// decides what the process may reach and what keys it holds), so set only restates it.
 func modeOp(e *sim.Engine) lab.OpFunc {
 	return func(_ context.Context, args json.RawMessage) (any, error) {
 		var a struct{ Set string }
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
 		}
-		if a.Set != "" && a.Set != sim.ModeScripted {
-			return nil, lab.Errorf(lab.CodeUnavailable, "mode %q is not available yet (only %q)", a.Set, sim.ModeScripted)
+		if a.Set != "" && a.Set != e.Mode() {
+			return nil, lab.Errorf(lab.CodeUnavailable, "this instance runs %q: the mode is chosen at start (sandbox up --llm), not switched", e.Mode())
 		}
 		return map[string]string{"mode": e.Mode()}, nil
 	}
+}
+
+// maxCassetteFile bounds a cassette read from disk.
+const maxCassetteFile = 16 << 20
+
+// cassetteLoadOp replaces the replay set from a file inside the instance home or from
+// inline entries. A relative path is relative to the home (the gateway's working directory).
+func cassetteLoadOp(e *sim.Engine, home string) lab.OpFunc {
+	return func(_ context.Context, args json.RawMessage) (any, error) {
+		var a struct {
+			Path   string            `json:"path"`
+			Inline []json.RawMessage `json:"inline"`
+			Miss   string            `json:"miss"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
+		}
+		if (a.Path == "") == (len(a.Inline) == 0) {
+			return nil, lab.Errorf(lab.CodeBadArgs, "give exactly one of path and inline")
+		}
+		var entries []sim.Entry
+		var err error
+		if a.Path != "" {
+			p := a.Path
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(home, p)
+			}
+			if home == "" || !sandbox.PathInside(home, p) {
+				return nil, lab.Errorf(lab.CodeBadArgs, "path %q is outside the instance home", a.Path)
+			}
+			f, openErr := os.Open(p)
+			if openErr != nil {
+				return nil, lab.Errorf(lab.CodeBadArgs, "%v", openErr)
+			}
+			defer f.Close()
+			entries, err = sim.ParseEntries(io.LimitReader(f, maxCassetteFile))
+		} else {
+			entries, err = sim.ParseEntries(strings.NewReader(joinLines(a.Inline)))
+		}
+		if err == nil {
+			err = e.LoadCassette(entries, a.Miss)
+		}
+		if err != nil {
+			return nil, lab.Errorf(lab.CodeBadArgs, "%v", err)
+		}
+		n, miss := e.CassetteStat()
+		return map[string]any{"entries": n, "miss": miss}, nil
+	}
+}
+
+func joinLines(raw []json.RawMessage) string {
+	var b strings.Builder
+	for _, r := range raw {
+		var one bytes.Buffer
+		if json.Compact(&one, r) == nil { // a line per entry; a malformed one fails the parse
+			r = one.Bytes()
+		}
+		b.Write(r)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func putOp(e *sim.Engine) lab.OpFunc {

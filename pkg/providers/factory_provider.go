@@ -95,7 +95,11 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	switch protocol {
 	case "sim":
 		// The simulated model of a sandbox instance; NewProvider refuses it unlocked.
-		p, err := sim.NewProvider(modelID)
+		mode, inner := sim.ParseRef(modelID)
+		if inner != "" {
+			return nil, "", fmt.Errorf("sim: mode %q takes no inner model (%q)", mode, inner)
+		}
+		p, err := sim.NewProvider(mode)
 		if err != nil {
 			return nil, "", err
 		}

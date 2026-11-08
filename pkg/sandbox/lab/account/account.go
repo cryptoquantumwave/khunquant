@@ -23,7 +23,7 @@ type SeedArgs struct {
 	Venue     string             `json:"venue"`              // binance | binance.spot (its spot wallet) | okx | settrade | webull
 	Balances  map[string]float64 `json:"balances,omitempty"` // asset -> free
 	Positions []sandbox.Position `json:"positions,omitempty"`
-	Replace   bool               `json:"replace,omitempty"`  // clear balances and positions first
+	Replace   bool               `json:"replace,omitempty"`  // clear balances and positions first (no open orders)
 	Baseline  *bool              `json:"baseline,omitempty"` // default true: a reset returns to this seed
 	// Options are the venue's knobs (settrade: auction_open, auction_afternoon as HH:MM
 	// Asia/Bangkok; webull: reject_duplicate_client_id, list_seed); an unknown key is
@@ -52,9 +52,9 @@ func Group(sim *sandbox.StatefulSimulator) lab.Group {
 			"Prices are not set here: see sandbox_market.",
 		Ops: []lab.Op{
 			{Name: "seed", Description: "set free balances and put positions; by default the result is what sandbox_reset_simulator returns to",
-				Args: json.RawMessage(`{` + argVenue + `,"balances":{"type":"object","description":"asset -> free amount"},` +
+				Args: json.RawMessage(`{` + argVenue + `,"balances":{"type":"object","description":"asset -> free amount (locked is kept)"},` +
 					`"positions":{"type":"array","items":{"type":"object"},"description":"[{symbol (wire), side long|short, contracts, entryPrice, leverage[, marginMode cross|isolated, maintRate, isolatedMargin]}]; the market must exist"},` +
-					`"replace":{"type":"boolean","description":"clear balances and positions first"},` +
+					`"replace":{"type":"boolean","description":"clear balances and positions first; refused while orders are open"},` +
 					`"baseline":{"type":"boolean","description":"default true"},` +
 					`"options":{"type":"object","description":"settrade: auction_open (default 10:00), auction_afternoon (14:30), HH:MM Asia/Bangkok; webull: reject_duplicate_client_id (default false), list_seed (default 1); an equity venue's holdings are balances, e.g. {THB: 1000000, PTT: 500}"}}`),
 				Required: []string{"venue"}, Run: run(sim, seed)},
@@ -106,11 +106,16 @@ func seed(sim *sandbox.StatefulSimulator, r request) (any, error) {
 			return err
 		}
 		if r.Replace {
+			if n := len(st.OpenOrders); n > 0 { // their reservations are in the balances it would clear
+				return lab.Errorf(lab.CodeBadArgs, "replace: %d open orders hold part of the balances; cancel them first", n)
+			}
 			clear(st.Balances)
 			clear(st.Positions)
 		}
 		for a, v := range r.Balances {
-			st.Balances[a] = sandbox.Balance{Free: v}
+			b := st.Balances[a] // Locked is what open orders and positions hold: kept
+			b.Free = v
+			st.Balances[a] = b
 		}
 		for _, p := range ps {
 			st.Positions[p.Symbol] = p

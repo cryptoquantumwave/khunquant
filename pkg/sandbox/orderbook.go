@@ -327,7 +327,7 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		// Only what the ledger locked is released: a seeded position never locked its entry
 		// notional, so closing it must not mint that amount (the liquidation path does the same).
 		bal := st.Balances["USDT"]
-		rel := math.Min(bal.Locked, n*cs*pos.EntryPrice)
+		rel := math.Min(st.positionLocked(), n*cs*pos.EntryPrice)
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
 		credit(st, pnl) // a loss takes the free balance first, and never more than the wallet holds
@@ -354,6 +354,18 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		o.Status = nativeStates[b.venue][stPartial]
 	}
 	b.emit("fill", o, "")
+}
+
+// positionLocked is the part of the USDT Locked that positions hold: Locked less what the
+// open orders of this wallet still reserve. A close releases at most this, so a seeded
+// position (which locked nothing) cannot be paid out of a resting order's reservation, which
+// the order's cancel would then credit a second time.
+func (st *VenueState) positionLocked() float64 {
+	held := 0.0
+	for _, o := range st.OpenOrders {
+		held += o.Reserved
+	}
+	return math.Max(0, st.Balances["USDT"].Locked-held)
 }
 
 // close ends an unfilled remainder: the reservation is released, the order moves to the

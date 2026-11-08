@@ -57,6 +57,9 @@ type EngineOptions struct {
 	BudgetTok int
 	// RecordPath is the JSONL file record appends to.
 	RecordPath string
+	// BudgetStore is where the budget is saved (<HOME>/lab/budget.json), so a restart of
+	// a record or live instance keeps what it spent; "" keeps it in memory only. See budget_store.go.
+	BudgetStore string
 }
 
 // Engine answers the model calls of one sandbox instance from its script.
@@ -74,6 +77,7 @@ type Engine struct {
 
 	liveMu sync.Mutex // serialises live calls with their accounting; guards bud
 	bud    BudgetState
+	budErr error // the saved budget could not be read: every live call is refused (budget_store.go)
 }
 
 // scriptFile is what Store holds.
@@ -87,6 +91,9 @@ type scriptFile struct {
 func NewEngine(o EngineOptions) (*Engine, error) {
 	e := &Engine{o: o, fallback: fallbackText, hits: map[string]int{}, loops: map[string]int{}}
 	e.bud.LimitUSD, e.bud.LimitTok = o.BudgetUSD, o.BudgetTok
+	if o.BudgetStore != "" {
+		e.loadBudget()
+	}
 	if o.Store == "" {
 		return e, nil
 	}

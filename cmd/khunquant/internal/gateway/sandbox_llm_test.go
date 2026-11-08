@@ -52,22 +52,22 @@ func TestSeedFromEnv(t *testing.T) {
 	t.Cleanup(sandbox.ResetLockForTest)
 
 	// Unlocked: a seed is refused, so an unlocked process can never get a seeded source.
-	if err := seedFromEnv(env("5")); err == nil || !strings.Contains(err.Error(), "sandbox-locked") {
+	if err := seedFromEnv(env("5"), 1); err == nil || !strings.Contains(err.Error(), "sandbox-locked") {
 		t.Errorf("unlocked seed = %v", err)
 	}
 	for _, v := range []string{"", "0"} {
-		if err := seedFromEnv(env(v)); err != nil {
+		if err := seedFromEnv(env(v), 1); err != nil {
 			t.Errorf("seed %q: %v", v, err)
 		}
 	}
-	if err := seedFromEnv(env("abc")); err == nil {
+	if err := seedFromEnv(env("abc"), 1); err == nil {
 		t.Error("a non-integer seed must be refused")
 	}
 
 	if err := sandbox.Lock(sandbox.LockOptions{Token: strings.Repeat("t", 32)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedFromEnv(env("12345")); err != nil {
+	if err := seedFromEnv(env("12345"), 1); err != nil {
 		t.Fatal(err)
 	}
 	a := make([]byte, 16)
@@ -76,7 +76,7 @@ func TestSeedFromEnv(t *testing.T) {
 	if err := sandbox.Lock(sandbox.LockOptions{Token: strings.Repeat("t", 32)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedFromEnv(env("12345")); err != nil {
+	if err := seedFromEnv(env("12345"), 1); err != nil {
 		t.Fatal(err)
 	}
 	b := make([]byte, 16)

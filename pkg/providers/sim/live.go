@@ -87,18 +87,26 @@ func (e *Engine) LowerBudget(usd float64, tok int) (BudgetState, error) {
 	}
 	e.liveMu.Lock()
 	defer e.liveMu.Unlock()
+	if e.budErr != nil {
+		return e.bud, e.budErr
+	}
 	if usd > 0 && e.bud.LimitUSD > 0 && usd >= e.bud.LimitUSD {
 		return e.bud, fmt.Errorf("sim: lower_usd %g is not below the limit %g: the budget can only be lowered", usd, e.bud.LimitUSD)
 	}
 	if tok > 0 && e.bud.LimitTok > 0 && tok >= e.bud.LimitTok {
 		return e.bud, fmt.Errorf("sim: lower_tok %d is not below the limit %d: the budget can only be lowered", tok, e.bud.LimitTok)
 	}
+	next := e.bud
 	if usd > 0 {
-		e.bud.LimitUSD = usd
+		next.LimitUSD = usd
 	}
 	if tok > 0 {
-		e.bud.LimitTok = tok
+		next.LimitTok = tok
 	}
+	if err := e.saveBudgetLocked(next); err != nil { // a lowered limit stays lowered across a restart
+		return e.bud, err
+	}
+	e.bud = next
 	e.budgetEventLocked("lowered")
 	return e.bud, nil
 }
@@ -147,6 +155,9 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 	}
 	e.liveMu.Lock()
 	defer e.liveMu.Unlock()
+	if e.budErr != nil {
+		return decision{rule: "live", err: e.budErr, extra: map[string]any{"mode": e.Mode()}}
+	}
 
 	reserveTok, reserveUSD := bound(msgs, tools, options, lo.Price)
 	reserveTok, reserveUSD = max(reserveTok, e.bud.maxTok), max(reserveUSD, e.bud.maxUSD)
@@ -154,8 +165,16 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 		if !e.bud.Exhausted {
 			e.bud.Exhausted = true // sticky: later calls are refused too
 		}
+		_ = e.saveBudgetLocked(e.bud) // the exhausted flag is sticky across a restart; the spend already is
 		e.budgetEventLocked("refused")
 		return decision{rule: "live", err: ErrBudget, extra: map[string]any{"mode": e.Mode()}}
+	}
+	// Write ahead: the whole reservation is on the saved budget before the provider is called,
+	// so a process killed during the call has been charged for it.
+	ahead := e.bud
+	ahead.SpentTok, ahead.SpentUSD, ahead.Calls = ahead.SpentTok+reserveTok, ahead.SpentUSD+reserveUSD, ahead.Calls+1
+	if err := e.saveBudgetLocked(ahead); err != nil {
+		return decision{rule: "live", err: err, extra: map[string]any{"mode": e.Mode()}}
 	}
 
 	resp, err := lo.Inner.Chat(ctx, msgs, tools, lo.InnerModel, options)
@@ -165,6 +184,9 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 		// the call timed out or was cut off, which is billed too: charge the whole reservation
 		// the call was admitted at (input and maximum output, or the dearest call so far).
 		e.spendLocked(reserveTok, reserveUSD)
+		if serr := e.saveBudgetLocked(e.bud); serr != nil {
+			return decision{rule: "live", err: serr, extra: map[string]any{"mode": e.Mode()}}
+		}
 		return decision{rule: "live", err: scrub(err, lo.Key), extra: map[string]any{"mode": e.Mode(), "spent_usd": e.bud.SpentUSD}}
 	}
 
@@ -182,6 +204,10 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 	d := decision{rule: "live", resp: resp, extra: map[string]any{
 		"mode": e.Mode(), "usage": resp.Usage, "cost_usd": usd, "spent_usd": e.bud.SpentUSD, "usage_estimated": estimated,
 	}}
+	if err := e.saveBudgetLocked(e.bud); err != nil { // the spend is saved before the answer leaves
+		d.resp, d.err = nil, err
+		return d
+	}
 	if e.Mode() == ModeRecord && e.o.RecordPath != "" {
 		if err := AppendEntry(e.o.RecordPath, Entry{Key: key, Request: creq, Response: ReplyOf(resp), Usage: resp.Usage}); err != nil {
 			d.resp, d.err = nil, fmt.Errorf("sim: recording the cassette: %w", err)

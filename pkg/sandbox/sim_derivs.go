@@ -50,8 +50,8 @@ const maxDerivEvents = 10000
 // order. Each round it finds the next event in (t, now]: the earliest liquidation, found by
 // a crossing search over the price path so a crash that recovers between two polls is
 // not missed, or else the next settlement instant. A liquidation at the instant of a
-// settlement goes first (the position is gone and pays nothing); positions settling at one
-// instant are paid, and two crossing at one instant liquidated, in symbol order. Every
+// settlement goes first (the position is gone and pays nothing, the others still settle at
+// that instant); positions settling at one instant are paid, and two crossing at one instant liquidated, in symbol order. Every
 // event is valued at its own time with the wallet the events before it left, so a
 // payment that lowers the wallet moves the liquidation price the next search uses. It is
 // idempotent: it works from LastDerivs, which it leaves at now.
@@ -68,7 +68,10 @@ func (sim *StatefulSimulator) advanceDerivs(key string, now time.Time) {
 		st.LastDerivs = now
 		return
 	}
-	t, done := st.LastDerivs, false
+	// t is how far the events are processed, paid how far the settlements are. They differ
+	// only after a liquidation at a settlement instant: the positions that settle at that
+	// instant are still owed their payment, and the next round pays them.
+	t, paid, done := st.LastDerivs, st.LastDerivs, false
 	if !now.After(t) {
 		return
 	}
@@ -76,7 +79,7 @@ func (sim *StatefulSimulator) advanceDerivs(key string, now time.Time) {
 		rs := sim.legRisks(key, st, t, func(p *Position) float64 { px, _ := src.MarkPriceAt(key, p.Symbol, t); return px })
 		var settle time.Time
 		for _, r := range rs {
-			if f, ok := src.NextFunding(key, r.Pos.Symbol, t); ok && (settle.IsZero() || f.Before(settle)) {
+			if f, ok := src.NextFunding(key, r.Pos.Symbol, paid); ok && (settle.IsZero() || f.Before(settle)) {
 				settle = f
 			}
 		}
@@ -98,9 +101,12 @@ func (sim *StatefulSimulator) advanceDerivs(key string, now time.Time) {
 		case hit != nil:
 			sim.liquidate(key, st, *hit, at)
 			t = at
+			if !(due && at.Equal(settle)) { // else the others settling at this instant are paid next
+				paid = at
+			}
 		case due:
-			sim.settleFunding(key, st, rs, t, settle, src)
-			t = settle
+			sim.settleFunding(key, st, rs, paid, settle, src)
+			t, paid = settle, settle
 		default:
 			t, done = now, true
 		}

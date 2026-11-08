@@ -343,6 +343,72 @@ func TestDerivs_DeterministicOrder(t *testing.T) {
 	}
 }
 
+// A liquidation found exactly at a settlement instant takes that position out, and the other
+// positions settling at that instant are still paid, with their income line and journal
+// entry (184-1). The price steps through the liquidation price at 16:00, the first
+// settlement; the survivor is the symbol that sorts after the liquidated one and before it.
+func TestLiquidation_AtASettlementStillPaysTheOthers(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		pair, surv market.Pair
+		wire, sWire string
+		liq        *sandbox.Position
+		stepTo     float64
+		survivor   *sandbox.Position
+		pay        float64 // the survivor's payment: -q x mark x rate
+	}{
+		{"survivor sorts after", btcPair, ethPair, "BTCUSDT", "ETHUSDT", short("BTCUSDT", 0.1, 70000), 90000, long("ETHUSDT", 2, 3000), -2 * 3000 * 0.0002},
+		{"survivor sorts before", ethPair, btcPair, "ETHUSDT", "BTCUSDT", short("ETHUSDT", 2, 3000), 4000, long("BTCUSDT", 0.1, 70000), -0.1 * 70000 * 0.0001},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := newDerivLab(t)
+			for p, rate := range map[market.Pair]float64{btcPair: 0.0001, ethPair: 0.0002} {
+				if err := d.Market.SetFunding("", p, rate); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entry := c.liq.EntryPrice
+			c.liq.MarginMode, c.liq.MaintRate, c.liq.Isolated = "isolated", 0.005, entry*c.liq.Contracts*0.1 // L is under the step
+			// The price holds until 16:00 (7 h in), then steps past the liquidation price.
+			if err := d.Market.Path("", c.pair, entry, 8*time.Hour, market.ShapeStep, []market.Keyframe{{At: 7 * time.Hour, Price: c.stepTo}}); err != nil {
+				t.Fatal(err)
+			}
+			d.seed(t, 10000, c.liq, c.survivor)
+			settle := clockT0.Add(7 * time.Hour)
+			check := func(when string) {
+				t.Helper()
+				funding, orders := d.journaled()
+				if len(funding) != 1 || funding[0].Wire != c.sWire || !funding[0].Time.Equal(settle) || math.Abs(funding[0].Payment-c.pay) > 1e-9 {
+					t.Fatalf("%s: funding %+v, want one payment of %v to %s at 16:00 and none to the liquidated %s", when, funding, c.pay, c.sWire, c.wire)
+				}
+				var liqAt []time.Time
+				for _, o := range orders {
+					if o.Effect == "liquidation" {
+						liqAt = append(liqAt, o.At)
+					}
+				}
+				if len(liqAt) != 1 || !liqAt[0].Equal(settle) || d.positions() != 1 {
+					t.Fatalf("%s: liquidations at %v, positions %d, want one at 16:00 and the survivor kept", when, liqAt, d.positions())
+				}
+				var income []sandbox.IncomeEntry
+				d.Sim.Read("binance", func(st *sandbox.VenueState) { income = slices.Clone(st.Income) })
+				if len(income) != 1 || income[0].Symbol != c.sWire || math.Abs(income[0].Income-c.pay) > 1e-9 {
+					t.Fatalf("%s: income %+v, want the survivor's one line", when, income)
+				}
+				if got := d.wallet(); math.Abs(got-(10000+c.pay)) > 1e-6 { // the liquidated one is isolated: the wallet is untouched
+					t.Fatalf("%s: wallet %v, want %v", when, got, 10000+c.pay)
+				}
+			}
+			d.advance(t, "8h")
+			check("after the advance")
+			for _, at := range []time.Time{{}, d.Now()} { // idempotent at one now
+				d.Sim.Advance(at)
+			}
+			check("after a second Advance at the same now")
+		})
+	}
+}
+
 // Advance is idempotent at one time: a second call changes nothing, neither the state nor the journal, so a request, a clock step and a lab read can
 // all call it.
 func TestDerivs_IdempotentAtSameNow(t *testing.T) {

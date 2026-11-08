@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
 )
 
@@ -392,7 +394,7 @@ func TestUpOptions_CLIAndMCPAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	for k := range schema.Properties {
-		if !slices.Contains([]string{"op", "keep_home", "mode", "tail", "contains"}, k) { // the other ops' own arguments
+		if !slices.Contains([]string{"op", "keep_home", "mode", "tail", "contains", "kill_at", "wait_wall"}, k) { // the other ops' own arguments
 			args = append(args, k)
 		}
 	}
@@ -422,5 +424,86 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
+	}
+}
+
+// restart kill_at arms a crash point and answers at once; the crash and the supervisor's
+// restart happen later, and proxied calls wait for the instance meanwhile.
+func TestMCP_RestartKillAt(t *testing.T) {
+	h := newHarness(t)
+	info := h.up()
+	out := h.must("sandbox_instance", map[string]any{"op": "restart", "mode": "kill_at",
+		"kill_at": map[string]any{"workflow": "dn.open", "step": "place_second_leg", "point": "after_fn"}})
+	if out != `{"armed":"c1"}` {
+		t.Fatalf("restart kill_at = %s, want {armed}", out)
+	}
+	if err := syscall.Kill(info.PID, syscall.SIGUSR2); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the supervisor to restart the instance", func() bool {
+		i := h.sup.List()[0]
+		return i.CrashRestarts == 1 && i.State == supervisor.StateRunning
+	})
+	if out := h.must("sandbox_chat", map[string]any{"op": "echo", "text": "after"}); !strings.Contains(out, "after") {
+		t.Errorf("a proxied call after the restart = %s", out)
+	}
+	if got := h.sup.List()[0]; got.ExitReason != supervisor.ExitCrashPoint || got.Crash == nil || got.Crash.Step != "place_second_leg" {
+		t.Errorf("after the crash: %+v", got)
+	}
+	for _, bad := range []map[string]any{
+		{"op": "restart", "mode": "kill_at"},
+		{"op": "restart", "mode": "kill_at", "kill_at": map[string]any{"workflow": "dn.open", "step": "s", "point": "never"}},
+		{"op": "restart", "mode": "kill_at", "kill_at": map[string]any{"workflow": "dn.open", "step": "s", "point": "after_fn", "bogus": 1}},
+		{"op": "restart", "mode": "kill_at", "kill_at": map[string]any{"workflow": "dn.open", "step": "s", "point": "after_fn"}, "wait_wall": "forever"},
+		{"op": "restart", "mode": "kill", "kill_at": map[string]any{"workflow": "dn.open", "step": "s", "point": "after_fn"}},
+	} {
+		if out, isErr := h.call("sandbox_instance", bad); !isErr {
+			t.Errorf("sandbox_instance %v = %s, want an error", bad, out)
+		}
+	}
+}
+
+// The MCP argument kill_at, the scenario step and the supervisor's KillAt are one
+// definition: the schema's properties are the struct's fields, and the scenario step accepts
+// exactly those keys.
+func TestKillAt_MCPAndScenarioAgree(t *testing.T) {
+	var schema struct {
+		Properties map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(instanceSchema(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	var fields, props []string
+	for _, f := range supervisor.KillAtFields() {
+		fields = append(fields, f.JSON)
+	}
+	for k := range schema.Properties["kill_at"].Properties {
+		props = append(props, k)
+	}
+	slices.Sort(fields)
+	slices.Sort(props)
+	if !slices.Equal(fields, props) || len(fields) != 4 {
+		t.Errorf("KillAt fields %v, sandbox_instance kill_at properties %v", fields, props)
+	}
+	if req := schema.Properties["kill_at"].Required; !slices.Equal(req, []string{"workflow", "step", "point"}) {
+		t.Errorf("required = %v", req)
+	}
+	if n := reflect.TypeFor[supervisor.KillAtRequest]().NumField(); n != 2 {
+		t.Errorf("KillAtRequest has %d fields, want kill_at and wait_wall", n)
+	}
+	for _, key := range []string{"kill_at", "wait_wall"} {
+		if _, ok := schema.Properties[key]; !ok {
+			t.Errorf("sandbox_instance has no %s argument", key)
+		}
+	}
+	ok := map[string]any{"kill_at": map[string]any{"workflow": "w", "step": "s", "point": "after_fn", "attempt": 2}, "wait_wall": "30s"}
+	if _, err := scenario.KillAtOf(ok); err != nil {
+		t.Errorf("the scenario refuses the arguments the tool takes: %v", err)
+	}
+	if _, err := scenario.KillAtOf(map[string]any{"kill_at": map[string]any{"workflow": "w", "step": "s", "point": "after_fn", "when": "now"}}); err == nil {
+		t.Error("the scenario accepted a key the tool does not have")
 	}
 }

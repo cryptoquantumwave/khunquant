@@ -52,7 +52,7 @@ var kindOwner = []struct{ prefix, pr string }{
 	{"chat.", "SBX-02"}, {"exchange.req", "SBX-03"}, {"exchange.order", "SBX-14a"}, {"exchange.funding", "SBX-14b"}, {"llm.budget", "SBX-16"},
 	{"llm.", "SBX-04"}, {"event.", "SBX-05"}, {"tool.", "SBX-05"}, {"workflow.", "SBX-05"}, {"proposal", "SBX-05"},
 	{"policy.", "SBX-05"}, {"manage.", "SBX-06"}, {"clock.", "SBX-07"}, {"settle", "SBX-09"}, {"config.", "SBX-11"},
-	{"web.", "SBX-15"}, {"fault.", "SBX-13"}, {"crash.", "SBX-20"},
+	{"web.", "SBX-15"}, {"fault.", "SBX-13"}, {"crash", "SBX-20"},
 }
 
 func ownerOf(kind string) string {

@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -62,6 +63,7 @@ func TestHelperFakeInstance(t *testing.T) {
 		os.Exit(2)
 	}
 
+	var armed atomic.Bool
 	guard := func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer "+token {
@@ -112,6 +114,9 @@ func TestHelperFakeInstance(t *testing.T) {
 			reply(w, 200, map[string]any{"ok": true})
 		case group == "chat" && req.Op == "leak":
 			reply(w, 200, map[string]any{"token": token})
+		case group == "crash" && req.Op == "arm": // SIGUSR2 stands for "the armed step was reached"
+			armed.Store(true)
+			reply(w, 200, map[string]any{"id": "c1"})
 		case group == "inspect" && req.Op == "wait_for":
 			wall, _ := time.ParseDuration(req.TimeoutWall)
 			res, err := j.WaitFor(r.Context(), req.Match, req.AfterSeq, wall)
@@ -127,6 +132,18 @@ func TestHelperFakeInstance(t *testing.T) {
 			reply(w, 404, map[string]any{"error": fmt.Sprintf("no lab group %q", group), "code": "unknown_group"})
 		}
 	})))
+
+	usr2 := make(chan os.Signal, 1)
+	signal.Notify(usr2, syscall.SIGUSR2)
+	go func() {
+		<-usr2
+		if armed.Load() {
+			m := `{"arm_id":"c1","point":"after_fn","kind":"dn.open","workflow_id":"wf_1","step":"place_second_leg","attempt":1,"wall_time":"` + time.Now().Format(time.RFC3339Nano) + `"}`
+			_ = os.WriteFile(filepath.Join(home, "lab", "crash.json"), []byte(m), 0o600)
+		}
+		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		time.Sleep(time.Minute)
+	}()
 
 	devSrv := func(*http.Request) *mcp.Server {
 		s := mcp.NewServer(&mcp.Implementation{Name: "fake-dev", Version: "1"}, nil)

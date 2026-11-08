@@ -25,6 +25,7 @@ type Instances interface {
 	Client(name string) (*labclient.Client, error)
 	PatchConfig(ctx context.Context, name string, patch map[string]any) (bool, error)
 	Restart(ctx context.Context, name string, mode supervisor.RestartMode) (supervisor.Info, error)
+	KillAt(ctx context.Context, name string, k supervisor.KillAt, wait time.Duration) (string, error)
 	WaitRunning(ctx context.Context, name string) (supervisor.Info, error)
 	Logs(name string, tail int, contains string) ([]string, error)
 }
@@ -127,6 +128,11 @@ type runState struct {
 	start time.Time
 	loc   *time.Location
 	env   *env
+
+	// A crash point is armed (restart kill_at) and has not fired yet; crashBase is the
+	// instance's count of crash restarts when it was armed (killat.go).
+	armed     bool
+	crashBase int
 }
 
 func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {

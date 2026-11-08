@@ -122,8 +122,8 @@ func TestValidate_RequirementsNamePR(t *testing.T) {
 			t.Errorf("%q must be refused at %s", in, path)
 		}
 	}
-	if got := issueAt(Validate(parseString(t, base+"timeline:\n  - restart: {kill_at: {workflow: dn.open}}\n"), nil), "/timeline/0/restart/kill_at"); !strings.Contains(got, "SBX-20") {
-		t.Errorf("restart kill_at: %q", got)
+	if got := issueAt(Validate(parseString(t, base+"timeline:\n  - restart: {kill_at: {workflow: dn.open}}\n"), nil), "/timeline/0/restart/kill_at"); !strings.Contains(got, "step") {
+		t.Errorf("an incomplete kill_at: %q, want it to name the missing step", got)
 	}
 }
 

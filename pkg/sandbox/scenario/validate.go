@@ -267,9 +267,11 @@ func (v *validator) step(p string, s *Step, spec stepSpec) {
 		switch {
 		case isScalar && (scalar == "graceful" || scalar == "kill"):
 		case err == nil && args["kill_at"] != nil:
-			v.addf(p+"/kill_at", "restart kill_at is not supported by this runner (SBX-20)")
+			if _, kerr := KillAtOf(args); kerr != nil {
+				v.addf(p+"/kill_at", "%v", kerr)
+			}
 		default:
-			v.addf(p, "restart takes graceful or kill")
+			v.addf(p, "restart takes graceful, kill or {kill_at: {workflow, step, point}}")
 		}
 	case "config.patch":
 		if err != nil || len(args) == 0 {

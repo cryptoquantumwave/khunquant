@@ -146,6 +146,32 @@ func TestHelperFakeGateway(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(st)
 	})
+	if hasFlag("--crash-lab") { // the crash group, and a SIGUSR2 that stands for "the armed step was reached"
+		armed := ""
+		mux.HandleFunc("/api/sandbox/lab/crash", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+os.Getenv("KQ_SANDBOX_TOKEN") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			armed = "c1"
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": armed})
+		})
+		usr2 := make(chan os.Signal, 1)
+		signal.Notify(usr2, syscall.SIGUSR2)
+		go func() {
+			<-usr2
+			if armed != "" && !hasFlag("--no-marker") {
+				_ = os.MkdirAll(filepath.Join(home, "lab"), 0o700)
+				m := `{"arm_id":"c1","point":"after_fn","kind":"dn.open","workflow_id":"wf_1","step":"place_second_leg","attempt":1,"wall_time":"` + time.Now().Format(time.RFC3339Nano) + `"}`
+				_ = os.WriteFile(filepath.Join(home, "lab", "crash.json"), []byte(m), 0o600)
+			}
+			if flagValue("--usr2=") == "exit1" {
+				os.Exit(1)
+			}
+			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			time.Sleep(time.Minute)
+		}()
+	}
 	go func() {
 		// Like the real gateway (channels.Manager.StartAll): a server that cannot listen
 		// ends the process with exit 1.

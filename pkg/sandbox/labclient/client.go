@@ -59,6 +59,18 @@ type Client struct {
 	base  string
 	token string
 	hc    *http.Client
+	gate  func(context.Context) error // held before every request (SetGate)
+}
+
+// SetGate makes every request wait for gate first: the supervisor holds calls while the
+// instance restarts, and an error from gate (instance_restarting) fails the call.
+func (c *Client) SetGate(gate func(context.Context) error) { c.gate = gate }
+
+// Ungated is the same client without its gate, for the supervisor's own readiness polls.
+func (c *Client) Ungated() *Client {
+	cp := *c
+	cp.gate = nil
+	return &cp
 }
 
 // New returns a Client for baseURL (http://127.0.0.1:port). It refuses any other host:
@@ -88,6 +100,11 @@ func New(baseURL, token string) (*Client, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	if c.gate != nil {
+		if err := c.gate(ctx); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

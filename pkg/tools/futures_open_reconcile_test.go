@@ -590,6 +590,42 @@ func TestFuturesOpen_ClientOrderIDParamIsRefusedBeforeAnythingIsSent(t *testing.
 	}
 }
 
+// A conditional entry (a trigger price in params, in any case, or an order type other than
+// market or limit) is refused before anything is sent: it would carry no client order ID,
+// and a look cannot see a resting algo order, so its marker would clear and a second
+// conditional entry would go through. The same open without the trigger is placed.
+func TestFuturesOpen_ConditionalEntryIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	w := newLostWorld(t, true)
+	for _, over := range []map[string]any{
+		{"params": map[string]interface{}{"stopPrice": 51000.0}},
+		{"params": map[string]interface{}{"triggerPrice": 51000.0}},
+		{"params": map[string]interface{}{"stopLossPrice": 45000.0}},
+		{"params": map[string]interface{}{"takeProfitPrice": 60000.0}},
+		{"params": map[string]interface{}{"StopPrice": 51000.0}},
+		{"order_type": "stop_market"},
+	} {
+		res := w.open(t, nil, over)
+		if !res.IsError || !strings.Contains(res.ForLLM, "conditional entry") || !strings.Contains(res.ForLLM, "Nothing was sent") {
+			t.Fatalf("%v: want a refusal before anything is sent, got error=%v %s", over, res.IsError, res.ForLLM)
+		}
+	}
+	if entries, _, _, _, log := w.f.snapshot(); entries != 0 || len(log) != 0 || w.limiter.tokens() != 0 {
+		t.Errorf("nothing may be sent or spent: entries=%d log=%v tokens=%d", entries, log, w.limiter.tokens())
+	}
+
+	// Control: the same open with an execution option the sanitizer admits, and no trigger.
+	res := w.open(t, nil, map[string]any{"params": map[string]interface{}{"timeInForce": "GTC"}})
+	if res.IsError {
+		t.Fatalf("an entry without a trigger must be placed: %s", res.ForLLM)
+	}
+	if entries, _, _, _, _ := w.f.snapshot(); entries != 1 {
+		t.Errorf("entries = %d, want the plain entry placed", entries)
+	}
+	if cid, _ := w.f.entryParams[0]["clientOrderId"].(string); cid == "" {
+		t.Error("the plain entry must carry a client order ID")
+	}
+}
+
 // Every gate still runs, in order, before the first mutation: a refusal at any of them
 // sends nothing and spends nothing, and a placed order goes limiter, leverage, entry.
 func TestFuturesOpen_EveryGateRunsBeforeTheFirstMutation(t *testing.T) {

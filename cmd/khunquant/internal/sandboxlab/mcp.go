@@ -104,6 +104,7 @@ func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 		Name: "sandbox_instance",
 		Description: "Start, stop, restart and inspect locked sandbox instances of this binary. " +
 			"ops: up, down, list, restart (mode graceful|kill|kill_at), logs (tail, contains). " +
+			"down, restart and logs take the instance in `name`, required when several run (KQ_SANDBOX_MAX_INSTANCES, default 1, at most 8); list also shows stale homes (stale:true), which only down removes. " +
 			"restart kill_at {workflow, step, point, attempt?} arms a crash point and returns {armed}: the instance dies by SIGKILL when that step " +
 			"reaches the point and is restarted on the same home; calls wait up to wait_wall for it (default 60s), then fail with instance_restarting.",
 		InputSchema: instanceSchema(),

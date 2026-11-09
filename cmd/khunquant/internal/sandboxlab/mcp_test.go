@@ -35,9 +35,11 @@ type mcpHarness struct {
 	texts   []string // every tool result and error text, for the token search
 }
 
-func newHarness(t *testing.T) *mcpHarness {
+func newHarness(t *testing.T) *mcpHarness { return newHarnessMax(t, 1) }
+
+func newHarnessMax(t *testing.T, max int) *mcpHarness {
 	t.Helper()
-	h := &mcpHarness{t: t, sup: fakeSupervisor(t)}
+	h := &mcpHarness{t: t, sup: fakeSupervisorMax(t, max)}
 	srv := newMCPServer(h.sup)
 	cr, sw := io.Pipe()
 	sr, cw := io.Pipe()

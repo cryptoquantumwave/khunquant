@@ -5,10 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
 
@@ -221,5 +225,61 @@ func TestTimelinePayloadCapped(t *testing.T) {
 	}
 	if !sawBig || !sawSmall {
 		t.Fatalf("entries missing: big=%v small=%v", sawBig, sawSmall)
+	}
+}
+
+// The real path, as the launcher takes it: the profile `sandbox up` writes holds the view
+// token, a re-executed locked gateway serves the timeline to it and refuses the instance
+// token, and the chat the test sent is on the timeline.
+func TestTimelineReadWithTheProfilesViewToken(t *testing.T) {
+	home := newInstanceHome(t)
+	t.Setenv("KHUNQUANT_HOME", home)
+	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(home, "config.json"))
+	t.Setenv("KQ_SANDBOX_TOKEN", "")
+	childHome, childTmp := t.TempDir(), t.TempDir()
+	env := []string{
+		"PATH=" + os.Getenv("PATH"), "TMPDIR=" + childTmp, "HOME=" + childHome,
+		"KHUNQUANT_HOME=" + home, "KHUNQUANT_CONFIG=" + home + "/config.json",
+		"KQ_SANDBOX_LOCKED=1", "KQ_SANDBOX_TOKEN=" + lockTestToken, "KQ_SANDBOX_INSTANCE=timeline-e2e",
+	}
+	p := startLocked(t, home, env, []string{home, childHome, childTmp}, func(port int) {
+		if _, err := sandbox.WriteProfile(sandbox.ProfileOptions{Home: home, Port: port}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	p.waitOutput("Channels enabled: [simchat]", 20*time.Second)
+
+	fileCfg, err := config.LoadConfig(filepath.Join(home, "config.json"))
+	if err != nil || len(fileCfg.Gateway.ManagementToken) < 32 {
+		t.Fatalf("the profile's view token: %v (%d chars)", err, len(fileCfg.Gateway.ManagementToken))
+	}
+	view := fileCfg.Gateway.ManagementToken
+	if code, body, err := postJSON(p.url("/api/sandbox/lab/chat"), lockTestToken, `{"op":"send","as":"stranger","text":"/whoami"}`); err != nil || code != http.StatusOK {
+		t.Fatalf("POST chat send = %d (%v) %s", code, err, body)
+	}
+	if code, _ := doGet(t, p.url("/api/sandbox/timeline"), lockTestToken, nil); code != http.StatusUnauthorized {
+		t.Errorf("the instance token on the timeline = %d, want 401", code)
+	}
+	if code, _ := doGet(t, p.url("/api/proactive/state"), view, nil); code != http.StatusUnauthorized {
+		t.Errorf("the view token on a management read = %d, want 401", code)
+	}
+	var got timelineBody
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		code, body := doGet(t, p.url("/api/sandbox/timeline?kinds=chat.*"), view, nil)
+		if code != http.StatusOK {
+			t.Fatalf("timeline with the view token = %d %s", code, body)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Entries) >= 2 { // chat.in and its chat.out
+			break
+		}
+	}
+	if !got.Locked || got.Instance != "timeline-e2e" || len(got.Entries) < 2 {
+		t.Fatalf("timeline = locked %v instance %q, %d chat entries\n%s", got.Locked, got.Instance, len(got.Entries), p.out.String())
+	}
+	if !strings.Contains(got.Entries[0].Summary, "/whoami") {
+		t.Errorf("first chat entry summary = %q", got.Entries[0].Summary)
 	}
 }

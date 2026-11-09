@@ -157,11 +157,11 @@ func TestOrders_ThroughTheRealAdapters(t *testing.T) {
 
 // place runs PlaceOrderIdempotent for a futures market buy with a fixed key, as attempt n
 // of a step whose first attempt began first; the broker is told elapsed time has passed.
-func (r *orderRig) place(t *testing.T, fp broker.FuturesProvider, sym string, amount float64, attempt int, first time.Time, elapsed time.Duration) (ccxt.Order, error) {
+func (r *orderRig) place(t *testing.T, fp broker.FuturesProvider, sym string, amount float64, attempt int, first time.Time, elapsed time.Duration, extra ...broker.PlaceOption) (ccxt.Order, error) {
 	t.Helper()
 	return broker.PlaceOrderIdempotent(context.Background(), fp, broker.OrderRequest{
 		Market: broker.OrderMarketFutures, Symbol: sym, Type: "market", Side: "buy", Amount: amount, PositionSide: "long",
-	}, "idem-orders", attempt, first, broker.WithClock(func() time.Time { return first.Add(elapsed) }))
+	}, "idem-orders", attempt, first, append([]broker.PlaceOption{broker.WithClock(func() time.Time { return first.Add(elapsed) })}, extra...)...)
 }
 
 // written_then_timeout makes the first attempt's answer unknown; the retry finds the
@@ -185,26 +185,36 @@ func TestPlaceOrderIdempotent_ReconcilesWrittenThenTimeout(t *testing.T) {
 }
 
 // With a lookup lag shorter than the settle delay the retry (which waits that long) sees
-// the order; with a longer one it does not, and the same client ID places a second order,
-// because a closed order's ID is free again. This is the residual idempotent.go names.
+// the order. With a longer one it does not see it, and what happens next depends on whether
+// the step marked before it sent (the journal's write-ahead mark, WithPriorSend): marked, the
+// empty answer is not believed and nothing is placed (unproven, one order); a caller that
+// cannot say it marked still gets the residual, a second order with the same client ID,
+// because a closed order's ID is free again.
 func TestPlaceOrderIdempotent_LookupLag(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		lag    time.Duration
-		orders int
-	}{{"shorter than the settle delay", 2 * time.Second, 1}, {"longer than the settle delay", 20 * time.Second, 2}} {
+		name      string
+		lag       time.Duration
+		marked    bool
+		orders    int
+		unproven  bool
+	}{
+		{"shorter than the settle delay", 2 * time.Second, true, 1, false},
+		{"longer than the settle delay, step marked", 20 * time.Second, true, 1, true},
+		{"longer than the settle delay, no mark known", 20 * time.Second, false, 2, false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newOrderRig(t)
 			fp, sym, amount := r.futures(t, "binance")
 			r.add(t, Rule{Match: Match{Venue: "binance", Market: "futures"}, Effect: Effect{Order: "written_then_timeout"}, When: When{Times: 1}})
 			r.add(t, Rule{Match: Match{Venue: "binance", Market: "futures"}, Effect: Effect{Order: "lookup_lag", Lag: Duration(tc.lag)}, When: When{Times: 1}})
 			first := r.clk.Now()
-			if _, err := r.place(t, fp, sym, amount, 1, first, 0); !errors.Is(err, broker.ErrOutcomeUnknown) {
+			if _, err := r.place(t, fp, sym, amount, 1, first, 0, broker.WithPriorSend(false)); !errors.Is(err, broker.ErrOutcomeUnknown) {
 				t.Fatalf("attempt 1 = %v, want an unknown outcome", err)
 			}
 			r.clk.Add(6 * time.Second) // the backoff: past the 5 s settle delay
-			if _, err := r.place(t, fp, sym, amount, 2, first, 6*time.Second); err != nil {
-				t.Fatalf("attempt 2 = %v", err)
+			_, err := r.place(t, fp, sym, amount, 2, first, 6*time.Second, broker.WithPriorSend(tc.marked))
+			if tc.unproven != errors.Is(err, broker.ErrReconcileUnproven) || (!tc.unproven && err != nil) {
+				t.Fatalf("attempt 2 = %v, want unproven=%v", err, tc.unproven)
 			}
 			if n := r.count("binance"); n != tc.orders {
 				t.Fatalf("%d orders, want %d", n, tc.orders)

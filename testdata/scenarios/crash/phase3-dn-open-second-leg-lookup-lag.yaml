@@ -4,19 +4,19 @@
 # client ID for 30 minutes of sim time (lookup_lag), far more than the 5 s settle delay after
 # which the broker believes an empty lookup (ReconcileSettleDelay) and the 40 s a restart takes.
 #
-# Expected, and what the scenario asserts: one spot buy. Actual: the restarted open looks the
-# order up, gets "not found", has waited out the settle delay, and places the leg again: two
-# spot buys, a position that is twice as long as its hedge. This is the residual that
-# pkg/providers/broker/idempotent.go documents ("the lookup, not the exchange, is what prevents
-# the second order") and that the Phase 3 plan names: a venue whose lookup lags longer than the
-# settle delay defeats the reconcile. It is a defect of the product (the settle assumption), not
-# of the lab: the simulator hides the order from lookups and listings exactly as the rule says.
-# Control: phase3-dn-open-second-leg, the same crash with an ordinary lookup: one buy.
+# Expected, and what the scenario asserts: still one spot buy and one futures short. The
+# step marked, durably, right before it sent the second leg (journal.Effect), so the restarted
+# attempt knows an earlier one may have sent; its lookup finds nothing, and because the venue's
+# lookup can lag by any amount that empty answer is not believed. Nothing is placed, the open
+# ends in recovery and the owner is told. (Before the mark, the restarted open believed the empty
+# lookup after the 5 s settle delay and bought again: two spot buys, a position twice as long as
+# its hedge. PHASE3-LOOKUP-LAG.) Controls: phase3-dn-open-second-leg (ordinary lookup, one buy)
+# and phase3-dn-open-before-send[-lag] (a crash before the send, with and without a lag: the mark
+# was never written, so the restarted open places the leg once and succeeds).
 version: 1
 scenario: phase3-dn-open-second-leg-lookup-lag
 covers: [SBX-20, Phase3]
-status: known_bug
-known_bug: PHASE3-LOOKUP-LAG
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
@@ -71,3 +71,5 @@ expect:
     order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
   - id: one-futures-short
     order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }
+  - id: the-owner-is-told-the-leg-is-unproven
+    message: { to: owner, contains: ["second leg not placed (unknown)"], count: 1 }

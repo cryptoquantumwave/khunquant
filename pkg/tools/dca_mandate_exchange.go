@@ -156,7 +156,7 @@ func (e *dcaExchange) PlaceMandateBuy(ctx context.Context, p *dca.Plan, q dca.Qu
 		return dca.Fill{}, err
 	}
 	var outcome broker.PlaceOutcome
-	opts := []broker.PlaceOption{broker.WithClock(e.now), broker.WithOutcome(func(o broker.PlaceOutcome, _ string) { outcome = o })}
+	opts := append([]broker.PlaceOption{broker.WithClock(e.now), broker.WithOutcome(func(o broker.PlaceOutcome, _ string) { outcome = o })}, journalSendOptions(ctx)...)
 	req := broker.OrderRequest{Market: broker.OrderMarketSpot, Symbol: p.Symbol, Type: "market", Side: "buy", Amount: q.BaseAmount}
 	order, err := broker.PlaceOrderIdempotent(ctx, tp, req, key, attempt, first, opts...)
 	if err != nil {

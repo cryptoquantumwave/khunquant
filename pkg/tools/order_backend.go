@@ -458,7 +458,7 @@ func (b *ApprovalOrderBackend) Throttle(p approval.OrderParams) (bool, time.Dura
 func (b *ApprovalOrderBackend) PlaceApprovedOrder(ctx context.Context, p approval.OrderParams, key string, attempt int, first time.Time, rc approval.Rechecked) (approval.Placed, error) {
 	var outcome broker.PlaceOutcome
 	var cid string
-	opts := []broker.PlaceOption{broker.WithClock(b.now), broker.WithOutcome(func(o broker.PlaceOutcome, id string) { outcome, cid = o, id })}
+	opts := append([]broker.PlaceOption{broker.WithClock(b.now), broker.WithOutcome(func(o broker.PlaceOutcome, id string) { outcome, cid = o, id })}, journalSendOptions(ctx)...)
 
 	req := broker.OrderRequest{Market: p.Market, Symbol: p.Symbol, Type: p.Type, Side: p.Side, Amount: p.Amount, Price: p.Price}
 	var target broker.Provider

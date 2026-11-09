@@ -14,12 +14,15 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
+	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/policy"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/quiesce"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 // Deps are the generation-scoped services behind four ops. The gateway fills what the
@@ -33,6 +36,13 @@ type Deps struct {
 	// it when set. Snapshot lists every quiescer and its state, without waiting (the idle op).
 	SettleWait func(ctx context.Context, wallCap time.Duration) (quiesce.Report, error)
 	Snapshot   func() []quiesce.Status
+	// Home, Specs, Attention and Profile are what export_replay writes a policy from: the
+	// instance home, the trigger registry's specs, the attention configuration and the
+	// owner's profile of this generation.
+	Home      string
+	Specs     func(ctx context.Context) ([]triggers.Spec, error)
+	Attention func() config.AttentionConfig
+	Profile   func(ctx context.Context) (intent.Profile, error)
 	// Err, when set, is the answer of every op that needs a dependency (workflows,
 	// proposals, policy, settle, idle): there is no generation of services to ask, so the
 	// ops must not read the nil fields as "this instance lacks the feature". Ops that
@@ -93,6 +103,11 @@ func Group(j *labjournal.Journal, deps func() Deps) lab.Group {
 			Args: schema(argLimit), Run: policyOp(d)},
 		{Name: "settle", Description: "wait until every component is idle: {settled, wall_ms, busy}",
 			Args: schema(`"wall_cap":{"type":"string","description":"Go duration, default 10s, clamped to 25s"}`), Run: settleOp(d)},
+		{Name: "export_replay", Description: "write the recordable events of the journal, this instance's trigger policy and the given labels as a replay case under <home>/lab/export/<case>/ (events.jsonl, policy.json, labels.json, golden.json), validated and replayed twice; refused when it would fail the golden test unless allow_failing",
+			Args: schema(`"case":{"type":"string","description":"^[a-z0-9_]{1,48}$"}`,
+				`"labels":{"type":"array","items":{"type":"object"},"description":"[{match, from, to, should_fire, critical?, note?}]; at least one"}`,
+				argSince, argUntil, `"allow_failing":{"type":"boolean"}`),
+			Required: []string{"case", "labels"}, Run: exportReplayOp(j, d)},
 		{Name: "idle", Description: "every quiescer and whether it is idle now, without waiting", Run: idleOp(d)},
 		{Name: "wait_for", Description: "block until journal entries match; at most 25 s per call, loop on next_seq",
 			Args: schema(`"match":{"type":"object","description":"{kind, subject, fields (dotted paths into the payload), count (\"1\", \">= 2\", \"0\" = absence)}"}`,

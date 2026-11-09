@@ -10,6 +10,8 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/agent"
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -22,6 +24,10 @@ type labSetup struct {
 	bus   *bus.MessageBus // the process's message bus (for the bus quiescer)
 	mux   http.Handler // manage's private mux: the real /api/proactive/* handlers, this generation's services
 	token string       // the management token that mux's guards expect; never leaves the process
+
+	// What export_replay writes a policy from: the attention configuration and the owner's profile.
+	attention func() config.AttentionConfig
+	profile   func(ctx context.Context) (intent.Profile, error)
 }
 
 // labSetupOf is the current generation's setup, or nil between generations.

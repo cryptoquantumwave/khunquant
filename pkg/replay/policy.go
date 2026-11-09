@@ -132,6 +132,9 @@ func (p Policy) profile() intent.Profile {
 
 func (p Policy) lang() func() string { return func() string { return p.Language } }
 
+// CanRun reports whether a replay has a factory for the trigger kind.
+func CanRun(kind string) bool { _, ok := (Policy{}).factories()[kind]; return ok }
+
 // factories are the trigger kinds a replay can run: the ones that read the world model
 // alone. A kind that needs the owner's databases or a source that is not recorded (dca_due,
 // time_at, news_relevant, external, goal_discrepancy) is unknown here, and a spec of it is

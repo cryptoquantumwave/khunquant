@@ -16,6 +16,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
+	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
@@ -37,6 +38,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/simweb"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
+	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
 )
 
 // This file is the only place the gateway builds and attaches Sandbox Lab
@@ -429,6 +431,15 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 		if rt := s.journalLive.Load(); rt != nil {
 			d.Workflows = rt.engine.List
 		}
+		if shared.lab != nil {
+			d.Home = shared.lab.Home
+		}
+		if rt := s.Perception; rt != nil && rt.triggers != nil {
+			d.Specs = func(ctx context.Context) ([]triggers.Spec, error) { return rt.triggers.List(ctx, triggers.ListFilter{}) }
+		}
+		if ls := s.labSetup; ls != nil {
+			d.Attention, d.Profile = ls.attention, ls.profile
+		}
 		if s.Approval != nil && s.Approval.svc != nil {
 			d.Pending = s.Approval.svc.ListPending
 		}
@@ -490,7 +501,19 @@ func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error
 	// generation's services, called in process. Set before buildServices publishes s.
 	priv := http.NewServeMux()
 	registerProactiveRoutes(priv, s, d)
-	s.labSetup = &labSetup{al: d.AgentLoop, bus: d.Bus, mux: priv, token: d.Cfg.Gateway.ManagementToken}
+	s.labSetup = &labSetup{al: d.AgentLoop, bus: d.Bus, mux: priv, token: d.Cfg.Gateway.ManagementToken,
+		attention: func() config.AttentionConfig { return d.Cfg.Proactive.Attention },
+		profile: func(ctx context.Context) (intent.Profile, error) {
+			db, err := proactiveDB(d)
+			if err != nil {
+				return intent.Profile{}, err
+			}
+			st, err := openIntentStore(ctx, d, db)
+			if err != nil {
+				return intent.Profile{}, err
+			}
+			return st.Profile(ctx)
+		}}
 	attachSimChat(d.Shared, s.ChannelManager)
 	if err := startLabObserver(s.lab, d.Shared); err != nil {
 		return fmt.Errorf("starting the lab observer: %w", err)

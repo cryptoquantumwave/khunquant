@@ -143,3 +143,29 @@ func TestWriteProfile_StaysInsideHome(t *testing.T) {
 		t.Errorf("round trip: port=%d model=%q", loaded.Gateway.Port, loaded.ModelList[0].Model)
 	}
 }
+
+// The profile carries a random view token for the launcher's timeline: it loads back
+// from config.json, is fresh per instance, and Profile (the in-memory form) holds none.
+func TestWriteProfile_ViewToken(t *testing.T) {
+	t.Setenv("KQ_SANDBOX_TOKEN", "")
+	a, err := WriteProfile(ProfileOptions{Home: filepath.Join(t.TempDir(), "a"), Port: 18793})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := WriteProfile(ProfileOptions{Home: filepath.Join(t.TempDir(), "b"), Port: 18793})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, errA := config.LoadConfig(a)
+	cb, errB := config.LoadConfig(b)
+	if errA != nil || errB != nil {
+		t.Fatal(errA, errB)
+	}
+	ta, tb := ca.Gateway.ManagementToken, cb.Gateway.ManagementToken
+	if len(ta) < 32 || ta == tb {
+		t.Errorf("view tokens = %q and %q, want two distinct tokens of 32+ characters", ta, tb)
+	}
+	if p, _ := Profile(ProfileOptions{Home: t.TempDir(), Port: 18793}); p.Gateway.ManagementToken != "" {
+		t.Error("Profile (in memory) carries a management token")
+	}
+}

@@ -361,6 +361,47 @@ func TestWebull_ListingOrderChangesPerFirstPageOnly(t *testing.T) {
 	}
 }
 
+// The ListPageCap option cuts every page of both listings at its value whatever page_size
+// asks, as a venue that returns fewer rows than were asked for would; a smaller page_size
+// still decides. Off (the default), page_size=100 returns them all.
+func TestWebull_ListPageCapIgnoresPageSize(t *testing.T) {
+	e := newEnv(t, true)
+	e.price(150)
+	e.seed(100_000)
+	for i := range 12 {
+		e.restLimit(fmt.Sprintf("ord%02d", i))
+	}
+	if got := listIDs(e, "&page_size=100"); len(got) != 12 {
+		t.Fatalf("page_size=100 without the cap returned %d, want all 12", len(got))
+	}
+	e.options(sandbox.VenueOptions{ListPageCap: 10})
+	if got := listIDs(e, "&page_size=100"); len(got) != 10 {
+		t.Errorf("page_size=100 under a cap of 10 returned %d, want 10", len(got))
+	}
+	if got := listIDs(e, "&page_size=4"); len(got) != 4 {
+		t.Errorf("page_size=4 under a cap of 10 returned %d, want 4", len(got))
+	}
+	if open, err := e.a.FetchOpenOrders(context.Background(), ""); err != nil || len(open) != 10 {
+		t.Errorf("the adapter's page of 100 = %d, %v, want 10 under the cap", len(open), err)
+	}
+	for i := range 12 {
+		if st, out, _ := e.raw("POST", "/openapi/trade/order/cancel", fmt.Sprintf(`{"account_id":"A","client_order_id":"ord%02d"}`, i)); st != 200 {
+			t.Fatalf("cancel ord%02d: %d %v", i, st, out)
+		}
+	}
+	history := func() int {
+		_, _, rows := e.raw("GET", "/openapi/trade/order/history?account_id=A&page_size=100", "")
+		return len(rows)
+	}
+	if n := history(); n != 10 {
+		t.Errorf("history page_size=100 under a cap of 10 returned %d, want 10", n)
+	}
+	e.options(sandbox.VenueOptions{})
+	if n := history(); n != 12 {
+		t.Errorf("history page_size=100 without the cap returned %d, want all 12", n)
+	}
+}
+
 // A repeated client_order_id makes a second order by default (the pessimistic reading of
 // what is not established) and is refused with the option; both are in the order journal,
 // and a lookup of a repeated id answers the newest, whatever the map order.

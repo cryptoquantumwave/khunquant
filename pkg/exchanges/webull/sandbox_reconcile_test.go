@@ -4,55 +4,151 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"testing"
 	"time"
 
+	ccxt "github.com/ccxt/ccxt/go/v4"
+
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
 // S108A-3 at the wire. A Webull order whose answer was lost is reconciled by reading the
-// listings. The plan this test came from assumed a listing returns 10 rows, so a reconcile
-// that read one page would miss the order among 12 and place a second one. The client now
-// asks for the maximum page (100) and treats a full page as unable to show absence
-// (7cbd839b), so with 12 open orders the reconcile finds its order and places nothing. The
-// gate the plan put on this test (KQ_KNOWN_BUG_S108A3) is not added: it would assert a
-// defect that this tree no longer has.
-func TestWebull_ReconcileReadsOnePage(t *testing.T) {
-	e := newEnv(t, true)
+// listings: the adapter has no lookup by client order ID (see ClientOrderIDKey), so the retry
+// looks for the ID on one open page and one history page. The order here is a buy limit below
+// the market: it rests among 12 other resting limits, so the open page is where it must be
+// found, and a list seed puts it beyond the 10th row, where a page of 10 would not show it.
+// (A market order fills at once and is found on a history page of one row, whatever the size
+// of the open page.)
+
+const lostKey = "wf-1:place"
+
+// lostLimit rests 12 buy limits at 100, then sends the order under test, a buy of 1 AAPL at
+// 140 with the market at 150, and loses its answer: the venue books it and the connection
+// dies before the reply. It returns the request, its client order ID, and the time the first
+// attempt began, an hour before the sim clock (far past the settle delay).
+func lostLimit(e *env) (broker.OrderRequest, string, time.Time) {
+	e.t.Helper()
 	e.price(150)
 	e.seed(1_000_000)
 	for i := range 12 {
 		e.restLimit(fmt.Sprintf("other%03d", i))
 	}
-	req := broker.OrderRequest{Market: broker.OrderMarketSpot, Symbol: "AAPL/USD", Type: "market", Side: "buy", Amount: 1}
-	const key = "wf-1:place"
-	first := e.clk.Now().Add(-time.Hour) // far past the settle delay
-
+	px := 140.0
+	req := broker.OrderRequest{Market: broker.OrderMarketSpot, Symbol: "AAPL/USD", Type: "limit", Side: "buy", Amount: 1, Price: &px}
+	cid := broker.ClientOrderID(lostKey, maxClientOrderIDLen)
+	first := e.clk.Now().Add(-time.Hour)
+	e.mu.Lock()
 	e.dropPlace = true
-	if _, err := broker.PlaceOrderIdempotent(context.Background(), e.a, req, key, 1, first); !errors.Is(err, broker.ErrOutcomeUnknown) {
-		t.Fatalf("first attempt: %v, want an outcome-unknown error (the answer was lost)", err)
+	e.mu.Unlock()
+	if _, err := broker.PlaceOrderIdempotent(context.Background(), e.a, req, lostKey, 1, first); !errors.Is(err, broker.ErrOutcomeUnknown) {
+		e.t.Fatalf("first attempt: %v, want an outcome-unknown error (the answer was lost)", err)
 	}
-	if n := e.placed(); n != 1 {
-		t.Fatalf("%d orders booked after the lost answer, want 1", n)
+	if n := e.creates(cid); n != 1 {
+		e.t.Fatalf("%d orders booked under %s after the lost answer, want 1", n, cid)
 	}
-	o, err := broker.PlaceOrderIdempotent(context.Background(), e.a, req, key, 2, first)
+	return req, cid, first
+}
+
+// hideBeyondTen sets the first list seed whose first open page of 10 rows leaves the order
+// under test out, found by reading that page, together with the page cap. Every first page
+// takes the next permutation of the listing (webullPage), so the venue's listing counter is
+// cleared before and after the look: the reconcile's first page is the permutation read here.
+func hideBeyondTen(e *env, cid string, pageCap int) {
+	e.t.Helper()
+	restart := func() {
+		err := e.sim.Mutate("webull", func(st *sandbox.VenueState) error {
+			st.ListSeq = nil
+			return nil
+		})
+		if err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	for s := uint64(1); s <= 64; s++ {
+		e.options(sandbox.VenueOptions{ListSeed: &s, ListPageCap: pageCap})
+		restart()
+		page := listIDs(e, "")
+		restart()
+		if len(page) != 10 {
+			e.t.Fatalf("a first page of %d rows, want 10 of the 13 open orders", len(page))
+		}
+		if !slices.Contains(page, cid) {
+			return
+		}
+	}
+	e.t.Fatal("no list seed from 1 to 64 puts the order beyond the 10th row")
+}
+
+// retryOrder is attempt 2 of the same order, on the sim clock. It returns the order, the
+// outcome PlaceOrderIdempotent reported ("" when it reported none) and the error.
+func retryOrder(e *env, req broker.OrderRequest, first time.Time) (ccxt.Order, broker.PlaceOutcome, error) {
+	var outcome broker.PlaceOutcome
+	o, err := broker.PlaceOrderIdempotent(context.Background(), e.a, req, lostKey, 2, first,
+		broker.WithClock(e.clk.Now), broker.WithOutcome(func(oc broker.PlaceOutcome, _ string) { outcome = oc }))
+	return o, outcome, err
+}
+
+// The venue honours page_size: the retry reads the open page of 100, finds the resting order
+// on it beyond the 10th row, and places nothing: one create under its client order ID. On a
+// page of 10 rows the order would not be listed (the next test).
+func TestWebull_ReconcileReadsOnePage(t *testing.T) {
+	e := newEnv(t, true)
+	req, cid, first := lostLimit(e)
+	hideBeyondTen(e, cid, 0)
+	o, outcome, err := retryOrder(e, req, first)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if want := broker.ClientOrderID(key, maxClientOrderIDLen); o.Id == nil || *o.Id != want {
-		t.Fatalf("retry returned %v, want the order already booked, %s", o.Id, want)
+	if outcome != broker.OutcomeFoundExisting || deref(o.Id) != cid || deref(o.Status) != "open" {
+		t.Fatalf("retry returned %s (%s) with outcome %q, want the resting order %s found", deref(o.Id), deref(o.Status), outcome, cid)
 	}
-	if n := e.placed(); n != 1 {
-		t.Fatalf("%d orders booked after the retry, want still 1: the reconcile must find it, not place another", n)
+	if n := e.creates(cid); n != 1 {
+		t.Fatalf("%d orders booked under %s after the retry, want still 1: the reconcile must find it, not place another", n, cid)
 	}
 }
 
-// placed counts the creates of market orders the venue booked (the 12 others rest as limits).
-func (e *env) placed() (n int) {
+// Known defect, gated until it is fixed (delete the gate with the fix). The adapter asks for a
+// page of 100 and takes a page shorter than 100 for the whole listing (pageIsFull). A venue
+// that returns 10 rows when asked for 100 (the simulator's ListPageCap) leaves the resting
+// order off the page; the retry concludes that it is absent and places it again under the same
+// client order ID, which the simulator accepts by default. Whether Webull returns fewer rows
+// than asked while more exist is not stated in docs/webull-api-spec.md ("default 10, max
+// 100"). Run with KQ_KNOWN_BUG_WEBULL_SHORT_PAGE=1; it fails while the defect is open.
+func TestWebull_ReconcileOnAShortPage(t *testing.T) {
+	if os.Getenv("KQ_KNOWN_BUG_WEBULL_SHORT_PAGE") != "1" {
+		t.Skip("known defect (a listing page cut below the page_size asked for is read as complete, so a lost order beyond it is placed again): set KQ_KNOWN_BUG_WEBULL_SHORT_PAGE=1 to reproduce it")
+	}
+	e := newEnv(t, true)
+	req, cid, first := lostLimit(e)
+	hideBeyondTen(e, cid, 10)
+	o, outcome, err := retryOrder(e, req, first)
+	if n := e.creates(cid); n != 1 {
+		t.Fatalf("%d orders booked under %s after the retry (outcome %q, err %v), want still 1: a page of 10 rows, asked for 100, was read as the whole listing", n, cid, outcome, err)
+	}
+	switch {
+	case err == nil && (outcome != broker.OutcomeFoundExisting || deref(o.Id) != cid):
+		t.Fatalf("retry returned %s with outcome %q, want the order %s found", deref(o.Id), outcome, cid)
+	case err != nil && !errors.Is(err, broker.ErrReconcileUnavailable) && !errors.Is(err, broker.ErrReconcileUnproven):
+		t.Fatalf("retry: %v, want the order found, or unavailable or unproven with nothing placed", err)
+	}
+}
+
+// creates counts the creates the venue booked under one client order ID.
+func (e *env) creates(cid string) (n int) {
 	for _, en := range e.entries() {
-		if en.Event == "create" && en.Type == "market" {
+		if en.Event == "create" && en.ClientID == cid {
 			n++
 		}
 	}
 	return n
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
 }

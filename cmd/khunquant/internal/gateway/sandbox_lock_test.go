@@ -281,6 +281,14 @@ func TestEnforceLockedConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("a workspace whose name only starts with lab is kept", func(t *testing.T) {
+		cfg := dirty()
+		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "lab", Workspace: filepath.Join(home, "laboratory")})
+		if err := enforceLockedConfig(cfg, lk); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("explicit fixtures dir inside home is kept", func(t *testing.T) {
 		cfg := dirty()
 		cfg.Debug.Sandbox.FixturesDir = filepath.Join(home, "workspace", "sandbox")
@@ -302,6 +310,21 @@ func TestEnforceLockedConfig(t *testing.T) {
 		},
 		"listed agent workspace climbs out": func(c *config.Config) {
 			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "workspace", "..", "..", "elsewhere")}}
+		},
+		// The lab directory holds the journal, the LLM script, the clock, the saved world, the
+		// live budget and the crash marker: no workspace may be it, hold it or lie in it (195-1).
+		"default workspace is the lab": func(c *config.Config) { c.Agents.Defaults.Workspace = filepath.Join(home, "lab") },
+		"listed agent workspace is the lab": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "lab")}}
+		},
+		"listed agent workspace inside the lab": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "lab", "world")}}
+		},
+		"listed agent workspace is the lab in another case": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "Lab")}}
+		},
+		"listed agent workspace reaches the lab by dot-dot": func(c *config.Config) {
+			c.Agents.List = []config.AgentConfig{{ID: "other", Workspace: filepath.Join(home, "workspace", "..", "lab")}}
 		},
 		"fixtures outside home":  func(c *config.Config) { c.Debug.Sandbox.FixturesDir = repoSandboxFixtures(t) },
 		"claude-cli model": func(c *config.Config) {

@@ -310,6 +310,10 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := l.AddGroup(crashops.Group(l.Crash)); err != nil {
 		return err
 	}
+	// The supervisor's snapshot op; it reads only the lab, so it holds no generation.
+	if err := l.AddGroup(l.SnapshotGroup()); err != nil {
+		return err
+	}
 	return l.AddGroup(llmops.Group(e, l.Home))
 }
 

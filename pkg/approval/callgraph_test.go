@@ -187,12 +187,12 @@ func assertSites(t *testing.T, what string, got []site, allowed ...string) {
 	}
 }
 
-// TestOrderExecutionCallGraph: there is no path from a model's output to an
-// exchange order except through an approved proposal.
+// TestOrderExecutionCallGraph: every caller of PlaceOrderIdempotent is listed, and the
+// one an approved proposal reaches is the only path from a proposal to an order.
 //
 //	PlaceOrderIdempotent   called only by ApprovalOrderBackend.PlaceApprovedOrder, and by
-//	                       the delta-neutral, mandated-DCA and futures_open_position
-//	                       callers named in the allowlist below
+//	                       the delta-neutral, mandated-DCA, futures_open_position and
+//	                       direct-order-tool callers named in the allowlist below
 //	PlaceApprovedOrder    called only by the place step of approval.order, declared once
 //	the approval.order workflow is started only by Service.startExecution
 //	startExecution         called only by Decide (right after the owner approved) and
@@ -230,12 +230,28 @@ func TestOrderExecutionCallGraph(t *testing.T) {
 	// attempt 1 with a key unique to the call, only to attach a client order ID and
 	// classify a failure; a lost answer is looked for with FindOrder and never placed
 	// again (a retry by a person or the model is a new call, not attempt 2).
+	// The fifth caller is sendOrderOnce, the direct order tools' one send: create_order, the
+	// scheduled DCA run and the futures exits close, reduce and flatten, each after its own
+	// gates and, but for the DCA run, a confirm=true. Like the fourth it
+	// calls at attempt 1 with a key unique to the call, to attach a client order ID and
+	// classify a failure; a lost answer is looked for with FindOrder, never placed again.
+	// These tools placed orders before, through the adapter directly: this is the same
+	// path with a client order ID, not a new one.
 	assertSites(t, "broker.PlaceOrderIdempotent", place,
 		"pkg/tools/order_backend.go:ApprovalOrderBackend.PlaceApprovedOrder",
 		"pkg/tools/dca_mandate_exchange.go:dcaExchange.PlaceMandateBuy",
 		"pkg/tools/dn_exchange.go:dnExchange.Place",
-		"pkg/tools/futures_open_reconcile.go:placeFuturesEntry")
+		"pkg/tools/futures_open_reconcile.go:placeFuturesEntry",
+		"pkg/tools/order_place_once.go:sendOrderOnce")
 	assertSites(t, "placeFuturesEntry", callSites(srcs, "placeFuturesEntry"), "pkg/tools/futures.go:FuturesOpenPositionTool.Execute")
+	assertSites(t, "sendOrderOnce", callSites(srcs, "sendOrderOnce"),
+		"pkg/tools/order_place_once.go:placeOrderOnce",
+		"pkg/tools/futures_close.go:FuturesEmergencyFlattenTool.execute")
+	assertSites(t, "placeOrderOnce", callSites(srcs, "placeOrderOnce"),
+		"pkg/tools/order_create.go:CreateOrderTool.Execute",
+		"pkg/tools/dca_execute_order.go:ExecuteDCAOrderTool.Execute",
+		"pkg/tools/futures_close.go:FuturesClosePositionTool.execute",
+		"pkg/tools/futures_close.go:FuturesReducePositionTool.execute")
 	assertSites(t, "dca.Exchange.PlaceMandateBuy", callSites(srcs, "PlaceMandateBuy"), "pkg/dca/workflow.go:Deps.place")
 	assertSites(t, "dca.StartExecute", callSites(srcs, "StartExecute"),
 		"cmd/khunquant/internal/gateway/dca_mandate_wiring.go:dcaDispatcher.Dispatch")

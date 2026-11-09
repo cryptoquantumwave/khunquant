@@ -58,7 +58,9 @@ const (
 // Overridden in tests only.
 var (
 	// futuresOpenSettle is how long to wait, in wall time, before looking for an
-	// order whose answer was lost: the exchange's view of it lags.
+	// order whose answer was lost: the exchange's view of it lags. The other direct
+	// order tools wait the same (order_place_once.go), and futuresOpenNow is their
+	// clock too.
 	futuresOpenSettle = broker.ReconcileSettleDelay
 	futuresOpenNow    = time.Now
 )

@@ -331,6 +331,11 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 	if err := prepareHome(in.home, in.name, port, fixtures, o.Accounts...); err != nil {
 		return err
 	}
+	if o.restore != nil { // every attempt: a retry makes a new home and may have a new port
+		if err := o.restore.apply(in.home, port); err != nil {
+			return err
+		}
+	}
 	if len(o.ConfigPatch) > 0 {
 		if _, err := patchConfigFile(in.home, o.ConfigPatch); err != nil {
 			return fmt.Errorf("sandbox up: config patch: %w", err)

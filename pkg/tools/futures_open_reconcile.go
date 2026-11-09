@@ -199,6 +199,22 @@ func paramsCarryClientOrderID(params map[string]interface{}) bool {
 	return false
 }
 
+// paramsCarryTrigger reports whether params make the entry a conditional (trigger) order,
+// in any case of the key (the sanitizer admits these four case-insensitively). Such an
+// order goes to the exchange's algo endpoint: it carries no client order ID, and neither
+// venue lists it among the open orders a look reads, so a lost answer could never be
+// settled and the marker would clear while the order still rests. The stop-loss and
+// take-profit have their own arguments.
+func paramsCarryTrigger(params map[string]interface{}) bool {
+	for k := range params {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "stopprice", "triggerprice", "stoplossprice", "takeprofitprice":
+			return true
+		}
+	}
+	return false
+}
+
 // ---- the next call ----
 
 // refuseWhileUnknown is the marker's gate. It looks (never places, never spends a rate

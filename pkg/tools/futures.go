@@ -190,6 +190,7 @@ func (t *FuturesOpenPositionTool) Parameters() map[string]any {
 				"type": "object",
 				"description": "Extra CCXT/exchange execution params (optional), e.g. timeInForce, postOnly, reduceOnly. " +
 					"Client order IDs are refused: the tool sets its own, so the entry can be found again if the exchange's answer is lost. " +
+					"Trigger prices (stopPrice, triggerPrice, stopLossPrice, takeProfitPrice) are refused too: use the stop_loss and take_profit arguments. " +
 					"Margin and leverage keys are refused unless trading_risk permits them, and unrecognised keys are refused; " +
 					"use the side, leverage and margin_mode arguments rather than passing them here.",
 			},
@@ -249,6 +250,14 @@ func (t *FuturesOpenPositionTool) Execute(ctx context.Context, args map[string]a
 	}
 	if paramsCarryClientOrderID(params) {
 		return ErrorResult("params must not carry a client order ID: futures_open_position sets its own, derived from a key unique to the call, so the entry can be found again if the exchange's answer is lost. Nothing was sent.")
+	}
+	// A conditional entry could not be found again if the answer were lost (see
+	// paramsCarryTrigger), so only a plain market or limit entry is sent.
+	if orderType != "market" && orderType != "limit" {
+		return ErrorResult(fmt.Sprintf("order_type must be market or limit, got %q: a conditional entry cannot be found again if the exchange's answer is lost. Nothing was sent.", orderType))
+	}
+	if paramsCarryTrigger(params) {
+		return ErrorResult("params must not carry a trigger price (stopPrice, triggerPrice, stopLossPrice, takeProfitPrice): a conditional entry cannot be found again if the exchange's answer is lost. Use the stop_loss and take_profit arguments for protection. Nothing was sent.")
 	}
 
 	// Step 2: leverage opt-in

@@ -70,6 +70,12 @@ func registerQuiescers(reg *quiesce.Registry, shared *sharedResources, l *lab.La
 	idleOf("intents", perception(func(rt *perceptionRuntime) bool { return rt.intentComp.Idle() }))
 	idleOf("agent", func(s *gatewayServices) bool { return s.labSetup == nil || s.labSetup.al == nil || s.labSetup.al.Idle() })
 	idleOf("bus", func(s *gatewayServices) bool { return s.labSetup == nil || s.labSetup.bus == nil || s.labSetup.bus.Idle() })
+	// Loops of their own on the sim clock: a heartbeat run (what it does before its agent
+	// turn registers is seen by nothing else), the alert runtime's hourly sync and
+	// plan-tool debounce, and the daily loss guard's equity sample.
+	idleOf("heartbeat", func(s *gatewayServices) bool { return s.HeartbeatService == nil || s.HeartbeatService.Idle() })
+	idleOf("alerts", func(s *gatewayServices) bool { return s.Alerts == nil || s.Alerts.idle() })
+	idleOf("lossguard", func(s *gatewayServices) bool { return s.LossGuard == nil || s.LossGuard.idle() })
 
 	// Process-lifetime components: the order feed is a package-level publisher, the
 	// simulated chat's world and the exchange server live as long as the lab, and a

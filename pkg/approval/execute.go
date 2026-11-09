@@ -247,12 +247,9 @@ func (s *Service) stepVerify(ctx context.Context, id string, placed Placed) Fill
 		if i == s.o.VerifyPolls-1 {
 			break
 		}
-		if s.o.VerifyPollInterval > 0 {
-			select {
-			case <-ctx.Done():
-				return last
-			case <-s.o.Clock.After(s.o.VerifyPollInterval):
-			}
+		// A timer, not work: the step is idle while it waits.
+		if s.o.VerifyPollInterval > 0 && !journal.WaitTimer(ctx, s.o.Clock.After(s.o.VerifyPollInterval)) {
+			return last
 		}
 	}
 	return last

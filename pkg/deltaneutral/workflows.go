@@ -872,10 +872,7 @@ func (d *Deps) pause(ctx context.Context) {
 	if iv == 0 {
 		iv = defaultPollInterval
 	}
-	select {
-	case <-d.clock().After(iv):
-	case <-ctx.Done():
-	}
+	journal.WaitTimer(ctx, d.clock().After(iv)) // a timer, not work: the step is idle meanwhile
 }
 
 // mergeOrder keeps what the create response said wherever a later read is silent

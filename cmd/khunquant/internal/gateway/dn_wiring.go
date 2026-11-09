@@ -45,6 +45,9 @@ type dnRuntime struct {
 	// pass, so that a burst of edits is one pass.
 	wake     chan struct{}
 	debounce time.Duration
+	// requested is set by requestSync and cleared once the loop has opened the debounce
+	// window: no gap for the alert runtime's idle.
+	requested atomic.Bool
 	// passes counts the passes the loop ran for a request (not the hourly ones).
 	passes atomic.Uint64
 }
@@ -66,6 +69,7 @@ func (r *dnRuntime) requestSync() {
 	if r.wake == nil {
 		return
 	}
+	r.requested.Store(true)
 	select {
 	case r.wake <- struct{}{}:
 	default: // a request is already waiting

@@ -41,6 +41,8 @@ type Engine struct {
 	stepsStop context.CancelFunc
 	renewHalt chan struct{}
 	inflight  map[string]struct{}
+	parked    map[string]int // in-flight workflows whose step waits on a timer (WaitTimer), by id (for Idle)
+	renewing  atomic.Int32   // lease renewals in progress (for Idle: a parked workflow's renewal is work)
 	changed   chan struct{}
 	kick      chan struct{}
 	scanErr   string
@@ -117,6 +119,7 @@ func New(db *sql.DB, defs []Definition, clock Clock, opts ...Option) (*Engine, e
 		opt:      o,
 		runner:   runner,
 		inflight: map[string]struct{}{},
+		parked:   map[string]int{},
 		changed:  make(chan struct{}),
 		kick:     make(chan struct{}, 1),
 	}, nil
@@ -511,14 +514,43 @@ func (e *Engine) safeExecute(ctx context.Context, id string) {
 // Idle is true when no workflow is claimed by a worker (marked before it is queued), no
 // scan is pending or running, and the engine is not running at all, or runs with
 // nothing to do. A workflow that is due but not yet scanned, or in backoff, is a timer:
-// the engine finds it on its tick. It changes nothing; only the sandbox lab calls it.
+// the engine finds it on its tick. So is a step that waits on a timer through WaitTimer
+// (the pause between two reads of an order): its workflow does not count while it waits,
+// but a renewal of its lease does. It changes nothing; only the sandbox lab calls it.
 func (e *Engine) Idle() bool {
 	if e.scanning.Load() {
 		return false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return !e.running || (len(e.inflight) == 0 && len(e.kick) == 0)
+	if !e.running {
+		return true
+	}
+	if len(e.kick) != 0 || e.renewing.Load() != 0 {
+		return false
+	}
+	for id := range e.inflight {
+		if e.parked[id] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// park marks the in-flight workflow id as waiting on a timer, not working, until the
+// returned function is called (WaitTimer). Only Idle reads it.
+func (e *Engine) park(id string) (unpark func()) {
+	e.mu.Lock()
+	e.parked[id]++
+	e.mu.Unlock()
+	return func() {
+		e.mu.Lock()
+		e.parked[id]--
+		if e.parked[id] <= 0 {
+			delete(e.parked, id)
+		}
+		e.mu.Unlock()
+	}
 }
 
 func (e *Engine) mark(id string) bool {

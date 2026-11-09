@@ -224,6 +224,32 @@ func TestSim_AdvanceWallBudget(t *testing.T) {
 	}
 }
 
+// The budget can end inside the settle after the last step: the clock is at the target,
+// but that step has not settled, so the advance is not done (the caller calls again, and
+// the lab settles before it answers).
+func TestSim_AdvanceCutInTheLastSettleIsNotDone(t *testing.T) {
+	s := simclock.NewSim(t0)
+	_ = s.SetResolution(0)
+	s.After(10 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	sum, err := s.Advance(ctx, t0.Add(time.Minute), func(c context.Context) error {
+		if calls++; calls == 2 { // the settle after the last step, at the target
+			cancel()
+			return c.Err()
+		}
+		return nil
+	})
+	if err != nil || sum.Done || !sum.Reached.Equal(sum.Target) || sum.Steps != 2 {
+		t.Fatalf("summary %+v, err %v: want not done, at the target, after 2 steps", sum, err)
+	}
+	sum, err = s.Advance(context.Background(), t0.Add(time.Minute), func(context.Context) error { return nil })
+	if err != nil || !sum.Done || sum.Steps != 0 {
+		t.Fatalf("a call at the target after the cut: %+v, %v; want done with no step", sum, err)
+	}
+}
+
 func TestSim_AdvanceRefusals(t *testing.T) {
 	s := simclock.NewSim(t0)
 	if _, err := s.Advance(context.Background(), t0.Add(-time.Second), nil); !errors.Is(err, simclock.ErrPast) {

@@ -1,0 +1,42 @@
+# SBX-21: the replay case testdata/replay/flash_crash played at wire level. The `recording` price
+# model feeds the recorded BTC/USDT ticks of that case to SimMarket, so the OKX ticker, klines
+# and mark price follow the same crash (70000 -> 55500 in 13 minutes, then back) that the fast
+# replay tier judges. An OKX long of 0.5 BTC from 70000 whose liquidation price is 50000 (the
+# recorded position) sees the distance (mark - liq) / mark fall under the 15 % Critical line
+# below 58824: the owner hears a critical, as the replay case's labels say.
+#
+# The numbers. Long 0.5 BTC (1 contract of this market is 1 BTC) from 70000 on a 10100 USDT cross
+# wallet, maintenance rate 0.4 %: L = (0.5 x 70000 - 10100) / (0.5 x 0.996) = 50000. The tick
+# at +11m is 62000 (distance 19 %, Warning), the one at +12m is 56000 (10.7 %, Critical). The
+# perception source polls an account with a position every 2 minutes of sim time.
+version: 1
+scenario: flash-crash-recording
+covers: [SBX-21]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [okx]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: okx, model: recording, path: testdata/replay/flash_crash/events.jsonl, align: start }
+account:
+  okx:
+    balances: { USDT: 10100 }
+    positions: [{ symbol: BTC-USDT-SWAP, side: long, contracts: 0.5, entryPrice: 70000, leverage: 10, marginMode: cross }]
+timeline:
+  - run_until: "+40m"
+expect:
+  - id: liq-critical
+    message: { to: owner, severity: critical, count: ">= 1" }
+    within: { from: "+11m", to: "+20m" }

@@ -3,6 +3,7 @@ package market
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -21,6 +22,13 @@ type segDump struct {
 	Path   *pathDump   `json:"path,omitempty"`
 	Walk   *walkDump   `json:"walk,omitempty"`
 	Replay *replayDump `json:"replay,omitempty"`
+	// Recording is saved by its file (relative to the home) and options, not its prices.
+	Recording *recordingDump `json:"recording,omitempty"`
+}
+
+type recordingDump struct {
+	File string           `json:"file"`
+	Opt  RecordingOptions `json:"opt"`
 }
 
 type pathDump struct {
@@ -73,13 +81,15 @@ func dumpModel(m Model) (d segDump, err error) {
 		d.Walk = &walkDump{Start: v.start, P0: v.p0, W: v.w}
 	case *replayModel:
 		d.Replay = &replayDump{TF: v.tf, Offset: v.offset, Bars: v.bars}
+	case *recordingModel:
+		d.Recording = &recordingDump{File: v.file, Opt: v.opt}
 	default:
 		err = fmt.Errorf("market: a %T model cannot be saved", m)
 	}
 	return d, err
 }
 
-func (d segDump) model() (Model, error) {
+func (d segDump) model(home, symbol string) (Model, error) {
 	switch {
 	case d.Set != nil:
 		return setModel{*d.Set}, nil
@@ -93,6 +103,11 @@ func (d segDump) model() (Model, error) {
 		return &walkModel{start: d.Walk.Start, p0: d.Walk.P0, w: d.Walk.W}, nil
 	case d.Replay != nil && len(d.Replay.Bars) > 0:
 		return &replayModel{tf: d.Replay.TF, offset: d.Replay.Offset, bars: d.Replay.Bars}, nil
+	case d.Recording != nil:
+		if home == "" || !filepath.IsLocal(d.Recording.File) {
+			return nil, fmt.Errorf("market: the saved recording %q is not inside the home", d.Recording.File)
+		}
+		return loadRecording(filepath.Join(home, filepath.FromSlash(d.Recording.File)), d.Recording.File, symbol, d.Recording.Opt)
 	}
 	return nil, fmt.Errorf("market: a saved segment at %s has no usable model", d.Start)
 }
@@ -149,7 +164,7 @@ func (b *Book) RestoreState(data []byte) error {
 				return err
 			}
 			for _, d := range segs {
-				m, err := d.model()
+				m, err := d.model(b.home, sym)
 				if err != nil {
 					return fmt.Errorf("%s on %s: %w", sym, venue, err)
 				}

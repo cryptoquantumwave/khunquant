@@ -115,7 +115,7 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 	groups := []lab.Group{
 		inspect.Group(j, deps), l.ClockGroup(),
 		recorder(l, j, "chat", "send", "press", "react", "outbox", "set_state"),
-		recorder(l, j, "call_tool", ""), recorder(l, j, "market", "set", "path", "shock", "walk", "replay", "delist", "relist"),
+		recorder(l, j, "call_tool", ""), recorder(l, j, "market", "set", "path", "shock", "walk", "replay", "recording", "delist", "relist"),
 		recorder(l, j, "account", "seed", "get"), recorder(l, j, "llm", "script_put", "cassette_load"), recorder(l, j, "manage", ""),
 	}
 	for _, g := range groups {

@@ -124,7 +124,7 @@ func New(ctx context.Context, opts Options) (*Lab, error) {
 	}
 	l.Settle = l.settleStep
 	// The book reads l.Now on every call, so the sim clock (SBX-07) needs no re-wiring.
-	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }})
+	l.Market = market.NewBook(market.Options{Now: func() time.Time { return l.Now() }, Home: opts.Home})
 	sim.SetPriceSource(l.Market)
 	l.Chain.Set(sandbox.StageMarket, l.Market.Middleware())
 	l.Chain.Set(sandbox.StageOrders, sandbox.AsMiddleware(persistingSim{sim, l}))

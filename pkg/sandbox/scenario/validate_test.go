@@ -85,7 +85,7 @@ func TestValidate_KnownBugNeedsID(t *testing.T) {
 func TestValidate_RequirementsNamePR(t *testing.T) {
 	caps := &Caps{Groups: map[string][]string{"chat": {"send", "set_state"}, "market": {"set", "path"}}, Kinds: []string{"chat.out", "exchange.req"}}
 
-	f := parseString(t, withExpect(base+"timeline:\n  - fault.add: {kind: latency}\n  - market.recording: {symbol: BTC/USDT}\n"))
+	f := parseString(t, withExpect(base+"timeline:\n  - fault.add: {kind: latency}\n  - market.recording: {symbol: BTC/USDT, path: x.jsonl}\n"))
 	issues := Validate(f, caps)
 	if got := issueAt(issues, "/timeline/0/fault.add"); !strings.Contains(got, "SBX-13") || !strings.Contains(got, "group `fault`") {
 		t.Errorf("fault.add: %q", got)

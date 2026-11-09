@@ -16,8 +16,8 @@ const (
 	EnvLLMModel   = "KQ_SANDBOX_LLM_MODEL"    // record/live: <protocol>/<model> of the real model
 	EnvLLMKey     = "KQ_SANDBOX_LLM_KEY"      // record/live: the API key; the child's env only
 	EnvLLMBudget  = "KQ_SANDBOX_LLM_BUDGET"   // record/live: "2USD" or "200000tok"
-	EnvLLMModels  = "KQ_SANDBOX_LLM_MODELS"   // record/live: allowed model ids, comma-separated
-	EnvLLMPrices  = "KQ_SANDBOX_LLM_PRICES"   // optional: "model=in:out,..." USD per million tokens
+	EnvLLMModels  = "KQ_SANDBOX_LLM_MODELS"   // record/live: allowed <protocol>/<model> ids, comma-separated
+	EnvLLMPrices  = "KQ_SANDBOX_LLM_PRICES"   // optional: "[protocol/]model=in:out,..." USD per million tokens
 	EnvLLMAPIBase = "KQ_SANDBOX_LLM_API_BASE" // Go callers only (UpOptions.LLMAPIBase): overrides the protocol's API base
 	EnvSeed       = "KQ_SANDBOX_SEED"         // non-zero int64 seeds the nonce source (pkg/randsrc)
 	EnvAllowHosts = "KQ_SANDBOX_ALLOW_HOSTS"  // the one inner API host, record/live only
@@ -86,6 +86,32 @@ func ParseLLMBudget(s string) (usd float64, tok int, err error) {
 		return 0, 0, errors.New("budget " + strconv.Quote(s) + " must end in USD or tok, e.g. 2USD or 200000tok")
 	}
 	return usd, tok, nil
+}
+
+// LLMModelAllowed checks inner ("<protocol>/<model>") against the KQ_SANDBOX_LLM_MODELS
+// allowlist. An entry names the protocol as well as the model: the protocol picks the API
+// host the key is sent to, so an entry that named the model alone would let any allowed
+// protocol's host receive the key (192-1). A bare entry matches nothing, and the error says
+// how to write it. The supervisor and the gateway both call this, so they cannot drift.
+func LLMModelAllowed(inner string, allowlist []string) error {
+	protocol, model, err := SplitInnerModel(inner)
+	if err != nil {
+		return err
+	}
+	want := protocol + "/" + model
+	bare := false
+	for _, e := range allowlist {
+		switch e {
+		case want:
+			return nil
+		case model:
+			bare = true
+		}
+	}
+	if bare {
+		return fmt.Errorf("%s lists %q without its protocol; list it as %q", EnvLLMModels, model, want)
+	}
+	return fmt.Errorf("model %q is not in %s", want, EnvLLMModels)
 }
 
 // ParseLLMModels splits the allowlist.

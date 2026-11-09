@@ -3,7 +3,6 @@ package providers
 import (
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	anthropicmessages "github.com/cryptoquantumwave/khunquant/pkg/providers/anthropic_messages"
@@ -19,7 +18,8 @@ import (
 // unless every one holds:
 //   - the protocol is one of the HTTP clients on http.DefaultTransport, which the egress
 //     guard replaces (anthropic-messages, openai, openrouter); never an agent CLI;
-//   - the model is on the KQ_SANDBOX_LLM_MODELS allowlist and has a known price;
+//   - <protocol>/<model> is on the KQ_SANDBOX_LLM_MODELS allowlist as written (the
+//     protocol picks the host the key goes to) and has a known price;
 //   - a budget is set (live without one is refused) and a key is given;
 //   - the API host is the one host the lock allows (LockOptions.AllowHosts), no more.
 //
@@ -42,15 +42,21 @@ func simInnerFrom(mode, inner string, getenv func(string) string) (*sim.LiveOpti
 	if err != nil {
 		return nil, fmt.Errorf("sim/%s: %w", mode, err)
 	}
+	allowErr := sandbox.LLMModelAllowed(inner, env.Models)
 	switch {
 	case env.Key == "":
 		return nil, fmt.Errorf("sim/%s: %s is not set", mode, sandbox.EnvLLMKey)
-	case !slices.Contains(env.Models, model):
-		return nil, fmt.Errorf("sim/%s: model %q is not in %s", mode, model, sandbox.EnvLLMModels)
+	case allowErr != nil:
+		return nil, fmt.Errorf("sim/%s: %w", mode, allowErr)
 	case env.BudgetUSD == 0 && env.BudgetTok == 0:
 		return nil, fmt.Errorf("sim/%s: %s is not set; a live model never runs without a budget", mode, sandbox.EnvLLMBudget)
 	}
-	price, ok := env.Prices[model]
+	// A price for this protocol's model first (an aggregator may charge more), else the
+	// model's list price.
+	price, ok := env.Prices[protocol+"/"+model]
+	if !ok {
+		price, ok = env.Prices[model]
+	}
 	if !ok {
 		return nil, fmt.Errorf("sim/%s: no price is known for model %q (add it with %s)", mode, model, sandbox.EnvLLMPrices)
 	}

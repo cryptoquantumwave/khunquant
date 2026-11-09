@@ -75,7 +75,7 @@ func TestSimRefusedWhenUnlocked(t *testing.T) {
 	// Replay, record and live are refused the same way, whatever the environment holds: an
 	// unlocked process never builds a real inner model through sim, and never reads the key.
 	t.Setenv(sandbox.EnvLLMKey, testKey)
-	t.Setenv(sandbox.EnvLLMModels, testModel)
+	t.Setenv(sandbox.EnvLLMModels, testAllow)
 	t.Setenv(sandbox.EnvLLMBudget, "2USD")
 	t.Setenv(sandbox.EnvLLMPrices, testModel+"=3:15")
 	for _, ref := range []string{"sim/replay", "sim/record:openai/" + testModel, "sim/live:anthropic-messages/" + testModel} {

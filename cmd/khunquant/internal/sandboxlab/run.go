@@ -159,7 +159,7 @@ func newRunCommand() *cobra.Command {
 		Long: "Run (or, with --validate-only, only check) scenario files, one fresh locked instance per run, one at a time.\n" +
 			"A path is a file or a directory; the default is " + scenario.DefaultDir + ". --llm picks the files by their llm\n" +
 			"field (offline by default: scripted and replay, which need no model API and no key; live needs " + sandbox.EnvLLMKey + ",\n" +
-			sandbox.EnvLLMModels + " and --llm-model, --llm-budget, and is skipped without a key). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
+			sandbox.EnvLLMModels + " (<protocol>/<model> entries) and --llm-model, --llm-budget, and is skipped without a key). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
 			"Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.",
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			cmd.SilenceUsage, cmd.SilenceErrors = true, true

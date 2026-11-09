@@ -36,7 +36,7 @@ type UpOptions struct {
 	// the environment of whoever starts the instance. Seed seeds the nonces and ids of the
 	// instance: empty derives one from the instance name, "0" leaves them random.
 	LLM       string `json:"llm,omitempty" flag:"llm" desc:"Simulated model: scripted (default), replay, record or live"`
-	LLMModel  string `json:"llm_model,omitempty" flag:"llm-model" desc:"record/live: the real model, <protocol>/<model> (anthropic-messages, openai or openrouter); must be in KQ_SANDBOX_LLM_MODELS"`
+	LLMModel  string `json:"llm_model,omitempty" flag:"llm-model" desc:"record/live: the real model, <protocol>/<model> (anthropic-messages, openai or openrouter); must be in KQ_SANDBOX_LLM_MODELS as written, protocol included"`
 	LLMBudget string `json:"llm_budget,omitempty" flag:"llm-budget" desc:"record/live: spending cap, e.g. 2USD or 200000tok (required; it can only be lowered later)"`
 	Seed      string `json:"seed,omitempty" flag:"seed" desc:"Seed of the instance's nonces and ids: an integer, 0 for none (default: derived from the instance name)"`
 
@@ -175,8 +175,7 @@ func (o UpOptions) llmEnv(env map[string]string, name string, getenv func(string
 // checkLive validates a record or live start and sets its variables. The key is read from
 // the starter's environment, never from an option.
 func (o UpOptions) checkLive(env map[string]string, getenv func(string) string) error {
-	_, model, err := sandbox.SplitInnerModel(o.LLMModel)
-	if err != nil {
+	if _, _, err := sandbox.SplitInnerModel(o.LLMModel); err != nil {
 		return fmt.Errorf("sandbox up: --llm %s: %w", o.LLM, err)
 	}
 	if _, _, err := sandbox.ParseLLMBudget(o.LLMBudget); err != nil {
@@ -187,8 +186,8 @@ func (o UpOptions) checkLive(env map[string]string, getenv func(string) string) 
 		return fmt.Errorf("sandbox up: --llm %s needs %s in the environment", o.LLM, sandbox.EnvLLMKey)
 	}
 	models := getenv(sandbox.EnvLLMModels)
-	if !slices.Contains(sandbox.ParseLLMModels(models), model) {
-		return fmt.Errorf("sandbox up: model %q is not in %s", model, sandbox.EnvLLMModels)
+	if err := sandbox.LLMModelAllowed(o.LLMModel, sandbox.ParseLLMModels(models)); err != nil {
+		return fmt.Errorf("sandbox up: %w", err)
 	}
 	host, err := sandbox.LLMInnerHost(o.LLMModel, o.LLMAPIBase)
 	if err != nil {

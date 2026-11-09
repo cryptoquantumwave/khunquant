@@ -1,6 +1,7 @@
 package sandboxlab
 
 import (
+	"cmp"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,10 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 )
+
+// maxMCPRuns caps the runs one sandbox_scenario call may ask for: the call holds the MCP
+// client until every run is done.
+const maxMCPRuns = 20
 
 var errBadSource = errors.New("give exactly one of file and inline")
 
@@ -132,7 +137,16 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	if a.Runs > 0 {
 		f.Runs = a.Runs
 	}
-	rep, err := (&scenario.Runner{Sup: m.sup, KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr}).Run(ctx, f)
+	if f.Runs > maxMCPRuns {
+		return errResult("sandbox_scenario run: %d runs; at most %d through MCP (use khunquant sandbox run for more)", f.Runs, maxMCPRuns), nil
+	}
+	// One run at a time: a run starts and owns its instance, which a second run would
+	// otherwise compete with for the supervisor's instance limit and memory.
+	if !m.runMu.TryLock() {
+		return errResult("sandbox_scenario run: another run is in progress; one at a time"), nil
+	}
+	defer m.runMu.Unlock()
+	rep, err := (&scenario.Runner{Sup: m.sup, Timeout: cmp.Or(m.runTimeout, defaultTimeout), KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr}).Run(ctx, f)
 	if err != nil {
 		return errResult("sandbox_scenario run: %v", err), nil
 	}

@@ -172,6 +172,11 @@ func TestHelperFakeGateway(t *testing.T) {
 			time.Sleep(time.Minute)
 		}()
 	}
+	// --bind-after-ms=N waits before listening, so the supervisor's readiness poll reaches
+	// whatever holds the port first.
+	if ms, err := strconv.Atoi(flagValue("--bind-after-ms=")); err == nil {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	go func() {
 		// Like the real gateway (channels.Manager.StartAll): a server that cannot listen
 		// ends the process with exit 1.

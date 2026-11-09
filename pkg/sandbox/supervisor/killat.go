@@ -169,6 +169,7 @@ func (in *instance) resume(dead *proc) {
 	in.restarting = false
 	if err != nil {
 		in.state, in.restartErr = StateExited, err.Error()
+		in.tokenSpent = errors.Is(err, errPortTaken)
 	}
 }
 

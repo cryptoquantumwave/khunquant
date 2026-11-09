@@ -44,7 +44,7 @@ type Expectation struct {
 	Count       string         // "1", ">= 1", "<= 2", "0": labjournal.Match's count grammar
 	Within      *Window
 	During      string // "22:00-07:00" in the profile's time zone
-	ReplayMatch string // message only; read by SBX-21, ignored by the runner
+	ReplayMatch string // message with count 0 only: the replay label's match (ReplayLabels); the runner ignores it
 
 	kinds []string // every key that is not id or a modifier
 	dups  []string // modifiers given both inside and beside the kind mapping
@@ -110,6 +110,8 @@ func (e *Expectation) setModifier(k string, v *yaml.Node) error {
 		}
 		if v.Kind != yaml.ScalarNode { // its Value is "": the default, which checks less than written
 			e.modIssues = append(e.modIssues, Issue{"/" + k, "must be one value, not a list or a mapping"})
+		} else if k == "replay_match" && strings.TrimSpace(v.Value) == "" {
+			e.modIssues = append(e.modIssues, Issue{"/" + k, "must not be empty: a label needs a match"})
 		}
 		*cur = v.Value
 	}

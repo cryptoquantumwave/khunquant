@@ -149,6 +149,8 @@ type runOptions struct {
 	report, binary, llm, fixtures     string
 	llmModel, budget, seed, cassettes string
 	settleCap, timeout                time.Duration
+	exportReplay                      string
+	force                             bool
 }
 
 func newRunCommand() *cobra.Command {
@@ -180,6 +182,8 @@ func newRunCommand() *cobra.Command {
 	f.StringVar(&o.llmModel, "llm-model", "", "Live runs: the real model, <protocol>/<model>")
 	f.StringVar(&o.budget, "llm-budget", "", "Live runs: spending cap per instance, e.g. 2USD or 200000tok (required for live)")
 	f.StringVar(&o.seed, "seed", "", "Seed of the instances' nonces and ids (default: derived from each instance name; 0: none)")
+	f.StringVar(&o.exportReplay, "export-replay", "", "After a passing run, write its journal as a replay case to <dir>/<scenario>/ (testdata/replay layout); refused when the case exists")
+	f.BoolVar(&o.force, "force", false, "With --export-replay: replace a case that already exists")
 	f.StringVar(&o.cassettes, "cassettes", "", "Directory of <scenario>.jsonl cassettes for replay scenarios (default: testdata/cassettes)")
 	return cmd
 }
@@ -252,7 +256,8 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 	}
 	defer func() { _ = closeSup(context.WithoutCancel(ctx)) }()
 	runner := &scenario.Runner{Sup: sup, Timeout: o.timeout, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr(),
-		CassetteDir: o.cassettes, LLMModel: o.llmModel, LLMBudget: o.budget, Seed: o.seed}
+		CassetteDir: o.cassettes, LLMModel: o.llmModel, LLMBudget: o.budget, Seed: o.seed,
+		ExportDir: o.exportReplay, ExportForce: o.force}
 
 	var reports []*scenario.Report
 	var md strings.Builder
@@ -277,6 +282,14 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 				continue
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%d of %d runs)\n", rep.Verdict(), rep.Scenario, rep.Passed, len(rep.Runs))
+			for _, res := range rep.Runs {
+				if res.Exported != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "exported %s\n", res.Exported)
+				}
+				for _, sk := range res.ExportSkipped {
+					fmt.Fprintf(cmd.OutOrStdout(), "export skipped: %s\n", sk)
+				}
+			}
 			if rep.ExitCode() != 0 {
 				fmt.Fprint(cmd.OutOrStdout(), rep.Markdown())
 			}

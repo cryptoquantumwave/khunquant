@@ -258,8 +258,8 @@ func TestEval_UntilExpectation(t *testing.T) {
 	}
 }
 
-// A passing expectation lists the chat.out seqs it counted; replay_match is parsed and
-// carried and never evaluated.
+// A passing expectation lists the chat.out seqs it counted, and for a message the
+// dedup key and severity of each (what ReplayLabels reads).
 func TestRunner_RecordsMatchedSeqs(t *testing.T) {
 	sup := newFakeSup(t)
 	var want []int64
@@ -274,11 +274,8 @@ timeline:
   - advance: 10m
 expect:
   - id: two-btc
-    message: {to: owner, contains: [BTC], count: 2, replay_match: "BTC hit"}
+    message: {to: owner, contains: [BTC], count: 2}
 `)
-	if f.Expect[0].ReplayMatch != "BTC hit" {
-		t.Fatalf("replay_match was not carried: %+v", f.Expect[0])
-	}
 	res := runOne(t, sup, f).Runs[0]
 	if !res.Pass {
 		t.Fatalf("result = %+v", res)
@@ -286,6 +283,9 @@ expect:
 	for _, e := range res.Expect {
 		if e.ID == "two-btc" {
 			want = e.MatchedSeqs
+			if len(e.Sent) != 2 || e.Sent[0].Seq != want[0] || e.Sent[0].Severity != "warning" {
+				t.Errorf("Sent = %+v, want the two BTC messages with their severity", e.Sent)
+			}
 		}
 	}
 	got := journalSeqs(t, sup.order[0], "BTC")

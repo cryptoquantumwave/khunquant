@@ -22,6 +22,7 @@ import {
   type FixtureEntry,
 } from "@/api/sandbox"
 import { useSandboxStatus, useFixtures } from "@/hooks/use-sandbox-status"
+import { LabTimeline } from "@/components/sandbox/lab-timeline"
 
 export function SandboxPage() {
   const { t } = useTranslation()
@@ -555,6 +556,9 @@ export function SandboxPage() {
               </Card>
             </div>
           )}
+          {/* A locked sandbox instance has its own journal; the cards above are for
+              the fixtures of an ordinary gateway. */}
+          <LabTimeline />
         </div>
       </div>
     </div>

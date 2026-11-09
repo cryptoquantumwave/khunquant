@@ -1109,7 +1109,31 @@
       "step2": "Navigate to the Fixtures Directory above.",
       "step3": "Create or edit .json fixture files for each venue (e.g., binance.json, okx.json).",
       "step4": "Restart the agent to load the new fixtures.",
-      "step5": "All exchange API calls will receive mock responses from your fixtures."
+      "step5": "All exchange API calls will receive mock responses from your fixtures.",
+      "timeline": {
+        "title": "Lab timeline",
+        "desc": "Read-only journal of one locked sandbox instance. Start one launcher per instance with KHUNQUANT_CONFIG=<instance home>/config.json.",
+        "not_locked": "This gateway is not a locked sandbox, so there is no lab journal to show.",
+        "error": "The timeline could not be read from the gateway.",
+        "drops": "The journal dropped {{count}} entries; assertions may be incomplete.",
+        "empty": "No journal entries yet.",
+        "truncated": "Payload cut at 4 KiB.",
+        "utc": "UTC",
+        "local": "Local",
+        "family": {
+          "event": "Events",
+          "chat": "Chat",
+          "llm": "LLM",
+          "workflow": "Workflow",
+          "proposal": "Proposals",
+          "policy": "Policy",
+          "tool": "Tools",
+          "exchange": "Exchange",
+          "fault": "Faults",
+          "clock": "Clock",
+          "settle": "Settle"
+        }
+      }
     }
   },
   "portfolios": {

@@ -1281,7 +1281,31 @@
       "step2": "导航到上面的 Fixtures 目录。",
       "step3": "为每个交易所创建或编辑 .json fixture 文件（例如 binance.json、okx.json）。",
       "step4": "重新启动代理以加载新 fixtures。",
-      "step5": "所有交易所 API 调用都将从您的 fixtures 接收模拟响应。"
+      "step5": "所有交易所 API 调用都将从您的 fixtures 接收模拟响应。",
+      "timeline": {
+        "title": "实验室时间线",
+        "desc": "一个已锁定沙盒实例的只读日志。每个实例用 KHUNQUANT_CONFIG=<instance home>/config.json 启动一个启动器。",
+        "not_locked": "此网关不是已锁定的沙盒，没有可显示的实验室日志。",
+        "error": "无法从网关读取时间线。",
+        "drops": "日志丢弃了 {{count}} 条记录；断言可能不完整。",
+        "empty": "暂无日志记录。",
+        "truncated": "载荷已在 4 KiB 处截断。",
+        "utc": "UTC",
+        "local": "本地",
+        "family": {
+          "event": "事件",
+          "chat": "聊天",
+          "llm": "LLM",
+          "workflow": "工作流",
+          "proposal": "提案",
+          "policy": "策略",
+          "tool": "工具",
+          "exchange": "交易所",
+          "fault": "故障",
+          "clock": "时钟",
+          "settle": "Settle"
+        }
+      }
     }
   },
   "launcherLogin": {

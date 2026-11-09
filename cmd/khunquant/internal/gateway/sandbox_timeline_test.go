@@ -132,6 +132,23 @@ func TestTimelineGuard(t *testing.T) {
 	}
 }
 
+// A reload rebuilds the mux and registers the route again, so it takes the token the
+// reloaded file holds: the old one stops working, the new one reads.
+func TestTimelineViewTokenFollowsReload(t *testing.T) {
+	f := newLockedFixture(t)
+	const next = "reloaded-view-token-0123456789abcdef"
+	if err := f.reload(func(c *config.Config) { c.Gateway.ManagementToken = next }); err != nil {
+		t.Fatal(err)
+	}
+	url := f.url("/api/sandbox/timeline")
+	if code, _ := doGet(t, url, next, nil); code != http.StatusOK {
+		t.Errorf("new view token after reload = %d, want 200", code)
+	}
+	if code, _ := doGet(t, url, testMgmtToken, nil); code != http.StatusUnauthorized {
+		t.Errorf("old view token after reload = %d, want 401", code)
+	}
+}
+
 // A file token equal to the instance token is never a view token.
 func TestTimelineViewTokenNeverTheInstanceToken(t *testing.T) {
 	t.Cleanup(func() { captureLabViewToken("", "") })

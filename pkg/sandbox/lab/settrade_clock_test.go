@@ -103,3 +103,65 @@ func TestSettrade_AuctionAndDayEndWakeTheClock(t *testing.T) {
 		t.Errorf("%d timers armed after the day, want none", d.Clock.Pending())
 	}
 }
+
+// An at-the-open sell placed during the morning session waits for the afternoon auction, as
+// an ATO buy does. It used to fill at once: an ATO carries price 0, and the sell's price test
+// (last >= price) always held (186-1). A limit sell in session still fills at once.
+func TestSettrade_ATOSellInTheMorningWaitsForTheAuction(t *testing.T) {
+	d := newDerivLab(t)
+	if err := d.Market.Set("", ptt, 30); err != nil {
+		t.Fatal(err)
+	}
+	d.advance(t, "18h30m") // Wednesday 10:30 in Bangkok: the morning session
+	if now := d.Now(); !now.Equal(bkkAt(10, 30)) {
+		t.Fatalf("the clock is at %v, want Wednesday 10:30 Bangkok", now)
+	}
+	if err := d.Sim.Mutate("settrade", func(st *sandbox.VenueState) error {
+		st.Balances["THB"] = sandbox.Balance{Free: 1_000_000}
+		st.Balances["PTT"] = sandbox.Balance{Free: 1_000}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	place := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/x", strings.NewReader(body))
+		resp, ok := d.Sim.Respond("settrade", "POST", "/api/seos/v3/B/accounts/A/orders", req)
+		if !ok || resp.Status != 200 {
+			t.Fatalf("order %s: %v %+v", body, ok, resp)
+		}
+	}
+	fills := func() (out []sandbox.OrderEntry) {
+		_, orders := d.journaled()
+		for _, o := range orders {
+			if o.Event == "fill" {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+
+	// Control: a limit sell at or under the last price trades at once in the session.
+	place(`{"side":"Sell","symbol":"PTT","volume":100,"price":29,"priceType":"Limit","validityType":"Day"}`)
+	if f := fills(); len(f) != 1 || !f[0].At.Equal(bkkAt(10, 30)) || f[0].Filled != 100 {
+		t.Fatalf("fills after the in-session limit sell = %+v, want one at 10:30", f)
+	}
+
+	place(`{"side":"Sell","symbol":"PTT","volume":200,"priceType":"ATO","validityType":"Day"}`)
+	if f := fills(); len(f) != 1 {
+		t.Fatalf("fills right after the ATO sell = %+v, want only the limit's: the ATO waits for its auction", f)
+	}
+	if at, ok := d.Clock.NextAt(); !ok || !at.Equal(bkkAt(14, 30)) {
+		t.Fatalf("after the ATO sell: next stop %v (%v), want the 14:30 auction", at, ok)
+	}
+
+	if err := d.Market.Path("", ptt, 33, 4*time.Hour, market.ShapeLinear, nil); err != nil { // 30 -> 33 over 10:30-14:30
+		t.Fatal(err)
+	}
+	d.advance(t, "4h30m") // 15:00
+	px, _ := d.Market.Price("settrade", ptt, bkkAt(14, 30))
+	f := fills()
+	if len(f) != 2 || !f[1].At.Equal(bkkAt(14, 30)) || f[1].Side != "sell" || f[1].Filled != 200 || f[1].Avg != px || px <= 30 {
+		t.Errorf("fills = %+v, want the ATO sell's 200 PTT at the 14:30 auction price %v", f, px)
+	}
+}

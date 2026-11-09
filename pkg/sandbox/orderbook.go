@@ -253,8 +253,9 @@ func (b book) place(sp orderSpec) (o *Order, reported *float64, rj *reject) {
 		}
 		b.emit("effect", o, eff.Kind)
 	}
-	// Nothing fills while the venue is shut, and an at-the-open order waits for its auction.
-	marketable := sim.tradable(b.venue, now) && ((sp.Type == "market" && sp.AuctionAt.IsZero()) ||
+	// Nothing fills while the venue is shut, and an at-the-open order waits for its auction,
+	// a sell as well as a buy: it carries no price, so a price test would let a sell through.
+	marketable := sim.tradable(b.venue, now) && sp.AuctionAt.IsZero() && (sp.Type == "market" ||
 		(sp.Side == "buy" && last <= sp.Price) || (sp.Side == "sell" && last >= sp.Price))
 	if !o.Hold && (marketable || force) {
 		b.firstFill(o, px, now)

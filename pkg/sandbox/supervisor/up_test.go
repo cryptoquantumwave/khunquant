@@ -58,6 +58,7 @@ func sandboxEnv(t *testing.T) string {
 	t.Setenv("TMPDIR", base)
 	t.Setenv("LANG", "C")
 	t.Setenv("TZ", "UTC")
+	t.Setenv("KQ_SANDBOX_MAX_INSTANCES", "") // the cap is the default unless a test raises it
 	// Variables the instance must never inherit.
 	t.Setenv("KHUNQUANT_HOME", filepath.Join(t.TempDir(), "decoy"))
 	t.Setenv("KHUNQUANT_GATEWAY_PORT", "1")

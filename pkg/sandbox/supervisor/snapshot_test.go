@@ -222,7 +222,11 @@ func TestRestore_IntoNewNameRewritesPaths(t *testing.T) {
 	var cfg struct {
 		Gateway struct{ Port int }
 		Agents  struct{ Defaults struct{ Workspace string } }
-		Debug   struct{ Sandbox struct{ FixturesDir string `json:"fixtures_dir"` } }
+		Debug   struct {
+			Sandbox struct {
+				FixturesDir string `json:"fixtures_dir"`
+			}
+		}
 	}
 	if err := json.Unmarshal([]byte(files["config.json"]), &cfg); err != nil {
 		t.Fatal(err)

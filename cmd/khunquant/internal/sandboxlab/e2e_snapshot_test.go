@@ -64,7 +64,13 @@ func TestE2E_BranchFromSnapshot(t *testing.T) {
 		return c.Now
 	}
 
-	call("sandbox_instance", map[string]any{"op": "up", "name": "a", "fixtures_from": repoFixtures(t), "clock_mode": "manual", "clock_start": "2026-10-20T09:59:00Z"})
+	call("sandbox_instance", map[string]any{"op": "up", "name": "a", "fixtures_from": repoFixtures(t), "clock_mode": "manual", "clock_start": "2026-10-19T07:59:00Z"})
+	// An H8-sized history: 26 sim hours of clock steps in the journal before the snapshot.
+	for done := false; !done; { // done:false means the wall budget ended first: call again
+		var adv struct{ Done bool }
+		_ = json.Unmarshal([]byte(call("sandbox_clock", map[string]any{"op": "advance", "instance": "a", "to": "2026-10-20T09:59:00Z"})), &adv)
+		done = adv.Done
+	}
 	call("sandbox_market", map[string]any{"op": "set", "instance": "a", "venue": "binance", "symbol": "BTC/USDT", "price": 98000})
 	call("sandbox_web", map[string]any{"op": "put", "instance": "a", "url_pattern": "snap.example/*", "status": 200, "body": "hello"})
 	var snap struct {
@@ -77,7 +83,11 @@ func TestE2E_BranchFromSnapshot(t *testing.T) {
 	if err := json.Unmarshal([]byte(call("sandbox_instance", map[string]any{"op": "snapshot", "name": "a", "label": "setup"})), &snap); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("snapshot %s: %d bytes in %v", snap.ID, snap.Bytes, time.Since(start))
+	took := time.Since(start)
+	t.Logf("snapshot %s: %d bytes in %v", snap.ID, snap.Bytes, took)
+	if took > 3*time.Second || snap.Bytes > 20<<20 {
+		t.Errorf("snapshot of an H8-sized instance took %v and holds %d bytes, want under 3s and 20 MiB", took, snap.Bytes)
+	}
 	if snap.ID == "" || snap.JournalSeq == 0 || !strings.HasPrefix(snap.SimTime, "2026-10-20T09:59:00") {
 		t.Fatalf("snapshot = %+v", snap)
 	}

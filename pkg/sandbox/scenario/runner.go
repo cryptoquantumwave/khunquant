@@ -342,7 +342,70 @@ func (s *runState) cassetteCheck(ctx context.Context) ExpectResult {
 	return r
 }
 
-// evaluate fills the implicit checks (settled, journal_drops) and the expectations.
+// liveCheck reads whether the real model served a live run: at least one model call was
+// answered (an llm.call or llm.complete of rule live with no error) and the budget refused
+// none (llm.budget, event refused). A run that fails it says nothing about the code: with a
+// wrong key or model id, an unreachable host or a budget too small, the instance does none
+// of what the model would have done, so upper bounds hold and lower bounds fail whatever the
+// code does. One failed call among answered ones is not this: pass_rate absorbs a transient
+// error.
+func (s *runState) liveCheck(ctx context.Context) ExpectResult {
+	r := ExpectResult{ID: "live_model", Kind: "implicit", OK: true, Want: "at least one model call answered and none refused by the budget"}
+	calls, err := s.env.entriesOf(ctx, []string{"llm.call", "llm.complete"})
+	if err != nil {
+		r.OK, r.Got = false, "the journal could not be read: "+err.Error()
+		return r
+	}
+	budget, err := s.env.entriesOf(ctx, []string{"llm.budget"})
+	if err != nil {
+		r.OK, r.Got = false, "the journal could not be read: "+err.Error()
+		return r
+	}
+	answered, firstErr := 0, ""
+	for _, c := range calls {
+		var p struct {
+			Rule  string `json:"rule"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(c.Payload, &p) != nil {
+			continue
+		}
+		switch {
+		case p.Error != "":
+			if firstErr == "" {
+				firstErr = p.Error
+			}
+		case p.Rule == "live":
+			answered++
+		}
+	}
+	refused := 0
+	for _, b := range budget {
+		var p struct {
+			Event string `json:"event"`
+		}
+		if json.Unmarshal(b.Payload, &p) == nil && p.Event == "refused" {
+			refused++
+		}
+	}
+	r.Got = fmt.Sprintf("%d of %d model calls answered", answered, len(calls))
+	switch {
+	case refused > 0:
+		r.OK = false
+		r.Got += fmt.Sprintf("; the budget refused %d (raise --llm-budget)", refused)
+	case len(calls) == 0:
+		r.OK, r.Got = false, "no model call was made"
+	case answered == 0:
+		r.OK = false
+		if firstErr != "" {
+			r.Got += "; first error: " + clip(firstErr)
+		}
+	}
+	return r
+}
+
+// evaluate fills the implicit checks (settled, journal_drops, and cassette_hits or
+// live_model by the scenario's llm) and the expectations.
 func (s *runState) evaluate(ctx context.Context) {
 	ok := ExpectResult{ID: "settled", Kind: "implicit", OK: true, Want: "every settle passed", Got: "every settle passed"}
 	if se, err := failedSettle(ctx, s.c, 0); err != nil {
@@ -364,6 +427,16 @@ func (s *runState) evaluate(ctx context.Context) {
 	}
 	s.res.Drops = drops
 	s.res.Expect = append(s.res.Expect, d)
+
+	// Keyed on the file's llm, not on what the instance journals: a scripted file run on a
+	// live instance (the record and budget E2Es) is not checked.
+	if s.f.LLMMode() == "live" {
+		lm := s.liveCheck(ctx)
+		if !lm.OK && s.res.Infra == "" { // infrastructure (exit 3), never a finding or a pass
+			s.res.Infra = "the live model did not serve the run: " + lm.Got
+		}
+		s.res.Expect = append(s.res.Expect, lm)
+	}
 
 	for i := range s.f.Expect {
 		r, _ := s.env.eval(ctx, i, &s.f.Expect[i])

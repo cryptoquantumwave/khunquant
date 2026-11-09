@@ -66,7 +66,7 @@ type Report struct {
 const (
 	ExitFailed  = 1 // an expectation failed
 	ExitInvalid = 2 // an invalid scenario
-	ExitInfra   = 3 // the instance would not start, a settle cap, a lost instance
+	ExitInfra   = 3 // the instance would not start, a settle cap, a lost instance, a live model that did not serve the run
 )
 
 // ExitCode is the status a run of this scenario ends the process with: 0 when it

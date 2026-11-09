@@ -19,6 +19,11 @@ func SetClock(now func() time.Time) {
 	processClock.Store(&now)
 }
 
+// Now is the process clock: the SetClock hook, else time.Now. An adapter's market-session
+// gate and the direct order tools' look read it, so a locked gateway's simulated clock is
+// the one clock they and the placer share.
+func Now() time.Time { return processNow() }
+
 // processNow is the package's time source: the SetClock hook, else time.Now.
 func processNow() time.Time {
 	if f := processClock.Load(); f != nil {

@@ -127,7 +127,7 @@ func (a *webullAdapter) GetMarketStatus(_ context.Context, _ string) (broker.Mar
 	if err != nil {
 		return broker.MarketUnknown, nil
 	}
-	return usMarketStatusAt(time.Now().In(eastern)), nil
+	return usMarketStatusAt(broker.Now().In(eastern)), nil
 }
 
 // usMarketStatusAt computes the NYSE session status for an instant that has

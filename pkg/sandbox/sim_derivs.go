@@ -114,20 +114,41 @@ func (sim *StatefulSimulator) advanceDerivs(key string, now time.Time) {
 	st.LastDerivs = t
 }
 
-// credit adds delta USDT to the wallet and returns what it did: a debit takes the free
-// balance first, then the locked, and never more than the wallet holds.
-func credit(st *VenueState, delta float64) float64 {
+// credit adds delta USDT to the wallet and returns what it did. A debit takes the free
+// balance first, then the margin the positions hold (positionLocked), never an open order's
+// reservation, which the order's cancel would credit a second time. Past that the venue
+// cancels the open orders that reserve USDT, oldest first and never keep (the order being
+// filled), until the free balance covers the rest; each cancel is dated at. What is still
+// missing is forgiven: the wallet never goes below empty.
+func (b book) credit(delta float64, keep *Order, at time.Time) float64 {
+	st := b.st
 	bal := st.Balances["USDT"]
 	if delta >= 0 {
 		bal.Free += delta
-	} else {
-		take := math.Min(-delta, bal.Free+bal.Locked)
-		fromFree := math.Min(take, bal.Free)
-		bal.Free, bal.Locked = bal.Free-fromFree, math.Max(0, bal.Locked-(take-fromFree))
-		delta = -take
+		st.Balances["USDT"] = bal
+		return delta
 	}
-	st.Balances["USDT"] = bal
-	return delta
+	fromFree := math.Min(-delta, bal.Free)
+	fromLocked := math.Min(-delta-fromFree, st.positionLocked(b.venue))
+	bal.Free, bal.Locked = bal.Free-fromFree, bal.Locked-fromLocked
+	st.Balances["USDT"] = bal // before any cancel: close credits the balance it reads
+	took := fromFree + fromLocked
+	if rest := -delta - took; rest > -delta*1e-9 { // more than rounding
+		for _, o := range b.usdtOrders(keep) {
+			if st.Balances["USDT"].Free >= rest {
+				break
+			}
+			if o.Reserved > 0 {
+				b.closeAs(o, stCanceled, at, "margin")
+			}
+		}
+		bal = st.Balances["USDT"]
+		last := math.Min(rest, bal.Free)
+		bal.Free -= last
+		st.Balances["USDT"] = bal
+		took += last
+	}
+	return -took
 }
 
 // settleFunding pays the positions whose next settlement after t is at: -q x mark x rate,
@@ -143,7 +164,7 @@ func (sim *StatefulSimulator) settleFunding(key string, st *VenueState, rs []leg
 		if !okR || !okM || !finite(rate) || !(mark > 0) {
 			continue
 		}
-		pay := credit(st, -r.Qty*mark*rate)
+		pay := sim.book(key).credit(-r.Qty*mark*rate, nil, at)
 		st.Income = append(st.Income, IncomeEntry{Symbol: sym, Type: "FUNDING_FEE", Income: pay, Rate: rate, Mark: mark, Time: at})
 		if sim.journal != nil {
 			o := &Order{Symbol: sym, Market: "futures"}
@@ -154,19 +175,25 @@ func (sim *StatefulSimulator) settleFunding(key string, st *VenueState, rs []leg
 }
 
 // liquidate closes the position at its liquidation price, at the instant the price path
-// reached it. Cross: its margin is released, the loss q(L-E) and a fee equal to its
+// reached it. Cross: the venue first cancels the open orders that reserve USDT (journaled
+// with effect "margin"), as venues do before a liquidation, so their reservations are wallet
+// again; then the position's margin is released, and the loss q(L-E) and a fee equal to its
 // maintenance margin are debited from the wallet (floored at empty). Isolated: the
-// position's own margin goes and the wallet is untouched. The venue's liquidation order
-// is kept for forceOrders and journaled as a fill with effect "liquidation".
+// position's own margin goes and the wallet and the orders are untouched. The venue's
+// liquidation order is kept for forceOrders and journaled as a fill with effect "liquidation".
 func (sim *StatefulSimulator) liquidate(key string, st *VenueState, r legRisk, at time.Time) {
 	p, px := r.Pos, r.Liq
 	fee := r.Rate * math.Abs(r.Qty) * px
 	if !p.isolated() {
+		b := sim.book(key)
+		for _, o := range b.usdtOrders(nil) {
+			b.closeAs(o, stCanceled, at, "margin")
+		}
 		bal := st.Balances["USDT"]
 		rel := math.Min(st.positionLocked(key), math.Abs(r.Qty)*p.EntryPrice) // what the ledger locked when it opened
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
-		credit(st, r.Qty*(px-p.EntryPrice)-fee)
+		b.credit(r.Qty*(px-p.EntryPrice)-fee, nil, at)
 	}
 	delete(st.Positions, p.Symbol)
 

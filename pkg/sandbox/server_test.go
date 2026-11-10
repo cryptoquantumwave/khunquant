@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -165,5 +167,65 @@ func TestGlobalInstance(t *testing.T) {
 	retrieved := GetInstance()
 	if retrieved != server {
 		t.Errorf("retrieved instance should be the same as the one set")
+	}
+}
+
+// A reload that keeps the sandbox on stops the old server with StopForRestart: the state
+// stays armed with no server, so a request made before the next server starts fails loudly
+// and never reaches the venue (130-3, AS-3). Stop, which a disable uses, switches the
+// sandbox off, and the same request then goes to the venue: the control.
+func TestStopForRestart_FailsClosedUntilTheNextServer(t *testing.T) {
+	var hits atomic.Int32
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer venue.Close()
+	t.Cleanup(func() { SetGlobalState(false, "") })
+	rt := NewRoundTripper("binance", http.DefaultTransport)
+	order := func() error {
+		req, err := http.NewRequest(http.MethodPost, venue.URL+"/api/v3/order", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := rt.RoundTrip(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+
+	server := NewServer(NewStore())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.StopForRestart(); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, base := GlobalState(); !enabled || base != "" || server.IsRunning() {
+		t.Fatalf("after StopForRestart: enabled=%v base=%q running=%v, want armed with no server", enabled, base, server.IsRunning())
+	}
+	if err := order(); err == nil {
+		t.Error("an order sent between the two servers of a reload did not fail")
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("%d request(s) reached the venue between the two servers of a reload", n)
+	}
+
+	// Control: Stop switches the sandbox off, and the request passes through. A fresh
+	// Server: Start reassigns s.server, which the previous serve goroutine still reads
+	// (a race under -race; no production path restarts a Server value).
+	server = NewServer(NewStore())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, _ := GlobalState(); enabled {
+		t.Fatal("Stop left the sandbox enabled")
+	}
+	if err := order(); err != nil || hits.Load() != 1 {
+		t.Fatalf("after Stop: err %v, %d request(s) at the venue, want the pass-through", err, hits.Load())
 	}
 }

@@ -81,3 +81,46 @@ func TestStartAndRegisterSandboxWithoutFixtures(t *testing.T) {
 		t.Errorf("expected no venues, got %v", venues)
 	}
 }
+
+// A reload that keeps the sandbox on leaves the sandbox state armed with no server between
+// the old server and the next one (130-3, AS-3). It used to switch the state off there, so
+// a tool call during the reload went to the real venue, and an exchange client built then
+// kept real URLs in the cache.
+func TestReloadKeepingTheSandbox_StaysArmedBetweenServers(t *testing.T) {
+	t.Cleanup(func() { sandbox.SetGlobalState(false, "") })
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Debug.Sandbox.Enabled = true
+	cfg.Debug.Sandbox.Token = "test-token"
+	manager, err := channels.NewManager(cfg, bus.NewMessageBus(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := &gatewayServices{ChannelManager: manager}
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
+		t.Fatal(err)
+	}
+	old := services.SandboxServer
+	if enabled, base := sandbox.GlobalState(); !enabled || base == "" {
+		t.Fatalf("with the server up: enabled=%v base=%q", enabled, base)
+	}
+
+	stopSandboxForRestart(services) // what handleConfigReload does when the sandbox stays on
+
+	if old.IsRunning() || services.SandboxServer != nil || services.SandboxToken != "" {
+		t.Errorf("the old server was not retired: running=%v server=%v token=%q", old.IsRunning(), services.SandboxServer, services.SandboxToken)
+	}
+	if enabled, base := sandbox.GlobalState(); !enabled || base != "" {
+		t.Fatalf("between the servers: enabled=%v base=%q, want armed with no server (fail closed)", enabled, base)
+	}
+
+	// The next server takes over.
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { services.SandboxServer.Stop() })
+	if enabled, base := sandbox.GlobalState(); !enabled || base == "" {
+		t.Errorf("after the restart: enabled=%v base=%q", enabled, base)
+	}
+}

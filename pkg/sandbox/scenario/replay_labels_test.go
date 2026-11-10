@@ -177,3 +177,81 @@ func TestCopyReplayCase(t *testing.T) {
 		t.Error("a refused copy left a case")
 	}
 }
+
+// force replaces a replay case and nothing else (217-1): the case's name comes from a
+// scenario id and its directory from the caller, so a destination that is somebody's data
+// (a directory holding other files, a link, a file) is refused and left as it was.
+func TestCopyReplayCase_ForceReplacesOnlyAReplayCase(t *testing.T) {
+	home, out := t.TempDir(), t.TempDir()
+	src := filepath.Join(home, "lab", "export", "docs")
+	if err := os.MkdirAll(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range replayCaseFiles {
+		if err := os.WriteFile(filepath.Join(src, f), []byte("new"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := func(p string) {
+		t.Helper()
+		if b, err := os.ReadFile(p); err != nil || string(b) != "mine" {
+			t.Errorf("%s = %q, %v: a refused export changed it", p, b, err)
+		}
+	}
+	write := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("mine"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A directory with the developer's files, named like the scenario.
+	write(filepath.Join(out, "docs", "README.md"))
+	if _, err := CopyReplayCase(src, home, out, "docs", true); err == nil {
+		t.Error("force replaced a directory that is not a replay case")
+	}
+	keep(filepath.Join(out, "docs", "README.md"))
+
+	// A case file beside a subdirectory is still not a case.
+	write(filepath.Join(out, "mixed", "golden.json"))
+	write(filepath.Join(out, "mixed", "src", "main.go"))
+	if _, err := CopyReplayCase(src, home, out, "mixed", true); err == nil {
+		t.Error("force replaced a directory holding a subdirectory")
+	}
+	keep(filepath.Join(out, "mixed", "src", "main.go"))
+
+	// A link to a directory, and a plain file.
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	write(filepath.Join(target, "golden.json"))
+	if err := os.Symlink(target, filepath.Join(out, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := CopyReplayCase(src, home, out, "linked", true); err == nil {
+		t.Error("force replaced a link")
+	}
+	keep(filepath.Join(target, "golden.json"))
+	write(filepath.Join(out, "afile"))
+	if _, err := CopyReplayCase(src, home, out, "afile", true); err == nil {
+		t.Error("force replaced a file")
+	}
+	keep(filepath.Join(out, "afile"))
+
+	// Controls: a real case (here with two of its files) and an empty directory are replaced.
+	write(filepath.Join(out, "old_case", "golden.json"))
+	write(filepath.Join(out, "old_case", "labels.json"))
+	if err := os.MkdirAll(filepath.Join(out, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old_case", "empty"} {
+		dest, err := CopyReplayCase(src, home, out, name, true)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(dest, "golden.json")); string(b) != "new" {
+			t.Errorf("%s: golden.json = %q, want the new case", name, b)
+		}
+	}
+}

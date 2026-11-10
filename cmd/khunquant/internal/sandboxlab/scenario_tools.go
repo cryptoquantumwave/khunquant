@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 )
 
@@ -35,8 +37,8 @@ func (m *mcpServer) registerScenarioTools() {
 			"inline":{"type":"string","description":"scenario YAML"},
 			"runs":{"type":"integer","description":"run: runs per matrix row (default: the file's runs)"},
 			"known_bugs":{"type":"boolean","description":"run: also run a known_bug scenario"},
-			"export_replay":{"type":"string","description":"run: after the first passing run, write its journal as a replay case to <dir>/<scenario>/ (events.jsonl, policy.json, labels.json, golden.json; labels come from the message expectations); never overwrites without force"},
-			"force":{"type":"boolean","description":"run: with export_replay, replace a case that exists"},
+			"export_replay":{"type":"string","description":"run: after the first passing run, write its journal as a replay case to <dir>/<scenario>/ (events.jsonl, policy.json, labels.json, golden.json; labels come from the message expectations); <dir> must lie inside the server's working directory; never overwrites without force"},
+			"force":{"type":"boolean","description":"run: with export_replay, replace a replay case that exists (a directory holding anything else is refused)"},
 			"scenario":{"type":"string","description":"report: the scenario id"},
 			"instance":` + instanceProp + `}}`),
 	}, m.scenarioHandler)
@@ -128,6 +130,21 @@ func (m *mcpServer) validateOp(ctx context.Context, a scenarioArgs) (*mcp.CallTo
 	}), nil
 }
 
+// mcpExportDir checks the directory an MCP caller names for export_replay. This process
+// runs unlocked, as the developer, so the caller's path is bounded: it must lie inside the
+// working directory (links resolved), where the repository's replay cases live. The CLI
+// user's --export-replay is not bounded; that path is typed by the person.
+func mcpExportDir(dir string) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("export_replay: %w", err)
+	}
+	if !sandbox.PathInside(wd, dir) {
+		return fmt.Errorf("export_replay: %q is outside the working directory; through MCP a replay case is written below it (use khunquant sandbox run --export-replay for another place)", dir)
+	}
+	return nil
+}
+
 // runOp runs a scenario on fresh instances of this server's supervisor.
 func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolResult, error) {
 	name, data, err := scenarioSource(a)
@@ -143,6 +160,11 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	}
 	if f.Runs > maxMCPRuns {
 		return errResult("sandbox_scenario run: %d runs; at most %d through MCP (use khunquant sandbox run for more)", f.Runs, maxMCPRuns), nil
+	}
+	if a.Export != "" {
+		if err := mcpExportDir(a.Export); err != nil {
+			return errResult("sandbox_scenario run: %v", err), nil
+		}
 	}
 	// One run at a time: a run starts and owns its instance, which a second run would
 	// otherwise compete with for the supervisor's instance limit and memory.

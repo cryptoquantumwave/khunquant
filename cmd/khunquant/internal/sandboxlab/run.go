@@ -183,7 +183,7 @@ func newRunCommand() *cobra.Command {
 	f.StringVar(&o.budget, "llm-budget", "", "Live runs: spending cap per instance, e.g. 2USD or 200000tok (required for live)")
 	f.StringVar(&o.seed, "seed", "", "Seed of the instances' nonces and ids (default: derived from each instance name; 0: none)")
 	f.StringVar(&o.exportReplay, "export-replay", "", "After a passing run, write its journal as a replay case to <dir>/<scenario>/ (testdata/replay layout); refused when the case exists")
-	f.BoolVar(&o.force, "force", false, "With --export-replay: replace a case that already exists")
+	f.BoolVar(&o.force, "force", false, "With --export-replay: replace a replay case that already exists (a directory holding anything else is refused)")
 	f.StringVar(&o.cassettes, "cassettes", "", "Directory of <scenario>.jsonl cassettes for replay scenarios (default: testdata/cassettes)")
 	return cmd
 }

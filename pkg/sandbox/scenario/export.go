@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -53,7 +54,10 @@ func (s *runState) exportReplay(ctx context.Context) error {
 
 // CopyReplayCase copies the four files of the case in src (which must lie inside home)
 // to <dir>/<name>/. The destination is always below dir, an existing case is refused
-// unless force, and only regular files are read.
+// unless force, and only regular files are read. force replaces a replay case and nothing
+// else: a destination that is not a directory holding only case files is refused, so the
+// name of a scenario can never pick a directory to delete (./docs, or ~/documents, which
+// is ~/Documents on a volume that ignores case).
 func CopyReplayCase(src, home, dir, name string, force bool) (string, error) {
 	if !replayCaseRE.MatchString(name) || !sandbox.PathInside(home, src) {
 		return "", errors.New("export: the case is not a plain name inside the instance home")
@@ -65,8 +69,13 @@ func CopyReplayCase(src, home, dir, name string, force bool) (string, error) {
 	if !sandbox.PathInside(dir, dest) || filepath.Dir(dest) != filepath.Clean(dir) {
 		return "", fmt.Errorf("export: %s is outside %s", dest, dir)
 	}
-	if _, err := os.Lstat(dest); err == nil && !force {
-		return "", fmt.Errorf("export: %s exists (--force replaces it)", dest)
+	if st, err := os.Lstat(dest); err == nil {
+		if !force {
+			return "", fmt.Errorf("export: %s exists (--force replaces it)", dest)
+		}
+		if err := replaceableCase(dest, st); err != nil {
+			return "", err
+		}
 	}
 	stage, err := os.MkdirTemp(dir, ".export-")
 	if err != nil {
@@ -85,6 +94,25 @@ func CopyReplayCase(src, home, dir, name string, force bool) (string, error) {
 		return "", err
 	}
 	return dest, os.Rename(stage, dest)
+}
+
+// replaceableCase says whether dest, which exists, is a replay case that force may replace:
+// a real directory (not a link to one) whose entries are all regular files named as case
+// files. An empty directory qualifies; anything else is somebody's data.
+func replaceableCase(dest string, st os.FileInfo) error {
+	if !st.IsDir() {
+		return fmt.Errorf("export: %s exists and is not a directory; force replaces only a replay case", dest)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !slices.Contains(replayCaseFiles, e.Name()) {
+			return fmt.Errorf("export: %s holds %q, so it is not a replay case; force replaces only a replay case", dest, e.Name())
+		}
+	}
+	return nil
 }
 
 func copyRegular(from, to string) error {

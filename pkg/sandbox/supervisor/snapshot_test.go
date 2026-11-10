@@ -323,3 +323,56 @@ func TestSupervisor_SnapshotRefusals(t *testing.T) {
 		t.Fatalf("record instance: err = %v, want ErrMoneyAtRisk", err)
 	}
 }
+
+// A restore with no name needs the snapshot to record its instance (215-1). The real lab
+// used not to record it, and an empty name is "the only instance" to lookup: the restore
+// took down whatever ran and came back under a random name, or, with two running,
+// dereferenced nil. It is now refused before anything is touched.
+func TestRestore_UnnamedSnapshotNeedsAName(t *testing.T) {
+	s, base := snapSupervisor(t, 2)
+	setup(t, s, "a", UpOptions{})
+	si, err := s.Snapshot(context.Background(), "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Down(context.Background(), "a", false); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot as the real lab wrote it before the fix: no instance in the manifest.
+	m, err := labsnap.Read(si.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Instance = ""
+	b, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(si.Dir, labsnap.ManifestName), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := setup(t, s, "other", UpOptions{}) // an unrelated instance, the only one running
+
+	if info, err := s.Restore(context.Background(), si.Manifest.ID, ""); err == nil {
+		t.Errorf("an unnamed restore of a snapshot with no instance started %q", info.Name)
+	}
+	list := s.List()
+	if len(list) != 1 || list[0].Name != "other" || list[0].State != StateRunning {
+		t.Fatalf("instances after the refused restore = %+v, want only the untouched %q", list, "other")
+	}
+	if _, err := os.Stat(other.Home); err != nil {
+		t.Errorf("the unrelated instance's home is gone: %v", err)
+	}
+	entries, _ := os.ReadDir(base)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "kq-sbx-sbx-") {
+			t.Errorf("a refused restore left the home %s", e.Name())
+		}
+	}
+
+	// Control: the same snapshot restores under a given name, beside the other instance.
+	info, err := s.Restore(context.Background(), si.Manifest.ID, "b")
+	if err != nil || info.Name != "b" || info.State != StateRunning {
+		t.Fatalf("named restore = %+v, %v", info, err)
+	}
+	if len(s.List()) != 2 {
+		t.Errorf("instances = %+v, want other and b", s.List())
+	}
+}

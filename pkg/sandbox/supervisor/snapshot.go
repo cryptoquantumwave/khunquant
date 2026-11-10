@@ -191,7 +191,11 @@ func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info
 	if moneyAtRisk(m.LLM) || slices.ContainsFunc(m.Files, func(f labsnap.FileEntry) bool { return f.Path == "lab/budget.json" }) {
 		return Info{}, ErrMoneyAtRisk
 	}
-	name = cmp.Or(name, m.Instance)
+	// Never an empty name: lookup("") is "the only instance", so an unnamed restore of a
+	// snapshot that records no instance would take down whatever happens to run.
+	if name = cmp.Or(name, m.Instance); name == "" {
+		return Info{}, errors.New("snapshot: the snapshot does not record the instance it was taken from; give the name to restore it as")
+	}
 	accounts, err := readAccounts(filepath.Join(dir, labsnap.HomeDir))
 	if err != nil {
 		return Info{}, fmt.Errorf("snapshot: %w", err)
@@ -208,12 +212,15 @@ func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info
 	if err != nil {
 		return Info{}, err
 	}
-	in, _ := s.lookup(name)
+	in, err := s.lookup(info.Name)
+	if err != nil {
+		return Info{}, fmt.Errorf("snapshot: the restored instance is gone: %w", err)
+	}
 	var clock struct {
 		Now time.Time `json:"now"`
 	}
 	if err := labCall(ctx, in, "clock", `{"op":"get"}`, &clock); err != nil || !clock.Now.Equal(m.SimTime) {
-		_ = s.Down(ctx, name, false)
+		_ = s.Down(ctx, info.Name, false)
 		return Info{}, fmt.Errorf("snapshot: the restored clock reads %v (%v), want %v", clock.Now, err, m.SimTime)
 	}
 	return info, nil

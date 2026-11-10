@@ -99,6 +99,9 @@ func prepareHome(home, name string, port int, fixtures []fixtureFile, accounts .
 	if err := os.WriteFile(filepath.Join(home, instanceMarker), []byte(name+"\n"), 0o600); err != nil {
 		return fmt.Errorf("sandbox up: write marker: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Join(home, sandbox.TempDirName), 0o700); err != nil {
+		return fmt.Errorf("sandbox up: temporary directory: %w", err)
+	}
 	for _, f := range fixtures {
 		if err := copyFile(f.path, filepath.Join(home, "workspace", "sandbox", f.venue, "fixtures.json")); err != nil {
 			return fmt.Errorf("sandbox up: copy %s fixtures: %w", f.venue, err)
@@ -126,14 +129,15 @@ func copyFile(src, dst string) error {
 
 // ChildEnv is the whole environment of the sandbox gateway, an allowlist: the config
 // loader lets any KHUNQUANT_* variable of the developer's shell override the profile.
-// HOME is the instance home, so nothing the gateway runs sees the developer's.
+// HOME is the instance home and TMPDIR a directory inside it, so nothing the gateway runs
+// sees the developer's.
 func ChildEnv(home, name, token string) []string { return childEnv(home, name, token, nil) }
 
 // childEnv is ChildEnv plus the AllowEnv-ed extras. The fixed entries come last: with a
 // duplicate key the last one wins, and validEnv has refused the fixed keys anyway.
 func childEnv(home, name, token string, extra map[string]string) []string {
 	var env []string
-	for _, k := range []string{"PATH", "TMPDIR", "LANG", "TZ"} {
+	for _, k := range []string{"PATH", "LANG", "TZ"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
 		}
@@ -143,6 +147,9 @@ func childEnv(home, name, token string, extra map[string]string) []string {
 	}
 	return append(env,
 		"HOME="+home,
+		// Never the developer's: the media store is under the temporary directory, and the
+		// file tools may always read it (sandbox.TempDirName).
+		"TMPDIR="+filepath.Join(home, sandbox.TempDirName),
 		"KHUNQUANT_HOME="+home,
 		"KHUNQUANT_CONFIG="+filepath.Join(home, "config.json"),
 		"KQ_SANDBOX_LOCKED=1",

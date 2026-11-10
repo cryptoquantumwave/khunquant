@@ -111,6 +111,13 @@ func ResetLockForTest() {
 	globalStateMu.Unlock()
 }
 
+// TempDirName is the temporary directory of a locked instance, inside its home. The
+// supervisor names it in the child's environment and the locked gateway points the process
+// at it, so os.TempDir() is never the developer's: the media store lives under it
+// (<temp>/khunquant_media), the file tools may always read that directory, and a shared
+// one would hand a locked instance the attachments a real gateway downloaded.
+const TempDirName = "tmp"
+
 // PathInside reports whether p is root itself or lies under it. Both sides are made
 // absolute and have symlinks resolved as far as they exist (so /var vs /private/var
 // and a symlink inside root that points out of it are both judged by where they

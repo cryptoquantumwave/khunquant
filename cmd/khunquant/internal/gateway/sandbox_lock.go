@@ -88,16 +88,42 @@ func lockOptionsFromEnv() (sandbox.LockOptions, error) {
 }
 
 // armSandboxLock locks the process (arming the sandbox state as enabled with no
-// server, so exchange traffic fails closed), makes SaveConfig refuse every write and
-// installs the loopback-only egress guard.
+// server, so exchange traffic fails closed), points its temporary directory into the
+// instance home, makes SaveConfig refuse every write and installs the loopback-only
+// egress guard.
 func armSandboxLock(lk sandbox.LockOptions) error {
 	if err := sandbox.Lock(lk); err != nil {
+		return err
+	}
+	if err := confineTempDir(config.HomeDir()); err != nil {
 		return err
 	}
 	config.SetSaveGuard(func(string) error {
 		return errors.New("config is read-only under the sandbox lock")
 	})
 	return egress.Install(egress.Policy{AllowHosts: lk.AllowHosts})
+}
+
+// confineTempDir points this process's temporary directory at <home>/tmp, before anything
+// reads os.TempDir(). An instance started by the supervisor is given that directory
+// already; a locked gateway started by hand is not, and the gateway is the one that must
+// hold the rule. Without it the media store of a locked instance is the developer's
+// <TMPDIR>/khunquant_media, which the file tools may read whatever the workspace is, and
+// which send_file plus the media cleaner can delete from.
+func confineTempDir(home string) error {
+	dir := filepath.Join(home, sandbox.TempDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("sandbox lock: temporary directory: %w", err)
+	}
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} { // unix, then Windows
+		if err := os.Setenv(k, dir); err != nil {
+			return fmt.Errorf("sandbox lock: temporary directory: %w", err)
+		}
+	}
+	if !sandbox.PathInside(home, os.TempDir()) {
+		return fmt.Errorf("sandbox lock: the temporary directory %q is not inside the instance home", os.TempDir())
+	}
+	return nil
 }
 
 // lockAllowHosts is the egress opening of the lock, and it is exact: no host unless the

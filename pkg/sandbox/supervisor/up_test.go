@@ -187,7 +187,7 @@ func TestChildEnv_Allowlist(t *testing.T) {
 	want := map[string]string{
 		"HOME": home, "KHUNQUANT_HOME": home, "KHUNQUANT_CONFIG": filepath.Join(home, "config.json"),
 		"KQ_SANDBOX_LOCKED": "1", "KQ_SANDBOX_TOKEN": "tok", "KQ_SANDBOX_INSTANCE": "x",
-		"PATH": os.Getenv("PATH"), "TMPDIR": os.Getenv("TMPDIR"), "LANG": "C", "TZ": "UTC",
+		"PATH": os.Getenv("PATH"), "TMPDIR": filepath.Join(home, "tmp"), "LANG": "C", "TZ": "UTC", // never the starter's TMPDIR (AS-1)
 	}
 	if len(got) != len(want) {
 		t.Errorf("env = %v", got)
@@ -449,5 +449,32 @@ func TestUp_ContextCancelStopsAndCleans(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(base); len(left) != 0 {
 		t.Errorf("an interrupted start left %d entries behind", len(left))
+	}
+}
+
+// The child's temporary directory is one inside the instance home, never the starter's
+// (AS-1): the media store lives under it and the file tools may always read it. The
+// supervisor creates it with the home.
+func TestChildEnv_TempDirIsTheInstancesOwn(t *testing.T) {
+	base := sandboxEnv(t)
+	t.Setenv("TMPDIR", filepath.Join(base, "the-developers-tmp"))
+	home := filepath.Join(base, "kq-sbx-x")
+	var tmp []string
+	for _, kv := range ChildEnv(home, "x", "tok") {
+		if k, v, _ := strings.Cut(kv, "="); k == "TMPDIR" {
+			tmp = append(tmp, v)
+		}
+	}
+	if len(tmp) != 1 || tmp[0] != filepath.Join(home, "tmp") {
+		t.Fatalf("TMPDIR in the child = %v, want only %s", tmp, filepath.Join(home, "tmp"))
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareHome(home, "x", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(filepath.Join(home, "tmp")); err != nil || !st.IsDir() {
+		t.Errorf("the home has no tmp directory: %v", err)
 	}
 }

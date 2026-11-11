@@ -237,7 +237,8 @@ func TestRestore_IntoNewNameRewritesPaths(t *testing.T) {
 	if cfg.Agents.Defaults.Workspace != filepath.Join(b.Home, "workspace") || cfg.Debug.Sandbox.FixturesDir != filepath.Join(b.Home, "workspace", "sandbox") {
 		t.Errorf("config paths: %+v", cfg)
 	}
-	if strings.TrimSpace(files[".kq-sandbox"]) != "b" || files[".sandbox-accounts"] != `["binance"]` {
+	// The marker is the name, then the owning supervisor's pid (213-2).
+	if first, _, _ := strings.Cut(files[".kq-sandbox"], "\n"); first != "b" || files[".sandbox-accounts"] != `["binance"]` {
 		t.Errorf("marker %q accounts %q", files[".kq-sandbox"], files[".sandbox-accounts"])
 	}
 	if !strings.Contains(files["facts.txt"], "instance=b\nseed=77\n") { // the seed of a, not one derived from "b"

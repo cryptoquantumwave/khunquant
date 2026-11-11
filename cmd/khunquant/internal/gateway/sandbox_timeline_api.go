@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -78,11 +79,11 @@ type timelineResponse struct {
 
 // registerSandboxTimeline mounts the read route. Only GET is registered.
 func registerSandboxTimeline(mux handleMux, j *labjournal.Journal, token string) {
-	h := requireManagementToken(token, func(w http.ResponseWriter, r *http.Request) { serveTimeline(w, r, j) })
+	h := requireManagementToken(token, func(w http.ResponseWriter, r *http.Request) { serveTimeline(w, r, j, token) })
 	mux.Handle("GET /api/sandbox/timeline", loopbackOnly(bearerTokenMiddleware(token, noBrowser(h))))
 }
 
-func serveTimeline(w http.ResponseWriter, r *http.Request, j *labjournal.Journal) {
+func serveTimeline(w http.ResponseWriter, r *http.Request, j *labjournal.Journal, viewTok string) {
 	q := r.URL.Query()
 	after, limit := int64(0), timelineDefault
 	if v := q.Get("after_seq"); v != "" {
@@ -117,13 +118,35 @@ func serveTimeline(w http.ResponseWriter, r *http.Request, j *labjournal.Journal
 	lk, _ := sandbox.LockInfo()
 	resp := timelineResponse{Locked: true, Instance: lk.InstanceName, Entries: make([]timelineEntry, 0, len(es)),
 		NextSeq: after, Drops: j.Drops()}
+	// Masked before the payload is cut, so a token across the cut is not left as a prefix;
+	// the encoded body is masked again below.
+	mask := func(b []byte) []byte {
+		for _, tok := range []string{lk.Token, viewTok} {
+			if tok != "" {
+				b = bytes.ReplaceAll(b, []byte(tok), []byte("***"))
+			}
+		}
+		return b
+	}
 	for _, e := range es {
-		p, cut := capPayload(e.Payload)
+		p, cut := capPayload(mask(e.Payload))
 		resp.Entries = append(resp.Entries, timelineEntry{Seq: e.Seq, SimTime: e.SimTime.UTC(), WallTime: e.WallTime.UTC(),
 			Kind: e.Kind, Source: e.Source, Subject: e.Subject, Summary: labjournal.Summary(e), Payload: p, Truncated: cut})
 		resp.NextSeq = max(resp.NextSeq, e.Seq)
 	}
-	writeManage(w, http.StatusOK, resp)
+	// Every other journal read masks the instance token (the supervisor does, on the
+	// encoded answer); this route is read straight from the gateway, so it masks here: both
+	// the instance token and the view token, wherever free text put them (218-3).
+	body, err := json.Marshal(resp)
+	if err != nil {
+		manageError(w, http.StatusInternalServerError, "the journal could not be encoded")
+		return
+	}
+	body = mask(body)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // capPayload returns p when it fits, else the start of its text as one JSON string (a

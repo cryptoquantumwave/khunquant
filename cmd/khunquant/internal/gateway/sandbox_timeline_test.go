@@ -300,3 +300,40 @@ func TestTimelineReadWithTheProfilesViewToken(t *testing.T) {
 		t.Errorf("first chat entry summary = %q", got.Entries[0].Summary)
 	}
 }
+
+// The instance (lab) token and the view token are masked as *** in the response, in
+// payloads and in summaries, as the supervisor masks the token in everything it relays.
+func TestTimelineMasksBothTokens(t *testing.T) {
+	f := newLockedFixture(t)
+	j := f.lab.Journal
+	for _, text := range []string{
+		"debugging with " + lockTestToken + " pasted",
+		"and " + testMgmtToken + " as well",
+		lockTestToken + testMgmtToken,
+	} {
+		p, _ := json.Marshal(map[string]any{"text": text, "delivered": true})
+		j.Append(labjournal.Entry{Kind: "chat.out", Subject: "dm:a", Payload: p})
+	}
+	code, body := doGet(t, f.url("/api/sandbox/timeline?kinds=chat.*&limit=500"), testMgmtToken, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET timeline = %d %s", code, body)
+	}
+	for name, tok := range map[string]string{"instance token": lockTestToken, "view token": testMgmtToken} {
+		if tok == "" || strings.Contains(string(body), tok) {
+			t.Errorf("the response holds the %s: %s", name, body)
+		}
+	}
+	var out timelineBody
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	var masked int
+	for _, e := range out.Entries {
+		if strings.Contains(string(e.Payload), "***") && strings.Contains(e.Summary, "***") {
+			masked++
+		}
+	}
+	if masked != 3 {
+		t.Errorf("%d entries carry *** in both payload and summary, want 3: %s", masked, body)
+	}
+}

@@ -86,10 +86,10 @@ func TestClose_OKXSpotBuyInUSDTKeepsItsReservation(t *testing.T) {
 	}
 }
 
-// The liquidation releases through the same helper: a seeded cross position that locked
-// nothing is liquidated while a USDT order rests. The order's 2000 stays locked, the loss and
-// the fee come out of free, and cancelling the order credits the 2000 once.
-func TestLiquidate_SeededPositionLeavesARestingOrdersReservation(t *testing.T) {
+// The liquidation cancels the orders on the wallet first (185-2): a seeded cross position that
+// locked nothing is liquidated while a USDT order rests. The order is cancelled and its 2000 is
+// free again, the loss and the fee come out of free, and the reservation is credited once.
+func TestLiquidate_SeededPositionCancelsARestingOrderFirst(t *testing.T) {
 	const sym = "BTCUSDT"
 	sim, st, b := ledgerSim(t, "binance", map[string]Market{sym: {Symbol: sym, ContractSize: 0.001}}, map[string]float64{sym: 100000})
 	st.Balances["USDT"] = Balance{Free: 10000}
@@ -101,11 +101,10 @@ func TestLiquidate_SeededPositionLeavesARestingOrdersReservation(t *testing.T) {
 	}
 	// Short 0.01 BTC from 100000, liquidated at 110000: loss 100, fee 0.005 x 0.01 x 110000 = 5.5.
 	sim.liquidate("binance", st, legRisk{Pos: pos, Qty: -0.01, Rate: 0.005, Liq: 110000}, time.Now())
-	if u := st.Balances["USDT"]; !nearF(u.Locked, 2000) || !nearF(u.Free, 8000-105.5) {
-		t.Fatalf("after the liquidation USDT = %+v, want 2000 still locked and %v free", u, 8000-105.5)
-	}
-	b.close(rest, stCanceled, sim.clock())
 	if u := st.Balances["USDT"]; !nearF(u.Locked, 0) || !nearF(u.Free, 10000-105.5) {
-		t.Fatalf("after the cancel USDT = %+v, want %v free: the reservation credited once", u, 10000-105.5)
+		t.Fatalf("after the liquidation USDT = %+v, want nothing locked and %v free: the reservation credited once", u, 10000-105.5)
+	}
+	if _, open := st.OpenOrders[rest.ID]; open || rest.Reserved != 0 || stateOf("binance", rest.Status) != stCanceled {
+		t.Fatalf("the resting order is %s with %v reserved (open: %v), want it cancelled by the liquidation", rest.Status, rest.Reserved, open)
 	}
 }

@@ -330,7 +330,7 @@ func (b book) fill(o *Order, qty, px float64, at time.Time) {
 		rel := math.Min(st.positionLocked(b.venue), n*cs*pos.EntryPrice)
 		bal.Locked, bal.Free = bal.Locked-rel, bal.Free+rel
 		st.Balances["USDT"] = bal
-		credit(st, pnl) // a loss takes the free balance first, and never more than the wallet holds
+		b.credit(pnl, o, at) // a loss past the free balance and the margin cancels other orders, never this one
 		if pos.Contracts -= n; pos.Contracts <= 0 {
 			delete(st.Positions, o.Symbol)
 		} else {
@@ -371,9 +371,10 @@ func reservedAsset(venue string, o *Order) string {
 
 // positionLocked is the part of the USDT Locked that positions hold: Locked less what the
 // open orders reserving USDT still hold (OKX keeps spot and swap orders in one state, so
-// only the orders reserving USDT count). A close releases at most this, so a seeded
-// position (which locked nothing) cannot be paid out of a resting order's reservation, which
-// the order's cancel would then credit a second time.
+// only the orders reserving USDT count). A close releases at most this, and a loss takes at
+// most this out of Locked (credit), so a seeded position (which locked nothing) cannot be
+// paid out of a resting order's reservation, which the order's cancel would then credit a
+// second time.
 func (st *VenueState) positionLocked(venue string) float64 {
 	held := 0.0
 	for _, o := range st.OpenOrders {
@@ -384,16 +385,32 @@ func (st *VenueState) positionLocked(venue string) float64 {
 	return math.Max(0, st.Balances["USDT"].Locked-held)
 }
 
+// usdtOrders is the open orders reserving USDT (the ones positionLocked counts) other than
+// keep, oldest first: the orders the venue cancels to cover a loss or before a liquidation.
+func (b book) usdtOrders(keep *Order) []*Order {
+	var out []*Order
+	for _, o := range b.st.OpenOrders {
+		if o != keep && reservedAsset(b.venue, o) == "USDT" {
+			out = append(out, o)
+		}
+	}
+	sortOrders(out)
+	return out
+}
+
 // close ends an unfilled remainder: the reservation is released, the order moves to the
 // closed map as cancelled or expired.
-func (b book) close(o *Order, to ordState, at time.Time) {
+func (b book) close(o *Order, to ordState, at time.Time) { b.closeAs(o, to, at, "") }
+
+// closeAs is close journaled with the reason the venue ended the order ("margin").
+func (b book) closeAs(o *Order, to ordState, at time.Time, effect string) {
 	asset := reservedAsset(b.venue, o)
 	bal := b.st.Balances[asset]
 	bal.Locked, bal.Free = math.Max(0, bal.Locked-o.Reserved), bal.Free+o.Reserved
 	b.st.Balances[asset] = bal
 	o.Reserved, o.UpdatedAt = 0, at
 	b.finish(o, to)
-	b.emit("cancel", o, "")
+	b.emit("cancel", o, effect)
 }
 
 func (b book) finish(o *Order, to ordState) {
@@ -564,6 +581,9 @@ func (b book) advance(now time.Time) {
 	}
 	slices.SortFunc(evs, func(x, y event) int { return cmp.Or(x.at.Compare(y.at), orderBefore(x.o, y.o)) })
 	for _, e := range evs {
+		if b.st.OpenOrders[e.o.ID] != e.o { // an earlier fill's loss had the venue cancel it (credit)
+			continue
+		}
 		switch {
 		case e.cancel:
 			b.close(e.o, stCanceled, e.at)

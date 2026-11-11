@@ -35,29 +35,29 @@ const (
 // File is one scenario. Verbatim blocks (Profile, Faults, Web, LLMScript) are handed to
 // the tool or lab op that owns them, unchanged.
 type File struct {
-	Version   int                    `yaml:"version"`
-	Scenario  string                 `yaml:"scenario"`
-	Covers    []string               `yaml:"covers"`
-	Status    Status                 `yaml:"status,omitempty"`
-	KnownBug  string                 `yaml:"known_bug,omitempty"`
-	LLM       string                 `yaml:"llm"`
-	Miss      string                 `yaml:"miss,omitempty"` // replay only: a request the cassette lacks fails (error, default) or goes to llm_script (scripted)
-	Level     string                 `yaml:"level"`          // wire (default) | event; recorded only in v1
-	Runs      int                    `yaml:"runs,omitempty"`
-	PassRate  float64                `yaml:"pass_rate,omitempty"`
-	Matrix    map[string][]string    `yaml:"matrix,omitempty"`
-	Base      string                 `yaml:"base,omitempty"` // main | stack-head; informative
-	Clock     ClockSpec              `yaml:"clock"`
-	Instance  InstanceSpec           `yaml:"instance,omitempty"`
-	Profile   map[string]any         `yaml:"profile,omitempty"`
-	Market    map[string]MarketInit  `yaml:"market,omitempty"`
-	Account   map[string]AccountSeed `yaml:"account,omitempty"`
-	Faults    []map[string]any       `yaml:"faults,omitempty"`
-	Web       []map[string]any       `yaml:"web,omitempty"`
-	LLMScript []map[string]any       `yaml:"llm_script,omitempty"`
-	Setup     []Step                 `yaml:"setup,omitempty"`
-	Timeline  []Step                 `yaml:"timeline,omitempty"`
-	Expect    []Expectation          `yaml:"expect"`
+	Version   int                    `yaml:"version" jsonschema:"required" jsonschema_description:"Schema version; must be 1."`
+	Scenario  string                 `yaml:"scenario" jsonschema:"required" jsonschema_description:"Scenario id: lower-case letters or digits, then . _ - allowed; also the file name without .yaml."`
+	Covers    []string               `yaml:"covers" jsonschema_description:"Review IDs or features this scenario covers (H8, S116A-1)."`
+	Status    Status                 `yaml:"status,omitempty" jsonschema:"enum=active,enum=known_bug" jsonschema_description:"active (default) gates; known_bug documents an unfixed defect and runs only with KQ_SCENARIO_KNOWN_BUGS=1."`
+	KnownBug  string                 `yaml:"known_bug,omitempty" jsonschema_description:"Review ID of the open defect; required with status known_bug and refused otherwise."`
+	LLM       string                 `yaml:"llm" jsonschema:"enum=scripted,enum=replay,enum=live" jsonschema_description:"scripted (default; the only mode for PR CI), replay (a committed cassette) or live (only when the Sandbox Live workflow is started by hand, or locally with a key and --llm-budget)."`
+	Miss      string                 `yaml:"miss,omitempty" jsonschema:"enum=error,enum=scripted" jsonschema_description:"llm: replay only. A request the cassette lacks fails (error) or goes to llm_script (scripted)."` // replay only: a request the cassette lacks fails (error, default) or goes to llm_script (scripted)
+	Level     string                 `yaml:"level" jsonschema:"enum=wire,enum=event" jsonschema_description:"wire (default) or event; recorded only in v1."`                                                               // wire (default) | event; recorded only in v1
+	Runs      int                    `yaml:"runs,omitempty" jsonschema_description:"Runs per matrix row (default 1)."`
+	PassRate  float64                `yaml:"pass_rate,omitempty" jsonschema_description:"Share of runs that must pass, 0 to 1 (default 1)."`
+	Matrix    map[string][]string    `yaml:"matrix,omitempty" jsonschema_description:"Name to values; the file runs once per combination."`
+	Base      string                 `yaml:"base,omitempty" jsonschema:"enum=main,enum=stack-head" jsonschema_description:"Informative: the base the scenario was written against."` // main | stack-head; informative
+	Clock     ClockSpec              `yaml:"clock" jsonschema:"required" jsonschema_description:"The instance clock; a scenario controls it."`
+	Instance  InstanceSpec           `yaml:"instance,omitempty" jsonschema_description:"Merged over the sandbox profile before the instance starts."`
+	Profile   map[string]any         `yaml:"profile,omitempty" jsonschema_description:"Proactive profile (time zone, active hours), applied through call_tool."`
+	Market    map[string]MarketInit  `yaml:"market,omitempty" jsonschema_description:"Symbol to starting price model. The venue must match the account."`
+	Account   map[string]AccountSeed `yaml:"account,omitempty" jsonschema_description:"venue or venue/account to its simulated balances and positions."`
+	Faults    []map[string]any       `yaml:"faults,omitempty" jsonschema_description:"Fault rules, each the arguments of sandbox_fault add."`
+	Web       []map[string]any       `yaml:"web,omitempty" jsonschema_description:"Fake web pages, each the arguments of sandbox_web put."`
+	LLMScript []map[string]any       `yaml:"llm_script,omitempty" jsonschema_description:"Scripted model rules (match, respond) for llm: scripted."`
+	Setup     []Step                 `yaml:"setup,omitempty" jsonschema_description:"Steps that run before the clock moves (no at)."`
+	Timeline  []Step                 `yaml:"timeline,omitempty" jsonschema_description:"Steps over sim time; at offsets must not decrease."`
+	Expect    []Expectation          `yaml:"expect" jsonschema:"required" jsonschema_description:"What the journal must show afterwards; at least one."`
 
 	// MatrixRow is the combination an expanded file stands for (nil: no matrix).
 	MatrixRow map[string]string `yaml:"-"`
@@ -68,19 +68,19 @@ type File struct {
 
 // ClockSpec maps to the instance clock options (KQ_SANDBOX_CLOCK_*).
 type ClockSpec struct {
-	Start      string `yaml:"start"`                // RFC 3339
-	Mode       string `yaml:"mode"`                 // manual (default)
-	Resolution string `yaml:"resolution,omitempty"` // Go duration; the clock's default when empty
+	Start      string `yaml:"start" jsonschema:"required" jsonschema_description:"RFC 3339 start time, such as 2026-10-20T09:00:00+07:00."` // RFC 3339
+	Mode       string `yaml:"mode" jsonschema:"enum=manual"`                                                                                // manual (default)
+	Resolution string `yaml:"resolution,omitempty" jsonschema_description:"Go duration; the clock default when empty."`                     // Go duration; the clock's default when empty
 }
 
 // InstanceSpec is merged over the sandbox profile before the instance starts.
 type InstanceSpec struct {
-	Config    map[string]any    `yaml:"config,omitempty"`
-	Workspace map[string]string `yaml:"workspace,omitempty"` // path under <home>/workspace -> content
+	Config    map[string]any    `yaml:"config,omitempty" jsonschema_description:"Partial gateway config merged over the profile."`
+	Workspace map[string]string `yaml:"workspace,omitempty" jsonschema_description:"Path under the workspace to file content."` // path under <home>/workspace -> content
 	// Accounts asks the sandbox profile for a placeholder exchange account on these
 	// venues (binance, okx), so tools find them configured. The scenario never carries a
 	// credential: the profile writes constants that cannot be real.
-	Accounts []string `yaml:"accounts,omitempty"`
+	Accounts []string `yaml:"accounts,omitempty" jsonschema_description:"Venues (binance, okx) that get a placeholder account; never a credential."`
 }
 
 // MarketInit is the starting price model of one symbol. Model names the market op
@@ -93,9 +93,9 @@ type MarketInit struct {
 
 // AccountSeed seeds one venue's simulated account. The key is "<venue>[/<account>]".
 type AccountSeed struct {
-	Balances  map[string]float64 `yaml:"balances,omitempty"`
-	Positions []map[string]any   `yaml:"positions,omitempty"`
-	Replace   bool               `yaml:"replace,omitempty"`
+	Balances  map[string]float64 `yaml:"balances,omitempty" jsonschema_description:"Currency to amount."`
+	Positions []map[string]any   `yaml:"positions,omitempty" jsonschema_description:"Open positions, in the shape sandbox_account seed takes."`
+	Replace   bool               `yaml:"replace,omitempty" jsonschema_description:"Replace the venue's seeded account instead of merging."`
 	Baseline  *bool              `yaml:"baseline,omitempty"`
 	Options   map[string]any     `yaml:"options,omitempty"` // the venue's knobs (settrade: auction_open, auction_afternoon)
 }

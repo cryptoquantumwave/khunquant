@@ -59,7 +59,8 @@ func recoverPanics(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 func newMCPCommand() *cobra.Command {
-	return &cobra.Command{
+	var printConfig bool
+	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve the sandbox supervisor as an MCP server on stdio",
 		Long: "Serve one MCP server on stdin/stdout that starts, restarts and stops locked sandbox\n" +
@@ -68,6 +69,9 @@ func newMCPCommand() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
+			if printConfig {
+				return printMCPConfig(cmd.OutOrStdout())
+			}
 			if runtime.GOOS == "windows" {
 				return supervisor.ErrUnixOnly
 			}
@@ -94,6 +98,8 @@ func newMCPCommand() *cobra.Command {
 			return runErr
 		},
 	}
+	cmd.Flags().BoolVar(&printConfig, "print-config", false, "print the MCP client entry (.mcp.json shape) for this binary and exit")
+	return cmd
 }
 
 // newMCPServer builds the server over sup; the tools exist before any instance does.

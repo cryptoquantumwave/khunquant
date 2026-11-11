@@ -73,6 +73,11 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      # go generate rewrites the committed schema in this checkout, so the freshness test
+      # cannot see a stale file. A diff here is the stale file: run go generate and commit.
+      - name: Scenario schema is up to date
+        run: git diff --exit-code -- testdata/scenarios/schema.v1.json || { echo "::error::testdata/scenarios/schema.v1.json is stale; run 'go generate ./...' and commit it"; exit 1; }
+
       - name: Run go test
         run: go test ./...
 

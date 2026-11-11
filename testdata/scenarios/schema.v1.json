@@ -1,0 +1,2147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cryptoquantumwave/khunquant/testdata/scenarios/schema.v1.json",
+  "$defs": {
+    "AccountSeed": {
+      "properties": {
+        "balances": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Currency to amount."
+        },
+        "positions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Open positions, in the shape sandbox_account seed takes."
+        },
+        "replace": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Replace the venue's seeded account instead of merging."
+        },
+        "baseline": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ClockSpec": {
+      "properties": {
+        "start": {
+          "type": "string",
+          "description": "RFC 3339 start time, such as 2026-10-20T09:00:00+07:00."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "manual",
+                ""
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Go duration; the clock default when empty."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "start"
+      ]
+    },
+    "Expectation": {
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unique id, shown in the report."
+        },
+        "count": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+        },
+        "within": {
+          "anyOf": [
+            {
+              "properties": {
+                "from": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Start offset; 0 when empty."
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "End offset; open when empty."
+                }
+              },
+              "additionalProperties": false,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sim-time window as offsets from clock.start."
+        },
+        "during": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+        },
+        "replay_match": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "trigger": true,
+                "severity": true,
+                "disposition": true,
+                "reason": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind decision."
+        },
+        "event": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "kind": true,
+                "fields": true,
+                "subject": true,
+                "trigger": true,
+                "severity": true,
+                "disposition": true,
+                "reason": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind event."
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "turn": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind llm."
+        },
+        "logs": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "level": true,
+                "allow": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind logs."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "to": true,
+                "contains": true,
+                "severity": true,
+                "silent": true,
+                "buttons": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind message."
+        },
+        "order": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "venue": true,
+                "symbol": true,
+                "side": true,
+                "reduce_only": true,
+                "client_id": true,
+                "status": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind order."
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "verdict": true,
+                "gate": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind policy."
+        },
+        "probe": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "mandate_status": true,
+                "dn_plan_status": true,
+                "alert_job_exists": true,
+                "equals": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind probe."
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "kind": true,
+                "status": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind proposal."
+        },
+        "web": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "host": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind web."
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "properties": {
+                "count": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How many matching entries: 1, \"\u003e= 1\", \"\u003c= 2\" or \"0\" for absence."
+                },
+                "within": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "from": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Start offset; 0 when empty."
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "End offset; open when empty."
+                        }
+                      },
+                      "additionalProperties": false,
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Sim-time window as offsets from clock.start."
+                },
+                "during": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."
+                },
+                "replay_match": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
+                },
+                "kind": true,
+                "state": true
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Expectation of kind workflow."
+        }
+      },
+      "propertyNames": {
+        "enum": [
+          "id",
+          "count",
+          "within",
+          "during",
+          "replay_match",
+          "decision",
+          "event",
+          "llm",
+          "logs",
+          "message",
+          "order",
+          "policy",
+          "probe",
+          "proposal",
+          "web",
+          "workflow"
+        ]
+      },
+      "type": "object",
+      "minProperties": 1,
+      "description": "One kind key (decision, event, llm, logs, message, order, policy, probe, proposal, web, workflow) and optional id and modifiers."
+    },
+    "InstanceSpec": {
+      "properties": {
+        "config": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Partial gateway config merged over the profile."
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path under the workspace to file content."
+        },
+        "accounts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Venues (binance, okx) that get a placeholder account; never a credential."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MarketInit": {
+      "properties": {
+        "venue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Venue of the symbol; must match the account."
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "recording",
+                "replay",
+                "set",
+                "walk",
+                ""
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Market op that sets the symbol up (set by default)."
+        }
+      },
+      "additionalProperties": true,
+      "type": "object",
+      "description": "Starting price model; every other key is the model op's argument (price, vol, seed, ...)."
+    },
+    "Step": {
+      "properties": {
+        "at": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Offset from clock.start, such as +5m. Timeline only; offsets must not decrease."
+        },
+        "advance": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_clock op advance (SBX-07)."
+        },
+        "call_tool": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "name"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_call_tool (SBX-06)."
+        },
+        "chat": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "as",
+                "text"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_chat op send (SBX-02)."
+        },
+        "chat.channel": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "state"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_chat op set_state (SBX-02)."
+        },
+        "chat.press": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "action"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_chat op press (SBX-02)."
+        },
+        "chat.react": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "emoji"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_chat op react (SBX-02)."
+        },
+        "config.patch": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_inspect op wait_for (SBX-05)."
+        },
+        "fault.add": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_fault op add (SBX-13)."
+        },
+        "fault.clear": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_fault op clear (SBX-13)."
+        },
+        "llm.script": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "rules"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_llm op script_put (SBX-04)."
+        },
+        "manage": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "route"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_manage (SBX-06)."
+        },
+        "market.delist": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op delist (SBX-03)."
+        },
+        "market.path": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol",
+                "to",
+                "over"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op path (SBX-03)."
+        },
+        "market.recording": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol",
+                "path"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op recording (SBX-21)."
+        },
+        "market.relist": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op relist (SBX-03)."
+        },
+        "market.replay": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol",
+                "timeframe"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op replay (SBX-03)."
+        },
+        "market.set": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op set (SBX-03)."
+        },
+        "market.shock": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol",
+                "pct"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op shock (SBX-03)."
+        },
+        "market.walk": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "symbol",
+                "vol",
+                "seed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_market op walk (SBX-03)."
+        },
+        "restart": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runner step."
+        },
+        "run_until": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_clock op advance (SBX-07)."
+        },
+        "settle": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_inspect op settle (SBX-09)."
+        },
+        "wait_for": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "match"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_inspect op wait_for (SBX-05)."
+        },
+        "web.put": {
+          "anyOf": [
+            true,
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Served by sandbox_web op put (SBX-15)."
+        }
+      },
+      "propertyNames": {
+        "enum": [
+          "at",
+          "advance",
+          "call_tool",
+          "chat",
+          "chat.channel",
+          "chat.press",
+          "chat.react",
+          "config.patch",
+          "fault.add",
+          "fault.clear",
+          "llm.script",
+          "manage",
+          "market.delist",
+          "market.path",
+          "market.recording",
+          "market.relist",
+          "market.replay",
+          "market.set",
+          "market.shock",
+          "market.walk",
+          "restart",
+          "run_until",
+          "settle",
+          "wait_for",
+          "web.put"
+        ]
+      },
+      "type": "object",
+      "minProperties": 1,
+      "description": "One kind key (chat, market.path, advance, ...) and an optional at."
+    }
+  },
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Schema version; must be 1."
+    },
+    "scenario": {
+      "type": "string",
+      "description": "Scenario id: lower-case letters or digits, then . _ - allowed; also the file name without .yaml."
+    },
+    "covers": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Review IDs or features this scenario covers (H8, S116A-1)."
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "active",
+            "known_bug",
+            ""
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "active (default) gates; known_bug documents an unfixed defect and runs only with KQ_SCENARIO_KNOWN_BUGS=1."
+    },
+    "known_bug": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Review ID of the open defect; required with status known_bug and refused otherwise."
+    },
+    "llm": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "scripted",
+            "replay",
+            "live",
+            ""
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "scripted (default; the only mode for PR CI), replay (a committed cassette) or live (only when the Sandbox Live workflow is started by hand, or locally with a key and --llm-budget)."
+    },
+    "miss": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "error",
+            "scripted",
+            ""
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "llm: replay only. A request the cassette lacks fails (error) or goes to llm_script (scripted)."
+    },
+    "level": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "wire",
+            "event",
+            ""
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "wire (default) or event; recorded only in v1."
+    },
+    "runs": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Runs per matrix row (default 1)."
+    },
+    "pass_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Share of runs that must pass, 0 to 1 (default 1)."
+    },
+    "matrix": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Name to values; the file runs once per combination."
+    },
+    "base": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "main",
+            "stack-head",
+            ""
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Informative: the base the scenario was written against."
+    },
+    "clock": {
+      "$ref": "#/$defs/ClockSpec",
+      "description": "The instance clock; a scenario controls it."
+    },
+    "instance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InstanceSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Merged over the sandbox profile before the instance starts."
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Proactive profile (time zone, active hours), applied through call_tool."
+    },
+    "market": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/MarketInit"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Symbol to starting price model. The venue must match the account."
+    },
+    "account": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccountSeed"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "venue or venue/account to its simulated balances and positions."
+    },
+    "faults": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Fault rules, each the arguments of sandbox_fault add."
+    },
+    "web": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Fake web pages, each the arguments of sandbox_web put."
+    },
+    "llm_script": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Scripted model rules (match, respond) for llm: scripted."
+    },
+    "setup": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Steps that run before the clock moves (no at)."
+    },
+    "timeline": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Steps over sim time; at offsets must not decrease."
+    },
+    "expect": {
+      "items": {
+        "$ref": "#/$defs/Expectation"
+      },
+      "type": "array",
+      "description": "What the journal must show afterwards; at least one."
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "version",
+    "scenario",
+    "clock",
+    "expect"
+  ],
+  "title": "KhunQuant Sandbox Lab scenario (schema v1)"
+}

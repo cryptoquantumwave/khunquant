@@ -246,9 +246,18 @@ func (s *Server) listenAvoiding() (net.Listener, error) {
 // lab calls it.
 func (s *Server) Idle() bool { return s.inflight.Load() == 0 }
 
-// Stop gracefully shuts down the server. It is safe to call multiple times;
-// if not running, Stop returns nil without error.
-func (s *Server) Stop() error {
+// Stop gracefully shuts down the server and switches the sandbox off. It is safe to call
+// multiple times; if not running, Stop returns nil without error.
+func (s *Server) Stop() error { return s.stop(false) }
+
+// StopForRestart shuts the server down and leaves the sandbox armed with no server
+// (enabled, empty base URL), for a reload that keeps the sandbox on: until the next server
+// starts, exchange traffic fails loudly instead of passing through to the real venue, and
+// an exchange client built in between is built for the sandbox, not with real URLs that
+// its cache would then keep. It is the state the gateway starts in.
+func (s *Server) StopForRestart() error { return s.stop(true) }
+
+func (s *Server) stop(armed bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -271,7 +280,7 @@ func (s *Server) Stop() error {
 	}
 
 	s.running = false
-	SetGlobalState(false, "")
+	SetGlobalState(armed, "")
 	logger.Debugf("sandbox server stopped")
 
 	return nil

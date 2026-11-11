@@ -345,6 +345,14 @@ func shutdownGateway(
 	logger.Info("✓ Gateway stopped")
 }
 
+// stopSandboxForRestart stops the sandbox server of a reload that keeps the sandbox on and
+// leaves the sandbox state armed with no server until buildServices starts the next one.
+func stopSandboxForRestart(services *gatewayServices) {
+	_ = services.SandboxServer.StopForRestart()
+	services.SandboxServer = nil
+	services.SandboxToken = ""
+}
+
 // handleConfigReload handles config file reload by stopping all services,
 // reloading the provider and config, and restarting services with the new config.
 func handleConfigReload(
@@ -455,13 +463,13 @@ func handleConfigReload(
 		sandbox.SetGlobalState(true, "")
 		logger.Debugf("sandbox: state armed for restart")
 	} else if wasEnabled && isEnabled {
-		// Sandbox stays enabled: stop the old server so a fresh one can start in buildServices
+		// Sandbox stays enabled: stop the old server so a fresh one can start in
+		// buildServices, and keep the state armed in between (enabled, no server), as at
+		// start-up. Switching it off here let a tool call during the reload reach the real
+		// venue, and let an exchange client built then keep real URLs in the cache.
 		logger.Info("  Reloading sandbox configuration...")
-		services.SandboxServer.Stop()
-		sandbox.SetGlobalState(false, "")
-		services.SandboxServer = nil
-		services.SandboxToken = ""
-		logger.Debugf("sandbox: old server stopped, will restart with new config")
+		stopSandboxForRestart(services)
+		logger.Debugf("sandbox: old server stopped, state stays armed, will restart with new config")
 	}
 
 	// Restart all services with new config
@@ -490,8 +498,10 @@ func startAndRegisterSandbox(mux handleMux, cfg *config.Config, services *gatewa
 	// agent loop fails to load, bypassing the enable/disable toggle that would
 	// otherwise stop the old server — without this, every failed reload strands
 	// another listener for the lifetime of the process.
+	// The sandbox is on in cfg, so the state stays armed until the new server starts: if
+	// anything below fails, exchange traffic fails closed instead of passing through.
 	if services.SandboxServer != nil {
-		services.SandboxServer.Stop()
+		_ = services.SandboxServer.StopForRestart()
 		services.SandboxServer = nil
 		services.SimulatorReseter = nil
 	}

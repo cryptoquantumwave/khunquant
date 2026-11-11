@@ -14,6 +14,9 @@ type Options struct {
 	// Now is the sim-time source, read on every call (the lab passes a closure over
 	// lab.Lab.Now); nil is time.Now.
 	Now func() time.Time
+	// Home is the instance home: a recording's file lies under it, and the saved world
+	// names it relative to it. Empty: no recording.
+	Home string
 }
 
 // Bar is one OHLC candle; V is a synthetic constant (1) that no scenario may assert on.
@@ -43,8 +46,9 @@ func (tl timeline) price(t time.Time) (float64, bool) { return tl[tl.index(t)].m
 // simulator calls it, holding its own lock), so the order is always sim.mu -> book.mu.
 type Book struct {
 	mu  sync.RWMutex
-	now func() time.Time
-	tls map[string]map[Pair]timeline // venue ("*" = wildcard) -> pair
+	now  func() time.Time
+	home string
+	tls  map[string]map[Pair]timeline // venue ("*" = wildcard) -> pair
 
 	delisted map[string]map[Pair]bool    // venue ("*" = every venue) -> pair (delist.go)
 	terms    map[string]map[Pair][]terms // venue ("*" = wildcard) -> pair -> funding rate, schedule, maintenance rate (funding.go)
@@ -56,7 +60,7 @@ func NewBook(o Options) *Book {
 		o.Now = time.Now
 	}
 	return &Book{
-		now: o.Now, tls: map[string]map[Pair]timeline{},
+		now: o.Now, home: o.Home, tls: map[string]map[Pair]timeline{},
 		delisted: map[string]map[Pair]bool{}, terms: map[string]map[Pair][]terms{},
 	}
 }

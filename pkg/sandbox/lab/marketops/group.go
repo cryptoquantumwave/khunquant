@@ -64,6 +64,13 @@ func Group(b *market.Book, o Options) lab.Group {
 					`"timeframe":{"type":"string","description":"the CSV bar length, e.g. 1m"},` +
 					`"start":{"type":"string","description":"RFC 3339 or unix time of the CSV bar to begin with; default the first"}}`),
 				Required: []string{"symbol", "timeframe"}, Run: run(b, replayOp(o.Home))},
+			{Name: "recording", Description: "play the market ticks (and closed candles) of a recorded events.jsonl (pkg/replay's input) from now: ticks give a step or linear price, so the venues' tickers, klines and fills all follow it",
+				Args: json.RawMessage(`{` + symVenue + `,"path":{"type":"string","description":"an events.jsonl inside the instance home (the scenario runner copies a repository file in)"},` +
+					`"source":{"type":"string","description":"the recorded provider:symbol, e.g. okx:BTC/USDT; default: the one provider that recorded the symbol"},` +
+					`"align":{"type":"string","description":"sim time of the file's first line: RFC 3339, or start/now (default) for the current sim time"},` +
+					`"speed":{"type":"number","description":"1 (default) is the recorded pace"},` +
+					`"interpolate":{"type":"string","enum":["step","linear"]}}`),
+				Required: []string{"symbol", "path"}, Run: run(b, recordingOp(o.Home))},
 			{Name: "delist", Description: "take a symbol off a venue: market data and orders for it fail with the venue's invalid-symbol error and exchangeInfo/instruments lose it; ccxt clients that already loaded markets keep it until reload_markets",
 				Args:     json.RawMessage(`{` + symVenue + `,` + reload + `}`),
 				Required: []string{"symbol"}, Run: runWire(b, delistOp(o, true))},
@@ -94,6 +101,11 @@ type req struct {
 	CSVInline string   `json:"csv_inline"`
 	Timeframe string   `json:"timeframe"`
 	Start     string   `json:"start"`
+	Path      string   `json:"path"`
+	Source    string   `json:"source"`
+	Align     string   `json:"align"`
+	Speed     float64  `json:"speed"`
+	Interp    string   `json:"interpolate"`
 	Reload    bool     `json:"reload_markets"`
 	Keyframes []struct {
 		At    string  `json:"at"`
@@ -272,5 +284,41 @@ func replayOp(home string) func(*market.Book, req, market.Pair) error {
 			rd = f
 		}
 		return b.Replay(a.Venue, p, rd, tf, start)
+	}
+}
+
+// recordingOp plays an events.jsonl that lies inside home; the book stores its path
+// relative to home, so a restart or a snapshot restore finds it again.
+func recordingOp(home string) func(*market.Book, req, market.Pair) error {
+	return func(b *market.Book, a req, p market.Pair) error {
+		path := a.Path
+		if path == "" {
+			return errors.New("recording needs a path")
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(home, path)
+		}
+		if !sandbox.PathInside(home, path) {
+			return errors.New("path must be inside the instance home")
+		}
+		h, err := filepath.EvalSymlinks(home)
+		if err != nil {
+			return errors.New("cannot read path")
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return errors.New("cannot read path")
+		}
+		rel, err := filepath.Rel(h, resolved)
+		if err != nil || !filepath.IsLocal(rel) {
+			return errors.New("path must be inside the instance home")
+		}
+		o := market.RecordingOptions{Source: a.Source, Speed: a.Speed, Interpolate: a.Interp}
+		if a.Align != "" && a.Align != "start" && a.Align != "now" {
+			if o.Align, err = time.Parse(time.RFC3339, a.Align); err != nil {
+				return errors.New("align must be RFC 3339, start or now")
+			}
+		}
+		return b.SetRecording(a.Venue, p.String(), rel, o)
 	}
 }

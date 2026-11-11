@@ -133,6 +133,8 @@ type runState struct {
 	// instance's count of crash restarts when it was armed (killat.go).
 	armed     bool
 	crashBase int
+
+	staged map[string]string // recording files copied into the home: repository path -> home-relative path
 }
 
 func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {

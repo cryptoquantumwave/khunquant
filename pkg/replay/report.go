@@ -117,6 +117,40 @@ type LabelResult struct {
 // none, or without labels).
 func (r *Report) CriticalRecallOK() bool { return r.Labels == nil || r.Labels.CriticalRecall >= 1 }
 
+// Golden is the summary a case keeps in golden.json: counts are exact, and the only
+// tolerance is a second on the latencies. TestReplay_GoldenScenarios compares a replay to it.
+type Golden struct {
+	Events         int            `json:"events"`
+	Candidates     int            `json:"candidates"`
+	Dispositions   map[string]int `json:"dispositions"`
+	WouldSend      int            `json:"would_send"`
+	LLMWakes       int            `json:"llm_wakes"`
+	Precision      float64        `json:"precision"`
+	Recall         float64        `json:"recall"`
+	CriticalRecall float64        `json:"critical_recall"`
+	LatencyMax     float64        `json:"latency_max_seconds"`
+	LatencyTolS    float64        `json:"latency_tolerance_seconds"`
+}
+
+// Golden is the report's summary; the label figures are those of a report with no labels
+// (1, 1, 1, 0) when it has none. LatencyTolS is 1, as in every golden.json.
+func (r *Report) Golden() Golden {
+	g := Golden{
+		Events: r.Events.Total, Candidates: r.Totals.Candidates, Dispositions: r.Totals.Dispositions,
+		WouldSend: r.Totals.WouldSend, LLMWakes: r.LLMWakes, Precision: 1, Recall: 1, CriticalRecall: 1, LatencyTolS: 1,
+	}
+	if l := r.Labels; l != nil {
+		g.Precision, g.Recall, g.CriticalRecall, g.LatencyMax = l.Precision, l.Recall, l.CriticalRecall, l.Latency.Max
+	}
+	return g
+}
+
+// JSON encodes the golden file: indented, with a final newline.
+func (g Golden) JSON() ([]byte, error) {
+	b, err := json.MarshalIndent(g, "", "  ")
+	return append(b, '\n'), err
+}
+
 // JSON encodes the report, indented, with a final newline.
 func (r *Report) JSON() ([]byte, error) {
 	b, err := json.MarshalIndent(r, "", "  ")

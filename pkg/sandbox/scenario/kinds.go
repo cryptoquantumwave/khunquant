@@ -30,7 +30,7 @@ var stepKinds = map[string]stepSpec{
 	"market.replay":    {"market", "replay", "SBX-03", []string{"symbol", "timeframe"}},
 	"market.delist":    {"market", "delist", "SBX-03", []string{"symbol"}},
 	"market.relist":    {"market", "relist", "SBX-03", []string{"symbol"}},
-	"market.recording": {"market", "recording", "SBX-21", []string{"symbol"}},
+	"market.recording": {"market", "recording", "SBX-21", []string{"symbol", "path"}},
 	"llm.script":       {"llm", "script_put", "SBX-04", []string{"rules"}},
 	"fault.add":        {"fault", "add", "SBX-13", nil},
 	"fault.clear":      {"fault", "clear", "SBX-13", nil},

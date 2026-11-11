@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/replay"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/supervisor"
@@ -39,6 +41,11 @@ func (s *runState) apply(ctx context.Context) error {
 		model := m.Model
 		if model == "" {
 			model = "set"
+		}
+		if model == "recording" {
+			if err := s.stageRecording(args); err != nil {
+				return fmt.Errorf("market %s: %w", sym, err)
+			}
 		}
 		if _, err := call(ctx, s.c, "market", model, args); err != nil {
 			return fmt.Errorf("market %s: %w", sym, err)
@@ -210,8 +217,56 @@ func (s *runState) runStep(ctx context.Context, step *Step) error {
 	if sym, _ := args["symbol"].(string); spec.Group == "market" && args["venue"] == nil && s.f.Market[sym].Venue != "" {
 		args["venue"] = s.f.Market[sym].Venue // the market block priced the symbol on this venue
 	}
+	if step.Kind == "market.recording" {
+		if err := s.stageRecording(args); err != nil {
+			return err
+		}
+	}
 	_, err = call(ctx, s.c, spec.Group, spec.Op, args)
 	return err
+}
+
+// maxRecordingFile bounds a recording the runner copies into the home.
+const maxRecordingFile = 64 << 20
+
+// stageRecording copies the repository file args["path"] (relative, under the working
+// directory, as a cassette is) into <home>/lab/recordings/ and points path at the copy:
+// the market recording op reads only inside the instance home. A file is copied once per run.
+func (s *runState) stageRecording(args map[string]any) error {
+	src, _ := args["path"].(string)
+	wd, err := os.Getwd()
+	if err != nil || !filepath.IsLocal(src) || !sandbox.PathInside(wd, filepath.Join(wd, src)) {
+		return fmt.Errorf("recording path %q must be a file below the working directory", src)
+	}
+	if rel, ok := s.staged[src]; ok {
+		args["path"] = rel
+		return nil
+	}
+	st, err := os.Stat(src)
+	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 || st.Size() > maxRecordingFile {
+		return fmt.Errorf("recording %s: not a non-empty regular file of at most %d bytes (%v)", src, maxRecordingFile, err)
+	}
+	// Check before the copy: only a valid recording (the loader the market op uses) enters
+	// the home, so a stray repository file such as a .env never does.
+	if _, err := replay.LoadEvents(src); err != nil {
+		return fmt.Errorf("recording %s is not a valid recording: %w", src, err)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	rel := filepath.Join("lab", "recordings", fmt.Sprintf("rec%d.jsonl", len(s.staged)+1))
+	if err := os.MkdirAll(filepath.Join(s.home, filepath.Dir(rel)), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(s.home, rel), data, 0o600); err != nil {
+		return err
+	}
+	if s.staged == nil {
+		s.staged = map[string]string{}
+	}
+	s.staged[src], args["path"] = rel, rel
+	return nil
 }
 
 // runUntil is the step run_until: a time target, or {until: <expectation>, max_sim, step}.

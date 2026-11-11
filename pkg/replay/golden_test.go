@@ -11,21 +11,6 @@ import (
 	"time"
 )
 
-// golden is the summary a scenario must keep producing. Counts are exact; the fake
-// clock leaves no timing to vary, so the only tolerance is a second on the latencies.
-type golden struct {
-	Events         int            `json:"events"`
-	Candidates     int            `json:"candidates"`
-	Dispositions   map[string]int `json:"dispositions"`
-	WouldSend      int            `json:"would_send"`
-	LLMWakes       int            `json:"llm_wakes"`
-	Precision      float64        `json:"precision"`
-	Recall         float64        `json:"recall"`
-	CriticalRecall float64        `json:"critical_recall"`
-	LatencyMax     float64        `json:"latency_max_seconds"`
-	LatencyTolS    float64        `json:"latency_tolerance_seconds"`
-}
-
 // loadScenario loads a scenario directory and fails loudly when it is empty, so a
 // wrong path shows up as itself and not as a report of nothing.
 func loadScenario(t testing.TB, name string) Input {
@@ -85,7 +70,7 @@ func TestReplay_GoldenScenarios(t *testing.T) {
 			if !rep.CriticalRecallOK() {
 				t.Errorf("critical recall %v, want 1", rep.Labels.CriticalRecall)
 			}
-			var want golden
+			var want Golden
 			b, err := os.ReadFile(filepath.Join(fixturesDir(t), name, "golden.json"))
 			if err != nil {
 				t.Fatal(err)
@@ -93,11 +78,7 @@ func TestReplay_GoldenScenarios(t *testing.T) {
 			if err := json.Unmarshal(b, &want); err != nil {
 				t.Fatal(err)
 			}
-			got := golden{
-				Events: rep.Events.Total, Candidates: rep.Totals.Candidates, Dispositions: rep.Totals.Dispositions,
-				WouldSend: rep.Totals.WouldSend, LLMWakes: rep.LLMWakes, Precision: rep.Labels.Precision,
-				Recall: rep.Labels.Recall, CriticalRecall: rep.Labels.CriticalRecall, LatencyMax: rep.Labels.Latency.Max,
-			}
+			got := rep.Golden()
 			exact := func(what string, g, w any) {
 				if !equalJSON(g, w) {
 					t.Errorf("%s = %v, golden %v", what, g, w)
@@ -118,6 +99,27 @@ func TestReplay_GoldenScenarios(t *testing.T) {
 	}
 	// The whole set is a few seconds at most: it runs in CI on every change.
 	t.Logf("golden set: %v", time.Since(start))
+}
+
+// The exported summary is byte-for-byte what the six checked-in golden.json files hold.
+func TestGoldenMatchesExistingFiles(t *testing.T) {
+	for _, name := range scenarioNames(t) {
+		rep, err := Run(context.Background(), loadScenario(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := os.ReadFile(filepath.Join(fixturesDir(t), name, "golden.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := rep.Golden().JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s: Report.Golden() is\n%s\nwant the file's\n%s", name, got, want)
+		}
+	}
 }
 
 func equalJSON(a, b any) bool {

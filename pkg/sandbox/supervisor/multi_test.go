@@ -173,6 +173,59 @@ func TestSupervisor_InstanceRequiredWhenSeveral(t *testing.T) {
 	}
 }
 
+// A marker that names its supervisor keeps the home out of the stale list while that
+// supervisor lives, even with a dead gateway pid: `down` cannot remove it and `list`
+// leaves its pid file alone. With the supervisor dead it is stale like any other.
+func TestSupervisor_StaleNeedsTheSupervisorGone(t *testing.T) {
+	base := sandboxEnv(t)
+	s := multiSup(t, base, 2)
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name string, supervisor int) (home, pidFile string) {
+		home = filepath.Join(base, "kq-sbx-"+name)
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(home, ".kq-sandbox")
+		if err := os.WriteFile(marker, []byte(fmt.Sprintf("%s\nsupervisor=%d\n", name, supervisor)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(marker, old, old); err != nil {
+			t.Fatal(err)
+		}
+		pidFile = filepath.Join(home, ".khunquant.pid")
+		if err := os.WriteFile(pidFile, []byte(fmt.Sprintf(`{"pid":%d}`, dead.Process.Pid)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return home, pidFile
+	}
+	liveHome, livePid := mk("owned", os.Getpid()) // gateway dead, supervisor (this test) alive
+	goneHome, _ := mk("orphan", dead.Process.Pid) // gateway and supervisor dead
+
+	list := s.List()
+	if len(list) != 1 || list[0].Name != "orphan" || !list[0].Stale {
+		t.Fatalf("List = %+v, want only the orphan as stale", list)
+	}
+	if _, err := os.Stat(livePid); err != nil {
+		t.Errorf("list deleted the pid file of a live supervisor's home: %v", err)
+	}
+	if err := s.Down(context.Background(), "owned", false); err == nil {
+		t.Error("Down removed a home whose supervisor is alive")
+	}
+	if _, err := os.Stat(liveHome); err != nil {
+		t.Errorf("the home of a live supervisor is gone: %v", err)
+	}
+	if err := s.Down(context.Background(), "orphan", false); err != nil {
+		t.Fatalf("Down of a home whose supervisor is dead: %v", err)
+	}
+	if _, err := os.Stat(goneHome); !os.IsNotExist(err) {
+		t.Errorf("Down left the orphan home: %v", err)
+	}
+}
+
 func TestSupervisor_StaleHomeListed(t *testing.T) {
 	base := sandboxEnv(t)
 	s := multiSup(t, base, 2)
@@ -351,5 +404,22 @@ func TestSupervisor_KillAtOnOneCannotFireInTheOther(t *testing.T) {
 	a, _ = s.Get("a")
 	if a.Armed != "c1" || a.State != StateRunning || a.PID != infos[0].PID || a.CrashRestarts != 0 {
 		t.Errorf("a was disturbed by b's death: %+v", a)
+	}
+}
+
+func TestMarker_NamesItsSupervisor(t *testing.T) {
+	home := t.TempDir()
+	write := func(content []byte) {
+		if err := os.WriteFile(filepath.Join(home, ".kq-sandbox"), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(markerContent("a"))
+	if got := markerSupervisor(home); got != os.Getpid() {
+		t.Errorf("markerSupervisor = %d, want %d", got, os.Getpid())
+	}
+	write([]byte("a\n")) // an older home: the name only
+	if got := markerSupervisor(home); got != 0 {
+		t.Errorf("markerSupervisor of an old marker = %d, want 0", got)
 	}
 }

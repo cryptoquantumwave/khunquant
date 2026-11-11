@@ -200,22 +200,23 @@ func readPlaceholderVenues(home string) ([]string, error) {
 // enforceLockedConfig forces the invariants of a locked config. It runs on the
 // config loaded at start and on every reloaded one, before anything is built from
 // it. It returns an error for what it cannot fix: a workspace or fixtures directory
-// outside the instance home, an agent workspace that is the home itself, or a model
-// the lock does not allow.
+// outside the instance home, an agent workspace that is the home itself or touches the
+// lab's own directory, or a model the lock does not allow.
 func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	home := config.HomeDir()
 
 	workspace := cfg.WorkspacePath()
 	if !workspaceInHome(home, workspace) {
-		return fmt.Errorf("agents.defaults.workspace %q is not a directory inside the instance home", workspace)
+		return fmt.Errorf("agents.defaults.workspace %q is not a directory inside the instance home, apart from %s", workspace, labDirName)
 	}
 	// Every agent's tools are built on its own workspace, and the default agent's is
 	// where the shared proactive database opens. Each must be inside the home, or a
-	// relaxed list would open the developer's real ~/.khunquant from a locked instance.
+	// relaxed list would open the developer's real ~/.khunquant from a locked instance,
+	// and one in the lab directory would let the file tools rewrite the lab's own state.
 	for i := range cfg.Agents.List {
 		ws := agent.AgentWorkspace(&cfg.Agents.List[i], &cfg.Agents.Defaults)
 		if !workspaceInHome(home, ws) {
-			return fmt.Errorf("agents.list[%d] (%q) workspace %q is not a directory inside the instance home", i, cfg.Agents.List[i].ID, ws)
+			return fmt.Errorf("agents.list[%d] (%q) workspace %q is not a directory inside the instance home, apart from %s", i, cfg.Agents.List[i].ID, ws, labDirName)
 		}
 	}
 	fixtures := cfg.Debug.Sandbox.FixturesDir
@@ -315,8 +316,18 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	return nil
 }
 
-// workspaceInHome reports whether ws is inside home and is not home itself: a workspace
-// at the home would hold config.json, .security.yml and the accounts record.
+// labDirName is the directory under the instance home where the lab keeps its own state:
+// the journal that scenario expectations read, the LLM script, the clock, the saved world,
+// the live budget, the boot counter and the crash marker.
+const labDirName = "lab"
+
+// workspaceInHome reports whether ws is inside home, is not home itself, and keeps clear of
+// the lab directory. A workspace at the home would hold config.json, .security.yml and the
+// accounts record. One that is, holds or lies inside <home>/lab would hand the file tools
+// the lab's state, so a scenario could reset the live budget or forge a crash marker
+// (195-1). The lab check ignores letter case, as macOS's default volume does.
 func workspaceInHome(home, ws string) bool {
-	return sandbox.PathInside(home, ws) && !sandbox.PathInside(ws, home)
+	lab := filepath.Join(home, labDirName)
+	return sandbox.PathInside(home, ws) && !sandbox.PathInside(ws, home) &&
+		!sandbox.PathInsideFold(lab, ws) && !sandbox.PathInsideFold(ws, lab)
 }

@@ -134,6 +134,21 @@ func PathInside(root, p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// PathInsideFold is PathInside without regard to letter case, as on macOS's default
+// volume, where "Lab" names the directory "lab". For a path the lock must keep out it errs
+// toward "inside", the safe answer on a case-sensitive file system too.
+func PathInsideFold(root, p string) bool {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(p) == "" {
+		return false
+	}
+	r, p2 := strings.ToLower(resolveExisting(root)), strings.ToLower(resolveExisting(p))
+	rel, err := filepath.Rel(r, p2)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // resolveExisting makes p absolute and resolves symlinks in its longest existing
 // ancestor, keeping the not-yet-existing tail as written.
 func resolveExisting(p string) string {

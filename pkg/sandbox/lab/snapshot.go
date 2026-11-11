@@ -43,6 +43,7 @@ func (l *Lab) SnapshotGroup() Group {
 			Name: "take", Description: "settle, save the world, back up every SQLite file, copy the rest, write the manifest with sha256 sums",
 			Args:     json.RawMessage(`{"id":{"type":"string","description":"letters, digits and '-'"},"label":{"type":"string"}}`),
 			Required: []string{"id"}, Run: l.snapshotTake,
+			Exclusive: true, // no other lab call between the settle and the last copy; the take never calls Lab.Call
 		}},
 	}
 }
@@ -223,7 +224,17 @@ func (l *Lab) snapshotFiles() (files []snapshotFile, total int64, err error) {
 	return files, total, err
 }
 
+// isSQLite says whether p is a SQLite database. A database the gateway holds open in WAL
+// mode has a -wal or -shm file beside it, and is recognised by that alone: opening and
+// closing any descriptor of it would drop this process's POSIX locks on the file, which
+// SQLite warns about. The take is settled and holds off every other lab call, so any
+// other file is not in a transaction and a header read is harmless.
 func isSQLite(p string) bool {
+	for _, side := range []string{"-wal", "-shm"} {
+		if _, err := os.Lstat(p + side); err == nil {
+			return true
+		}
+	}
 	f, err := os.Open(p)
 	if err != nil {
 		return false
@@ -235,7 +246,8 @@ func isSQLite(p string) bool {
 }
 
 // skipSnapshot says whether the home-relative path rel stays out of a snapshot: the log, the
-// pid file and the instance marker (a restore writes its own), earlier snapshots, the crash
+// pid file and the instance marker (a restore writes its own), the instance's tmp/ (the
+// TMPDIR of a locked instance), earlier snapshots, the crash
 // marker and its reports, a restore's working directory, and SQLite's side files (the
 // backup is self-contained) and temporary files.
 func skipSnapshot(rel string) bool {
@@ -245,7 +257,7 @@ func skipSnapshot(rel string) bool {
 		return false
 	case rel == "gateway.log", rel == ".khunquant.pid", rel == ".kq-sandbox":
 		return true
-	case rel == "lab/snapshots", rel == "lab/crash.json", strings.HasPrefix(rel, "lab/restore"):
+	case rel == "tmp", rel == "lab/snapshots", rel == "lab/crash.json", strings.HasPrefix(rel, "lab/restore"):
 		return true
 	case path.Dir(rel) == "lab" && strings.HasPrefix(base, "crash-") && strings.HasSuffix(base, ".json"):
 		return true

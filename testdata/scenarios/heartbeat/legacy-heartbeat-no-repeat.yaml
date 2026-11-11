@@ -3,10 +3,25 @@
 # relies on does not work (S110B-1); v2 asks the model to read its own history instead. Both
 # are expected to go red at the head of #116, which is why this documents a known bug.
 #
+# The owner says good morning first (setup). A legacy heartbeat runs in the chat the owner
+# last wrote in, and its message tool may only write there; with no such chat it runs on
+# cli:direct, which the owner never sees, and every expectation below would read nothing.
+#
+# What each expectation proves:
+# - reported-at-least-once: the owner was told about the move (after the greeting's reply). A
+#   legacy heartbeat reaches the owner only through the model's own message call, so without
+#   it a run whose heartbeats sent nothing would pass the two bounds below.
+# - quiet-at-night: nothing reached the owner between 22:00 and 07:00.
+# - reported-at-most-twice: the one move was not reported again every half hour (the bug).
+# The runner also checks every live run itself (live_model): a run in which no model call was
+# answered, or the budget refused one, is an infrastructure failure (exit 3), not a failed
+# expectation (exit 1), so a dead key, a wrong model id or a spent budget is never read as
+# "the bug is still there" (nor, as before, as "fixed").
+#
 # This one talks to the real model. It runs only with `--llm live` and needs
 # KQ_SANDBOX_LLM_KEY, KQ_SANDBOX_LLM_MODELS, --llm-model and --llm-budget; without a key the
 # runner skips it ("live: no key") and does not fail. It is checked by --validate-only like
-# any other file. The nightly job that runs it is opt-in: .github/workflows/sandbox-live.yml.
+# any other file. The job that runs it is opt-in and dispatch-only: .github/workflows/sandbox-live.yml.
 version: 1
 scenario: legacy-heartbeat-no-repeat
 covers: [H9, S110B-1]
@@ -27,11 +42,15 @@ instance:
   workspace: { HEARTBEAT.md: "${template}" }
 market:
   SOL/USDT: { venue: binance, model: set, price: 180 }
+setup:
+  - chat: { as: owner, text: "good morning" } # records the owner's chat for the heartbeat
 timeline:
   - at: "+0m"
     market.path: { symbol: SOL/USDT, to: 165.6, over: 30m, shape: linear } # -8%, then flat
   - run_until: "next 08:00"
 expect:
+  - id: reported-at-least-once
+    message: { to: owner, contains: ["SOL"], count: ">= 1", within: { from: "+1m" } }
   - id: quiet-at-night
     message: { to: owner, during: "22:00-07:00", count: 0 }
   - id: reported-at-most-twice

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,8 +43,8 @@ func TestPrintConfig_PointsAtRunningBinary(t *testing.T) {
 	if !ok || len(got.MCPServers) != 1 {
 		t.Fatalf("servers = %v, want only %s", got.MCPServers, mcpServerName)
 	}
-	if s.Command != exe || !slices.Equal(s.Args, []string{"sandbox", "mcp"}) || len(s.Env) != 0 {
-		t.Errorf("entry = %+v, want command %s, args [sandbox mcp], no env", s, exe)
+	if s.Command != exe || !slices.Equal(s.Args, []string{"sandbox", "mcp"}) || !maps.Equal(s.Env, map[string]string{"KQ_SANDBOX_MAX_INSTANCES": "1"}) {
+		t.Errorf("entry = %+v, want command %s, args [sandbox mcp], env KQ_SANDBOX_MAX_INSTANCES=1 only", s, exe)
 	}
 }
 
@@ -75,6 +76,12 @@ func TestMCPJSON_IsValid(t *testing.T) {
 	args, _ := json.Marshal(entry["args"])
 	if string(args) != `["sandbox","mcp"]` || strings.Contains(string(data), "gateway") {
 		t.Errorf("args = %s: the entry must run `sandbox mcp` and never a gateway", args)
+	}
+	// The env block holds the instance cap and nothing else; the key-name scan below
+	// covers its keys like every other key (token, key, secret, password).
+	env, _ := entry["env"].(map[string]any)
+	if len(env) != 1 || env["KQ_SANDBOX_MAX_INSTANCES"] != "1" {
+		t.Errorf("env = %v, want only KQ_SANDBOX_MAX_INSTANCES=1", env)
 	}
 	var walk func(v any)
 	walk = func(v any) {

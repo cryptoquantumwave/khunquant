@@ -25,6 +25,8 @@ var (
 	// ErrMoneyAtRisk: a live or record instance is never snapshotted or restored, because a
 	// restored older budget would erase spend already made.
 	ErrMoneyAtRisk = errors.New("snapshot: refused for a live or record instance: spent budget must not be rolled back")
+	// ErrTooManySnapshots: the store holds as many snapshots as the cap allows.
+	ErrTooManySnapshots = errors.New("snapshot: the store is full")
 )
 
 // SnapshotInfo is a snapshot in the store.
@@ -69,6 +71,13 @@ func (s *Supervisor) Snapshot(ctx context.Context, name, label string) (Snapshot
 	defer in.opMu.Unlock()
 	if moneyAtRisk(in.env[envLLM]) {
 		return SnapshotInfo{}, ErrMoneyAtRisk
+	}
+	s.snapMu.Lock()
+	defer s.snapMu.Unlock()
+	if list, err := s.ListSnapshots(); err != nil {
+		return SnapshotInfo{}, err
+	} else if len(list) >= s.cfg.MaxSnapshots {
+		return SnapshotInfo{}, fmt.Errorf("%w (%d); remove one with sandbox_instance op=snapshot_delete {snapshot}", ErrTooManySnapshots, s.cfg.MaxSnapshots)
 	}
 	if _, err := s.Client(in.name); err != nil {
 		return SnapshotInfo{}, err
@@ -156,6 +165,8 @@ func (s *Supervisor) DeleteSnapshot(id string) error {
 	if _, err := labsnap.Read(dir); err != nil {
 		return fmt.Errorf("snapshot: no snapshot %q in the store", id)
 	}
+	s.snapMu.Lock() // not while a Snapshot is counting or moving one in
+	defer s.snapMu.Unlock()
 	return os.RemoveAll(dir)
 }
 

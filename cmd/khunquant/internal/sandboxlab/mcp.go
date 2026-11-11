@@ -104,7 +104,8 @@ func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 		Name: "sandbox_instance",
 		Description: "Start, stop, restart and inspect locked sandbox instances of this binary. " +
 			"ops: up, down, list, restart (mode graceful|kill|kill_at), logs (tail, contains), " +
-			"snapshot {label?} (manual clock; settles, then freezes the instance), snapshots (list), restore {snapshot, name?} " +
+			"snapshot {label?} (manual clock; settles, then freezes the instance), snapshots (list), snapshot_delete {snapshot}, restore {snapshot, name?} " +
+			"(the store keeps at most KQ_SANDBOX_MAX_SNAPSHOTS snapshots, default 20: a take beyond that is refused until one is deleted) " +
 			"(a new locked instance from a snapshot, also beside a running one; refused for live and record instances). " +
 			"down, restart and logs take the instance in `name`, required when several run (KQ_SANDBOX_MAX_INSTANCES, default 1, at most 8); list also shows stale homes (stale:true), which only down removes. " +
 			"restart kill_at {workflow, step, point, attempt?} arms a crash point and returns {armed}: the instance dies by SIGKILL when that step " +
@@ -148,9 +149,9 @@ func errResult(format string, a ...any) *mcp.CallToolResult {
 // `sandbox up` is an argument of op=up.
 func instanceSchema() json.RawMessage {
 	props := map[string]any{
-		"op":        map[string]any{"type": "string", "enum": []string{"up", "down", "list", "restart", "logs", "snapshot", "restore", "snapshots"}},
+		"op":        map[string]any{"type": "string", "enum": []string{"up", "down", "list", "restart", "logs", "snapshot", "restore", "snapshots", "snapshot_delete"}},
 		"label":     map[string]any{"type": "string", "description": "snapshot: a note kept in the manifest"},
-		"snapshot":  map[string]any{"type": "string", "description": "restore: the snapshot id (see snapshots); name is the instance it becomes (default: the one it was taken from)"},
+		"snapshot":  map[string]any{"type": "string", "description": "restore, snapshot_delete: the snapshot id (see snapshots); for restore, name is the instance it becomes (default: the one it was taken from)"},
 		"keep_home": map[string]any{"type": "boolean", "description": "down: keep the home (logs, config)"},
 		"mode":      map[string]any{"type": "string", "enum": []string{"graceful", "kill", "kill_at"}, "description": "restart: SIGTERM then SIGKILL, SIGKILL at once, or arm a crash point (kill_at)"},
 		"kill_at":   killAtSchema(),
@@ -262,6 +263,11 @@ func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolReques
 		}
 		m.refine(ctx, info.Name)
 		return jsonResult(info), nil
+	case "snapshot_delete":
+		if err := m.sup.DeleteSnapshot(a.Snapshot); err != nil {
+			return errResult("%v", err), nil
+		}
+		return jsonResult(map[string]any{"deleted": a.Snapshot}), nil
 	case "snapshots":
 		list, err := m.sup.ListSnapshots()
 		if err != nil {
@@ -269,7 +275,7 @@ func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolReques
 		}
 		return jsonResult(map[string]any{"snapshots": list}), nil
 	}
-	return errResult("sandbox_instance: op must be one of up, down, list, restart, logs, snapshot, restore, snapshots (got %q)", a.Op), nil
+	return errResult("sandbox_instance: op must be one of up, down, list, restart, logs, snapshot, restore, snapshots, snapshot_delete (got %q)", a.Op), nil
 }
 
 // killAt arms the crash point and answers {armed}: the crash and the restart happen later,

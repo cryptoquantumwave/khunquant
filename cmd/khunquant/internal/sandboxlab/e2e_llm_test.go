@@ -34,7 +34,7 @@ const (
 // shellOf is the starter's environment for a record or live start: a map, so the
 // developer's shell is never consulted.
 func shellOf(extra map[string]string) func(string) string {
-	m := map[string]string{"KQ_SANDBOX_LLM_KEY": e2eKey, "KQ_SANDBOX_LLM_MODELS": "test-model", "KQ_SANDBOX_LLM_PRICES": "test-model=3:15"}
+	m := map[string]string{"KQ_SANDBOX_LLM_KEY": e2eKey, "KQ_SANDBOX_LLM_MODELS": e2eModel, "KQ_SANDBOX_LLM_PRICES": "test-model=3:15"}
 	for k, v := range extra {
 		m[k] = v
 	}
@@ -300,7 +300,7 @@ func TestE2E_LLMLiveStartRefusals(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	withKey := []string{"KQ_SANDBOX_LLM_KEY=" + e2eKey, "KQ_SANDBOX_LLM_MODELS=claude-sonnet-4.6"}
+	withKey := []string{"KQ_SANDBOX_LLM_KEY=" + e2eKey, "KQ_SANDBOX_LLM_MODELS=anthropic-messages/claude-sonnet-4.6"}
 	for name, c := range map[string]struct {
 		env  []string
 		args []string

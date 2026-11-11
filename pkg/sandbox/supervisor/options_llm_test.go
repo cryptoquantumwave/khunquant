@@ -14,7 +14,7 @@ const (
 func shell(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 var liveShell = map[string]string{
-	"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6,other", "KQ_SANDBOX_LLM_PRICES": "other=1:2",
+	"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "anthropic-messages/claude-sonnet-4.6,openai/other", "KQ_SANDBOX_LLM_PRICES": "other=1:2",
 	// A real key in the shell must never be consulted.
 	"ANTHROPIC_API_KEY": "sk-shell-MUST-NEVER-BE-USED", "OPENAI_API_KEY": "sk-shell-MUST-NEVER-BE-USED",
 }
@@ -57,7 +57,7 @@ func TestChildEnvLiveSetsExactlyWhatItNeeds(t *testing.T) {
 	e := env(t, UpOptions{LLM: "live", LLMModel: liveModel, LLMBudget: "2USD"}, liveShell)
 	want := map[string]string{
 		"KQ_SANDBOX_LLM": "live", "KQ_SANDBOX_LLM_MODEL": liveModel, "KQ_SANDBOX_LLM_BUDGET": "2USD",
-		"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6,other",
+		"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "anthropic-messages/claude-sonnet-4.6,openai/other",
 		"KQ_SANDBOX_LLM_PRICES": "other=1:2", "KQ_SANDBOX_ALLOW_HOSTS": "api.anthropic.com",
 	}
 	for k, v := range want {
@@ -72,7 +72,7 @@ func TestChildEnvLiveSetsExactlyWhatItNeeds(t *testing.T) {
 	}
 	// The loopback fake of a test: its host is the one opened.
 	e = env(t, UpOptions{LLM: "record", LLMModel: "openai/gpt-x", LLMBudget: "1000tok", LLMAPIBase: "http://127.0.0.1:5555/v1"},
-		map[string]string{"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "gpt-x"})
+		map[string]string{"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "openai/gpt-x"})
 	if e["KQ_SANDBOX_ALLOW_HOSTS"] != "127.0.0.1" || e["KQ_SANDBOX_LLM_API_BASE"] != "http://127.0.0.1:5555/v1" {
 		t.Errorf("record env = %v", e)
 	}
@@ -91,9 +91,14 @@ func TestLiveStartIsRefusedBeforeAnythingStarts(t *testing.T) {
 		"a CLI model":           {func(o *UpOptions) { o.LLMModel = "claude-cli/sonnet" }, liveShell, "not allowed"},
 		"no inner model":        {func(o *UpOptions) { o.LLMModel = "" }, liveShell, "protocol"},
 		"a model off the list":  {func(o *UpOptions) { o.LLMModel = "anthropic-messages/unlisted" }, liveShell, "KQ_SANDBOX_LLM_MODELS"},
-		"no key":                {func(*UpOptions) {}, map[string]string{"KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6"}, "KQ_SANDBOX_LLM_KEY"},
-		"a cleartext base":      {func(o *UpOptions) { o.LLMAPIBase = "http://api.example.com/v1" }, liveShell, "https"},
-		"an unknown mode":       {func(o *UpOptions) { o.LLM = "turbo" }, liveShell, "not scripted"},
+		// The protocol picks the host the key goes to: claude-sonnet-4.6 is allowed only as
+		// an anthropic-messages model, so OpenRouter or OpenAI never receive the key (192-1).
+		"the model under another protocol":    {func(o *UpOptions) { o.LLMModel = "openrouter/claude-sonnet-4.6" }, liveShell, "KQ_SANDBOX_LLM_MODELS"},
+		"the model under the openai protocol": {func(o *UpOptions) { o.LLMModel = "openai/claude-sonnet-4.6" }, liveShell, "KQ_SANDBOX_LLM_MODELS"},
+		"a bare allowlist entry":              {func(*UpOptions) {}, map[string]string{"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6"}, "without its protocol"},
+		"no key":                              {func(*UpOptions) {}, map[string]string{"KQ_SANDBOX_LLM_MODELS": liveModel}, "KQ_SANDBOX_LLM_KEY"},
+		"a cleartext base":                    {func(o *UpOptions) { o.LLMAPIBase = "http://api.example.com/v1" }, liveShell, "https"},
+		"an unknown mode":                     {func(o *UpOptions) { o.LLM = "turbo" }, liveShell, "not scripted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := ok
@@ -107,6 +112,19 @@ func TestLiveStartIsRefusedBeforeAnythingStarts(t *testing.T) {
 			}
 		})
 	}
+	// 192-1 as it was: with the model listed bare (the form main documented), a start on
+	// another protocol's host was accepted, and the key went to that host. Now it is refused.
+	t.Run("a bare entry lets no protocol through", func(t *testing.T) {
+		sh := map[string]string{"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6"}
+		for _, inner := range []string{"openrouter/claude-sonnet-4.6", "openai/claude-sonnet-4.6", liveModel} {
+			o := ok
+			o.LLMModel = inner
+			e, err := o.childEnvOf("n", shell(sh))
+			if err == nil {
+				t.Errorf("%s with a bare allowlist started, opening %q", inner, e["KQ_SANDBOX_ALLOW_HOSTS"])
+			}
+		}
+	})
 	// A model and a budget do not belong to the other modes.
 	for _, o := range []UpOptions{{LLMModel: liveModel}, {LLM: "replay", LLMBudget: "1USD"}, {LLM: "scripted", LLMAPIBase: "http://127.0.0.1/v1"}} {
 		if _, err := o.childEnvOf("n", shell(liveShell)); err == nil {

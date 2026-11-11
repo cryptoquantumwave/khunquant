@@ -14,7 +14,9 @@ name: Sandbox Live Scenarios
 # Cost control: --llm-budget caps ONE instance (every run of every matrix row is its own
 # instance), and the lab refuses a model call that could pass it. The scenario's `runs: 5`
 # and two matrix rows are ten instances, so the most a dispatch can spend is ten times the
-# budget you pass. The model must be on KQ_SANDBOX_LLM_MODELS and have a known price.
+# budget you pass. The model must be on KQ_SANDBOX_LLM_MODELS, written with its protocol
+# exactly as --llm-model names it (the protocol picks the host the key is sent to), and
+# have a known price.
 #
 # The key is read from the secret into the step's environment only; the lab passes it to the
 # instance's gateway process and nowhere else (not a config, not the journal, not a log).
@@ -81,7 +83,7 @@ jobs:
         if: steps.key.outputs.present == 'true'
         env:
           KQ_SANDBOX_LLM_KEY: ${{ secrets.SANDBOX_LLM_KEY }}
-          KQ_SANDBOX_LLM_MODELS: claude-sonnet-4.6
+          KQ_SANDBOX_LLM_MODELS: anthropic-messages/claude-sonnet-4.6
           KQ_SCENARIO_KNOWN_BUGS: "1"
           LLM_BUDGET: ${{ inputs.llm_budget }}
         run: |

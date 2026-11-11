@@ -22,12 +22,14 @@ const (
 	testKey   = "sk-test-SENTINEL-0123456789-not-a-real-key"
 	shellKey  = "sk-shell-MUST-NEVER-BE-USED"
 	testModel = "test-model"
+	// testAllow is the allowlist: the test model under every protocol a live model may use.
+	testAllow = "anthropic-messages/" + testModel + ",openai/" + testModel + ",openrouter/" + testModel
 )
 
 func liveEnv(t *testing.T, base string, over map[string]string) {
 	t.Helper()
 	for k, v := range map[string]string{
-		sandbox.EnvLLMKey: testKey, sandbox.EnvLLMModels: testModel, sandbox.EnvLLMBudget: "2USD",
+		sandbox.EnvLLMKey: testKey, sandbox.EnvLLMModels: testAllow, sandbox.EnvLLMBudget: "2USD",
 		sandbox.EnvLLMPrices: testModel + "=3:15", sandbox.EnvLLMAPIBase: base,
 		"ANTHROPIC_API_KEY": shellKey, "OPENAI_API_KEY": shellKey, "OPENROUTER_API_KEY": shellKey,
 	} {
@@ -95,20 +97,26 @@ func TestLiveRefusesCLIAndUnlistedModel(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		"claude-cli":                     {"sim/live:claude-cli/x", nil, "not allowed"},
-		"codex-cli":                      {"sim/record:codex-cli/x", nil, "not allowed"},
-		"a local daemon":                 {"sim/live:ollama/x", nil, "not allowed"},
-		"azure":                          {"sim/live:azure/x", nil, "not allowed"},
-		"no protocol":                    {"sim/live:" + testModel, nil, "<protocol>/<model>"},
-		"no inner at all":                {"sim/live", nil, "<protocol>/<model>"},
-		"a model off the list":           {"sim/live:openai/other-model", nil, "KQ_SANDBOX_LLM_MODELS"},
-		"an empty allowlist":             {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMModels: ""}, "KQ_SANDBOX_LLM_MODELS"},
-		"no key":                         {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMKey: ""}, "KQ_SANDBOX_LLM_KEY"},
-		"no budget":                      {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMBudget: ""}, "without a budget"},
-		"a zero budget":                  {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMBudget: "0USD"}, "positive"},
-		"a model with no price":          {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMPrices: ""}, "no price"},
-		"an http non-loopback base":      {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMAPIBase: "http://api.example.com/v1"}, "https"},
-		"a host the lock does not allow": {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMAPIBase: "https://api.example.com/v1"}, "one host the sandbox lock allows"},
+		"claude-cli":           {"sim/live:claude-cli/x", nil, "not allowed"},
+		"codex-cli":            {"sim/record:codex-cli/x", nil, "not allowed"},
+		"a local daemon":       {"sim/live:ollama/x", nil, "not allowed"},
+		"azure":                {"sim/live:azure/x", nil, "not allowed"},
+		"no protocol":          {"sim/live:" + testModel, nil, "<protocol>/<model>"},
+		"no inner at all":      {"sim/live", nil, "<protocol>/<model>"},
+		"a model off the list": {"sim/live:openai/other-model", nil, "KQ_SANDBOX_LLM_MODELS"},
+		"an empty allowlist":   {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMModels: ""}, "KQ_SANDBOX_LLM_MODELS"},
+		// The protocol picks the host the key goes to: a model allowed under one protocol is
+		// not allowed under another (192-1), and a bare entry allows nothing.
+		"the model under another protocol": {"sim/live:openrouter/" + testModel, map[string]string{sandbox.EnvLLMModels: "anthropic-messages/" + testModel}, "KQ_SANDBOX_LLM_MODELS"},
+		"a bare allowlist entry":           {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMModels: testModel}, "without its protocol"},
+		// 192-1 as it was: a bare entry (main's documented form) let every protocol through.
+		"a bare entry and another protocol": {"sim/live:openrouter/" + testModel, map[string]string{sandbox.EnvLLMModels: testModel}, "without its protocol"},
+		"no key":                            {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMKey: ""}, "KQ_SANDBOX_LLM_KEY"},
+		"no budget":                         {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMBudget: ""}, "without a budget"},
+		"a zero budget":                     {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMBudget: "0USD"}, "positive"},
+		"a model with no price":             {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMPrices: ""}, "no price"},
+		"an http non-loopback base":         {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMAPIBase: "http://api.example.com/v1"}, "https"},
+		"a host the lock does not allow":    {"sim/live:openai/" + testModel, map[string]string{sandbox.EnvLLMAPIBase: "https://api.example.com/v1"}, "one host the sandbox lock allows"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			liveEnv(t, fake.Base(), c.env)

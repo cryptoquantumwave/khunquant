@@ -360,6 +360,14 @@ func (v *validator) modifiers(p string, e *Expectation) {
 	}
 	if e.ReplayMatch != "" && e.Kind != "message" {
 		v.addf(p+"/replay_match", "only a message expectation has replay_match")
+	} else if e.ReplayMatch != "" {
+		// A should-not-fire label: the message must not arrive inside a closed window.
+		if _, hi, err := (labjournal.Match{Count: e.Count}).Bounds(); err != nil || hi != 0 {
+			v.addf(p+"/replay_match", "labels a message that must not be sent: it needs count: 0 (a sent message is labelled by its dedup key)")
+		}
+		if _, _, hasTo, _ := e.Within.Bounds(); !hasTo {
+			v.addf(p+"/replay_match", "needs within with from and to: a label covers a closed window")
+		}
 	}
 }
 

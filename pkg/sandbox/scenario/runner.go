@@ -50,6 +50,13 @@ type Runner struct {
 	LLMBudget   string
 	Seed        string
 	Getenv      func(string) string
+
+	// ExportDir, when set, makes the first passing run of each scenario export its journal
+	// as a replay case to <ExportDir>/<scenario with - as _>/ (export.go); ExportForce
+	// replaces a case that is already there.
+	ExportDir   string
+	ExportForce bool
+	exported    map[string]bool // scenarios whose case was exported (or tried) by this runner
 }
 
 // liveSkip says why a live scenario cannot run here ("" when it can).
@@ -203,6 +210,15 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 	}
 	st.evaluate(ctx)
 	res.Pass = res.Failure == "" && res.Infra == "" && len(res.Settle) == 0 && allOK(res.Expect)
+	if res.Pass && r.ExportDir != "" && !r.exported[f.Scenario] {
+		if r.exported == nil {
+			r.exported = map[string]bool{}
+		}
+		r.exported[f.Scenario] = true
+		if err := st.exportReplay(ctx); err != nil {
+			res.Pass, res.Failure = false, "export_replay: "+err.Error()
+		}
+	}
 	return res
 }
 

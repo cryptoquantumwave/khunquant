@@ -1,17 +1,19 @@
 package sandboxlab
 
 import (
-	"cmp"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
 )
 
@@ -27,7 +29,7 @@ func (m *mcpServer) registerScenarioTools() {
 		Description: "Scenario files (schema v1). ops: validate (file | inline YAML, instance?) returns the issues, each with a JSON " +
 			"pointer, and with an instance running names the PR that adds a feature it lacks; run (file | inline, runs?, known_bugs?) " +
 			"starts a fresh instance per run (it counts against the instance cap, so stop another instance first if the cap is reached), walks the timeline and returns the verdict, the failed " +
-			"expectations (want and got) and the path of the Markdown report, which is long-running; report (scenario) returns the " +
+			"expectations (want and got) and the path of the Markdown report, which is long-running (export_replay: dir also writes the passing run as a replay case); report (scenario) returns the " +
 			"last report of that scenario as Markdown.",
 		InputSchema: json.RawMessage(`{"type":"object","required":["op"],"additionalProperties":false,"properties":{
 			"op":{"type":"string","enum":["validate","run","report"]},
@@ -35,6 +37,8 @@ func (m *mcpServer) registerScenarioTools() {
 			"inline":{"type":"string","description":"scenario YAML"},
 			"runs":{"type":"integer","description":"run: runs per matrix row (default: the file's runs)"},
 			"known_bugs":{"type":"boolean","description":"run: also run a known_bug scenario"},
+			"export_replay":{"type":"string","description":"run: after the first passing run, write its journal as a replay case to <dir>/<scenario>/ (events.jsonl, policy.json, labels.json, golden.json; labels come from the message expectations); <dir> must lie inside the server's working directory; never overwrites without force"},
+			"force":{"type":"boolean","description":"run: with export_replay, replace a replay case that exists (a directory holding anything else is refused)"},
 			"scenario":{"type":"string","description":"report: the scenario id"},
 			"instance":` + instanceProp + `}}`),
 	}, m.scenarioHandler)
@@ -60,6 +64,8 @@ type scenarioArgs struct {
 	Instance  string `json:"instance"`
 	Runs      int    `json:"runs"`
 	KnownBugs bool   `json:"known_bugs"`
+	Export    string `json:"export_replay"`
+	Force     bool   `json:"force"`
 	Scenario  string `json:"scenario"`
 }
 
@@ -124,6 +130,21 @@ func (m *mcpServer) validateOp(ctx context.Context, a scenarioArgs) (*mcp.CallTo
 	}), nil
 }
 
+// mcpExportDir checks the directory an MCP caller names for export_replay. This process
+// runs unlocked, as the developer, so the caller's path is bounded: it must lie inside the
+// working directory (links resolved), where the repository's replay cases live. The CLI
+// user's --export-replay is not bounded; that path is typed by the person.
+func mcpExportDir(dir string) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("export_replay: %w", err)
+	}
+	if !sandbox.PathInside(wd, dir) {
+		return fmt.Errorf("export_replay: %q is outside the working directory; through MCP a replay case is written below it (use khunquant sandbox run --export-replay for another place)", dir)
+	}
+	return nil
+}
+
 // runOp runs a scenario on fresh instances of this server's supervisor.
 func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolResult, error) {
 	name, data, err := scenarioSource(a)
@@ -140,13 +161,18 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	if f.Runs > maxMCPRuns {
 		return errResult("sandbox_scenario run: %d runs; at most %d through MCP (use khunquant sandbox run for more)", f.Runs, maxMCPRuns), nil
 	}
+	if a.Export != "" {
+		if err := mcpExportDir(a.Export); err != nil {
+			return errResult("sandbox_scenario run: %v", err), nil
+		}
+	}
 	// One run at a time: a run starts and owns its instance, which a second run would
 	// otherwise compete with for the supervisor's instance limit and memory.
 	if !m.runMu.TryLock() {
 		return errResult("sandbox_scenario run: another run is in progress; one at a time"), nil
 	}
 	defer m.runMu.Unlock()
-	rep, err := (&scenario.Runner{Sup: m.sup, Timeout: cmp.Or(m.runTimeout, defaultTimeout), KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr}).Run(ctx, f)
+	rep, err := (&scenario.Runner{Sup: m.sup, Timeout: cmp.Or(m.runTimeout, defaultTimeout), KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr, ExportDir: a.Export, ExportForce: a.Force}).Run(ctx, f)
 	if err != nil {
 		return errResult("sandbox_scenario run: %v", err), nil
 	}
@@ -157,7 +183,16 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	m.reports[rep.Scenario] = rep
 	m.mu.Unlock()
 
-	out := map[string]any{"scenario": rep.Scenario, "verdict": rep.Verdict(), "exit_code": rep.ExitCode(), "passed": rep.Passed, "runs": len(rep.Runs), "skipped": rep.Skipped}
+	var exported, exportWarnings []string
+	for _, res := range rep.Runs {
+		if res.Exported != "" {
+			exported = append(exported, res.Exported)
+		}
+		if res.ExportWarning != "" {
+			exportWarnings = append(exportWarnings, res.ExportWarning)
+		}
+	}
+	out := map[string]any{"exported": exported, "export_warnings": exportWarnings, "scenario": rep.Scenario, "verdict": rep.Verdict(), "exit_code": rep.ExitCode(), "passed": rep.Passed, "runs": len(rep.Runs), "skipped": rep.Skipped}
 	var failed []map[string]string
 	for _, res := range rep.Runs {
 		for _, e := range res.Expect {

@@ -125,6 +125,11 @@ func (v *env) eval(ctx context.Context, i int, e *Expectation) (ExpectResult, []
 		if p.keep(en, doc) {
 			matched = append(matched, *en)
 			r.MatchedSeqs = append(r.MatchedSeqs, en.Seq)
+			if e.Kind == "message" {
+				key, _ := doc["dedup_key"].(string)
+				sev, _ := doc["severity"].(string)
+				r.Sent = append(r.Sent, SentMsg{en.Seq, key, sev})
+			}
 		}
 	}
 	n := len(matched)

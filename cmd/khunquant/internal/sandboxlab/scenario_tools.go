@@ -26,7 +26,7 @@ func (m *mcpServer) registerScenarioTools() {
 		Name: "sandbox_scenario",
 		Description: "Scenario files (schema v1). ops: validate (file | inline YAML, instance?) returns the issues, each with a JSON " +
 			"pointer, and with an instance running names the PR that adds a feature it lacks; run (file | inline, runs?, known_bugs?) " +
-			"starts a fresh instance per run (stop other instances first), walks the timeline and returns the verdict, the failed " +
+			"starts a fresh instance per run (it counts against the instance cap, so stop another instance first if the cap is reached), walks the timeline and returns the verdict, the failed " +
 			"expectations (want and got) and the path of the Markdown report, which is long-running; report (scenario) returns the " +
 			"last report of that scenario as Markdown.",
 		InputSchema: json.RawMessage(`{"type":"object","required":["op"],"additionalProperties":false,"properties":{

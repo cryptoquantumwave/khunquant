@@ -56,7 +56,7 @@ var devTools = []struct{ name, desc string }{
 	{"sandbox_reset_simulator", "Reset the stateful simulator (orders, balances)."},
 }
 
-const instanceProp = `{"type":"string","description":"Instance name; optional while exactly one instance runs"}`
+const instanceProp = `{"type":"string","description":"Instance name. Required when more than one instance runs (the error lists them); optional while exactly one runs"}`
 
 // staticGroupSchema is what a client sees before the first `up`.
 func staticGroupSchema(g groupSpec) json.RawMessage {

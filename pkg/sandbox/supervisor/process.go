@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,10 +94,33 @@ func listFixtures(dir string) ([]fixtureFile, error) {
 	return files, nil
 }
 
+// markerContent is the marker file: the instance name, then the pid of the supervisor
+// that owns the home, so another supervisor can tell a live owner from a dead one.
+func markerContent(name string) []byte {
+	return []byte(fmt.Sprintf("%s\nsupervisor=%d\n", name, os.Getpid()))
+}
+
+// markerSupervisor is the supervisor pid a marker names, or 0 for an older marker
+// (the name only) or an unreadable one.
+func markerSupervisor(home string) int {
+	data, err := os.ReadFile(filepath.Join(home, instanceMarker))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "supervisor="); ok {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
 // prepareHome fills a fresh instance home: the marker, the fixtures under
 // workspace/sandbox, and the sandbox profile (config.json and .security.yml).
 func prepareHome(home, name string, port int, fixtures []fixtureFile, accounts ...string) error {
-	if err := os.WriteFile(filepath.Join(home, instanceMarker), []byte(name+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, instanceMarker), markerContent(name), 0o600); err != nil {
 		return fmt.Errorf("sandbox up: write marker: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(home, sandbox.TempDirName), 0o700); err != nil {

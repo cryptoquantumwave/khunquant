@@ -172,11 +172,14 @@ func TestHelperFakeInstance(t *testing.T) {
 	os.Exit(0)
 }
 
-// fakeSupervisor is a supervisor whose instances are the fake above.
-func fakeSupervisor(t *testing.T) *supervisor.Supervisor {
+// fakeSupervisor is a supervisor whose instances are the fake above (one at a time).
+func fakeSupervisor(t *testing.T) *supervisor.Supervisor { return fakeSupervisorMax(t, 1) }
+
+// fakeSupervisorMax lets it run up to max instances, whatever the developer's env says.
+func fakeSupervisorMax(t *testing.T, max int) *supervisor.Supervisor {
 	t.Helper()
 	sup, err := supervisor.New(supervisor.Config{
-		Binary: os.Args[0], TmpDir: sandboxEnv(t), MinFreeBytes: 1, TermGrace: 2 * time.Second,
+		Binary: os.Args[0], TmpDir: sandboxEnv(t), MinFreeBytes: 1, TermGrace: 2 * time.Second, MaxInstances: max,
 		PreArgs: []string{"-test.run=^TestHelperFakeInstance$", "-test.timeout=2m", "--"}, ExtraArgs: []string{fakeInstanceMarker},
 	})
 	if err != nil {

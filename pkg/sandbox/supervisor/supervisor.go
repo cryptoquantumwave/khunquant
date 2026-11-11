@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,8 +26,11 @@ const (
 	defaultRestartWait = 60 * time.Second
 	defaultMinFreeMB   = 1024
 	defaultLogTail     = 200
-	maxLogTail         = 2000
-	maxLogRead         = 1 << 20 // the end of gateway.log that Logs reads
+	// MaxInstancesCeiling is the most instances one supervisor may run, whatever
+	// KQ_SANDBOX_MAX_INSTANCES says.
+	MaxInstancesCeiling = 8
+	maxLogTail          = 2000
+	maxLogRead          = 1 << 20 // the end of gateway.log that Logs reads
 )
 
 var (
@@ -34,6 +38,11 @@ var (
 	ErrLowMemory = errors.New("supervisor: not enough free memory to start an instance")
 	// ErrTooMany means the instance limit is reached.
 	ErrTooMany = errors.New("supervisor: instance limit reached")
+	// ErrInstanceRequired means several instances run and the call named none: there is no
+	// implicit default, so a call never reaches the wrong one.
+	ErrInstanceRequired = errors.New("supervisor: several instances are running; pass instance")
+	// ErrNameTaken means a running instance already has this name.
+	ErrNameTaken = errors.New("supervisor: an instance with this name exists")
 	// ErrNotLocked means a started gateway did not report an enabled, locked sandbox.
 	ErrNotLocked = errors.New("supervisor: instance did not report locked:true")
 )
@@ -43,7 +52,7 @@ type Config struct {
 	Binary       string        // absolute path of the prebuilt khunquant; this executable when empty
 	TmpDir       string        // parent of kq-sbx-<name>; os.TempDir() when empty
 	MinFreeBytes uint64        // memory floor; KQ_SANDBOX_MIN_FREE_MB (default 1024 MiB) when zero
-	MaxInstances int           // 1 when zero (SBX-18 raises it)
+	MaxInstances int           // KQ_SANDBOX_MAX_INSTANCES, else 1; clamped to [1, MaxInstancesCeiling]
 	ReadyTimeout time.Duration // 60s when zero, wall time
 	// RestartWait is how long a call through this supervisor's client waits for an instance
 	// that is restarting (wall time; 60s when zero). A `restart kill_at` can set its own.
@@ -107,6 +116,9 @@ type Info struct {
 	LastExit   *int       `json:"last_exit,omitempty"`   // exit code of the previous process (137 after a kill)
 	ExitReason ExitReason `json:"exit_reason,omitempty"` // why it ended; exit 3 is lock_invariant, not a crash
 	StartedAt  time.Time  `json:"started_at"`
+	// Stale is a home with the instance marker whose process is gone (a supervisor that
+	// died). It is listed, never adopted: its token is unknown by design. Down removes it.
+	Stale bool `json:"stale,omitempty"`
 	// Crash is the last crash at a point (the marker the process left); CrashRestarts counts
 	// them; Armed is the crash point armed and not yet fired; RestartError is why an
 	// automatic restart after a crash failed.
@@ -163,6 +175,8 @@ type Supervisor struct {
 
 	// pickPort chooses a gateway's port: freePort, except where a test injects one.
 	pickPort func() (int, error)
+	// freeMem reads free memory: FreeMemory, except where a test injects one.
+	freeMem func() (uint64, error)
 
 	mu        sync.Mutex
 	instances map[string]*instance
@@ -193,7 +207,10 @@ func New(cfg Config) (*Supervisor, error) {
 		}
 		cfg.MinFreeBytes = mb << 20
 	}
-	cfg.MaxInstances = max(cfg.MaxInstances, 1)
+	if cfg.MaxInstances == 0 {
+		cfg.MaxInstances, _ = strconv.Atoi(os.Getenv("KQ_SANDBOX_MAX_INSTANCES")) // garbage reads as 0
+	}
+	cfg.MaxInstances = min(max(cfg.MaxInstances, 1), MaxInstancesCeiling)
 	if cfg.Getenv == nil {
 		cfg.Getenv = os.Getenv
 	}
@@ -206,7 +223,7 @@ func New(cfg Config) (*Supervisor, error) {
 	if cfg.RestartWait <= 0 {
 		cfg.RestartWait = defaultRestartWait
 	}
-	return &Supervisor{cfg: cfg, pickPort: freePort, instances: map[string]*instance{}}, nil
+	return &Supervisor{cfg: cfg, pickPort: freePort, freeMem: FreeMemory, instances: map[string]*instance{}}, nil
 }
 
 // Up makes an instance home, starts a locked gateway in it and returns once the gateway
@@ -281,7 +298,7 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 // attempt is one try of Up: a new port, a client and URL for it, a home made from
 // scratch, and a start. On failure the home it made is gone again.
 func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fixtures []fixtureFile) (err error) {
-	port, err := s.pickPort()
+	port, err := s.reservePort(in)
 	if err != nil {
 		return err
 	}
@@ -297,7 +314,7 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 	client.SetGate(in.gate) // a call waits out a restart (killat.go)
 	in.mu.Lock()
 	in.token = token
-	in.port, in.url, in.client = port, url, client
+	in.url, in.client = url, client
 	in.mu.Unlock()
 
 	if err := os.Mkdir(in.home, 0o700); err != nil {
@@ -325,6 +342,37 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 	return in.start(ctx, s.cfg)
 }
 
+// reservePort picks a loopback port that no other instance of this supervisor holds and
+// records it on in. The kernel may hand the same ephemeral port to two starts that overlap,
+// since the first has not bound it yet; a Down frees the reservation with the instance.
+func (s *Supervisor) reservePort(in *instance) (int, error) {
+	for range 8 {
+		port, err := s.pickPort()
+		if err != nil {
+			return 0, err
+		}
+		s.mu.Lock()
+		held := false
+		for _, o := range s.instances {
+			if o != in {
+				o.mu.Lock()
+				held = held || o.port == port
+				o.mu.Unlock()
+			}
+		}
+		if !held {
+			in.mu.Lock()
+			in.port = port
+			in.mu.Unlock()
+		}
+		s.mu.Unlock()
+		if !held {
+			return port, nil
+		}
+	}
+	return 0, errors.New("sandbox up: no loopback port free of the other instances")
+}
+
 // forgetFailedStart clears what a failed attempt recorded, so the attempt after it does
 // not report the dead process's exit as the instance's own. It drops p first: a
 // watcher that has not run yet then sees another process and records nothing.
@@ -339,7 +387,7 @@ func (s *Supervisor) register(in *instance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, dup := s.instances[in.name]; dup {
-		return fmt.Errorf("sandbox up: instance %q is already running in this supervisor", in.name)
+		return fmt.Errorf("%w: %q is already running in this supervisor", ErrNameTaken, in.name)
 	}
 	if len(s.instances) >= s.cfg.MaxInstances {
 		return fmt.Errorf("%w (%d)", ErrTooMany, s.cfg.MaxInstances)
@@ -353,7 +401,7 @@ func (s *Supervisor) checkMemory() error {
 	if s.cfg.MinFreeBytes == 0 {
 		return nil
 	}
-	free, err := FreeMemory()
+	free, err := s.freeMem()
 	if err != nil || free >= s.cfg.MinFreeBytes {
 		return nil
 	}
@@ -500,7 +548,8 @@ func (in *instance) info() Info {
 	return i
 }
 
-// lookup finds an instance; an empty name is the only one.
+// lookup finds an instance. An empty name is the only one, and only while exactly one
+// runs: with several there is no default, and the error names them.
 func (s *Supervisor) lookup(name string) (*instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -509,18 +558,24 @@ func (s *Supervisor) lookup(name string) (*instance, error) {
 		case 0:
 			return nil, errors.New("sandbox: no instance is running; start one first (sandbox_instance op=up)")
 		case 1:
-		default:
-			return nil, fmt.Errorf("sandbox: name the instance (%d are running)", len(s.instances))
+			for _, in := range s.instances {
+				return in, nil
+			}
 		}
-		for _, in := range s.instances {
-			return in, nil
-		}
+		return nil, fmt.Errorf("%w (`name` on sandbox_instance); running: %s", ErrInstanceRequired, s.namesLocked())
 	}
 	in, ok := s.instances[name]
 	if !ok {
-		return nil, fmt.Errorf("sandbox: no instance %q", name)
+		return nil, fmt.Errorf("sandbox: no instance %q (running: %s)", name, s.namesLocked())
 	}
 	return in, nil
+}
+
+func (s *Supervisor) namesLocked() string {
+	if len(s.instances) == 0 {
+		return "none"
+	}
+	return strings.Join(slices.Sorted(maps.Keys(s.instances)), ", ")
 }
 
 // Get returns the Info of one instance (an empty name is the only one).
@@ -557,7 +612,7 @@ func (s *Supervisor) WaitRunning(ctx context.Context, name string) (Info, error)
 	}
 }
 
-// List returns the instances sorted by name.
+// List returns the instances sorted by name, then the stale homes (Stale: true).
 func (s *Supervisor) List() []Info {
 	s.mu.Lock()
 	all := make([]*instance, 0, len(s.instances))
@@ -570,7 +625,18 @@ func (s *Supervisor) List() []Info {
 		out = append(out, in.info())
 	}
 	slices.SortFunc(out, func(a, b Info) int { return strings.Compare(a.Name, b.Name) })
-	return out
+	stale, _ := scanStale(s.cfg.TmpDir, s.runningNames())
+	return append(out, stale...)
+}
+
+func (s *Supervisor) runningNames() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := make(map[string]bool, len(s.instances))
+	for n := range s.instances {
+		set[n] = true
+	}
+	return set
 }
 
 // Restart stops the instance as mode says, records the exit, and starts it again in the
@@ -636,6 +702,10 @@ func (s *Supervisor) Client(name string) (*labclient.Client, error) {
 func (s *Supervisor) Down(_ context.Context, name string, keepHome bool) error {
 	in, err := s.lookup(name)
 	if err != nil {
+		// A stale home (its process is gone) is removed, not adopted.
+		if stale, _ := scanStale(s.cfg.TmpDir, s.runningNames()); name != "" && slices.ContainsFunc(stale, func(i Info) bool { return i.Name == name }) {
+			return DownByName(DownOptions{Name: name, KeepHome: keepHome, BaseDir: s.cfg.TmpDir})
+		}
 		return err
 	}
 	in.opMu.Lock()
@@ -657,14 +727,29 @@ func (s *Supervisor) Down(_ context.Context, name string, keepHome bool) error {
 }
 
 // Close downs every instance this supervisor started: they cannot be re-adopted,
-// because the token was never stored.
+// because the token was never stored. They go down concurrently, each with its own
+// SIGTERM grace then SIGKILL, so eight stubborn ones take one grace, not eight.
 func (s *Supervisor) Close(ctx context.Context) error {
-	var errs []error
-	for _, i := range s.List() {
-		if err := s.Down(ctx, i.Name, false); err != nil {
-			errs = append(errs, err)
-		}
+	s.mu.Lock()
+	names := slices.Sorted(maps.Keys(s.instances))
+	s.mu.Unlock()
+	var (
+		wg   sync.WaitGroup
+		emu  sync.Mutex
+		errs []error
+	)
+	for _, n := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.Down(ctx, n, false); err != nil {
+				emu.Lock()
+				errs = append(errs, err)
+				emu.Unlock()
+			}
+		}()
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

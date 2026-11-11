@@ -40,7 +40,7 @@ type File struct {
 	Covers    []string               `yaml:"covers" jsonschema_description:"Review IDs or features this scenario covers (H8, S116A-1)."`
 	Status    Status                 `yaml:"status,omitempty" jsonschema:"enum=active,enum=known_bug" jsonschema_description:"active (default) gates; known_bug documents an unfixed defect and runs only with KQ_SCENARIO_KNOWN_BUGS=1."`
 	KnownBug  string                 `yaml:"known_bug,omitempty" jsonschema_description:"Review ID of the open defect; required with status known_bug and refused otherwise."`
-	LLM       string                 `yaml:"llm" jsonschema:"enum=scripted,enum=replay,enum=live" jsonschema_description:"scripted (default; the only mode for PR CI), replay (a committed cassette) or live (nightly)."`
+	LLM       string                 `yaml:"llm" jsonschema:"enum=scripted,enum=replay,enum=live" jsonschema_description:"scripted (default; the only mode for PR CI), replay (a committed cassette) or live (only when the Sandbox Live workflow is started by hand, or locally with a key and --llm-budget)."`
 	Miss      string                 `yaml:"miss,omitempty" jsonschema:"enum=error,enum=scripted" jsonschema_description:"llm: replay only. A request the cassette lacks fails (error) or goes to llm_script (scripted)."` // replay only: a request the cassette lacks fails (error, default) or goes to llm_script (scripted)
 	Level     string                 `yaml:"level" jsonschema:"enum=wire,enum=event" jsonschema_description:"wire (default) or event; recorded only in v1."`                                                               // wire (default) | event; recorded only in v1
 	Runs      int                    `yaml:"runs,omitempty" jsonschema_description:"Runs per matrix row (default 1)."`

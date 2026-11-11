@@ -106,7 +106,7 @@ llm_script:
 
 To prove that a gate holds even if the model is fully compromised, script the model to do the
 forbidden thing (see `security/confirm-false-still-needs-approval.yaml`) and expect the gate, not
-the model's good behaviour. PR CI runs scripted and replay scenarios only; `llm: live` runs nightly.
+the model's good behaviour. PR CI runs scripted and replay scenarios only; `llm: live` runs only when someone starts the Sandbox Live workflow by hand (`workflow_dispatch`, with the `SANDBOX_LLM_KEY` secret), or locally with `KQ_SANDBOX_LLM_KEY` and `--llm-budget`.
 
 ## Faults and crashes
 
@@ -129,7 +129,7 @@ One kind key per entry, plus an optional `id`: `message`, `event`, `decision`, `
 `workflow`, `proposal`, `policy`, `probe`, `llm`, `web`, `logs`. The fields of each kind are in the
 schema. Modifiers may sit inside the kind's mapping or beside it:
 
-- `count`: `1`, `">= 1"`, `"<= 2"`, `"0"` (absence). An absence check needs a `within` window.
+- `count`: `1`, `">= 1"`, `"<= 2"`, `"0"` (absence). Give an absence check a `within` window (advice; the loader does not enforce it).
 - `within: { from: "+6m", to: "+10m" }`: offsets from `clock.start`; `during: "22:00-07:00"`: a
   daily window in the profile time zone.
 - A value may be negated with `!`: `decision: { reason: "!muted" }`.
@@ -170,5 +170,5 @@ The schema checks keys, closed value sets and required arguments. These rules li
 ranges of `count`, `at`, `within`, `during`, durations and `pass_rate`; `at` order and no `at` in
 `setup`; exactly one kind key per step and expectation; unknown fields inside `instance.config`;
 order values (unified symbol, status, side); event payload paths; `known_bug` only with
-`status: known_bug`; unique ids; the ban on credentials and real exchange hosts; and what the
+`status: known_bug`; unique ids; the ban on credentials and real exchange hosts; the ban on `as: cli` in a `call_tool` step; and what the
 running instance lacks.

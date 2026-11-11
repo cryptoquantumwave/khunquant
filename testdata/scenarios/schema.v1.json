@@ -1913,7 +1913,7 @@
           "type": "null"
         }
       ],
-      "description": "scripted (default; the only mode for PR CI), replay (a committed cassette) or live (nightly)."
+      "description": "scripted (default; the only mode for PR CI), replay (a committed cassette) or live (only when the Sandbox Live workflow is started by hand, or locally with a key and --llm-budget)."
     },
     "miss": {
       "anyOf": [

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/replay"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
@@ -244,6 +245,11 @@ func (s *runState) stageRecording(args map[string]any) error {
 	st, err := os.Stat(src)
 	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 || st.Size() > maxRecordingFile {
 		return fmt.Errorf("recording %s: not a non-empty regular file of at most %d bytes (%v)", src, maxRecordingFile, err)
+	}
+	// Check before the copy: only a valid recording (the loader the market op uses) enters
+	// the home, so a stray repository file such as a .env never does.
+	if _, err := replay.LoadEvents(src); err != nil {
+		return fmt.Errorf("recording %s is not a valid recording: %w", src, err)
 	}
 	data, err := os.ReadFile(src)
 	if err != nil {

@@ -14,7 +14,7 @@ func TestRunner_CopiesARecordingIntoTheHome(t *testing.T) {
 	if err := os.MkdirAll("testdata/replay/x", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	const data = `{"clock":"2026-03-10T05:00:00Z"}` + "\n"
+	const data = `{"clock":"2026-03-10T05:00:00Z","event":{"kind":"perception.market.tick","payload":{"provider":"okx","symbol":"BTC/USDT","last":100}}}` + "\n"
 	if err := os.WriteFile("testdata/replay/x/events.jsonl", []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +60,35 @@ func TestRunner_RefusesARecordingOutsideTheWorkingDirectory(t *testing.T) {
 		}
 		if len(journalPayloads(t, sup.order[0], "fake.market.*")) != 0 {
 			t.Errorf("%s: the op was called", path)
+		}
+	}
+}
+
+// A file that is not a valid recording is refused before anything is copied: a repository
+// file such as a git-ignored .env must never land in the instance home.
+func TestRunner_RefusesANonRecordingBeforeCopying(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(".env", []byte("API_KEY=not-a-real-secret\nOTHER=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, step := range map[string]string{
+		"market block": "market: {BTC/USDT: {venue: okx, model: recording, path: .env}}\n",
+		"step":         "timeline:\n  - market.recording: {symbol: BTC/USDT, path: .env}\n",
+	} {
+		sup := newFakeSup(t)
+		res := runOne(t, sup, scenarioOf(t, step)).Runs[0]
+		if res.Pass || !strings.Contains(res.Failure, "not a valid recording") {
+			t.Errorf("%s: %+v", name, res)
+		}
+		if strings.Contains(res.Failure, "not-a-real-secret") {
+			t.Errorf("%s: the failure echoes the file: %q", name, res.Failure)
+		}
+		if len(journalPayloads(t, sup.order[0], "fake.market.*")) != 0 {
+			t.Errorf("%s: the op was called", name)
+		}
+		entries, err := os.ReadDir(filepath.Join(sup.order[0].home, "lab", "recordings"))
+		if err == nil && len(entries) != 0 {
+			t.Errorf("%s: %d file(s) copied into the home", name, len(entries))
 		}
 	}
 }

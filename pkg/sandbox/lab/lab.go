@@ -77,6 +77,9 @@ type Lab struct {
 	gmu    sync.RWMutex // guards groups (group.go)
 	groups map[string]Group
 
+	// callMu: Call holds it shared; an Exclusive op (the snapshot take) holds it exclusively.
+	callMu sync.RWMutex
+
 	kmu   sync.RWMutex // guards kinds
 	kinds map[string]bool
 

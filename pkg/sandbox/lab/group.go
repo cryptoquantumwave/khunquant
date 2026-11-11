@@ -25,6 +25,9 @@ type Op struct {
 	Args        json.RawMessage // JSON Schema "properties" object for this op
 	Required    []string
 	Run         OpFunc
+	// Exclusive runs the op with no other lab call in flight and none starting (the
+	// snapshot take). An exclusive op must not call Lab.Call: that would wait on itself.
+	Exclusive bool
 }
 
 // Group is a named set of operations.
@@ -114,6 +117,28 @@ func OpOf(args json.RawMessage) string {
 	return o.Op
 }
 
+// holdCall takes the lab's call lock: shared for an ordinary op, exclusive for an
+// Exclusive one (which then waits for the calls in flight and holds off new ones). The
+// wait ends with ctx, so a long call cannot hold a take past its own timeout.
+func (l *Lab) holdCall(ctx context.Context, exclusive bool) (release func(), err error) {
+	lock, unlock := l.callMu.RLock, l.callMu.RUnlock
+	if exclusive {
+		lock, unlock = l.callMu.Lock, l.callMu.Unlock
+	}
+	got := make(chan struct{})
+	go func() {
+		lock()
+		close(got)
+	}()
+	select {
+	case <-got:
+		return unlock, nil
+	case <-ctx.Done():
+		go func() { <-got; unlock() }() // the lock arrives later: give it straight back
+		return nil, fmt.Errorf("waiting for other lab calls: %w", ctx.Err())
+	}
+}
+
 // Call runs op of group with args under CallTimeout. The error is always an *Error:
 // a panic in the op and any plain error it returns both become CodeFailed.
 func (l *Lab) Call(ctx context.Context, group, op string, args json.RawMessage) (res any, err error) {
@@ -126,9 +151,10 @@ func (l *Lab) Call(ctx context.Context, group, op string, args json.RawMessage) 
 		return nil, Errorf(CodeUnknownGroup, "no lab group %q", group)
 	}
 	var run OpFunc
+	var exclusive bool
 	for _, o := range g.Ops {
 		if o.Name == op {
-			run = o.Run
+			run, exclusive = o.Run, o.Exclusive
 		}
 	}
 	if run == nil {
@@ -137,6 +163,11 @@ func (l *Lab) Call(ctx context.Context, group, op string, args json.RawMessage) 
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
+	release, lerr := l.holdCall(ctx, exclusive)
+	if lerr != nil {
+		return nil, Errorf(CodeFailed, "group %q op %q: %v", group, op, lerr)
+	}
+	defer release()
 	defer func() {
 		if r := recover(); r != nil {
 			res, err = nil, Errorf(CodeFailed, "group %q op %q panicked: %v", group, op, r)

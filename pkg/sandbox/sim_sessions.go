@@ -35,6 +35,7 @@ type VenueOptions struct {
 
 	RejectDuplicateClientID bool    // webull: a repeated client_order_id is refused (default: it makes a second order)
 	ListSeed                *uint64 // webull: seeds the order of its listings (default 1)
+	ListPageCap             int     // webull, Go only (no seed key): a listing page holds at most this many rows, whatever page_size asks (default 0: page_size decides)
 }
 
 // timeOfDay reads "HH:MM".

@@ -209,8 +209,9 @@ func (sim *StatefulSimulator) webullDetail(r *http.Request) *Response {
 
 // webullList answers the open and history listings. The matching set (the open orders, or
 // the closed ones inside the date window) is put in the permutation of its kind and cut
-// to page_size after last_client_order_id. A first page (no cursor) takes the next
-// permutation; a page with a cursor continues the one the last first page used.
+// to page_size (or to the ListPageCap option, when smaller) after last_client_order_id.
+// A first page (no cursor) takes the next permutation; a page with a cursor continues the
+// one the last first page used.
 func (sim *StatefulSimulator) webullList(r *http.Request, history bool) *Response {
 	q, ok := webullQuery(r)
 	if !ok {
@@ -223,6 +224,9 @@ func (sim *StatefulSimulator) webullList(r *http.Request, history bool) *Respons
 			return webullErr(400, "SBX-PAGE-SIZE", "page_size is a whole number from 1 to 100")
 		}
 		size = n
+	}
+	if c := sim.options["webull"].ListPageCap; c > 0 {
+		size = min(size, c) // a venue that returns fewer rows than were asked for
 	}
 	now := sim.clock()
 	from, to := now.AddDate(0, 0, -7), now

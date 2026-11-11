@@ -85,6 +85,16 @@ func setLockEnv(t *testing.T, home string) {
 	t.Setenv("KHUNQUANT_CONFIG", filepath.Join(home, "config.json"))
 	t.Setenv("KQ_SANDBOX_TOKEN", lockTestToken)
 	t.Setenv("KQ_SANDBOX_INSTANCE", "test")
+	// armSandboxLock points the process's temporary directory into the home: put the
+	// test process's own back when the test ends.
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Setenv(k, v)
+		} else {
+			t.Setenv(k, "")
+			_ = os.Unsetenv(k)
+		}
+	}
 }
 
 // lockProcessForTest locks this test process the way gatewayCmd does and undoes it

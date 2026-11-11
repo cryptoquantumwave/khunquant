@@ -149,7 +149,7 @@ export function LabTimeline() {
         <CardDescription>
           {t(
             "pages.sandbox.timeline.desc",
-            "Read-only journal of one locked sandbox instance. Start one launcher per instance with KHUNQUANT_CONFIG=<instance home>/config.json.",
+            "Read-only journal of one locked sandbox instance. Start one launcher per instance with KHUNQUANT_HOME=<home> KHUNQUANT_CONFIG=<home>/config.json <launcher> -port <N> -no-browser. Do not save settings in that launcher: a save rewrites the instance's config.",
           )}
         </CardDescription>
       </CardHeader>
@@ -158,7 +158,7 @@ export function LabTimeline() {
           <p className="text-muted-foreground text-sm">
             {t(
               "pages.sandbox.timeline.not_locked",
-              "This gateway is not a locked sandbox, so there is no lab journal to show.",
+              "No locked sandbox reachable: this gateway is not running, or it is not a locked sandbox, so there is no lab journal to show.",
             )}
           </p>
         ) : state === "loading" ? (

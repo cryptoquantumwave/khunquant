@@ -1284,8 +1284,8 @@
       "step5": "所有交易所 API 调用都将从您的 fixtures 接收模拟响应。",
       "timeline": {
         "title": "实验室时间线",
-        "desc": "一个已锁定沙盒实例的只读日志。每个实例用 KHUNQUANT_CONFIG=<instance home>/config.json 启动一个启动器。",
-        "not_locked": "此网关不是已锁定的沙盒，没有可显示的实验室日志。",
+        "desc": "一个已锁定沙盒实例的只读日志。每个实例用 KHUNQUANT_HOME=<home> KHUNQUANT_CONFIG=<home>/config.json <launcher> -port <N> -no-browser 启动一个启动器。不要在该启动器中保存设置：保存会重写该实例的 config。",
+        "not_locked": "无可访问的已锁定沙盒：网关未运行，或不是已锁定的沙盒，因此没有可显示的实验室日志。",
         "error": "无法从网关读取时间线。",
         "drops": "日志丢弃了 {{count}} 条记录；断言可能不完整。",
         "empty": "暂无日志记录。",

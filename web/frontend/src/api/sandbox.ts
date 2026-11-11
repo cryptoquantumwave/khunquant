@@ -115,8 +115,10 @@ export interface LabTimelineResponse {
   drops: number
 }
 
-// Read-only. The gateway answers 404 when it is not a locked sandbox, which is not an
-// error here. The launcher adds the token; this page never holds one.
+// Read-only. The gateway answers 404 when it is not a locked sandbox, and the launcher
+// answers 502 (gateway not running or unreachable) or 503 (no view token): none of these
+// is an error here, only "no locked sandbox reachable". The launcher adds the token;
+// this page never holds one.
 export async function getLabTimeline(p: {
   afterSeq: number
   kinds?: string
@@ -126,7 +128,7 @@ export async function getLabTimeline(p: {
   if (p.kinds) qs.set("kinds", p.kinds)
   if (p.limit) qs.set("limit", String(p.limit))
   const res = await fetch(`${BASE_URL}/api/sandbox/timeline?${qs}`)
-  if (res.status === 404) return { locked: false }
+  if ([404, 502, 503].includes(res.status)) return { locked: false }
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`)
   }

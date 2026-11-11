@@ -24,7 +24,7 @@ type ExpectResult struct {
 // SentMsg is a chat.out entry a message expectation matched: the proactive dedup key of
 // the message ("" for an ordinary reply) and its severity.
 type SentMsg struct {
-	Seq               int64
+	Seq                int64
 	DedupKey, Severity string
 }
 
@@ -55,6 +55,9 @@ type Result struct {
 	// ExportSkipped the expectations and trigger specs that could not be part of it.
 	Exported      string
 	ExportSkipped []string
+	// ExportWarning is set when the replay tier does not reproduce every label of the
+	// exported case (a case that is written, and pinned, below full recall).
+	ExportWarning string
 
 	// Why the run did not pass besides an expectation: a step that failed (Failure), a
 	// settle that did not pass (Settle names the busy components), the instance (Infra),

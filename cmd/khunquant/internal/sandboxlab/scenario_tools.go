@@ -1,8 +1,8 @@
 package sandboxlab
 
 import (
-	"cmp"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,13 +183,16 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	m.reports[rep.Scenario] = rep
 	m.mu.Unlock()
 
-	var exported []string
+	var exported, exportWarnings []string
 	for _, res := range rep.Runs {
 		if res.Exported != "" {
 			exported = append(exported, res.Exported)
 		}
+		if res.ExportWarning != "" {
+			exportWarnings = append(exportWarnings, res.ExportWarning)
+		}
 	}
-	out := map[string]any{"exported": exported, "scenario": rep.Scenario, "verdict": rep.Verdict(), "exit_code": rep.ExitCode(), "passed": rep.Passed, "runs": len(rep.Runs), "skipped": rep.Skipped}
+	out := map[string]any{"exported": exported, "export_warnings": exportWarnings, "scenario": rep.Scenario, "verdict": rep.Verdict(), "exit_code": rep.ExitCode(), "passed": rep.Passed, "runs": len(rep.Runs), "skipped": rep.Skipped}
 	var failed []map[string]string
 	for _, res := range rep.Runs {
 		for _, e := range res.Expect {

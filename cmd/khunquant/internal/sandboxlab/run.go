@@ -286,6 +286,9 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 				if res.Exported != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "exported %s\n", res.Exported)
 				}
+				if res.ExportWarning != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "export warning: %s\n", res.ExportWarning)
+				}
 				for _, sk := range res.ExportSkipped {
 					fmt.Fprintf(cmd.OutOrStdout(), "export skipped: %s\n", sk)
 				}

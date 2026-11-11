@@ -250,3 +250,24 @@ func TestExportStaysInHome(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// An export says so when the replay tier misses a label (217-3): the case is still written
+// with allow_failing, and golden.json pins the miss, so the answer must name it.
+func TestExportWarnsWhenLabelsAreNotReproduced(t *testing.T) {
+	x := newExportRig(t)
+	x.publish(tick(exportT0, 70000), futures(exportT0))
+	missed := `[{"match":"price_cross","from":"2026-03-10T05:00:00Z","to":"2026-03-10T06:00:00Z","should_fire":true,"critical":true}]`
+	out, err := x.export(`{"case":"w1","allow_failing":true,"labels":` + missed + `}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := out["warning"].(string); !strings.Contains(w, "does not reproduce every label") || !strings.Contains(w, "recall 0.00") || !strings.Contains(w, "critical recall ok: false") {
+		t.Errorf("warning = %q, want the missed label named with its recall", w)
+	}
+	if out, err = x.export(`{"case":"w2","labels":` + notFire + `}`); err != nil {
+		t.Fatal(err)
+	}
+	if w, ok := out["warning"]; ok {
+		t.Errorf("a case whose labels all hold got a warning: %v", w)
+	}
+}

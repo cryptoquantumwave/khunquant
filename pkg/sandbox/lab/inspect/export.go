@@ -29,7 +29,7 @@ var ExportFiles = []string{"events.jsonl", "policy.json", "labels.json", "golden
 
 type exportArgs struct {
 	Op           string         `json:"op"` // the lab adds it to every call
-	Case        string         `json:"case"`
+	Case         string         `json:"case"`
 	Labels       []replay.Label `json:"labels"`
 	Since        time.Time      `json:"since"`
 	Until        time.Time      `json:"until"`
@@ -88,9 +88,26 @@ func exportReplayOp(j *labjournal.Journal, deps func() Deps) lab.OpFunc {
 		if err := os.Rename(stage, final); err != nil {
 			return nil, err
 		}
-		return map[string]any{"dir": filepath.ToSlash(filepath.Join(ExportDir, a.Case)), "files": ExportFiles,
-			"events": len(lines), "skipped": skipped, "golden": rep.Golden(), "critical_recall_ok": rep.CriticalRecallOK()}, nil
+		out := map[string]any{"dir": filepath.ToSlash(filepath.Join(ExportDir, a.Case)), "files": ExportFiles,
+			"events": len(lines), "skipped": skipped, "golden": rep.Golden(), "critical_recall_ok": rep.CriticalRecallOK()}
+		if w := labelWarning(rep); w != "" {
+			out["warning"] = w
+		}
+		return out, nil
 	}
+}
+
+// labelWarning says so when the replay tier does not reproduce every label of the case: a
+// missed should-fire label (recall below 1), a should-not-fire label that fired (precision
+// below 1) or a missed critical label. The case is still written, and its golden pins these
+// figures, so an export is never silent about them (217-3).
+func labelWarning(rep *replay.Report) string {
+	l := rep.Labels
+	if l == nil || (l.Recall >= 1 && l.Precision >= 1 && rep.CriticalRecallOK()) {
+		return ""
+	}
+	return fmt.Sprintf("the replay tier does not reproduce every label (recall %.2f, precision %.2f, critical recall ok: %v); the case is exported and golden.json pins these figures",
+		l.Recall, l.Precision, rep.CriticalRecallOK())
 }
 
 // recordable reads the journaled perception events that carry recordable:true, oldest

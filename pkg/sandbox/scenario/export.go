@@ -42,11 +42,15 @@ func (s *runState) exportReplay(ctx context.Context) error {
 	var out struct {
 		Dir     string   `json:"dir"`
 		Skipped []string `json:"skipped"`
+		Warning string   `json:"warning"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return err
 	}
 	s.res.ExportSkipped = append(s.res.ExportSkipped, out.Skipped...)
+	if out.Warning != "" {
+		s.res.ExportWarning = out.Warning
+	}
 	dest, err := CopyReplayCase(filepath.Join(s.home, filepath.FromSlash(out.Dir)), s.home, r.ExportDir, name, r.ExportForce)
 	s.res.Exported = dest
 	return err

@@ -396,7 +396,7 @@ func TestUpOptions_CLIAndMCPAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	for k := range schema.Properties {
-		if !slices.Contains([]string{"op", "keep_home", "mode", "tail", "contains", "kill_at", "wait_wall"}, k) { // the other ops' own arguments
+		if !slices.Contains([]string{"op", "keep_home", "mode", "tail", "contains", "kill_at", "wait_wall", "label", "snapshot"}, k) { // the other ops' own arguments
 			args = append(args, k)
 		}
 	}

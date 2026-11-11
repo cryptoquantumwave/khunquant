@@ -29,6 +29,10 @@ const (
 	// MaxInstancesCeiling is the most instances one supervisor may run, whatever
 	// KQ_SANDBOX_MAX_INSTANCES says.
 	MaxInstancesCeiling = 8
+	// DefaultMaxSnapshots is how many snapshots the store holds before a new take is
+	// refused; KQ_SANDBOX_MAX_SNAPSHOTS overrides it, clamped to [1, MaxSnapshotsCeiling].
+	DefaultMaxSnapshots = 20
+	MaxSnapshotsCeiling = 200
 	maxLogTail          = 2000
 	maxLogRead          = 1 << 20 // the end of gateway.log that Logs reads
 )
@@ -53,6 +57,7 @@ type Config struct {
 	TmpDir       string        // parent of kq-sbx-<name>; os.TempDir() when empty
 	MinFreeBytes uint64        // memory floor; KQ_SANDBOX_MIN_FREE_MB (default 1024 MiB) when zero
 	MaxInstances int           // KQ_SANDBOX_MAX_INSTANCES, else 1; clamped to [1, MaxInstancesCeiling]
+	MaxSnapshots int           // KQ_SANDBOX_MAX_SNAPSHOTS, else DefaultMaxSnapshots; clamped to [1, MaxSnapshotsCeiling]
 	ReadyTimeout time.Duration // 60s when zero, wall time
 	// RestartWait is how long a call through this supervisor's client waits for an instance
 	// that is restarting (wall time; 60s when zero). A `restart kill_at` can set its own.
@@ -180,6 +185,9 @@ type Supervisor struct {
 
 	mu        sync.Mutex
 	instances map[string]*instance
+	// snapMu serializes Snapshot across instances, so the count check against the cap and
+	// the move into the store are one step.
+	snapMu sync.Mutex
 }
 
 // New checks the binary and returns a Supervisor. It never compiles anything.
@@ -211,6 +219,13 @@ func New(cfg Config) (*Supervisor, error) {
 		cfg.MaxInstances, _ = strconv.Atoi(os.Getenv("KQ_SANDBOX_MAX_INSTANCES")) // garbage reads as 0
 	}
 	cfg.MaxInstances = min(max(cfg.MaxInstances, 1), MaxInstancesCeiling)
+	if cfg.MaxSnapshots == 0 {
+		cfg.MaxSnapshots, _ = strconv.Atoi(os.Getenv("KQ_SANDBOX_MAX_SNAPSHOTS")) // garbage reads as 0
+	}
+	if cfg.MaxSnapshots == 0 {
+		cfg.MaxSnapshots = DefaultMaxSnapshots
+	}
+	cfg.MaxSnapshots = min(max(cfg.MaxSnapshots, 1), MaxSnapshotsCeiling)
 	if cfg.Getenv == nil {
 		cfg.Getenv = os.Getenv
 	}
@@ -330,6 +345,11 @@ func (s *Supervisor) attempt(ctx context.Context, in *instance, o UpOptions, fix
 	}()
 	if err := prepareHome(in.home, in.name, port, fixtures, o.Accounts...); err != nil {
 		return err
+	}
+	if o.restore != nil { // every attempt: a retry makes a new home and may have a new port
+		if err := o.restore.apply(in.home, port); err != nil {
+			return err
+		}
 	}
 	if len(o.ConfigPatch) > 0 {
 		if _, err := patchConfigFile(in.home, o.ConfigPatch); err != nil {

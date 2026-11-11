@@ -95,7 +95,9 @@ type snapshotFile struct {
 
 func (l *Lab) writeSnapshot(ctx context.Context, id, label string) (labsnap.Manifest, string, error) {
 	dir := filepath.Join(l.SnapshotsDir(), id)
-	m := labsnap.Manifest{ID: id, Label: label, Home: l.Home, BinaryVersion: config.FormatVersion(),
+	// The instance's name is the one the lock was given (sandbox_lock.go reads the same
+	// variable): a restore with no name starts the snapshot under it.
+	m := labsnap.Manifest{ID: id, Label: label, Instance: os.Getenv("KQ_SANDBOX_INSTANCE"), Home: l.Home, BinaryVersion: config.FormatVersion(),
 		LLM: os.Getenv(sandbox.EnvLLM), Seed: os.Getenv(sandbox.EnvSeed), Parts: []string{}}
 	if _, err := os.Lstat(dir); err == nil {
 		return m, "", fmt.Errorf("snapshot %q already exists", id) // not ours to remove

@@ -59,6 +59,9 @@ type UpOptions struct {
 	// sandbox.ProfileOptions). Like ConfigPatch it is for Go callers only: a flag or an MCP
 	// argument would let a tool caller turn on a venue the instance never configured.
 	Accounts []string `json:"-"`
+
+	// restore, set only by Restore, fills each attempt's home from a snapshot.
+	restore *restoreSpec `json:"-"`
 }
 
 // OptionField describes one generated option of UpOptions.

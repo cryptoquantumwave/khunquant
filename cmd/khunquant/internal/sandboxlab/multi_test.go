@@ -36,6 +36,7 @@ func TestProxy_RequiresInstanceWhenSeveral(t *testing.T) {
 		{"sandbox_instance", map[string]any{"op": "logs"}},
 		{"sandbox_instance", map[string]any{"op": "restart", "mode": "kill"}},
 		{"sandbox_instance", map[string]any{"op": "down"}},
+		{"sandbox_instance", map[string]any{"op": "snapshot"}},
 		{"sandbox_instance", map[string]any{"op": "restart", "mode": "kill_at", "kill_at": map[string]any{"workflow": "dn.open", "step": "s", "point": "after_fn"}}},
 	} {
 		out, isErr := h.call(c.tool, c.args)
@@ -58,5 +59,22 @@ func TestProxy_RequiresInstanceWhenSeveral(t *testing.T) {
 	h.must("sandbox_instance", map[string]any{"op": "down", "name": "b"})
 	if out := h.must("sandbox_chat", map[string]any{"op": "echo", "text": "back"}); !strings.Contains(out, "back") {
 		t.Errorf("implicit call after b went down = %s", out)
+	}
+}
+
+// The snapshot ops are in the schema; an empty store lists nothing, and a restore of a
+// snapshot that is not there, or whose id tries to leave the store, is refused.
+func TestMCP_SnapshotOps(t *testing.T) {
+	h := newHarness(t)
+	if out := h.must("sandbox_instance", map[string]any{"op": "snapshots"}); out != `{"snapshots":[]}` {
+		t.Errorf("snapshots = %s", out)
+	}
+	for _, id := range []string{"nope", "../x", ""} {
+		if out, isErr := h.call("sandbox_instance", map[string]any{"op": "restore", "snapshot": id}); !isErr {
+			t.Errorf("restore %q = %s, want an error", id, out)
+		}
+	}
+	if out, isErr := h.call("sandbox_instance", map[string]any{"op": "snapshot"}); !isErr || !strings.Contains(out, "no instance is running") {
+		t.Errorf("snapshot with no instance = %q (error=%v)", out, isErr)
 	}
 }

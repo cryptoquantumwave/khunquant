@@ -170,3 +170,21 @@ func TestSnapshotTake_CapIdAndLinks(t *testing.T) {
 		t.Error("a too large take left a partial snapshot")
 	}
 }
+
+// The manifest records the instance the snapshot was taken from, which a restore with no
+// name starts it as (215-1). The supervisor's tests fill the field in their fake gateway;
+// this is the real take.
+func TestSnapshotTake_RecordsTheInstance(t *testing.T) {
+	t.Setenv("KQ_SANDBOX_INSTANCE", "alpha")
+	l := snapLab(t)
+	if _, err := take(t, l, "alpha-1"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := labsnap.Read(filepath.Join(l.SnapshotsDir(), "alpha-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Instance != "alpha" {
+		t.Errorf("manifest instance = %q, want %q", m.Instance, "alpha")
+	}
+}

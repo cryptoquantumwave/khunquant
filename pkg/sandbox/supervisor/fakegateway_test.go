@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -85,7 +86,7 @@ func TestHelperFakeGateway(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(home, "env-keys.txt"), []byte(strings.Join(keys, "\n")), 0o600)
 	_ = os.WriteFile(filepath.Join(home, "argv.txt"), []byte(strings.Join(os.Args[1:], "\n")), 0o600)
 	_, merr := os.Stat(filepath.Join(home, ".kq-sandbox"))
-	facts := fmt.Sprintf("marker=%v\nlocked=%s\ninstance=%s\n", merr == nil, os.Getenv("KQ_SANDBOX_LOCKED"), os.Getenv("KQ_SANDBOX_INSTANCE"))
+	facts := fmt.Sprintf("marker=%v\nlocked=%s\ninstance=%s\nseed=%s\n", merr == nil, os.Getenv("KQ_SANDBOX_LOCKED"), os.Getenv("KQ_SANDBOX_INSTANCE"), os.Getenv("KQ_SANDBOX_SEED"))
 	_ = os.WriteFile(filepath.Join(home, "facts.txt"), []byte(facts), 0o600)
 	if out := flagValue("--pidout="); out != "" {
 		_ = os.WriteFile(out, []byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -146,6 +147,21 @@ func TestHelperFakeGateway(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(st)
 	})
+	if hasFlag("--snapshot-lab") { // the clock and snapshot groups, over the fake's own home
+		mux.HandleFunc("/api/sandbox/lab/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+os.Getenv("KQ_SANDBOX_TOKEN") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			out, err := fakeLabGroup(home, strings.TrimPrefix(r.URL.Path, "/api/sandbox/lab/"), body, flagValue("--clock-mode="))
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				out = map[string]string{"error": err.Error(), "code": "failed"}
+			}
+			_ = json.NewEncoder(w).Encode(out)
+		})
+	}
 	if hasFlag("--crash-lab") { // the crash group, and a SIGUSR2 that stands for "the armed step was reached"
 		armed := ""
 		mux.HandleFunc("/api/sandbox/lab/crash", func(w http.ResponseWriter, r *http.Request) {

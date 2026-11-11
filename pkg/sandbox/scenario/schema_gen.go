@@ -132,7 +132,7 @@ func (Expectation) JSONSchema() *jsonschema.Schema {
 		"within", &jsonschema.Schema{Type: "object", Description: "Sim-time window as offsets from clock.start.", AdditionalProperties: no,
 			Properties: props("from", scalar("Start offset; 0 when empty."), "to", scalar("End offset; open when empty."))},
 		"during", &jsonschema.Schema{Type: "string", Description: "HH:MM-HH:MM in the profile time zone; wraps midnight when the end is not after the start."},
-		"replay_match", &jsonschema.Schema{Type: "string", Description: "message only; ignored by the runner."},
+		"replay_match", &jsonschema.Schema{Type: "string", Description: "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."},
 	)
 	p := props("id", scalar("Unique id, shown in the report."))
 	for pair := mods.Oldest(); pair != nil; pair = pair.Next() {

@@ -213,7 +213,7 @@
               "type": "null"
             }
           ],
-          "description": "message only; ignored by the runner."
+          "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
         },
         "decision": {
           "anyOf": [
@@ -307,7 +307,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "trigger": true,
                 "severity": true,
@@ -414,7 +414,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "kind": true,
                 "fields": true,
@@ -524,7 +524,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "turn": true
               },
@@ -628,7 +628,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "level": true,
                 "allow": true
@@ -733,7 +733,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "to": true,
                 "contains": true,
@@ -841,7 +841,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "venue": true,
                 "symbol": true,
@@ -950,7 +950,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "verdict": true,
                 "gate": true
@@ -1055,7 +1055,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "mandate_status": true,
                 "dn_plan_status": true,
@@ -1162,7 +1162,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "kind": true,
                 "status": true
@@ -1267,7 +1267,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "host": true
               },
@@ -1371,7 +1371,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "message only; ignored by the runner."
+                  "description": "message with count: 0 and a within with from and to only: the should-not-fire label this expectation exports as a replay case (export_replay); the run verdict ignores it."
                 },
                 "kind": true,
                 "state": true
@@ -1680,7 +1680,8 @@
             {
               "type": "object",
               "required": [
-                "symbol"
+                "symbol",
+                "path"
               ]
             },
             {

@@ -27,6 +27,7 @@ func (h *Handler) registerSandboxRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sandbox/fixtures", h.handlePutFixtures)
 	mux.HandleFunc("POST /api/sandbox/reload", h.handleReloadFixtures)
 	mux.HandleFunc("POST /api/sandbox/reset-state", h.handleResetState)
+	h.registerSandboxTimelineRoute(mux)
 }
 
 func (h *Handler) handleSandboxStatus(w http.ResponseWriter, r *http.Request) {

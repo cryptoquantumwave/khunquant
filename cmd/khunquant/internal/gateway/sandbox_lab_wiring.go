@@ -519,6 +519,7 @@ func registerSandboxLab(mux handleMux, s *gatewayServices, d assemblyDeps) error
 		return fmt.Errorf("starting the lab observer: %w", err)
 	}
 	labapi.Register(mux, s.lab, labGuard(lk.Token))
+	registerSandboxTimeline(mux, s.lab.Journal, labViewToken())
 	return nil
 }
 

@@ -1,7 +1,9 @@
 package sandbox
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,11 +55,22 @@ func Profile(o ProfileOptions) (*config.Config, error) {
 // WriteProfile writes the profile to <home>/config.json and returns that path.
 // config.SaveConfig puts the secrets in <home>/.security.yml, so both files land in
 // the instance home. It runs in the process that creates the instance (not locked).
+//
+// It also writes a random gateway.management_token. A locked gateway replaces its
+// management token with the instance token, so this one opens no management route: it
+// is the VIEW token of the launcher's read-only timeline (GET /api/sandbox/timeline),
+// which the launcher reads from this file. It is not the instance token; it stays on
+// disk in the instance home.
 func WriteProfile(o ProfileOptions) (string, error) {
 	cfg, err := Profile(o)
 	if err != nil {
 		return "", err
 	}
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("sandbox profile: view token: %w", err)
+	}
+	cfg.Gateway.ManagementToken = hex.EncodeToString(b[:])
 	home := filepath.Clean(o.Home)
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return "", fmt.Errorf("sandbox profile: create home: %w", err)

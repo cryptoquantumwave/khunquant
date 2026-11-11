@@ -94,4 +94,45 @@ export async function resetSandboxState(): Promise<SandboxEnableResponse> {
   })
 }
 
+export interface LabTimelineEntry {
+  seq: number
+  sim_time: string
+  wall_time: string
+  kind: string
+  source: string
+  subject: string
+  summary: string
+  // Any JSON value; a payload over 4 KiB arrives as a string with truncated set.
+  payload: unknown
+  truncated?: boolean
+}
+
+export interface LabTimelineResponse {
+  locked: true
+  instance: string
+  entries: LabTimelineEntry[]
+  next_seq: number
+  drops: number
+}
+
+// Read-only. The gateway answers 404 when it is not a locked sandbox, and the launcher
+// answers 502 (gateway not running or unreachable) or 503 (no view token): none of these
+// is an error here, only "no locked sandbox reachable". The launcher adds the token;
+// this page never holds one.
+export async function getLabTimeline(p: {
+  afterSeq: number
+  kinds?: string
+  limit?: number
+}): Promise<LabTimelineResponse | { locked: false }> {
+  const qs = new URLSearchParams({ after_seq: String(p.afterSeq) })
+  if (p.kinds) qs.set("kinds", p.kinds)
+  if (p.limit) qs.set("limit", String(p.limit))
+  const res = await fetch(`${BASE_URL}/api/sandbox/timeline?${qs}`)
+  if ([404, 502, 503].includes(res.status)) return { locked: false }
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText}`)
+  }
+  return res.json() as Promise<LabTimelineResponse>
+}
+
 export type { SandboxEnableResponse }

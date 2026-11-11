@@ -1079,7 +1079,31 @@
       "step2": "นำทางไปยังไดเรกทอรี Fixtures ด้านบน",
       "step3": "สร้างหรือแก้ไขไฟล์ .json fixture สำหรับแต่ละ venue (เช่น binance.json, okx.json)",
       "step4": "รีสตาร์ต Agent เพื่อโหลด Fixtures ใหม่",
-      "step5": "การเรียก API ทั้งหมดของการแลกเปลี่ยนจะได้รับการตอบสนองจำลองจาก Fixtures ของคุณ"
+      "step5": "การเรียก API ทั้งหมดของการแลกเปลี่ยนจะได้รับการตอบสนองจำลองจาก Fixtures ของคุณ",
+      "timeline": {
+        "title": "ไทม์ไลน์ของแล็บ",
+        "desc": "บันทึกแบบอ่านอย่างเดียวของอินสแตนซ์ Sandbox ที่ล็อกอยู่หนึ่งตัว เปิด Launcher หนึ่งตัวต่ออินสแตนซ์ด้วย KHUNQUANT_HOME=<home> KHUNQUANT_CONFIG=<home>/config.json <launcher> -port <N> -no-browser อย่าบันทึกการตั้งค่าใน Launcher นั้น เพราะการบันทึกจะเขียนทับ config ของอินสแตนซ์",
+        "not_locked": "ไม่พบ Sandbox ที่ล็อกอยู่: Gateway ไม่ได้ทำงานอยู่หรือไม่ใช่ Sandbox ที่ล็อก จึงไม่มีบันทึกของแล็บให้แสดง",
+        "error": "อ่านไทม์ไลน์จาก Gateway ไม่ได้",
+        "drops": "บันทึกทิ้งไป {{count}} รายการ การตรวจสอบอาจไม่ครบถ้วน",
+        "empty": "ยังไม่มีรายการในบันทึก",
+        "truncated": "ตัดข้อมูลที่ 4 KiB",
+        "utc": "UTC",
+        "local": "เวลาท้องถิ่น",
+        "family": {
+          "event": "เหตุการณ์",
+          "chat": "แชต",
+          "llm": "LLM",
+          "workflow": "เวิร์กโฟลว์",
+          "proposal": "ข้อเสนอ",
+          "policy": "นโยบาย",
+          "tool": "เครื่องมือ",
+          "exchange": "ตลาด",
+          "fault": "ข้อผิดพลาด",
+          "clock": "นาฬิกา",
+          "settle": "Settle"
+        }
+      }
     }
   },
   "portfolios": {

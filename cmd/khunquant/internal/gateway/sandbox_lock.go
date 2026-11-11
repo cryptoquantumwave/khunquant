@@ -245,6 +245,10 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	cfg.Debug.Sandbox.Enabled = true
 	cfg.Debug.Sandbox.FixturesDir = fixtures
 	cfg.Debug.Sandbox.Token = "" // env.Parse copies KQ_SANDBOX_TOKEN here; the lab holds it
+	// The file's management token is the timeline's view token, kept apart from the
+	// instance token that guards every other management route. Published only once
+	// the rest of the config has passed.
+	fileViewToken := cfg.Gateway.ManagementToken
 	cfg.Gateway.ManagementToken = lk.Token
 
 	cfg.Tools.Exec.Enabled = false // also stops cron command jobs
@@ -313,6 +317,7 @@ func enforceLockedConfig(cfg *config.Config, lk sandbox.LockOptions) error {
 	for i := range ex.Webull.Accounts {
 		ex.Webull.Accounts[i].Proxy = ""
 	}
+	captureLabViewToken(fileViewToken, lk.Token)
 	return nil
 }
 

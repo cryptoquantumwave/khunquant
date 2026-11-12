@@ -15,6 +15,7 @@ func killGroup(int)                           {}
 func termGroup(int)                           {}
 func processAlive(int) bool                   { return false }
 func processCommand(int) (string, error)      { return "", ErrUnixOnly }
+func privateToUs(os.FileInfo) bool            { return true } // up is refused here anyway
 
 func exitCode(ps *os.ProcessState) int {
 	if ps == nil {

@@ -45,3 +45,9 @@ func exitCode(ps *os.ProcessState) int {
 	}
 	return ps.ExitCode()
 }
+
+// privateToUs says whether st is owned by this user and closed to group and others.
+func privateToUs(st os.FileInfo) bool {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == os.Geteuid() && st.Mode().Perm()&0o077 == 0
+}

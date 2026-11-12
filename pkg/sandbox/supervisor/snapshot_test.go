@@ -408,3 +408,27 @@ func TestUp_RefusesTheSnapshotStoresName(t *testing.T) {
 		t.Errorf("up snapshots-2 = %+v, %v", info, err)
 	}
 }
+
+// A snapshot left in the instance's home (a take that never reached the store) is not in
+// the store's count: the next Snapshot clears it before asking for a new one (AS2-1).
+func TestSnapshot_ClearsWhatATakeLeftInTheHome(t *testing.T) {
+	s, _ := snapSupervisor(t, 1)
+	a := setup(t, s, "a", UpOptions{})
+	left := filepath.Join(a.Home, "lab", "snapshots", "left-behind")
+	put(t, a.Home, "lab/snapshots/left-behind/home/big.bin", "x")
+	si, err := s.Snapshot(context.Background(), "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); err == nil {
+		t.Error("the snapshot a take left in the home is still there")
+	}
+	if ents, _ := os.ReadDir(filepath.Join(a.Home, "lab", "snapshots")); len(ents) != 0 {
+		t.Errorf("the home still holds %d snapshot(s) after the move to the store", len(ents))
+	}
+	for _, f := range si.Manifest.Files {
+		if strings.HasPrefix(f.Path, "lab/snapshots") {
+			t.Errorf("the new snapshot holds %s", f.Path)
+		}
+	}
+}

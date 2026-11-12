@@ -154,6 +154,9 @@ func TestSnapshotTake_CapIdAndLinks(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(l.SnapshotsDir(), "k-1", "home", "workspace", "link")); err == nil {
 		t.Error("a link was copied into the snapshot")
 	}
+	if err := os.RemoveAll(filepath.Join(l.SnapshotsDir(), "k-1")); err != nil { // one at a time in the home
+		t.Fatal(err)
+	}
 	f, err := os.Create(filepath.Join(l.Home, "workspace", "big"))
 	if err != nil {
 		t.Fatal(err)
@@ -186,5 +189,32 @@ func TestSnapshotTake_RecordsTheInstance(t *testing.T) {
 	}
 	if m.Instance != "alpha" {
 		t.Errorf("manifest instance = %q, want %q", m.Instance, "alpha")
+	}
+}
+
+// The home holds one snapshot at a time (AS2-1). The supervisor moves each take to its
+// store, which has the cap; the take op is also a tool of the lab, and a direct call used to
+// add a copy of the home on every call, in a directory the size limit does not count.
+func TestSnapshotTake_OneAtATimeInTheHome(t *testing.T) {
+	l := snapLab(t)
+	writeHome(t, l, "workspace/notes.txt", []byte("notes"))
+	if _, err := take(t, l, "one-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one-2", "one-3"} {
+		_, err := take(t, l, id)
+		if err == nil || !strings.Contains(err.Error(), "one at a time") {
+			t.Fatalf("take %s with one-1 still in the home: err = %v, want a refusal", id, err)
+		}
+	}
+	if ents, _ := os.ReadDir(l.SnapshotsDir()); len(ents) != 1 || ents[0].Name() != "one-1" {
+		t.Fatalf("the home holds %d snapshots, want only one-1", len(ents))
+	}
+	// Control: once it is moved out (what the supervisor does), the next take is accepted.
+	if err := os.Rename(filepath.Join(l.SnapshotsDir(), "one-1"), filepath.Join(t.TempDir(), "one-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := take(t, l, "one-2"); err != nil {
+		t.Fatalf("take after the first was moved out: %v", err)
 	}
 }

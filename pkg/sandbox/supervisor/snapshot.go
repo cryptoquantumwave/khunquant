@@ -120,15 +120,24 @@ func (s *Supervisor) Snapshot(ctx context.Context, name, label string) (Snapshot
 		return SnapshotInfo{}, err
 	}
 	id := nextSnapshotID(root, in.name, clock.Now)
+	// The instance keeps one snapshot at a time in its home. Whatever is there now was
+	// left by a take that never reached the store (a failed move, or a take sent to the
+	// instance directly): it is not in the store's count, so it goes.
+	pending := filepath.Join(in.home, "lab", "snapshots")
+	if err := os.RemoveAll(pending); err != nil {
+		return SnapshotInfo{}, fmt.Errorf("snapshot: clear %s: %w", pending, err)
+	}
 	body, _ := json.Marshal(map[string]string{"op": "take", "id": id, "label": label})
 	if err := labCall(ctx, in, "snapshot", string(body), nil); err != nil {
 		return SnapshotInfo{}, err
 	}
-	src, dst := filepath.Join(in.home, "lab", "snapshots", id), filepath.Join(root, id)
+	src, dst := filepath.Join(pending, id), filepath.Join(root, id)
 	if err := os.MkdirAll(root, 0o700); err != nil {
+		_ = os.RemoveAll(src)
 		return SnapshotInfo{}, err
 	}
 	if err := os.Rename(src, dst); err != nil {
+		_ = os.RemoveAll(src)
 		return SnapshotInfo{}, fmt.Errorf("snapshot: move to the store: %w", err)
 	}
 	m, err := labsnap.Read(dst)

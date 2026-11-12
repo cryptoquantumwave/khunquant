@@ -36,11 +36,16 @@ type SnapshotInfo struct {
 	Bytes    int64            `json:"bytes"`
 }
 
+// snapshotStoreName is the store's directory under the temp dir. It shares the prefix of an
+// instance home, so no instance may be called "snapshots" (instanceHome): its home would be
+// the store, and its down would delete every snapshot.
+const snapshotStoreName = homePrefix + "snapshots"
+
 // snapshotRoot is the store, <TmpDir>/kq-sbx-snapshots: outside every instance home, so a
 // `down` does not delete a snapshot.
 func (s *Supervisor) snapshotRoot() (string, error) {
 	base, err := filepath.Abs(s.cfg.TmpDir)
-	return filepath.Join(base, "kq-sbx-snapshots"), err
+	return filepath.Join(base, snapshotStoreName), err
 }
 
 func moneyAtRisk(llm string) bool { return llm == "live" || llm == "record" }

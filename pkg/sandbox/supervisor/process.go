@@ -47,6 +47,9 @@ func instanceHome(base, name string) (string, error) {
 	if !nameRE.MatchString(name) {
 		return "", fmt.Errorf("sandbox: invalid instance name %q (lower-case letters, digits and '-', at most 31 characters)", name)
 	}
+	if homePrefix+name == snapshotStoreName {
+		return "", fmt.Errorf("sandbox: the instance name %q is reserved: its home would be the snapshot store", name)
+	}
 	if base == "" {
 		base = os.TempDir()
 	}

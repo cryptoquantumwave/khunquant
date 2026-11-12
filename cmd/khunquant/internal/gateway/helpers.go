@@ -345,6 +345,45 @@ func shutdownGateway(
 	logger.Info("✓ Gateway stopped")
 }
 
+// syncSandboxForReload brings the sandbox server and the sandbox state in line with the
+// reloaded config, before the services are rebuilt. The state follows the config, not the
+// server: with the sandbox on it is armed (and buildServices starts the next server), with
+// the sandbox off it is off, whether or not a server was running. A server that failed to
+// start on an earlier reload leaves no server and an armed state; switching the sandbox
+// off in the config must then disarm it, or every exchange call keeps failing with
+// "sandbox: enabled but server not started" until the process restarts.
+func syncSandboxForReload(services *gatewayServices, isEnabled, locked bool) {
+	wasEnabled := services.SandboxServer != nil
+	switch {
+	case locked:
+		logger.Debugf("sandbox: locked, server kept across the reload")
+	case !isEnabled:
+		// Disable: stop the server, if there is one, and clear the state either way.
+		if wasEnabled {
+			logger.Info("  Disabling sandbox...")
+			services.SandboxServer.Stop()
+			services.SandboxServer = nil
+			services.SandboxToken = ""
+		}
+		sandbox.SetGlobalState(false, "")
+		logger.Debugf("sandbox: disabled and state cleared")
+	case !wasEnabled:
+		// Enable: arm state (already done by config reload watcher, but arm again)
+		// and prepare to start server in buildServices
+		logger.Info("  Enabling sandbox...")
+		sandbox.SetGlobalState(true, "")
+		logger.Debugf("sandbox: state armed for restart")
+	default:
+		// Sandbox stays enabled: stop the old server so a fresh one can start in
+		// buildServices, and keep the state armed in between (enabled, no server), as at
+		// start-up. Switching it off here let a tool call during the reload reach the real
+		// venue, and let an exchange client built then keep real URLs in the cache.
+		logger.Info("  Reloading sandbox configuration...")
+		stopSandboxForRestart(services)
+		logger.Debugf("sandbox: old server stopped, state stays armed, will restart with new config")
+	}
+}
+
 // stopSandboxForRestart stops the sandbox server of a reload that keeps the sandbox on and
 // leaves the sandbox state armed with no server until buildServices starts the next one.
 func stopSandboxForRestart(services *gatewayServices) {
@@ -443,34 +482,7 @@ func handleConfigReload(
 
 	// Handle sandbox enable/disable toggle. Locked, the sandbox server is
 	// process-lifetime: it is never stopped, disabled or rebuilt here.
-	wasEnabled := services.SandboxServer != nil
-	isEnabled := newCfg.Debug.Sandbox.Enabled
-
-	if locked {
-		logger.Debugf("sandbox: locked, server kept across the reload")
-	} else if wasEnabled && !isEnabled {
-		// Disable: stop the server and clear state
-		logger.Info("  Disabling sandbox...")
-		services.SandboxServer.Stop()
-		sandbox.SetGlobalState(false, "")
-		services.SandboxServer = nil
-		services.SandboxToken = ""
-		logger.Debugf("sandbox: disabled and state cleared")
-	} else if !wasEnabled && isEnabled {
-		// Enable: arm state (already done by config reload watcher, but arm again)
-		// and prepare to start server in buildServices
-		logger.Info("  Enabling sandbox...")
-		sandbox.SetGlobalState(true, "")
-		logger.Debugf("sandbox: state armed for restart")
-	} else if wasEnabled && isEnabled {
-		// Sandbox stays enabled: stop the old server so a fresh one can start in
-		// buildServices, and keep the state armed in between (enabled, no server), as at
-		// start-up. Switching it off here let a tool call during the reload reach the real
-		// venue, and let an exchange client built then keep real URLs in the cache.
-		logger.Info("  Reloading sandbox configuration...")
-		stopSandboxForRestart(services)
-		logger.Debugf("sandbox: old server stopped, state stays armed, will restart with new config")
-	}
+	syncSandboxForReload(services, newCfg.Debug.Sandbox.Enabled, locked)
 
 	// Restart all services with new config
 	logger.Info("  Restarting all services with new configuration...")

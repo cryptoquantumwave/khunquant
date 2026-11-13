@@ -918,6 +918,13 @@ All calls returned **HTTP 200** with the Go signer described above (whole-string
 7. **Combo order semantics:** Docs mention `combo_type` (NORMAL, MASTER, STOP_PROFIT, STOP_LOSS, OTO, OCO, OTOCO) but don't specify legs requirements per combo type or how client_combo_order_id is used.
 
 8. **Pagination cursor behavior:** Both order history and order open use `last_client_order_id` for pagination. Docs don't clarify if it's inclusive/exclusive or if cursor must be the actual client_order_id or a server-opaque token.
+   - **What Webull's reference says (read 2026-11-13, developer.webull.com `order-open`, `order-history`, `order-detail`):**
+     - Both listings: "This endpoint may not return the most recent order data in real time due to processing delays. To ensure you get the latest order status, please query the Order Detail endpoint by client_order_id." So an empty listing is not proof that an order is absent, whatever the page size.
+     - History: "If orders are group orders, they will be returned together, and the number of orders returned on one page may exceed the page_size."
+     - Whether a page can come back **shorter** than `page_size` while more rows exist is not stated.
+     - The current reference documents other paths (`/trading/orders/...`, header `x-version: v3`) whose listings return `{data, pagination_key}`; a missing `pagination_key` is the last page. This client uses the `/openapi/trade/order/...` paths with `x-version: v2`, verified above.
+   - **So the reconcile asks `order/detail` by `client_order_id` first** (`ProbeOrderByClientID`) and reads the listings only when that finds nothing.
+   - **Not established:** what `order/detail` answers for an ID it does not hold (status, `error_code`), and whether a repeated `client_order_id` is refused. A place-order page shows the example `TRADE_PLACE_ORDER_REPEAT` / "The order existed"; no call here has seen it.
 
 9. **algo_type constraints:** TWAP/VWAP/POV are mentioned but no param details (e.g., target_vol_percent range, algo_start_time format relative to market hours).
 

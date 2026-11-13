@@ -161,15 +161,23 @@ start one with `sandbox_instance op=up` and use:
 - `sandbox_inspect op=settle` returns `busy` (the components that did not go idle) when a settle fails.
 
 To retry from a known point, take a snapshot (manual clock only): `sandbox_instance op=snapshot`,
-list them with `sandbox_instance op=snapshots`, start a new instance from one with
+list them with `sandbox_instance op=snapshots`, start an instance from one with
 `sandbox_instance op=restore` (refused for live and record instances), and remove one with
-`sandbox_instance op=snapshot_delete`. The store keeps at most `KQ_SANDBOX_MAX_SNAPSHOTS` (default
-20, at most 200), and a take beyond that is refused until one is deleted.
+`sandbox_instance op=snapshot_delete`. A restore with no `name`, or with the name of the instance
+the snapshot was taken from, replaces that instance if it is running; give another `name` to start
+it beside the first. A snapshot is restored only by the build (version and commit) that took it.
+The store keeps at most `KQ_SANDBOX_MAX_SNAPSHOTS` (default 20, at most 200), and a take beyond
+that is refused until one is deleted.
 
 A green run can become a replay case: `./build/khunquant sandbox run --export-replay <dir> <file>`
-(add `--force` to replace a case), or `sandbox_scenario op=run` with `export_replay` (and `force`);
-`sandbox_inspect op=export_replay` does it for a running instance. Labels come from the message
-expectations.
+(add `--force` to replace a case), or `sandbox_scenario op=run` with `export_replay` (and `force`).
+Labels come from the scenario's message expectations. Through MCP the directory must lie inside
+the server's working directory, and `force` replaces only a directory that is a replay case:
+anything else there is refused. When the case does not reproduce every label, the run says so
+(`export warning:` on the CLI, `export_warnings` in the MCP result) and still writes it.
+`sandbox_inspect op=export_replay` (with `case` and `labels`) is the step underneath: it writes
+the case inside the instance home (`lab/export/<case>/`), which `down` deletes, and copies
+nothing out.
 
 The launcher can show the journal as a timeline, read-only. Start one launcher per instance with
 `KHUNQUANT_HOME=<home> KHUNQUANT_CONFIG=<home>/config.json <launcher> -port <N> -no-browser`. Do not
@@ -179,7 +187,8 @@ save settings in that launcher: a save rewrites the instance's config.
 
 With `KQ_SANDBOX_MAX_INSTANCES` above 1, `instance` (the name) is required on every tool call
 while more than one instance runs; the error lists them. It is optional while exactly one runs.
-`sandbox_instance op=list` shows them, and `down`, `restart` and `logs` take `name`.
+`sandbox_instance op=list` shows them, and `down`, `restart` and `logs` take `name`. Each instance
+is a whole gateway process, and every start is checked against the supervisor's memory floor.
 
 ## Known bugs
 

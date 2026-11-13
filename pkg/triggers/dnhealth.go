@@ -221,10 +221,13 @@ func (t *dnHealth) subject(plan string) string {
 func (t *dnHealth) evidence(plan, code string, h planhealth.Health) map[string]any {
 	ev := map[string]any{
 		"plan_id": t.p.PlanID, "code": code, "health_score": h.Score, "health_label": h.Label(),
-		"liquidation_distance_pct": h.LiquidationDistancePct, "margin_ratio_pct": h.MarginRatioPct,
+		"liquidation_distance_pct": h.LiquidationDistancePct, "margin_ratio_known": h.MarginIsKnown(),
 		"delta_drift_pct": h.DeltaDriftPct, "leg_mismatch_pct": h.LegMismatchPct,
 		"funding_apy_pct": h.FundingAPYPct, "funding_rate": h.FundingRate,
 		"breach_codes": h.BreachCodes, "recommended_action": planhealth.ActionText(code),
+	}
+	if h.MarginIsKnown() {
+		ev["margin_ratio_pct"] = h.MarginRatioPct // absent, not 0, when unknown
 	}
 	if t.p.Symbol != "" {
 		ev["symbol"] = t.p.Symbol
@@ -252,6 +255,17 @@ func (c DNHealthConfig) isThai() bool {
 	return CrossConfig{Language: c.Language}.isThai()
 }
 
+// dnMarginText is the margin ratio, or "unknown": an unknown ratio is never shown as 0.0%.
+func dnMarginText(thai bool, h planhealth.Health) string {
+	switch {
+	case h.MarginIsKnown():
+		return pct1(h.MarginRatioPct)
+	case thai:
+		return "ไม่ทราบ"
+	}
+	return "unknown"
+}
+
 func pct1(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) + "%" }
 
 // dnTitle is the headline: the plan, the finding and the figure that matters.
@@ -273,9 +287,9 @@ func dnTitle(thai bool, plan, symbol, code string, h planhealth.Health) string {
 		}
 	case planhealth.CodeMarginCritical, planhealth.CodeMarginDanger:
 		if thai {
-			finding += " — อัตรามาร์จิน " + pct1(h.MarginRatioPct)
+			finding += " — อัตรามาร์จิน " + dnMarginText(true, h)
 		} else {
-			finding += " — margin ratio " + pct1(h.MarginRatioPct)
+			finding += " — margin ratio " + dnMarginText(false, h)
 		}
 	case planhealth.CodeDeltaDriftHigh:
 		finding += " — " + pct1(h.DeltaDriftPct)
@@ -358,12 +372,12 @@ func dnDetail(thai bool, h planhealth.Health, code string) string {
 	if thai {
 		lines = append(lines,
 			"คำแนะนำ: "+dnAction(true, code),
-			"สุขภาพแผน "+strconv.Itoa(h.Score)+" ("+h.Label()+") · ห่างจุดล้างพอร์ต "+pct1(h.LiquidationDistancePct)+" · อัตรามาร์จิน "+pct1(h.MarginRatioPct),
+			"สุขภาพแผน "+strconv.Itoa(h.Score)+" ("+h.Label()+") · ห่างจุดล้างพอร์ต "+pct1(h.LiquidationDistancePct)+" · อัตรามาร์จิน "+dnMarginText(true, h),
 			"เดลต้าคลาดเคลื่อน "+pct1(h.DeltaDriftPct)+" · ปริมาณไม่ตรงกัน "+pct1(h.LegMismatchPct)+" · ฟันดิ้ง APY "+pct1(h.FundingAPYPct))
 	} else {
 		lines = append(lines,
 			"Recommended: "+dnAction(false, code),
-			"Health "+strconv.Itoa(h.Score)+" ("+h.Label()+") · liquidation distance "+pct1(h.LiquidationDistancePct)+" · margin ratio "+pct1(h.MarginRatioPct),
+			"Health "+strconv.Itoa(h.Score)+" ("+h.Label()+") · liquidation distance "+pct1(h.LiquidationDistancePct)+" · margin ratio "+dnMarginText(false, h),
 			"Delta drift "+pct1(h.DeltaDriftPct)+" · leg mismatch "+pct1(h.LegMismatchPct)+" · funding APY "+pct1(h.FundingAPYPct))
 	}
 	if h.PnLKnown {

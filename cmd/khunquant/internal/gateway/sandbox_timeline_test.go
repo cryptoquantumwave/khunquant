@@ -337,3 +337,71 @@ func TestTimelineMasksBothTokens(t *testing.T) {
 		t.Errorf("%d entries carry *** in both payload and summary, want 3: %s", masked, body)
 	}
 }
+
+// tokenFragment returns the first n consecutive characters of tok that body holds.
+func tokenFragment(body, tok string, n int) (string, bool) {
+	for i := 0; i+n <= len(tok); i++ {
+		if strings.Contains(body, tok[i:i+n]) {
+			return tok[i : i+n], true
+		}
+	}
+	return "", false
+}
+
+// A token that a cut splits is masked too: the summary cut (PR6-1) and the payload cap
+// leave no part of either token, where the whole-body mask alone would miss a prefix.
+func TestTimelineMasksATokenAcrossACut(t *testing.T) {
+	f := newLockedFixture(t)
+	j := f.lab.Journal
+	const (
+		subject = "dm:cut"
+		keep    = 8 // characters of the token the unmasked summary would keep
+	)
+	for _, tok := range []string{lockTestToken, testMgmtToken} {
+		// "dm:cut: xxx…<token>", the token starting keep runes before the summary cut.
+		text := strings.Repeat("x", labjournal.SummaryMax-1-keep-len(subject+": ")) + tok
+		p, _ := json.Marshal(map[string]any{"text": text, "delivered": true})
+		e := labjournal.Entry{Kind: "chat.out", Subject: subject, Payload: p}
+		if s := labjournal.Summary(e); !strings.HasSuffix(s, tok[:keep]+"…") {
+			t.Fatalf("the test line does not put the token across the summary cut: %q", s)
+		}
+		j.Append(e)
+	}
+	// Tokens all along a payload that is over the cap even when masked: one is at the cut.
+	long, _ := json.Marshal(map[string]any{"text": strings.Repeat(lockTestToken+" "+testMgmtToken+" ", 1200)})
+	j.Append(labjournal.Entry{Kind: "chat.in", Subject: "dm:long", Payload: long})
+
+	code, body := doGet(t, f.url("/api/sandbox/timeline?kinds=chat.*&limit=500"), testMgmtToken, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET timeline = %d %s", code, body)
+	}
+	for name, tok := range map[string]string{"instance token": lockTestToken, "view token": testMgmtToken} {
+		if frag, ok := tokenFragment(string(body), tok, keep); ok {
+			t.Errorf("the response holds %q of the %s", frag, name)
+		}
+	}
+	var out timelineBody
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	var cutSummaries int
+	var sawLong bool
+	for _, e := range out.Entries {
+		switch e.Subject {
+		case subject:
+			if strings.HasSuffix(e.Summary, "x***") {
+				cutSummaries++
+			} else {
+				t.Errorf("summary of a line with a token across the cut = %q, want it to end in ***", e.Summary)
+			}
+		case "dm:long":
+			sawLong = true
+			if !e.Truncated || len(e.Payload) > timelinePayloadMax || !strings.Contains(string(e.Payload), "***") {
+				t.Errorf("long payload: %d bytes truncated=%v, want it cut and masked", len(e.Payload), e.Truncated)
+			}
+		}
+	}
+	if cutSummaries != 2 || !sawLong {
+		t.Errorf("%d masked summaries (want 2), long payload seen=%v: %s", cutSummaries, sawLong, body)
+	}
+}

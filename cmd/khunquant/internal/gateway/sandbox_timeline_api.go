@@ -118,8 +118,6 @@ func serveTimeline(w http.ResponseWriter, r *http.Request, j *labjournal.Journal
 	lk, _ := sandbox.LockInfo()
 	resp := timelineResponse{Locked: true, Instance: lk.InstanceName, Entries: make([]timelineEntry, 0, len(es)),
 		NextSeq: after, Drops: j.Drops()}
-	// Masked before the payload is cut, so a token across the cut is not left as a prefix;
-	// the encoded body is masked again below.
 	mask := func(b []byte) []byte {
 		for _, tok := range []string{lk.Token, viewTok} {
 			if tok != "" {
@@ -129,7 +127,11 @@ func serveTimeline(w http.ResponseWriter, r *http.Request, j *labjournal.Journal
 		return b
 	}
 	for _, e := range es {
-		p, cut := capPayload(mask(e.Payload))
+		// Everything the summary and the payload are cut from is masked before the cut, so
+		// a token across a cut is not left as a prefix; the encoded body is masked again below.
+		e.Payload = mask(e.Payload)
+		e.Kind, e.Subject = string(mask([]byte(e.Kind))), string(mask([]byte(e.Subject)))
+		p, cut := capPayload(e.Payload)
 		resp.Entries = append(resp.Entries, timelineEntry{Seq: e.Seq, SimTime: e.SimTime.UTC(), WallTime: e.WallTime.UTC(),
 			Kind: e.Kind, Source: e.Source, Subject: e.Subject, Summary: labjournal.Summary(e), Payload: p, Truncated: cut})
 		resp.NextSeq = max(resp.NextSeq, e.Seq)

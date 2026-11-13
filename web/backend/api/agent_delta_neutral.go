@@ -86,6 +86,7 @@ type dnMonitorSnapshotDTO struct {
 	LiquidationPrice         float64   `json:"liquidation_price"`
 	LiquidationDistancePct   float64   `json:"liquidation_distance_pct"`
 	MarginRatioPct           float64   `json:"margin_ratio_pct"`
+	MarginRatioKnown         bool      `json:"margin_ratio_known"`
 	MarginState              string    `json:"margin_state"`
 	HealthScore              int       `json:"health_score"`
 	HealthLabel              string    `json:"health_label"`
@@ -805,6 +806,7 @@ func snapshotToDTO(s *deltaneutral.MonitorSnapshot) dnMonitorSnapshotDTO {
 		LiquidationPrice:         s.LiquidationPrice,
 		LiquidationDistancePct:   s.LiquidationDistancePct,
 		MarginRatioPct:           s.MarginRatioPct,
+		MarginRatioKnown:         s.MarginIsKnown(),
 		MarginState:              s.MarginState,
 		HealthScore:              s.HealthScore,
 		HealthLabel:              s.HealthLabel,

@@ -122,7 +122,8 @@ type Info struct {
 	ExitReason ExitReason `json:"exit_reason,omitempty"` // why it ended; exit 3 is lock_invariant, not a crash
 	StartedAt  time.Time  `json:"started_at"`
 	// Stale is a home with the instance marker whose process is gone (a supervisor that
-	// died). It is listed, never adopted: its token is unknown by design. Down removes it.
+	// died, or a home this one kept on down). It is listed, never adopted: its token is
+	// unknown by design. Down removes it.
 	Stale bool `json:"stale,omitempty"`
 	// Crash is the last crash at a point (the marker the process left); CrashRestarts counts
 	// them; Armed is the crash point armed and not yet fired; RestartError is why an

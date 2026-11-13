@@ -124,7 +124,7 @@ func (sim *StatefulSimulator) risksNow(venue string, st *VenueState) map[string]
 	return out
 }
 
-// cushion is the margin the wire shows ccxt for a position, floored above zero: ccxt
-// reads a negative margin ratio as a position it cannot report, and perception then drops
-// the whole account's sample.
+// cushion is the margin the wire shows ccxt for an isolated position (and for a Binance
+// one), floored above zero: ccxt derives a negative margin ratio from a negative margin,
+// and perception then drops the whole account's sample.
 func (r legRisk) cushion() float64 { return math.Max(r.Equity(), 1e-9) }

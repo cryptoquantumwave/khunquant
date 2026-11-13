@@ -22,8 +22,10 @@ type listServer struct {
 	mu      sync.Mutex
 	open    []ComboOrder
 	history []ComboOrder
+	detail  map[string]ComboOrder // by the client_order_id asked for; absent: 404
 	openQ   []map[string]string
 	histQ   []map[string]string
+	detailQ []string
 	placed  []string
 }
 
@@ -49,6 +51,16 @@ func (s *listServer) adapter(t *testing.T) *webullAdapter {
 		case endpointOrderHistory:
 			s.histQ = append(s.histQ, query())
 			_ = json.NewEncoder(w).Encode(s.history)
+		case endpointOrderDetail:
+			id := r.URL.Query().Get("client_order_id")
+			s.detailQ = append(s.detailQ, id)
+			c, ok := s.detail[id]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(ErrorResponse{ErrorCode: "ORDER_NOT_FOUND", Message: "order not found"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(c)
 		case endpointOrderPlace:
 			var req PlaceOrderRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.NewOrders) != 1 {
@@ -208,5 +220,94 @@ func TestReconcile_FullPageNeverReplacesTheOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The lookup by client order ID runs before the listings. A hit is the order, whatever the
+// listings show; anything else leaves the answer to the listings, as before.
+func TestReconcile_DetailIsAskedBeforeTheListings(t *testing.T) {
+	const key = "wf-1:place"
+	cid := broker.ClientOrderID(key, maxClientOrderIDLen)
+	first := time.Now().Add(-time.Hour) // far past the settle delay
+	req := broker.OrderRequest{Market: broker.OrderMarketSpot, Symbol: "AAPL/USD", Type: "market", Side: "buy", Amount: 10}
+	order := func(id, symbol, side, status string) ComboOrder {
+		return ComboOrder{ComboType: "NORMAL", Orders: []OrderItem{{
+			ClientOrderID: id, Symbol: symbol, Side: side, Status: status, OrderType: "MARKET", TotalQuantity: "10",
+		}}}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		open       []ComboOrder
+		detail     *ComboOrder
+		wantPlaced int
+		wantStatus string // of the order returned; "" when wantErr is set
+		wantErr    error
+	}{
+		// The two cases the listings get wrong or cannot answer.
+		{"resting, and the listings are empty (a short page, or a listing that lags)", nil, ptr(order(cid, "AAPL", "BUY", "SUBMITTED")), 0, "open", nil},
+		{"resting, beyond a full open page", combos(100, "SUBMITTED"), ptr(order(cid, "AAPL", "BUY", "SUBMITTED")), 0, "open", nil},
+		{"filled", nil, ptr(order(cid, "AAPL", "BUY", "FILLED")), 0, "closed", nil},
+		{"cancelled", nil, ptr(order(cid, "AAPL", "BUY", "CANCELLED")), 0, "canceled", nil},
+		// A miss proves nothing: the listings decide, exactly as without the lookup.
+		{"no such order (404): an empty listing is believed", nil, nil, 1, "", nil},
+		{"no such order (404): a full page stays inconclusive", combos(100, "SUBMITTED"), nil, 0, "", broker.ErrReconcileUnavailable},
+		{"a FAILED order is not one the listings keep: placed again, as before", nil, ptr(order(cid, "AAPL", "BUY", "FAILED")), 1, "", nil},
+		{"the answer is another order: ignored", nil, ptr(order("someoneelse", "AAPL", "BUY", "SUBMITTED")), 1, "", nil},
+		{"an empty answer: ignored", nil, &ComboOrder{ComboType: "NORMAL"}, 1, "", nil},
+		// A hit that is plainly not the requested order is for a person.
+		{"this ID on another symbol", nil, ptr(order(cid, "TSLA", "BUY", "SUBMITTED")), 0, "", broker.ErrReconcileAmbiguous},
+		{"this ID on the other side", nil, ptr(order(cid, "AAPL", "SELL", "SUBMITTED")), 0, "", broker.ErrReconcileAmbiguous},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &listServer{open: tc.open}
+			if tc.detail != nil {
+				s.detail = map[string]ComboOrder{cid: *tc.detail}
+			}
+			a := s.adapter(t)
+			o, err := broker.PlaceOrderIdempotent(context.Background(), a, req, key, 2, first)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+			case err != nil:
+				t.Fatalf("err = %v", err)
+			case o.Id == nil || *o.Id != cid:
+				t.Errorf("order id = %v, want %s", o.Id, cid)
+			case tc.wantStatus != "" && deref(o.Status) != tc.wantStatus:
+				t.Errorf("order status = %s, want %s", deref(o.Status), tc.wantStatus)
+			}
+			if got := s.placedIDs(); len(got) != tc.wantPlaced {
+				t.Errorf("place requests = %v, want %d", got, tc.wantPlaced)
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if len(s.detailQ) == 0 || s.detailQ[0] != cid {
+				t.Errorf("order/detail was asked for %v, want %s first", s.detailQ, cid)
+			}
+			// A hit ends the reconcile: the listings are not read.
+			if tc.wantStatus != "" && len(s.openQ)+len(s.histQ) != 0 {
+				t.Errorf("the listings were read %d times after a hit", len(s.openQ)+len(s.histQ))
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// The lookup is for equity orders by a client order ID: nothing else is asked.
+func TestProbeOrderByClientID_OnlySpotWithAnID(t *testing.T) {
+	s := &listServer{}
+	a := s.adapter(t)
+	for _, tc := range []struct{ market, id string }{{broker.OrderMarketFutures, "abc"}, {broker.OrderMarketSpot, ""}} {
+		if _, found := a.ProbeOrderByClientID(context.Background(), tc.market, "AAPL/USD", tc.id); found {
+			t.Errorf("market %q id %q: found", tc.market, tc.id)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.detailQ) != 0 {
+		t.Errorf("order/detail was asked: %v", s.detailQ)
 	}
 }

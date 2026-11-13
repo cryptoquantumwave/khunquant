@@ -13,11 +13,13 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 )
 
 // registerSandboxTools registers all sandbox fixture management tools with the MCP server.
 // These are write-capable tools, deliberately placed in a separate registration function
 // to make their intentional addition visible. They are gated on sandbox being enabled.
+// The four that write run under the lab's call lock when there is a lab (underLab).
 func registerSandboxTools(s *mcp.Server, d Deps) {
 	// Tool: sandbox_list_venues — no parameters, read-only
 	s.AddTool(&mcp.Tool{
@@ -51,7 +53,7 @@ func registerSandboxTools(s *mcp.Server, d Deps) {
 			},
 			"required":["venue","entries"]
 		}`),
-	}, sandboxWriteFixturesHandler(d))
+	}, underLab(d.Lab, sandboxWriteFixturesHandler(d)))
 
 	// Tool: sandbox_upsert_fixture — venue, method, path_prefix, and response parameters, write (gated)
 	s.AddTool(&mcp.Tool{
@@ -69,7 +71,7 @@ func registerSandboxTools(s *mcp.Server, d Deps) {
 			},
 			"required":["venue","method","path_prefix","status","body"]
 		}`),
-	}, sandboxUpsertFixtureHandler(d))
+	}, underLab(d.Lab, sandboxUpsertFixtureHandler(d)))
 
 	// Tool: sandbox_reload_fixtures — venue parameter, write (gated)
 	s.AddTool(&mcp.Tool{
@@ -81,14 +83,36 @@ func registerSandboxTools(s *mcp.Server, d Deps) {
 				"venue":{"type":"string","description":"Venue name (e.g., 'okx', 'binance'). Empty string reloads all venues."}
 			}
 		}`),
-	}, sandboxReloadFixturesHandler(d))
+	}, underLab(d.Lab, sandboxReloadFixturesHandler(d)))
 
 	// Tool: sandbox_reset_simulator — no parameters, write (gated)
 	s.AddTool(&mcp.Tool{
 		Name:        "sandbox_reset_simulator",
 		Description: "Reset the stateful simulator (in-memory balances, positions, orders). Gated on sandbox being enabled.",
 		InputSchema: json.RawMessage(`{"type":"object"}`),
-	}, sandboxResetSimulatorHandler(d))
+	}, underLab(d.Lab, sandboxResetSimulatorHandler(d)))
+}
+
+// underLab runs a write handler holding the lab's call lock shared, as a lab group op
+// does, so a snapshot take (which holds it exclusively) never copies the home while the
+// tool is half done (PR6-2). With no lab (an unlocked process) the handler runs as it is.
+func underLab(l *lab.Lab, h mcp.ToolHandler) mcp.ToolHandler {
+	if l == nil {
+		return h
+	}
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var (
+			res  *mcp.CallToolResult
+			herr error
+		)
+		if err := l.Shared(ctx, func() error {
+			res, herr = h(ctx, req)
+			return nil
+		}); err != nil {
+			return errorResult("the lab is busy: " + err.Error()), nil
+		}
+		return res, herr
+	}
 }
 
 // Helper: check if sandbox is enabled

@@ -97,7 +97,7 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asse
 			if res.Err != nil {
 				return res.Err
 			}
-			rows := earnRows(res.Boxed())
+			rows := earnRows(res.Untyped())
 			for _, row := range rows {
 				products = append(products, broker.EarnProduct{
 					Exchange:      Name,
@@ -134,7 +134,7 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]
 			if res.Err != nil {
 				return res.Err
 			}
-			rows := earnRows(res.Boxed())
+			rows := earnRows(res.Untyped())
 			for _, row := range rows {
 				positions = append(positions, broker.EarnPosition{
 					Exchange:      Name,
@@ -195,7 +195,7 @@ func (a *BinanceBrokerAdapter) SubscribeFlexibleEarn(ctx context.Context, produc
 		if res.Err != nil {
 			return res.Err
 		}
-		if m, ok := res.Boxed().(map[string]interface{}); ok {
+		if m, ok := res.Untyped().(map[string]interface{}); ok {
 			txID = earnAsString(m["purchaseId"])
 		}
 		return nil
@@ -227,7 +227,7 @@ func (a *BinanceBrokerAdapter) RedeemFlexibleEarn(ctx context.Context, productID
 		if res.Err != nil {
 			return res.Err
 		}
-		if m, ok := res.Boxed().(map[string]interface{}); ok {
+		if m, ok := res.Untyped().(map[string]interface{}); ok {
 			txID = earnAsString(m["redeemId"])
 		}
 		return nil
@@ -289,7 +289,7 @@ func (a *BinanceBrokerAdapter) FetchFlexibleEarnRateHistory(ctx context.Context,
 		if res.Err != nil {
 			return 0, res.Err
 		}
-		rows := earnRows(res.Boxed())
+		rows := earnRows(res.Untyped())
 		for _, row := range rows {
 			points = append(points, broker.EarnRatePoint{
 				Rate:      earnAsFloat(row["annualPercentageRate"]),

@@ -9,7 +9,7 @@ require (
 	github.com/atc0005/go-teams-notify/v2 v2.14.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/ccxt/ccxt/go/v4 v4.5.85
+	github.com/ccxt/ccxt/go/v4 v4.5.92
 	github.com/creack/pty v1.1.24
 	github.com/ergochat/irc-go v0.7.0
 	github.com/ergochat/readline v0.1.3

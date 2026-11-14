@@ -14,6 +14,17 @@ import (
 // errNoBackupAPI: the driver connection does not expose NewBackup (the driver moved).
 var errNoBackupAPI = errors.New("sqlitex: the driver has no online backup")
 
+// sqliteNotADB is SQLITE_NOTADB, the primary result code for "file is not a database".
+const sqliteNotADB = 26
+
+// IsNotADatabase says whether err is SQLite's own verdict that a file is not a database:
+// it read the first page and found no database header there. Any other failure of an open
+// or a backup (busy, I/O, a damaged page) is of a file that is, or may be, a database.
+func IsNotADatabase(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code()&0xff == sqliteNotADB
+}
+
 // driverBackup copies the database of one driver connection into dst with SQLite's online
 // backup API. A variable so a test can stand in a driver without it.
 var driverBackup = func(driverConn any, dst string) error {

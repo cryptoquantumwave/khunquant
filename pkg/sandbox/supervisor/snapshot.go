@@ -194,6 +194,11 @@ func (s *Supervisor) DeleteSnapshot(id string) error {
 		return err
 	}
 	dir := filepath.Join(root, id)
+	// Not while a restore is between its check of a snapshot and the end of its copy: the
+	// restore would lose its files after the old instance is already down. Before snapMu,
+	// as everywhere (see restoreMu).
+	s.restoreMu.Lock()
+	defer s.restoreMu.Unlock()
 	if _, err := labsnap.Read(dir); err != nil {
 		return fmt.Errorf("snapshot: no snapshot %q in the store", id)
 	}
@@ -210,8 +215,10 @@ type restoreSpec struct {
 
 // Restore starts the snapshot as a locked instance called name (empty: the instance it was
 // taken from), through Up. The sums, the version and the money rule are checked before any
-// home exists; a running instance of that name is taken down first. The clock is not set:
-// the snapshot's clock.json wins. Restoring into another name while the first runs is fine.
+// home exists; a running instance of that name is taken down first, once the options and
+// the fixtures listing, which Up checks before it makes a home, cannot refuse the start.
+// The snapshot cannot be deleted meanwhile. The clock is not set: the snapshot's clock.json wins. Restoring into another
+// name while the first runs is fine.
 func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info, error) {
 	root, err := s.snapshotRoot()
 	if err != nil {
@@ -220,6 +227,10 @@ func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info
 	if err := labsnap.ValidID(snapshotID); err != nil {
 		return Info{}, err
 	}
+	// A snapshot_delete of this id waits: between the check and the copy it would leave the
+	// old instance down, the restore failed and the snapshot gone.
+	s.restoreMu.RLock()
+	defer s.restoreMu.RUnlock()
 	dir := filepath.Join(root, snapshotID)
 	m, err := labsnap.Read(dir)
 	if err != nil {
@@ -245,15 +256,26 @@ func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info
 	if err != nil {
 		return Info{}, fmt.Errorf("snapshot: %w", err)
 	}
+	o := UpOptions{
+		Name: name, FixturesFrom: filepath.Join(dir, labsnap.HomeDir, "workspace", "sandbox"),
+		LLM: m.LLM, Seed: cmp.Or(m.Seed, "0"), Accounts: accounts, restore: &restoreSpec{dir: dir, m: m},
+	}
 	if _, err := s.lookup(name); err == nil {
+		// What Up checks before it makes a home is checked here first, while the instance
+		// still runs: a restore that is refused must not have taken it down. Not the memory
+		// floor: the old instance still holds its share, which the new one takes over, so
+		// the floor is read after the Down, by Up.
+		if _, _, err := s.upInputs(o, name); err != nil {
+			return Info{}, err
+		}
+		if _, err := listFixtures(o.FixturesFrom); err != nil {
+			return Info{}, err
+		}
 		if err := s.Down(ctx, name, false); err != nil {
 			return Info{}, err
 		}
 	}
-	info, err := s.Up(ctx, UpOptions{
-		Name: name, FixturesFrom: filepath.Join(dir, labsnap.HomeDir, "workspace", "sandbox"),
-		LLM: m.LLM, Seed: cmp.Or(m.Seed, "0"), Accounts: accounts, restore: &restoreSpec{dir: dir, m: m},
-	})
+	info, err := s.Up(ctx, o)
 	if err != nil {
 		return Info{}, err
 	}
@@ -305,23 +327,38 @@ func (r *restoreSpec) apply(home string, port int) error {
 	return nil
 }
 
+// maxRewriteBytes is the largest text file a restore reads whole to move the old home's
+// path in it: the instance wrote the file, and it is read in the supervisor's memory. A
+// larger one is copied as it is. A variable for tests.
+var maxRewriteBytes int64 = 16 << 20
+
+// restoreFile copies one file of the snapshot into the home. A text file up to
+// maxRewriteBytes has the old home's path moved to the new one; any other file is streamed.
 func restoreFile(src, dst string, olds []string, home string) error {
-	switch strings.ToLower(filepath.Ext(src)) {
-	case ".json", ".yml", ".yaml", ".jsonl":
-		b, err := os.ReadFile(src)
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	text := slices.Contains([]string{".json", ".yml", ".yaml", ".jsonl"}, strings.ToLower(filepath.Ext(src)))
+	if text && st.Size() <= maxRewriteBytes {
+		// One byte past the limit shows a file that grew after the Stat.
+		b, err := io.ReadAll(io.LimitReader(in, maxRewriteBytes+1))
 		if err != nil {
 			return err
+		}
+		if int64(len(b)) > maxRewriteBytes {
+			return fmt.Errorf("it grew past %d bytes while it was read", maxRewriteBytes)
 		}
 		for _, old := range olds {
 			b = labsnap.ReplaceHome(b, old, home)
 		}
 		return os.WriteFile(dst, b, 0o600)
 	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err

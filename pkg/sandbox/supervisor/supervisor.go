@@ -188,6 +188,10 @@ type Supervisor struct {
 	// snapMu serializes Snapshot across instances, so the count check against the cap and
 	// the move into the store are one step.
 	snapMu sync.Mutex
+	// restoreMu keeps a snapshot in the store from a restore's check of it to the end of the
+	// restore: Restore reads it, DeleteSnapshot writes it. It is taken with no other lock
+	// held, and Snapshot never takes it, so it comes before opMu and snapMu on every path.
+	restoreMu sync.RWMutex
 }
 
 // New checks the binary and returns a Supervisor. It never compiles anything.
@@ -249,20 +253,7 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	if name == "" {
 		name = "sbx-" + randomHex(4)
 	}
-	if err := validEnv(o.Env); err != nil {
-		return Info{}, err
-	}
-	env, err := o.childEnvOf(name, s.cfg.Getenv)
-	if err != nil {
-		return Info{}, err
-	}
-	if err := checkOverlay(o.ConfigPatch, o.Workspace); err != nil {
-		return Info{}, err
-	}
-	if err := cmp.Or(CheckAccounts(o.Accounts), CheckAccountPatch(o.ConfigPatch, o.Accounts)); err != nil {
-		return Info{}, err
-	}
-	home, err := instanceHome(s.cfg.TmpDir, name)
+	env, home, err := s.upInputs(o, name)
 	if err != nil {
 		return Info{}, err
 	}
@@ -308,6 +299,29 @@ func (s *Supervisor) Up(ctx context.Context, o UpOptions) (Info, error) {
 	}
 	ok = true
 	return in.info(), nil
+}
+
+// upInputs checks the options of an `up` called name and returns the child's environment
+// and the home's path. It touches nothing.
+func (s *Supervisor) upInputs(o UpOptions, name string) (map[string]string, string, error) {
+	if err := validEnv(o.Env); err != nil {
+		return nil, "", err
+	}
+	env, err := o.childEnvOf(name, s.cfg.Getenv)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := checkOverlay(o.ConfigPatch, o.Workspace); err != nil {
+		return nil, "", err
+	}
+	if err := cmp.Or(CheckAccounts(o.Accounts), CheckAccountPatch(o.ConfigPatch, o.Accounts)); err != nil {
+		return nil, "", err
+	}
+	home, err := instanceHome(s.cfg.TmpDir, name)
+	if err != nil {
+		return nil, "", err
+	}
+	return env, home, nil
 }
 
 // attempt is one try of Up: a new port, a client and URL for it, a home made from

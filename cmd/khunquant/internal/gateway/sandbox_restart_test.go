@@ -124,3 +124,71 @@ func TestReloadKeepingTheSandbox_StaysArmedBetweenServers(t *testing.T) {
 		t.Errorf("after the restart: enabled=%v base=%q", enabled, base)
 	}
 }
+
+// The sandbox state follows the reloaded config, whether or not a server is running
+// (AS2-7). When a server failed to start on an earlier reload, the state is armed with no
+// server; switching the sandbox off in the config used to leave it armed, so every exchange
+// call of a gateway that had left the sandbox kept failing until a restart.
+func TestSyncSandboxForReload_StateFollowsTheConfig(t *testing.T) {
+	t.Cleanup(func() { sandbox.SetGlobalState(false, "") })
+	state := func() string {
+		enabled, base := sandbox.GlobalState()
+		switch {
+		case !enabled:
+			return "off"
+		case base == "":
+			return "armed"
+		}
+		return "serving"
+	}
+
+	// A server that failed to restart: no server, state armed. Then the sandbox is switched off.
+	services := &gatewayServices{}
+	sandbox.SetGlobalState(true, "")
+	syncSandboxForReload(services, false, false)
+	if got := state(); got != "off" {
+		t.Errorf("sandbox off in the config with no server running: state %s, want off", got)
+	}
+
+	// The same state with the sandbox still on stays armed, and enabling from off arms it.
+	sandbox.SetGlobalState(true, "")
+	syncSandboxForReload(services, true, false)
+	if got := state(); got != "armed" {
+		t.Errorf("sandbox on with no server: state %s, want armed", got)
+	}
+	sandbox.SetGlobalState(false, "")
+	syncSandboxForReload(services, true, false)
+	if got := state(); got != "armed" {
+		t.Errorf("enabling the sandbox: state %s, want armed", got)
+	}
+
+	// With a server running: staying on keeps it armed between the servers, and switching
+	// off stops the server and clears the state.
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Debug.Sandbox.Enabled = true
+	cfg.Debug.Sandbox.Token = "test-token"
+	manager, err := channels.NewManager(cfg, bus.NewMessageBus(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services = &gatewayServices{ChannelManager: manager}
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
+		t.Fatal(err)
+	}
+	if got := state(); got != "serving" {
+		t.Fatalf("with the server up: state %s", got)
+	}
+	syncSandboxForReload(services, true, false)
+	if got := state(); got != "armed" || services.SandboxServer != nil {
+		t.Errorf("staying on: state %s, server %v, want armed and retired", got, services.SandboxServer)
+	}
+	if err := startAndRegisterSandbox(manager, cfg, services); err != nil {
+		t.Fatal(err)
+	}
+	old := services.SandboxServer
+	syncSandboxForReload(services, false, false)
+	if got := state(); got != "off" || old.IsRunning() || services.SandboxServer != nil {
+		t.Errorf("switching off: state %s, old server running %v, want off and stopped", got, old.IsRunning())
+	}
+}

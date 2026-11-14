@@ -45,10 +45,11 @@ type env struct {
 	workspace string
 	a         *webullAdapter
 
-	mu        sync.Mutex
-	journal   []sandbox.OrderEntry
-	hits      int
-	dropPlace bool // the next place is booked and its answer never arrives (written_then_timeout)
+	mu         sync.Mutex
+	journal    []sandbox.OrderEntry
+	hits       int
+	dropPlace  bool // the next place is booked and its answer never arrives (written_then_timeout)
+	failDetail bool // order/detail answers 400, so the lookup by client order ID finds nothing
 }
 
 func fixturesDir(t *testing.T) string {
@@ -115,7 +116,12 @@ func newEnv(t *testing.T, enable bool) *env {
 		if drop {
 			e.dropPlace = false
 		}
+		noDetail := e.failDetail && strings.HasSuffix(r.URL.Path, "/openapi/trade/order/detail")
 		e.mu.Unlock()
+		if noDetail {
+			http.Error(w, `{"error_code":"SYSTEM_ERROR","message":"Internal Server Error"}`, http.StatusBadRequest)
+			return
+		}
 		if drop {
 			router(httptest.NewRecorder(), r) // the venue wrote the order...
 			panic(http.ErrAbortHandler)       // ...and the connection dies before the answer

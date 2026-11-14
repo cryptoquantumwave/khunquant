@@ -242,6 +242,8 @@ func (p *placer) report(o PlaceOutcome, cid string) {
 //     caps at 100. That is why "none" from a shape match is never acted on.
 //     An adapter with a paged listing (PagedListings, Webull) reports the cut
 //     itself, from the raw page, for the open and the closed listing alike.
+//     It cannot report a page the exchange cut below the size asked for, nor a
+//     listing that lags: a ClientIDProbe (Webull) is asked for the order first.
 //   - In paper mode the simulation is in memory and forgets, and is not
 //     capable: its listings are empty, so a retry ends in ErrReconcileUnproven.
 //     Nothing is placed, in the simulation or anywhere, and no live call is made.
@@ -503,8 +505,25 @@ func (pl *placer) reconcile(ctx context.Context, p Provider, tgt target, req *Or
 			}
 			return ccxt.Order{}, false, nil
 		}
+		if o, found := probeByClientID(ctx, p, req, cid); found {
+			if disagrees(req, o) {
+				return ccxt.Order{}, false, newOrderError(ErrReconcileAmbiguous, req, cid, 1,
+					"an order with this client order ID has a different symbol or side", nil)
+			}
+			return o, true, nil
+		}
 	}
 	return pl.reconcileByListing(ctx, tgt, req, cid, first)
+}
+
+// probeByClientID asks an adapter that is a ClientIDProbe for the order. found is
+// false for every other adapter and for a miss, which proves nothing.
+func probeByClientID(ctx context.Context, p Provider, req *OrderRequest, cid string) (ccxt.Order, bool) {
+	pr, ok := p.(ClientIDProbe)
+	if !ok {
+		return ccxt.Order{}, false
+	}
+	return pr.ProbeOrderByClientID(ctx, req.Market, req.Symbol, cid)
 }
 
 // findByClientID is the single lookup used after a failed place call. ok is false
@@ -516,6 +535,9 @@ func (pl *placer) findByClientID(ctx context.Context, p Provider, tgt target, re
 			return ccxt.Order{}, false, false
 		}
 		return o, found, true
+	}
+	if o, found := probeByClientID(ctx, p, req, cid); found {
+		return o, true, true
 	}
 	lst, err := pl.list(ctx, tgt, req, time.Time{}, false)
 	if err != nil {

@@ -1210,14 +1210,55 @@ func equityClientOrderID(params map[string]interface{}) (string, error) {
 // the API takes a client_order_id of at most 32 characters and the order
 // listings return it (as Order.Id and Order.ClientOrderId). There is no
 // FetchOrderByClientID: FetchOrder fails with untyped strings, so "no such
-// order" cannot be told from an outage, and the reconcile searches the open and
-// closed listings instead. Whether Webull refuses a repeated client_order_id is
-// not established. Webull has no futures here.
+// order" cannot be told from an outage. The reconcile asks ProbeOrderByClientID
+// first and searches the open and closed listings when that finds nothing.
+// Whether Webull refuses a repeated client_order_id is not established (its
+// place-order page shows a TRADE_PLACE_ORDER_REPEAT example; no call here has
+// seen it). Webull has no futures here.
 func (a *webullAdapter) ClientOrderIDKey(market string) (string, int, bool) {
 	if market == broker.OrderMarketSpot {
 		return "client_order_id", maxClientOrderIDLen, true
 	}
 	return "", 0, false
+}
+
+var _ broker.ClientIDProbe = (*webullAdapter)(nil)
+
+// ProbeOrderByClientID asks order/detail for the order with this client_order_id.
+// Webull's own listing pages say they "may not return the most recent order data
+// in real time" and to "query the Order Detail endpoint by client_order_id" for
+// the current answer; a listing is also one page, which the venue may cut short.
+//
+// It reports a hit only for an order the listings would also return when they are
+// complete and current: one whose client_order_id is exactly the one asked for,
+// in a status the open listing (PENDING, SUBMITTED, PARTIAL_FILLED) or the closed
+// listing (FILLED, CANCELLED) keeps. Every failure and every other answer is a
+// miss, which proves nothing (broker.ClientIDProbe). An order of another symbol
+// keeps its own symbol, so the reconcile sees the disagreement.
+func (a *webullAdapter) ProbeOrderByClientID(ctx context.Context, market, symbol, clientOrderID string) (ccxt.Order, bool) {
+	if market != broker.OrderMarketSpot || clientOrderID == "" {
+		return ccxt.Order{}, false
+	}
+	combo, err := a.client.FetchOrderDetail(ctx, clientOrderID)
+	if err != nil || combo == nil {
+		return ccxt.Order{}, false
+	}
+	for i := range combo.Orders {
+		item := &combo.Orders[i]
+		if item.ClientOrderID != clientOrderID {
+			continue
+		}
+		switch strings.ToUpper(item.Status) {
+		case "PENDING", "SUBMITTED", "PARTIAL_FILLED", "FILLED", "CANCELLED":
+		default:
+			return ccxt.Order{}, false
+		}
+		if item.Symbol != toWebullSymbol(symbol) {
+			symbol = ""
+		}
+		return orderItemToCCXT(symbol, item), true
+	}
+	return ccxt.Order{}, false
 }
 
 // generateClientOrderID generates a unique client_order_id (≤32 chars).

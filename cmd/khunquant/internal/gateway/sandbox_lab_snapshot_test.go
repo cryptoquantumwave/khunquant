@@ -119,9 +119,19 @@ func TestSnapshotTake_LockedGateway(t *testing.T) {
 			t.Errorf("the snapshot took %s", p)
 		}
 	}
-	// A second take does not hold the first one.
-	if code, _ := labPost(t, f, "snapshot", `{"op":"take","id":"t-2"}`); code != http.StatusOK {
-		t.Fatal("second take failed")
+	// One snapshot at a time in the home (AS2-1): a second take is refused while the first
+	// is there, and accepted once the first is moved out, as the supervisor does. It does
+	// not hold the first one.
+	if code, out := labPost(t, f, "snapshot", `{"op":"take","id":"t-2"}`); code == http.StatusOK || !strings.Contains(toString(out), "one at a time") {
+		t.Fatalf("a second take with t-1 still in the home = %d %v, want a refusal", code, out)
+	}
+	moved := filepath.Join(t.TempDir(), "t-1")
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	dir = moved
+	if code, out := labPost(t, f, "snapshot", `{"op":"take","id":"t-2"}`); code != http.StatusOK {
+		t.Fatalf("second take = %d %v", code, out)
 	}
 	m2, err := labsnap.Verify(filepath.Join(f.lab.SnapshotsDir(), "t-2"), config.FormatVersion())
 	if err != nil {

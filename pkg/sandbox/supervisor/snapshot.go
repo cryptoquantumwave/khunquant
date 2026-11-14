@@ -27,6 +27,8 @@ var (
 	ErrMoneyAtRisk = errors.New("snapshot: refused for a live or record instance: spent budget must not be rolled back")
 	// ErrTooManySnapshots: the store holds as many snapshots as the cap allows.
 	ErrTooManySnapshots = errors.New("snapshot: the store is full")
+	// ErrStoreNotPrivate: the store exists and is not this user's own private directory.
+	ErrStoreNotPrivate = errors.New("snapshot: the store is not a private directory of this user")
 )
 
 // SnapshotInfo is a snapshot in the store.
@@ -36,11 +38,32 @@ type SnapshotInfo struct {
 	Bytes    int64            `json:"bytes"`
 }
 
+// snapshotStoreName is the store's directory under the temp dir. It shares the prefix of an
+// instance home, so no instance may be called "snapshots" (instanceHome): its home would be
+// the store, and its down would delete every snapshot.
+const snapshotStoreName = homePrefix + "snapshots"
+
 // snapshotRoot is the store, <TmpDir>/kq-sbx-snapshots: outside every instance home, so a
-// `down` does not delete a snapshot.
+// `down` does not delete a snapshot. A restore copies what the store holds into a home as
+// this user, so a store that already exists must be this user's own directory, closed to
+// everyone else, and not a link: in a temp directory shared with other users (/tmp) anyone
+// could have made it first. A store that does not exist yet is made 0700 by the first take.
 func (s *Supervisor) snapshotRoot() (string, error) {
 	base, err := filepath.Abs(s.cfg.TmpDir)
-	return filepath.Join(base, "kq-sbx-snapshots"), err
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(base, snapshotStoreName)
+	st, err := os.Lstat(root)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return root, nil
+	case err != nil:
+		return "", err
+	case !st.IsDir() || !privateToUs(st):
+		return "", fmt.Errorf("%w: %s", ErrStoreNotPrivate, root)
+	}
+	return root, nil
 }
 
 func moneyAtRisk(llm string) bool { return llm == "live" || llm == "record" }
@@ -97,15 +120,24 @@ func (s *Supervisor) Snapshot(ctx context.Context, name, label string) (Snapshot
 		return SnapshotInfo{}, err
 	}
 	id := nextSnapshotID(root, in.name, clock.Now)
+	// The instance keeps one snapshot at a time in its home. Whatever is there now was
+	// left by a take that never reached the store (a failed move, or a take sent to the
+	// instance directly): it is not in the store's count, so it goes.
+	pending := filepath.Join(in.home, "lab", "snapshots")
+	if err := os.RemoveAll(pending); err != nil {
+		return SnapshotInfo{}, fmt.Errorf("snapshot: clear %s: %w", pending, err)
+	}
 	body, _ := json.Marshal(map[string]string{"op": "take", "id": id, "label": label})
 	if err := labCall(ctx, in, "snapshot", string(body), nil); err != nil {
 		return SnapshotInfo{}, err
 	}
-	src, dst := filepath.Join(in.home, "lab", "snapshots", id), filepath.Join(root, id)
+	src, dst := filepath.Join(pending, id), filepath.Join(root, id)
 	if err := os.MkdirAll(root, 0o700); err != nil {
+		_ = os.RemoveAll(src)
 		return SnapshotInfo{}, err
 	}
 	if err := os.Rename(src, dst); err != nil {
+		_ = os.RemoveAll(src)
 		return SnapshotInfo{}, fmt.Errorf("snapshot: move to the store: %w", err)
 	}
 	m, err := labsnap.Read(dst)
@@ -196,7 +228,9 @@ func (s *Supervisor) Restore(ctx context.Context, snapshotID, name string) (Info
 	if m.BinaryVersion != config.FormatVersion() {
 		return Info{}, fmt.Errorf("%w: it was taken by %q, this binary is %q", ErrVersionMismatch, m.BinaryVersion, config.FormatVersion())
 	}
-	if _, err := labsnap.Verify(dir, config.FormatVersion()); err != nil {
+	// The manifest that was verified is the one restored from: not the first read, which a
+	// writer of the store could have swapped before the check.
+	if m, err = labsnap.Verify(dir, config.FormatVersion()); err != nil {
 		return Info{}, err
 	}
 	if moneyAtRisk(m.LLM) || slices.ContainsFunc(m.Files, func(f labsnap.FileEntry) bool { return f.Path == "lab/budget.json" }) {
@@ -248,7 +282,15 @@ func (r *restoreSpec) apply(home string, port int) error {
 		olds = append(olds, filepath.Join(res, filepath.Base(r.m.Home)))
 	}
 	for _, f := range r.m.Files {
+		// Verify checked both already; apply writes as the developer, so it does not rely
+		// on a check made earlier, on another read of the store.
+		if !filepath.IsLocal(filepath.FromSlash(f.Path)) {
+			return fmt.Errorf("sandbox restore: %q is not a plain relative path", f.Path)
+		}
 		src := filepath.Join(r.dir, labsnap.HomeDir, filepath.FromSlash(f.Path))
+		if st, err := os.Lstat(src); err != nil || !st.Mode().IsRegular() {
+			return fmt.Errorf("sandbox restore: %s is missing or not a regular file", f.Path)
+		}
 		dst := filepath.Join(home, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return err

@@ -71,6 +71,13 @@ func (l *Lab) snapshotTake(ctx context.Context, args json.RawMessage) (any, erro
 	if l.Clock.State().Mode != simclock.ModeManual {
 		return nil, Errorf(CodeFailed, "%v", ErrClockRunning)
 	}
+	// One snapshot at a time in the home. The supervisor moves each one to its store, which
+	// has the cap; a take that reaches this op directly (it is also a tool of the lab) would
+	// otherwise add a copy of the home, up to the size limit, on every call, in a directory
+	// the size limit does not count.
+	if ents, err := os.ReadDir(l.SnapshotsDir()); err == nil && len(ents) > 0 {
+		return nil, Errorf(CodeFailed, "snapshot %q is still in this instance's home; one at a time: the supervisor moves a snapshot to its store (sandbox_instance op=snapshot)", ents[0].Name())
+	}
 	if _, err := l.SettleWait(ctx, snapshotSettleCap); err != nil {
 		return nil, Errorf(CodeFailed, "snapshot: the instance is not settled: %v", err)
 	}

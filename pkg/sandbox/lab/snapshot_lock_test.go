@@ -101,6 +101,9 @@ func TestSnapshotTake_ExcludesOtherCalls(t *testing.T) {
 		if len(a) == 0 || string(a) != string(b) {
 			t.Fatalf("snapshot %s is torn: a=%q b=%q", id, a, b)
 		}
+		if err := os.RemoveAll(filepath.Join(l.SnapshotsDir(), id)); err != nil { // as the supervisor moves it out: one at a time
+			t.Fatal(err)
+		}
 	}
 	close(stop)
 	<-done

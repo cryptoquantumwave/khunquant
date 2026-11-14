@@ -31,7 +31,7 @@ func (r *Report) Verdict() string {
 // got, the journal entries around it and the model's calls.
 func (r *Report) Markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Scenario %s: %s\n\n", r.Scenario, r.Verdict())
+	fmt.Fprintf(&b, "# Scenario %s: %s\n\n", strings.TrimSpace(r.Scenario+" "+r.Tag()), r.Verdict())
 	if r.Skipped != "" {
 		fmt.Fprintf(&b, "Skipped: %s.\n", r.Skipped)
 		return b.String()

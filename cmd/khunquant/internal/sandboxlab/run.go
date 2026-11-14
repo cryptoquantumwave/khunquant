@@ -150,7 +150,7 @@ type runOptions struct {
 	llmModel, budget, seed, cassettes string
 	settleCap, timeout                time.Duration
 	exportReplay                      string
-	force                             bool
+	force, knownBugsMayFail           bool
 }
 
 func newRunCommand() *cobra.Command {
@@ -162,7 +162,9 @@ func newRunCommand() *cobra.Command {
 			"A path is a file or a directory; the default is " + scenario.DefaultDir + ". --llm picks the files by their llm\n" +
 			"field (offline by default: scripted and replay, which need no model API and no key; live needs " + sandbox.EnvLLMKey + ",\n" +
 			sandbox.EnvLLMModels + " (<protocol>/<model> entries) and --llm-model, --llm-budget, and is skipped without a key). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
-			"Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.",
+			"Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.\n" +
+			"--known-bugs-may-fail (the nightly known-bug job): a known_bug scenario that fails does not set the status, an active one still does,\n" +
+			"and a known_bug scenario that passes is a \"warning\" line, not a failure.",
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			cmd.SilenceUsage, cmd.SilenceErrors = true, true
 			return runScenarios(cmd, o, paths)
@@ -183,6 +185,7 @@ func newRunCommand() *cobra.Command {
 	f.StringVar(&o.budget, "llm-budget", "", "Live runs: spending cap per instance, e.g. 2USD or 200000tok (required for live)")
 	f.StringVar(&o.seed, "seed", "", "Seed of the instances' nonces and ids (default: derived from each instance name; 0: none)")
 	f.StringVar(&o.exportReplay, "export-replay", "", "After a passing run, write its journal as a replay case to <dir>/<scenario>/ (testdata/replay layout); refused when the case exists")
+	f.BoolVar(&o.knownBugsMayFail, "known-bugs-may-fail", false, "A known_bug scenario whose expectation fails does not fail the run (an active one, an invalid scenario and an infrastructure failure still do)")
 	f.BoolVar(&o.force, "force", false, "With --export-replay: replace a replay case that already exists (a directory holding anything else is refused)")
 	f.StringVar(&o.cassettes, "cassettes", "", "Directory of <scenario>.jsonl cassettes for replay scenarios (default: testdata/cassettes)")
 	return cmd
@@ -275,13 +278,16 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 		}
 		reports = append(reports, rep)
 		md.WriteString(rep.Markdown() + "\n")
-		exit = worse(exit, rep.ExitCode())
+		exit = worse(exit, rep.GateExitCode(o.knownBugsMayFail))
 		if !o.jsonOut {
 			if rep.Skipped != "" { // say why: a skipped live scenario is not a passed one
 				fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%s)\n", rep.Verdict(), rep.Scenario, rep.Skipped)
 				continue
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%d of %d runs)\n", rep.Verdict(), rep.Scenario, rep.Passed, len(rep.Runs))
+			fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%d of %d runs)\n", rep.Verdict(), strings.TrimSpace(rep.Scenario+" "+rep.Tag()), rep.Passed, len(rep.Runs))
+			if rep.KnownBugFixed() {
+				fmt.Fprintf(cmd.OutOrStdout(), "warning  known-bug scenario %s passed; the defect looks fixed, so flip its status to active and drop known_bug\n", rep.Scenario)
+			}
 			for _, res := range rep.Runs {
 				if res.Exported != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "exported %s\n", res.Exported)

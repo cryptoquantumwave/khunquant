@@ -83,7 +83,7 @@ func (r *Runner) logf(format string, a ...any) {
 // Run runs every matrix row of f, f.Runs times each. It returns an error only when ctx
 // ends; a run that cannot start or loses its instance is a Result with Infra set.
 func (r *Runner) Run(ctx context.Context, f *File) (*Report, error) {
-	rep := &Report{Scenario: f.Scenario, Status: f.Status}
+	rep := &Report{Scenario: f.Scenario, Status: f.Status, KnownBug: f.KnownBug}
 	if f.IsKnownBug() && !r.KnownBugs {
 		rep.Skipped = "known_bug " + f.KnownBug
 		return rep, nil

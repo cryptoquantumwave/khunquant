@@ -41,6 +41,12 @@ function formatNum(n: number, digits = 4): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: 2 })
 }
 
+// The API says whether the margin ratio is a reading. A response from before the flag has
+// none: a non-zero value is a reading, an exact 0 is not (the old writer stored 0 for both).
+function marginRatioKnown(snap: DeltaNeutralMonitorSnapshot): boolean {
+  return snap.margin_ratio_known ?? snap.margin_ratio_pct !== 0
+}
+
 function healthLabelColor(label: string): string {
   if (!label) return "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
   const lower = label.toLowerCase()
@@ -364,7 +370,7 @@ function SnapshotTable({
                   {formatNum(snap.liquidation_distance_pct, 2)}%
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-xs">
-                  {formatNum(snap.margin_ratio_pct, 2)}%
+                  {marginRatioKnown(snap) ? `${formatNum(snap.margin_ratio_pct, 2)}%` : "unknown"}
                 </td>
                 <td className="px-3 py-2 text-center">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${healthLabelColor(snap.health_label)}`}>

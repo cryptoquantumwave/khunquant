@@ -119,7 +119,11 @@ func (t *GetDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]a
 		out += fmt.Sprintf("  Delta drift:        %.2f%%\n", snapshot.DeltaDriftPct)
 		out += fmt.Sprintf("  Current funding:    %.4f%% (est next: %.4f USDT)\n", snapshot.CurrentFundingRate*100, snapshot.EstimatedNextFundingUSDT)
 		out += fmt.Sprintf("  Liquidation dist:   %.2f%% (price: %.4f)\n", snapshot.LiquidationDistancePct, snapshot.LiquidationPrice)
-		out += fmt.Sprintf("  Margin ratio:       %.2f%% (%s)\n", snapshot.MarginRatioPct, snapshot.MarginState)
+		if snapshot.MarginIsKnown() {
+			out += fmt.Sprintf("  Margin ratio:       %.2f%% (%s)\n", snapshot.MarginRatioPct, snapshot.MarginState)
+		} else {
+			out += fmt.Sprintf("  Margin ratio:       unknown (%s)\n", snapshot.MarginState)
+		}
 
 		spotPnL := snapshot.SpotValueUSDT - plan.SpotNotionalUSDT
 		netPnL := snapshot.FuturesUnrealizedPnLUSDT + spotPnL

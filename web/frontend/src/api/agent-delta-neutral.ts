@@ -63,6 +63,8 @@ export interface DeltaNeutralMonitorSnapshot {
   liquidation_price: number
   liquidation_distance_pct: number
   margin_ratio_pct: number
+  /** false: margin_ratio_pct 0 means unknown. Absent in older API responses. */
+  margin_ratio_known?: boolean
   margin_state: string
   health_score: number
   health_label: string

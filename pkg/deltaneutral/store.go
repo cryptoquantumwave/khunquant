@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS delta_neutral_monitor_snapshots (
     liquidation_price          REAL    NOT NULL DEFAULT 0,
     liquidation_distance_pct   REAL    NOT NULL DEFAULT 0,
     margin_ratio_pct           REAL    NOT NULL DEFAULT 0,
+    margin_ratio_known         INTEGER NOT NULL DEFAULT 0,
     margin_state               TEXT    NOT NULL DEFAULT '',
 
     health_score               INTEGER NOT NULL DEFAULT 0,
@@ -218,6 +219,9 @@ var migrations = []string{
 	`ALTER TABLE delta_neutral_monitor_snapshots ADD COLUMN combined_apy_90d_pct  REAL NOT NULL DEFAULT 0;`,
 	`ALTER TABLE delta_neutral_monitor_snapshots ADD COLUMN combined_apy_180d_pct REAL NOT NULL DEFAULT 0;`,
 	`ALTER TABLE delta_neutral_monitor_snapshots ADD COLUMN combined_apy_365d_pct REAL NOT NULL DEFAULT 0;`,
+	// A row stored before this column has 0: it reads as known when margin_ratio_pct is not 0
+	// (MonitorSnapshot.MarginIsKnown), and as unknown when it is exactly 0.
+	`ALTER TABLE delta_neutral_monitor_snapshots ADD COLUMN margin_ratio_known INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Alert represents a delta-neutral alert in the database.
@@ -756,10 +760,10 @@ func (s *Store) SaveSnapshot(ctx context.Context, snapshot *MonitorSnapshot) (in
 		  combined_apy_90d_pct, combined_apy_180d_pct, combined_apy_365d_pct,
 		  estimated_next_funding_usdt, funding_state, delta_drift_pct,
 		  entry_spread_pct, exit_spread_pct,
-		  liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_state,
+		  liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_ratio_known, margin_state,
 		  health_score, health_label, cross_exchange, threshold_breached, breach_codes_json,
 		  data_status, error_msg, agent_invoked, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		snapshot.PlanID, snapshot.CheckedAt.Format(time.RFC3339),
 		snapshot.SpotPrice, snapshot.SpotQuantity, snapshot.SpotValueUSDT,
 		snapshot.FuturesMarkPrice, snapshot.FuturesContracts, snapshot.FuturesNotionalUSDT,
@@ -771,7 +775,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, snapshot *MonitorSnapshot) (in
 		snapshot.EstimatedNextFundingUSDT, snapshot.FundingState,
 		snapshot.DeltaDriftPct, snapshot.EntrySpreadPct, snapshot.ExitSpreadPct,
 		snapshot.LiquidationPrice, snapshot.LiquidationDistancePct,
-		snapshot.MarginRatioPct, snapshot.MarginState,
+		snapshot.MarginRatioPct, boolToInt(snapshot.MarginIsKnown()), snapshot.MarginState,
 		snapshot.HealthScore, snapshot.HealthLabel, boolToInt(snapshot.CrossExchange),
 		boolToInt(snapshot.ThresholdBreached), breachCodesJSON,
 		snapshot.DataStatus, snapshot.ErrorMsg, boolToInt(snapshot.AgentInvoked),
@@ -806,7 +810,7 @@ func (s *Store) ListSnapshots(ctx context.Context, planID int64, limit, offset i
 		        combined_apy_90d_pct, combined_apy_180d_pct, combined_apy_365d_pct,
 		        estimated_next_funding_usdt, funding_state, delta_drift_pct,
 		        entry_spread_pct, exit_spread_pct,
-		        liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_state,
+		        liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_ratio_known, margin_state,
 		        health_score, health_label, cross_exchange, threshold_breached, breach_codes_json,
 		        data_status, error_msg, agent_invoked, created_at
 		 FROM delta_neutral_monitor_snapshots
@@ -841,7 +845,7 @@ func (s *Store) LatestSnapshot(ctx context.Context, planID int64) (*MonitorSnaps
 		        combined_apy_90d_pct, combined_apy_180d_pct, combined_apy_365d_pct,
 		        estimated_next_funding_usdt, funding_state, delta_drift_pct,
 		        entry_spread_pct, exit_spread_pct,
-		        liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_state,
+		        liquidation_price, liquidation_distance_pct, margin_ratio_pct, margin_ratio_known, margin_state,
 		        health_score, health_label, cross_exchange, threshold_breached, breach_codes_json,
 		        data_status, error_msg, agent_invoked, created_at
 		 FROM delta_neutral_monitor_snapshots
@@ -1571,7 +1575,7 @@ func scanPlan(scan func(dest ...any) error) (*Plan, error) {
 func scanSnapshot(scan func(dest ...any) error) (*MonitorSnapshot, error) {
 	var s MonitorSnapshot
 	var checkedAt, createdAt string
-	var crossExchangeInt, thresholdBreachedInt, agentInvokedInt int
+	var crossExchangeInt, thresholdBreachedInt, agentInvokedInt, marginKnownInt int
 	var breachCodesJSON string
 
 	err := scan(
@@ -1585,7 +1589,7 @@ func scanSnapshot(scan func(dest ...any) error) (*MonitorSnapshot, error) {
 		&s.EstimatedNextFundingUSDT, &s.FundingState,
 		&s.DeltaDriftPct, &s.EntrySpreadPct, &s.ExitSpreadPct,
 		&s.LiquidationPrice, &s.LiquidationDistancePct,
-		&s.MarginRatioPct, &s.MarginState,
+		&s.MarginRatioPct, &marginKnownInt, &s.MarginState,
 		&s.HealthScore, &s.HealthLabel, &crossExchangeInt,
 		&thresholdBreachedInt, &breachCodesJSON,
 		&s.DataStatus, &s.ErrorMsg, &agentInvokedInt,
@@ -1597,6 +1601,7 @@ func scanSnapshot(scan func(dest ...any) error) (*MonitorSnapshot, error) {
 
 	s.CheckedAt, _ = time.Parse(time.RFC3339, checkedAt)
 	s.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	s.MarginRatioKnown = marginKnownInt != 0 || s.MarginRatioPct != 0
 	s.CrossExchange = crossExchangeInt != 0
 	s.ThresholdBreached = thresholdBreachedInt != 0
 	s.AgentInvoked = agentInvokedInt != 0

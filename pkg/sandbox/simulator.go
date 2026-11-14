@@ -779,13 +779,17 @@ func (sim *StatefulSimulator) binanceErrorResponse(httpStatus int, code int, msg
 }
 
 // okxPositionToWireFormat converts a Position to OKX wire format. r is its risk
-// (margin.go). ccxt (v4.5.85) ignores mgnRatio and derives the ratio itself as mmr over
-// the position's collateral: imr + upl for cross, margin for isolated. imr and margin
-// therefore carry the cushion that backs the position (floored above zero), so that
-// ratio is the fraction of it that maintenance takes, 1 at the liquidation price.
-// mgnRatio is OKX's own convention, equity over maintenance, for a reader of the wire.
+// (margin.go). mgnRatio is OKX's own convention, equity over maintenance, 1 at the
+// liquidation price: it is what the OKX adapter reads (okx.FixPositionMarginRatio).
+// ccxt (v4.5.85) ignores it and derives a ratio itself, as mmr over imr + upl for a
+// cross position. imr is therefore sent as OKX sends it, the initial margin
+// requirement (notional / leverage), so that ccxt's ratio goes wrong here exactly as
+// it does on the real venue: negative once the loss passes imr. A reader that takes
+// ccxt's number unfixed fails in the lab too. For an isolated position ccxt divides
+// mmr by margin, which carries the cushion that backs it (floored above zero).
 func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position, r legRisk) map[string]interface{} {
-	mode, margin, imr := "cross", "", formatNumber(r.cushion()-r.UPnL)
+	notional := math.Abs(pos.base()) * pos.MarkPrice
+	mode, margin, imr := "cross", "", formatNumber(notional/float64(max(pos.Leverage, 1)))
 	if pos.isolated() {
 		mode, margin, imr = "isolated", formatNumber(r.cushion()), ""
 	}
@@ -812,7 +816,7 @@ func (sim *StatefulSimulator) okxPositionToWireFormat(pos *Position, r legRisk) 
 		"mmr":         formatNumber(r.Maint),
 		"imr":         imr,
 		"margin":      margin,
-		"notionalUsd": formatNumber(math.Abs(pos.base()) * pos.MarkPrice),
+		"notionalUsd": formatNumber(notional),
 		"cTime":       strconv.FormatInt(pos.UpdatedAt.UnixMilli(), 10),
 		"uTime":       strconv.FormatInt(pos.UpdatedAt.UnixMilli(), 10),
 	}

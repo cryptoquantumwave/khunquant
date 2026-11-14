@@ -166,6 +166,7 @@ type MonitorSnapshot struct {
 	LiquidationPrice         float64   `json:"liquidation_price"`
 	LiquidationDistancePct   float64   `json:"liquidation_distance_pct"`
 	MarginRatioPct           float64   `json:"margin_ratio_pct"`
+	MarginRatioKnown         bool      `json:"margin_ratio_known"` // false: MarginRatioPct 0 means unknown; read via MarginIsKnown
 	MarginState              string    `json:"margin_state"`
 	HealthScore              int       `json:"health_score"`
 	HealthLabel              string    `json:"health_label"`
@@ -200,7 +201,18 @@ type FuturesState struct {
 	UnrealizedPnLUSDT float64
 	LiquidationPrice  float64
 	MarginRatioPct    float64
+	// MarginRatioKnown: the exchange gave a margin ratio. When false MarginRatioPct is 0
+	// and means "unknown". Use MarginIsKnown.
+	MarginRatioKnown bool
 }
+
+// MarginIsKnown reports whether MarginRatioPct is a reading. A non-zero value always is;
+// an exact 0 is a reading only when the flag says so, so a state built without the flag
+// (or a row stored before it existed) with 0 reads as unknown, the fail-safe reading.
+func (f FuturesState) MarginIsKnown() bool { return f.MarginRatioKnown || f.MarginRatioPct != 0 }
+
+// MarginIsKnown reports whether MarginRatioPct is a reading; see FuturesState.MarginIsKnown.
+func (s MonitorSnapshot) MarginIsKnown() bool { return s.MarginRatioKnown || s.MarginRatioPct != 0 }
 
 // FundingInfo describes funding rate and next payment estimates
 type FundingInfo struct {

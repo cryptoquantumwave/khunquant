@@ -11,14 +11,19 @@ const mcpServerName = "khunquant-sandbox"
 
 // mcpConfig is the MCP client entry that starts `<binary> sandbox mcp`: the shape of the
 // repository's .mcp.json, for clients (Cursor, Claude Desktop) that need their own copy.
-// It carries no environment and no credential; the supervisor locks every instance itself.
+// Its only environment is the instance cap (one, the supervisor's default, made visible and
+// editable); it carries no credential, and the supervisor locks every instance itself.
 func mcpConfig(binary string) ([]byte, error) {
 	type entry struct {
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
 	}
 	b, err := json.MarshalIndent(map[string]map[string]entry{
-		"mcpServers": {mcpServerName: {Command: binary, Args: []string{"sandbox", "mcp"}}},
+		"mcpServers": {mcpServerName: {
+			Command: binary, Args: []string{"sandbox", "mcp"},
+			Env: map[string]string{"KQ_SANDBOX_MAX_INSTANCES": "1"},
+		}},
 	}, "", "  ")
 	return append(b, '\n'), err
 }

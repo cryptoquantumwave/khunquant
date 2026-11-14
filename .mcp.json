@@ -5,7 +5,10 @@
       "args": [
         "sandbox",
         "mcp"
-      ]
+      ],
+      "env": {
+        "KQ_SANDBOX_MAX_INSTANCES": "1"
+      }
     }
   }
 }

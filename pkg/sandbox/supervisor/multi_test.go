@@ -173,7 +173,21 @@ func TestSupervisor_InstanceRequiredWhenSeveral(t *testing.T) {
 	}
 }
 
-// A marker that names its supervisor keeps the home out of the stale list while that
+// liveProcess starts a process that lives until the test ends: the pid of another supervisor.
+func liveProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sleep", "600")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// A marker that names another supervisor keeps the home out of the stale list while that
 // supervisor lives, even with a dead gateway pid: `down` cannot remove it and `list`
 // leaves its pid file alone. With the supervisor dead it is stale like any other.
 func TestSupervisor_StaleNeedsTheSupervisorGone(t *testing.T) {
@@ -202,8 +216,8 @@ func TestSupervisor_StaleNeedsTheSupervisorGone(t *testing.T) {
 		}
 		return home, pidFile
 	}
-	liveHome, livePid := mk("owned", os.Getpid()) // gateway dead, supervisor (this test) alive
-	goneHome, _ := mk("orphan", dead.Process.Pid) // gateway and supervisor dead
+	liveHome, livePid := mk("owned", liveProcess(t)) // gateway dead, its supervisor (another process) alive
+	goneHome, _ := mk("orphan", dead.Process.Pid)    // gateway and supervisor dead
 
 	list := s.List()
 	if len(list) != 1 || list[0].Name != "orphan" || !list[0].Stale {
@@ -224,6 +238,82 @@ func TestSupervisor_StaleNeedsTheSupervisorGone(t *testing.T) {
 	if _, err := os.Stat(goneHome); !os.IsNotExist(err) {
 		t.Errorf("Down left the orphan home: %v", err)
 	}
+}
+
+// A home this supervisor kept on down is nobody's: its marker names this process, which
+// no longer tracks it. Once it is old enough it is stale, and Down of its name (what MCP
+// `down` calls) removes it and frees the name. A home of another live supervisor and an
+// instance this one still tracks, running or dead, are not stale (PR6-3).
+func TestSupervisor_KeptHomeIsStale(t *testing.T) {
+	base := sandboxEnv(t)
+	s := multiSup(t, base, 2)
+	ctx := context.Background()
+	aged := func(home string) {
+		t.Helper()
+		old := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(filepath.Join(home, ".kq-sandbox"), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	infos := upNamed(t, s, "kept", "tracked")
+	kept, tracked := infos[0], infos[1]
+	for _, i := range infos {
+		if got := markerSupervisor(i.Home); got != os.Getpid() {
+			t.Fatalf("%s: the marker names supervisor %d, want this process", i.Name, got)
+		}
+	}
+	aged(tracked.Home)
+	other := filepath.Join(base, "kq-sbx-other")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := fmt.Sprintf("other\nsupervisor=%d\n", liveProcess(t))
+	if err := os.WriteFile(filepath.Join(other, ".kq-sandbox"), []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aged(other)
+
+	if err := s.Down(ctx, "kept", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(kept.Home); err != nil {
+		t.Fatalf("down keep_home did not keep the home: %v", err)
+	}
+	if l := s.List(); len(l) != 1 || l[0].Name != "tracked" {
+		t.Fatalf("List right after down keep_home = %+v, want no stale home: the kept one is younger than staleAfter", l)
+	}
+	aged(kept.Home)
+	wantList := func(when string, trackedState State) {
+		t.Helper()
+		l := s.List()
+		if len(l) != 2 || l[0].Name != "tracked" || l[0].Stale || l[0].State != trackedState || l[1].Name != "kept" || !l[1].Stale {
+			t.Fatalf("List %s = %+v, want tracked (%s) and the kept home as stale", when, l, trackedState)
+		}
+	}
+	wantList("with the kept home old enough", StateRunning)
+	// A tracked instance whose gateway died is kept for its log and a restart: not stale.
+	if err := syscall.Kill(tracked.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "tracked to exit", func() bool { i, _ := s.Get("tracked"); return i.State == StateExited })
+	wantList("with the tracked gateway dead", StateExited)
+
+	if _, err := s.Up(ctx, UpOptions{Name: "kept", FixturesFrom: repoFixtures(t)}); err == nil || !strings.Contains(err.Error(), "sandbox down kept") {
+		t.Errorf("up over the kept home: %v, want the down hint", err)
+	}
+	if err := s.Down(ctx, "other", false); err == nil {
+		t.Error("Down removed a home whose supervisor, another process, is alive")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("the home of another live supervisor is gone: %v", err)
+	}
+	if err := s.Down(ctx, "kept", false); err != nil {
+		t.Fatalf("Down of a home this supervisor kept: %v", err)
+	}
+	if _, err := os.Stat(kept.Home); !os.IsNotExist(err) {
+		t.Errorf("Down left the kept home: %v", err)
+	}
+	upNamed(t, s, "kept") // the name is free again
 }
 
 func TestSupervisor_StaleHomeListed(t *testing.T) {

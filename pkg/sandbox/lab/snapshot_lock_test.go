@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,5 +142,87 @@ func TestSnapshotTake_WaitEndsWithItsContext(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(l.SnapshotsDir(), "w-1")); err == nil {
 		t.Error("the refused take left a directory")
+	}
+}
+
+// Shared is the section a writer outside the groups takes (the dev-MCP fixture and
+// simulator tools). It and an exclusive call keep each other out, two shared sections
+// overlap, and a wait that ends with its context never runs the section (PR6-2).
+func TestShared_ExcludesAnExclusiveCall(t *testing.T) {
+	l := &Lab{}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	hold := func(ctx context.Context, _ json.RawMessage) (any, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := l.AddGroup(Group{Name: "hold", Ops: []Op{{Name: "hold", Run: hold, Exclusive: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	bg := context.Background()
+	exclusive := make(chan error, 1)
+	callHold := func() {
+		_, err := l.Call(bg, "hold", "hold", nil)
+		exclusive <- err
+	}
+
+	// An exclusive call in flight: a shared section waits, and gives up with its context.
+	go callHold()
+	<-started
+	short, cancel := context.WithTimeout(bg, 50*time.Millisecond)
+	ran := false
+	err := l.Shared(short, func() error { ran = true; return nil })
+	cancel()
+	if err == nil || ran || !strings.Contains(err.Error(), "waiting for other lab calls") {
+		t.Fatalf("Shared during an exclusive call: err = %v, ran = %v; want it to wait and not run", err, ran)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- l.Shared(bg, func() error { return nil }) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("Shared returned (%v) while an exclusive call held the lock", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release <- struct{}{}
+	if err := <-exclusive; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-waited; err != nil {
+		t.Fatalf("Shared after the exclusive call: %v", err)
+	}
+
+	// A shared section in flight: another one runs beside it, an exclusive call waits.
+	in, out := make(chan struct{}), make(chan struct{})
+	section := make(chan error, 1)
+	go func() { section <- l.Shared(bg, func() error { close(in); <-out; return nil }) }()
+	<-in
+	if err := l.Shared(bg, func() error { return nil }); err != nil {
+		t.Fatalf("a second shared section: %v", err)
+	}
+	short, cancel = context.WithTimeout(bg, 50*time.Millisecond)
+	_, err = l.Call(short, "hold", "hold", nil)
+	cancel()
+	if err == nil || !strings.Contains(err.Error(), "waiting for other lab calls") {
+		t.Fatalf("an exclusive call during a shared section: err = %v, want it to wait", err)
+	}
+	close(out)
+	if err := <-section; err != nil {
+		t.Fatal(err)
+	}
+
+	// Neither refused wait left the lock held, and Shared returns what f returns.
+	go callHold()
+	<-started
+	release <- struct{}{}
+	if err := <-exclusive; err != nil {
+		t.Fatalf("an exclusive call after the shared section: %v", err)
+	}
+	failed := errors.New("f failed")
+	if err := l.Shared(bg, func() error { return failed }); !errors.Is(err, failed) {
+		t.Fatalf("Shared = %v, want the error of f", err)
 	}
 }

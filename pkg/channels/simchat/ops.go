@@ -32,6 +32,13 @@ func schema(props ...string) json.RawMessage {
 
 func decode(args json.RawMessage, v any) error {
 	// Strict: a misspelt key (mentoin: true) is a refusal, not a silently ignored argument.
+	// The lab's own op key travels in the body (the HTTP route and the scenario runner send it).
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(args, &body); err != nil {
+		return lab.Errorf(lab.CodeBadArgs, "%v", err)
+	}
+	delete(body, "op")
+	args, _ = json.Marshal(body)
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

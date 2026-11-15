@@ -59,6 +59,9 @@ func TestSnapshotTake_RefusesRunningClock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), ErrClockRunning.Error()) {
 		t.Fatalf("realtime: err = %v, want %v", err, ErrClockRunning)
 	}
+	if !strings.Contains(err.Error(), "start the instance with clock_mode manual") {
+		t.Fatalf("realtime: err = %v, want the clock_mode manual hint", err)
+	}
 	if _, err := os.Stat(filepath.Join(l.SnapshotsDir(), "c-1")); err == nil {
 		t.Error("a refused take left a directory")
 	}

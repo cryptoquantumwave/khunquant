@@ -174,6 +174,9 @@ func TestClockGroup_Ops(t *testing.T) {
 	if !strings.Contains(err.Error(), simclock.ErrNotManual.Error()) {
 		t.Fatalf("err = %v, want ErrNotManual", err)
 	}
+	if !strings.Contains(err.Error(), "start the instance with clock_mode manual") {
+		t.Fatalf("err = %v, want the hint to start the instance with clock_mode manual", err)
+	}
 	if got, err = call(t, l, `{"op":"set_mode","mode":"manual"}`); err != nil || got["mode"] != "manual" {
 		t.Fatalf("set_mode manual = %v, %v", got, err)
 	}

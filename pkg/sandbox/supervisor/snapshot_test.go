@@ -307,8 +307,8 @@ func TestSupervisor_RestoreRefusesTamperedOrForeign(t *testing.T) {
 func TestSupervisor_SnapshotRefusals(t *testing.T) {
 	s, _ := snapSupervisor(t, 1, "--clock-mode=scaled")
 	setup(t, s, "a", UpOptions{})
-	if _, err := s.Snapshot(context.Background(), "a", ""); !errors.Is(err, ErrClockRunning) {
-		t.Fatalf("scaled clock: err = %v, want ErrClockRunning", err)
+	if _, err := s.Snapshot(context.Background(), "a", ""); !errors.Is(err, ErrClockRunning) || !strings.Contains(err.Error(), "start the instance with clock_mode manual") {
+		t.Fatalf("scaled clock: err = %v, want ErrClockRunning with the clock_mode manual hint", err)
 	}
 	if err := s.Down(context.Background(), "a", false); err != nil {
 		t.Fatal(err)

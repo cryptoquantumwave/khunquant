@@ -512,7 +512,7 @@ func (b *BinanceExchange) paginateEarnPositions(
 			if ep.Err != nil {
 				return nil, fmt.Errorf("%s: %w", errorContext, compactCCXTError(ep.Err))
 			}
-			res = ep.Boxed()
+			res = ep.Untyped()
 		}
 		if ccxt.IsError(res) {
 			return nil, fmt.Errorf("%s: %w", errorContext, compactCCXTError(ccxt.CreateReturnError(res)))

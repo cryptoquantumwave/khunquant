@@ -60,14 +60,14 @@ func TestPinnedCCXT_MapsClientOrderIDToNewClientOrderId(t *testing.T) {
 			ex := ccxt.NewBinance(map[string]any{})
 			return func(m any) any { return ex.SetMarkets(m) },
 				func(s string, p map[string]any) any {
-					return ex.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
+					return ex.CreateOrderRequest(s, "limit", ccxt.SafeStringPtr("buy"), 0.01, 100.0, p)
 				}
 		}, "BTC/USDT", false},
 		{"usdm swap", func() (func(any) any, func(string, map[string]any) any) {
 			ex := ccxt.NewBinanceusdm(map[string]any{})
 			return func(m any) any { return ex.SetMarkets(m) },
 				func(s string, p map[string]any) any {
-					return ex.CreateOrderRequest(s, "limit", "buy", 0.01, 100.0, p)
+					return ex.CreateOrderRequest(s, "limit", ccxt.SafeStringPtr("buy"), 0.01, 100.0, p)
 				}
 		}, "BTC/USDT:USDT", true},
 	}

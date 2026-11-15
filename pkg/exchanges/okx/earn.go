@@ -94,7 +94,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asset st
 		if res.Err != nil {
 			return res.Err
 		}
-		for _, row := range okxData(res.Boxed()) {
+		for _, row := range okxData(res.Untyped()) {
 			products = append(products, broker.EarnProduct{
 				Exchange:     Name,
 				Asset:        okxString(row["ccy"]),
@@ -119,7 +119,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnProducts(_ context.Context, asset st
 			if res.Err != nil {
 				return nil // supplemental: ignore auth/permission errors
 			}
-			for _, row := range okxData(res.Boxed()) {
+			for _, row := range okxData(res.Untyped()) {
 				if okxString(row["state"]) != "purchasable" {
 					continue
 				}
@@ -181,7 +181,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 		if res.Err != nil {
 			return res.Err
 		}
-		for _, row := range okxData(res.Boxed()) {
+		for _, row := range okxData(res.Untyped()) {
 			asset := okxString(row["ccy"])
 			if !has(asset) {
 				positions = append(positions, broker.EarnPosition{
@@ -205,7 +205,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		m, ok := res.Boxed().(map[string]interface{})
+		m, ok := res.Untyped().(map[string]interface{})
 		if !ok {
 			return nil
 		}
@@ -239,7 +239,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		for _, row := range okxData(res.Boxed()) {
+		for _, row := range okxData(res.Untyped()) {
 			asset := okxString(row["ccy"])
 			frozen := okxFloat(row["frozenBal"])
 			if frozen > 0 && !has(asset) {
@@ -263,7 +263,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnPositions(_ context.Context) ([]brok
 		if res.Err != nil {
 			return nil // supplemental: ignore error
 		}
-		for _, row := range okxData(res.Boxed()) {
+		for _, row := range okxData(res.Untyped()) {
 			asset := okxString(row["ccy"])
 			state := okxString(row["state"])
 			// Skip terminal/exit states (2=Redeeming, 13=Cancelling); count all others.
@@ -314,7 +314,7 @@ func (a *OKXBrokerAdapter) purchaseRedempt(asset string, amount float64, side st
 		if res.Err != nil {
 			return res.Err
 		}
-		for _, row := range okxData(res.Boxed()) {
+		for _, row := range okxData(res.Untyped()) {
 			txID = okxString(row["ccy"]) + ":" + okxString(row["side"])
 		}
 		return nil
@@ -392,7 +392,7 @@ func (a *OKXBrokerAdapter) FetchFlexibleEarnRateHistory(_ context.Context, _ /*p
 			if res.Err != nil {
 				return res.Err
 			}
-			rows := okxData(res.Boxed())
+			rows := okxData(res.Untyped())
 			if len(rows) == 0 {
 				break
 			}

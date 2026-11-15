@@ -80,6 +80,15 @@ type World struct {
 	st     chanState
 }
 
+// DefaultPersonas are the personas of a world whose config names none; a scenario's chat
+// targets are checked against them.
+func DefaultPersonas() []config.SimChatPersona {
+	return []config.SimChatPersona{{Name: "owner"}, {Name: "stranger"}, {Name: "alice"}, {Name: "bob"}}
+}
+
+// DefaultGroups are the groups of a world whose config names none.
+func DefaultGroups() map[string][]string { return map[string][]string{"team": {"alice", "bob"}} }
+
 // NewWorld builds the world from the first config of the process; the personas are
 // fixed from then on. now is read on every use.
 func NewWorld(j Journal, now func() time.Time, cfg config.SimChatConfig) *World {
@@ -87,13 +96,13 @@ func NewWorld(j Journal, now func() time.Time, cfg config.SimChatConfig) *World 
 		byID: map[string]*OutMsg{}, st: chanState{kind: stateUp}}
 	ps := cfg.Personas
 	if len(ps) == 0 {
-		ps = []config.SimChatPersona{{Name: "owner"}, {Name: "stranger"}, {Name: "alice"}, {Name: "bob"}}
+		ps = DefaultPersonas()
 	}
 	for _, p := range ps {
 		w.personas[p.Name] = p
 	}
 	if len(w.groups) == 0 {
-		w.groups = map[string][]string{"team": {"alice", "bob"}}
+		w.groups = DefaultGroups()
 	}
 	w.nextID = resumeCounter(j)
 	return w

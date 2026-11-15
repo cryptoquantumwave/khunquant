@@ -104,23 +104,32 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Report, error) {
 		sctx, cancel = context.WithTimeoutCause(ctx, r.Timeout, errTimeout)
 		defer cancel()
 	}
+	rep.Pass = true
 	for _, g := range files {
+		row := RowResult{Matrix: g.MatrixRow}
 		for i := 1; i <= g.RunCount(); i++ {
 			if err := ctx.Err(); err != nil {
 				return rep, err
 			}
+			row.Runs++
 			if sctx.Err() != nil { // the cap ended an earlier run: the rest do not start
 				rep.Runs = append(rep.Runs, &Result{Scenario: g.Scenario, Matrix: g.MatrixRow, Run: i, StartSim: g.StartTime(), Infra: errTimeout.Error()})
 				continue
 			}
 			res := r.runOnce(sctx, g, i)
 			if res.Pass {
+				row.Passed++
 				rep.Passed++
 			}
 			rep.Runs = append(rep.Runs, res)
 		}
+		// Each matrix row meets pass_rate on its own: pooled, a row that fails every time
+		// would hide behind the rows that pass.
+		row.Pass = float64(row.Passed)/float64(row.Runs) >= f.RequiredPassRate()
+		rep.Rows = append(rep.Rows, row)
+		rep.Pass = rep.Pass && row.Pass
 	}
-	rep.Pass = len(rep.Runs) > 0 && float64(rep.Passed)/float64(len(rep.Runs)) >= f.RequiredPassRate()
+	rep.Pass = rep.Pass && len(rep.Runs) > 0
 	return rep, nil
 }
 
@@ -261,14 +270,38 @@ func (r *Runner) stepWall() time.Duration {
 	return 20 * time.Second
 }
 
-// zoneOf is the profile's time zone (UTC when it names none or one that does not load).
+// zoneOf is the time zone of `during` and `next HH:MM`: the profile's, else the fixed
+// offset clock.start is written in (UTC when it does not parse; Validate refuses that).
 func zoneOf(f *File) *time.Location {
 	if name, _ := f.Profile["timezone"].(string); name != "" {
 		if loc, err := time.LoadLocation(name); err == nil {
 			return loc
 		}
 	}
+	if t, err := time.Parse(time.RFC3339, f.Clock.Start); err == nil {
+		_, off := t.Zone()
+		return time.FixedZone(t.Format("-07:00"), off)
+	}
 	return time.UTC
+}
+
+// Warnings are what a loader should say about a valid file: a scenario that reads the
+// clock in a time zone (`during`, `run_until: next HH:MM`) without saying which one gets
+// the offset of clock.start, which is a fixed offset and has no daylight saving.
+func Warnings(f *File) []string {
+	if name, _ := f.Profile["timezone"].(string); name != "" {
+		return nil
+	}
+	zoned := slices.ContainsFunc(f.Expect, func(e Expectation) bool { return e.During != "" })
+	for _, st := range f.Timeline {
+		if v, ok := st.Scalar(); ok && st.Kind == "run_until" && strings.HasPrefix(strings.TrimSpace(v), "next ") {
+			zoned = true
+		}
+	}
+	if !zoned {
+		return nil
+	}
+	return []string{fmt.Sprintf("/profile/timezone is not set: during and next HH:MM use the offset of clock.start (%s)", zoneOf(f))}
 }
 
 // CapsOf is what an instance offers: its lab groups with their ops, and its journal kinds.

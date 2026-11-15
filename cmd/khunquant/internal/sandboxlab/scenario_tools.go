@@ -158,8 +158,12 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	if a.Runs > 0 {
 		f.Runs = a.Runs
 	}
-	if f.Runs > maxMCPRuns {
-		return errResult("sandbox_scenario run: %d runs; at most %d through MCP (use khunquant sandbox run for more)", f.Runs, maxMCPRuns), nil
+	total := f.RunCount() // every matrix row runs f.Runs times
+	for _, vals := range f.Matrix {
+		total *= len(vals)
+	}
+	if total > maxMCPRuns {
+		return errResult("sandbox_scenario run: %d runs in all (runs x matrix rows); at most %d through MCP (use khunquant sandbox run for more)", total, maxMCPRuns), nil
 	}
 	if a.Export != "" {
 		if err := mcpExportDir(a.Export); err != nil {

@@ -166,7 +166,13 @@ func TestInspectServiceOps(t *testing.T) {
 	deps := inspect.Deps{
 		Workflows: func(_ context.Context, f journal.ListFilter) ([]journal.Workflow, error) {
 			gotFilter = f
-			return []journal.Workflow{{ID: "1", Kind: "dca.execute"}, {ID: "2", Kind: "approval.order"}}, nil
+			var out []journal.Workflow // the engine filters the kind, as the real one does
+			for _, w := range []journal.Workflow{{ID: "1", Kind: "dca.execute"}, {ID: "2", Kind: "approval.order"}} {
+				if f.Kind == "" || w.Kind == f.Kind {
+					out = append(out, w)
+				}
+			}
+			return out, nil
 		},
 		Pending: func(context.Context) ([]approval.PendingView, time.Time, error) {
 			return []approval.PendingView{{Code: "ABC123", Summary: "buy"}}, time.Unix(100, 0), nil
@@ -186,7 +192,7 @@ func TestInspectServiceOps(t *testing.T) {
 	if len(ws) != 1 || ws[0].(map[string]any)["ID"] != "2" {
 		t.Errorf("workflows = %v, want only the approval.order one", ws)
 	}
-	if gotFilter.Limit != 7 || len(gotFilter.Statuses) != 2 || gotFilter.Statuses[0] != journal.StatusRunning {
+	if gotFilter.Kind != "approval.order" || gotFilter.Limit != 7 || len(gotFilter.Statuses) != 2 || gotFilter.Statuses[0] != journal.StatusRunning {
 		t.Errorf("filter passed to the engine = %+v", gotFilter)
 	}
 	out = r.mustCall("proposals", `{}`)

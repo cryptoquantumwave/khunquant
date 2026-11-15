@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
@@ -25,6 +26,8 @@ type env struct {
 	start time.Time // clock.start: the origin of within offsets
 	loc   *time.Location
 	logs  func() ([]string, error) // nil: no log source
+	// reached is the sim time the run got to; nil reads the instance's clock (a test sets it).
+	reached func(context.Context) (time.Time, error)
 	cache map[string]*fetched
 }
 
@@ -107,6 +110,12 @@ func (v *env) eval(ctx context.Context, i int, e *Expectation) (ExpectResult, []
 		return r, nil
 	}
 	r.Want = p.want + countText(e.Count, lo, hi) + windowText(e)
+	if lo == 0 && hi >= 0 && e.Within != nil { // an absence check: the run must have seen the whole window
+		if msg := v.windowNotReached(ctx, from, to, hasTo); msg != "" {
+			r.Got = msg
+			return r, nil
+		}
+	}
 	all, err := v.entriesOf(ctx, p.kinds)
 	if err != nil {
 		r.Got, r.err = "the journal could not be read: "+err.Error(), err
@@ -206,6 +215,30 @@ func countText(raw string, lo, hi int) string {
 	return ""
 }
 
+// windowNotReached says why an absence window cannot be judged: the run's sim clock stopped
+// before the window ended (or began), so part of it was never simulated and "nothing
+// happened" holds only because nothing could have. "" when the run reached the whole window.
+func (v *env) windowNotReached(ctx context.Context, from, to time.Duration, hasTo bool) string {
+	read := v.reached
+	if read == nil {
+		read = func(ctx context.Context) (time.Time, error) { return clockNow(ctx, v.c) }
+	}
+	reached, err := read(ctx)
+	if err != nil {
+		return "the sim clock could not be read to check the window: " + err.Error()
+	}
+	end := v.start.Add(from)
+	what := "starts"
+	if hasTo {
+		end, what = v.start.Add(to), "ends"
+	}
+	if reached.Before(end) {
+		return fmt.Sprintf("the window %s at %s but the run reached only %s: an absence over time the run never simulated proves nothing; run on to %s or shorten the window",
+			what, end.Format(time.RFC3339), reached.Format(time.RFC3339), end.Format(time.RFC3339))
+	}
+	return ""
+}
+
 func windowText(e *Expectation) string {
 	s := ""
 	if e.Within != nil {
@@ -284,7 +317,7 @@ func shorthand(fields map[string]any, table map[string]string) (paths, rest map[
 // exchange.order replaces this, and adds symbol, side and the rest).
 var orderPaths = map[string][]string{
 	"binance":  {"/fapi/v1/order", "/fapi/v3/order", "/api/v3/order"},
-	"okx":      {"/api/v5/trade/order"},
+	"okx":      {"/api/v5/trade/order", "/api/v5/trade/batch-orders"}, // ccxt creates through batch-orders
 	"bitkub":   {"/api/v3/market/place-bid", "/api/v3/market/place-ask"},
 	"settrade": {"/api/seos/v3/"}, // the only POST under it is an order create (login is /api/oam)
 	"webull":   {"/openapi/trade/order/place"},
@@ -445,23 +478,42 @@ func (v *env) evalOther(ctx context.Context, r ExpectResult, e *Expectation, lo,
 			r.Got += ": " + strings.Join(bad[:min(len(bad), 3)], " | ")
 		}
 	case "workflow":
-		r.Want = describe("workflow", f) + countText(e.Count, lo, hi)
-		raw, err := call(ctx, v.c, "inspect", "workflows", map[string]any{"kind": f["kind"]})
+		r.Want = describe("workflow", f) + countText(e.Count, lo, hi) + windowText(e)
+		// The kind and the state are in the query, so the row limit cannot hide a match; a
+		// workflow counts when it was created inside within / during (sim time).
+		args := map[string]any{"kind": f["kind"], "limit": journal.MaxListLimit}
+		if state, _ := f["state"].(string); state != "" {
+			args["status"] = []string{state}
+		}
+		raw, err := call(ctx, v.c, "inspect", "workflows", args)
 		if err != nil {
 			r.Got = err.Error()
 			return r, nil
 		}
 		var out struct {
-			Workflows []struct{ Kind, Status string }
+			Workflows []struct{ CreatedAt time.Time }
 		}
-		_ = json.Unmarshal(raw, &out)
+		if err := json.Unmarshal(raw, &out); err != nil {
+			r.Got = "the workflows could not be read: " + err.Error()
+			return r, nil
+		}
+		from, to, hasTo, _ := e.Within.Bounds()
+		dFrom, dTo := 0, 0
+		if e.During != "" {
+			dFrom, dTo, _ = ParseDuring(e.During)
+		}
 		n := 0
 		for _, w := range out.Workflows {
-			if state, _ := f["state"].(string); state == "" || w.Status == state {
-				n++
+			at := w.CreatedAt
+			if at.Before(v.start.Add(from)) || (hasTo && at.After(v.start.Add(to))) || (e.During != "" && !within(at.In(v.loc), dFrom, dTo)) {
+				continue
 			}
+			n++
 		}
 		r.OK, r.Got = n >= lo && (hi < 0 || n <= hi), fmt.Sprintf("%d workflows", n)
+		if len(out.Workflows) >= journal.MaxListLimit {
+			r.OK, r.Got = false, fmt.Sprintf("%d or more workflows of that kind: the list is cut at %d, so the count is not known", n, journal.MaxListLimit)
+		}
 	case "probe":
 		r.OK, r.Want, r.Got = v.probe(ctx, f)
 	}

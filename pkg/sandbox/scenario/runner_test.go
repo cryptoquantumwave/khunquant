@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -153,6 +154,49 @@ func TestRunner_RunsAndPassRate(t *testing.T) {
 	}
 	if rep := runOne(t, sup, scenarioOf(t, "runs: 5\npass_rate: 0.8\n")); rep.Pass || rep.ExitCode() != ExitFailed {
 		t.Errorf("3 of 5 at 0.8 must fail: pass=%v exit %d", rep.Pass, rep.ExitCode())
+	}
+}
+
+// pass_rate holds per matrix row (TRUST-6): a row that fails every time is not carried by
+// the rows that pass, and a row that meets the rate with a failed run says it was flaky.
+func TestRunner_PassRateIsPerMatrixRow(t *testing.T) {
+	const body = "matrix: {m: [a, b]}\nruns: 4\npass_rate: 0.5\n"
+	lossy := func(bad ...int) func(int, *fakeInstance) {
+		return func(n int, in *fakeInstance) {
+			if slices.Contains(bad, n) {
+				in.j.AddDropSource(func() uint64 { return 1 })
+			}
+		}
+	}
+	// Row a fails all 4 runs, row b passes all 4: pooled that is 4 of 8 = 0.5, a pass.
+	sup := newFakeSup(t)
+	sup.onUp = lossy(1, 2, 3, 4)
+	rep := runOne(t, sup, scenarioOf(t, body))
+	if rep.Pass || rep.ExitCode() != ExitFailed || rep.Passed != 4 || len(rep.Rows) != 2 || rep.Rows[0].Pass || !rep.Rows[1].Pass {
+		t.Fatalf("pass=%v exit %d passed %d rows %+v: row a never passed and must fail the scenario", rep.Pass, rep.ExitCode(), rep.Passed, rep.Rows)
+	}
+	if got := rep.RowLines(); len(got) != 2 || got[0] != "[m=a]: FAIL (0 of 4)" || got[1] != "[m=b]: pass" {
+		t.Errorf("row lines = %q", got)
+	}
+	// Each row meets the rate, row b with one failed run.
+	sup = newFakeSup(t)
+	sup.onUp = lossy(1, 2, 5)
+	rep = runOne(t, sup, scenarioOf(t, body))
+	if !rep.Pass || rep.ExitCode() != 0 {
+		t.Fatalf("pass=%v exit %d: both rows are at 0.5 or above", rep.Pass, rep.ExitCode())
+	}
+	if got := rep.RowLines(); len(got) != 2 || got[0] != "[m=a]: pass (flaky, 2 of 4)" || got[1] != "[m=b]: pass (flaky, 3 of 4)" {
+		t.Errorf("row lines = %q", got)
+	}
+}
+
+// A runs override reaches every matrix row (RDY-5): Expand decodes each row again.
+func TestRunner_RunsOverrideReachesMatrixRows(t *testing.T) {
+	f := scenarioOf(t, "matrix: {m: [a, b, c]}\nruns: 5\n")
+	f.Runs = 1
+	sup := newFakeSup(t)
+	if rep := runOne(t, sup, f); sup.ups() != 3 || len(rep.Runs) != 3 {
+		t.Errorf("%d instances, %d runs; runs: 1 over 3 rows is 3", sup.ups(), len(rep.Runs))
 	}
 }
 

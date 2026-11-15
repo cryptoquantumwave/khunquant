@@ -18,6 +18,9 @@ type ListFilter struct {
 	Statuses []Status
 	// Since limits the result to workflows created at or after it; zero means any age.
 	Since time.Time
+	// Kind limits the result to workflows of this kind, before Limit applies; empty means
+	// every kind.
+	Kind string
 	// Limit bounds the number of rows (DefaultListLimit when zero, never more than
 	// MaxListLimit). The newest come first.
 	Limit int
@@ -58,6 +61,10 @@ func (s *store) listWorkflows(ctx context.Context, f ListFilter) ([]Workflow, er
 	}
 	q := `SELECT ` + workflowCols + ` FROM workflows WHERE created_at_ms >= ?`
 	args := []any{since}
+	if f.Kind != "" {
+		q += ` AND kind = ?`
+		args = append(args, f.Kind)
+	}
 	if len(f.Statuses) > 0 {
 		q += ` AND status IN ` + inClause(len(f.Statuses))
 		for _, st := range f.Statuses {

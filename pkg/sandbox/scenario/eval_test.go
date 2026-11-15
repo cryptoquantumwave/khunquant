@@ -11,6 +11,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
 	"github.com/cryptoquantumwave/khunquant/pkg/channels/simchat"
 	"github.com/cryptoquantumwave/khunquant/pkg/events"
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
@@ -25,12 +26,19 @@ var (
 // evalFixture is a fake instance with a journal the test fills with entries made the
 // way the real producers make them, and an env that reads it through the lab client.
 type evalFixture struct {
-	t  *testing.T
-	in *fakeInstance
+	t   *testing.T
+	sup *fakeSup
+	in  *fakeInstance
 	v  *env
 }
 
-func newEvalFixture(t *testing.T) *evalFixture {
+// newEvalFixture is an instance whose clock has reached 48 h past the start, far enough
+// for every window the tests use.
+func newEvalFixture(t *testing.T) *evalFixture { return newEvalFixtureReached(t, 48*time.Hour) }
+
+// newEvalFixtureReached is an instance whose sim clock stopped reach after the start: an
+// absence window is judged only as far as the run got.
+func newEvalFixtureReached(t *testing.T, reach time.Duration) *evalFixture {
 	t.Helper()
 	sup := newFakeSup(t)
 	info, err := sup.Up(context.Background(), supervisor.UpOptions{ClockStart: evalStart.Format(time.RFC3339), ClockMode: "manual"})
@@ -41,7 +49,9 @@ func newEvalFixture(t *testing.T) *evalFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &evalFixture{t: t, in: sup.order[0], v: newEnv(c, evalStart, ict)}
+	v := newEnv(c, evalStart, ict)
+	v.reached = func(context.Context) (time.Time, error) { return evalStart.Add(reach), nil } // the entries carry sim times of their own
+	return &evalFixture{t: t, sup: sup, in: sup.order[0], v: v}
 }
 
 // chatOut journals what simchat journals for a send: the OutMsg and sandbox:true.
@@ -95,7 +105,7 @@ func TestEval_MessageWithinDuring(t *testing.T) {
 	// to: a persona list and a group glob.
 	f.check(`{message: {to: [stranger, "group:*"], count: 0}}`, false)
 	f.check(`{message: {to: "group:*", count: 1}}`, true)
-	f.check(`{message: {to: "group:other", count: 0}}`, true)
+	f.check(`{message: {to: bob, count: 0}}`, true)
 
 	// severity, buttons, contains.
 	f.check(`{message: {to: owner, severity: warning, buttons: [mute], count: 1}}`, true)
@@ -208,11 +218,14 @@ func TestEval_OrderFallbackBefore14a(t *testing.T) {
 	req("okx", "GET", "/api/v5/market/ticker", 200)
 	req("binance", "POST", "/fapi/v1/order", 200)
 	req("binance", "POST", "/fapi/v1/leverage", 200)
+	req("okx", "POST", "/api/v5/trade/batch-orders", 200) // how ccxt creates an OKX order
 
-	f.check(`order: {venue: okx, count: 1}`, true)
-	f.check(`order: {venue: binance, count: 1}`, true)
-	f.check(`order: {count: 2}`, true)
+	// With no venue, or Bitkub (which has no ledger), the request log is read.
+	f.check(`order: {count: 3}`, true)
 	f.check(`order: {venue: bitkub, count: 0}`, true)
+	req("bitkub", "POST", "/api/v3/market/place-bid", 200)
+	f.check(`order: {venue: bitkub, count: 1}`, true)
+	f.check(`order: {count: 4}`, true)
 
 	// What the request log cannot answer is refused up front, not guessed.
 	sc := parseString(t, "version: 1\nscenario: t\nclock: {start: \"2026-10-20T09:00:00+07:00\"}\nexpect:\n  - order: {venue: okx, symbol: BTC/USDT, count: 1}\n")
@@ -423,4 +436,50 @@ func TestEval_ProbeFailsWhenItsCallFails(t *testing.T) {
 	// No answer at all: the instance is gone. (The id has no digit: an error names 127.0.0.1.)
 	f.in.srv.Close()
 	f.check(`probe: {alert_job_exists: dca-btc, equals: false}`, false)
+}
+
+// A workflow check reads the kind through the query, so a limit cannot hide it (TRUST-11),
+// and honours within and during on the workflow's creation time.
+func TestEval_WorkflowKindWindowAndLimit(t *testing.T) {
+	f := newEvalFixture(t)
+	var got journal.ListFilter
+	f.sup.workflows = func(_ context.Context, lf journal.ListFilter) ([]journal.Workflow, error) {
+		got = lf
+		// 300 workflows of another kind are newer than the two of the kind asked for.
+		var out []journal.Workflow
+		for range 300 {
+			if lf.Kind == "" || lf.Kind == "other" {
+				out = append(out, journal.Workflow{Kind: "other", Status: journal.StatusRunning, CreatedAt: evalStart.Add(2 * time.Hour)})
+			}
+		}
+		if lf.Kind == "" || lf.Kind == "dca.execute" {
+			out = append(out, journal.Workflow{Kind: "dca.execute", Status: journal.StatusRunning, CreatedAt: evalStart.Add(5 * time.Minute)},
+				journal.Workflow{Kind: "dca.execute", Status: journal.StatusRunning, CreatedAt: evalStart.Add(90 * time.Minute)})
+		}
+		return out, nil
+	}
+	f.check("workflow: {kind: dca.execute}\n    count: 2", true)
+	if got.Kind != "dca.execute" || got.Limit != journal.MaxListLimit {
+		t.Errorf("the engine was asked %+v: the kind belongs in the query, with the largest limit", got)
+	}
+	f.check("workflow: {kind: dca.execute, state: running}\n    count: 1\n    within: {from: 0m, to: 1h}", true)
+	f.check("workflow: {kind: dca.execute}\n    count: 0\n    within: {from: 2h, to: 3h}", true)
+	f.check("workflow: {kind: dca.execute}\n    count: 1\n    during: \"10:00-11:00\"", true) // 09:05 is outside, 10:30 inside (ICT)
+	r := f.check("workflow: {kind: dca.execute}\n    count: 2\n    within: {from: 0m, to: 1h}", false)
+	if !strings.Contains(r.Want, "within") || r.Got != "1 workflows" {
+		t.Errorf("want %q got %q", r.Want, r.Got)
+	}
+}
+
+// A kind whose list reaches the engine's limit cannot be counted, so the check fails
+// instead of reporting a floor.
+func TestEval_WorkflowListCutAtTheLimitFails(t *testing.T) {
+	f := newEvalFixture(t)
+	f.sup.workflows = func(context.Context, journal.ListFilter) ([]journal.Workflow, error) {
+		return make([]journal.Workflow, journal.MaxListLimit), nil
+	}
+	r := f.check("workflow: {kind: dca.execute}\n    count: 0", false)
+	if !strings.Contains(r.Got, "cut at") {
+		t.Errorf("got %q", r.Got)
+	}
 }

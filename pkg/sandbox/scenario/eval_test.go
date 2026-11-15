@@ -218,11 +218,14 @@ func TestEval_OrderFallbackBefore14a(t *testing.T) {
 	req("okx", "GET", "/api/v5/market/ticker", 200)
 	req("binance", "POST", "/fapi/v1/order", 200)
 	req("binance", "POST", "/fapi/v1/leverage", 200)
+	req("okx", "POST", "/api/v5/trade/batch-orders", 200) // how ccxt creates an OKX order
 
-	f.check(`order: {venue: okx, count: 1}`, true)
-	f.check(`order: {venue: binance, count: 1}`, true)
-	f.check(`order: {count: 2}`, true)
+	// With no venue, or Bitkub (which has no ledger), the request log is read.
+	f.check(`order: {count: 3}`, true)
 	f.check(`order: {venue: bitkub, count: 0}`, true)
+	req("bitkub", "POST", "/api/v3/market/place-bid", 200)
+	f.check(`order: {venue: bitkub, count: 1}`, true)
+	f.check(`order: {count: 4}`, true)
 
 	// What the request log cannot answer is refused up front, not guessed.
 	sc := parseString(t, "version: 1\nscenario: t\nclock: {start: \"2026-10-20T09:00:00+07:00\"}\nexpect:\n  - order: {venue: okx, symbol: BTC/USDT, count: 1}\n")

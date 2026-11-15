@@ -147,14 +147,24 @@ func payloadShape(kind string) (shape, bool) {
 	return s, ok
 }
 
-// OrderJournalKind is the kind an order expectation reads: exchange.order when it asks
-// for anything beyond the venue (the request log has no symbol, side or order ids),
-// else the request log.
+// ledgerVenues are the venues whose orders the simulator's ledger journals (exchange.order):
+// every simulated venue but Bitkub, which has only recorded fixtures and so only the
+// request log.
+var ledgerVenues = []string{"binance", "okx", "settrade", "webull"}
+
+// OrderJournalKind is the kind an order expectation reads: exchange.order (one create entry
+// per order the venue accepted, whatever path the adapter used) for anything beyond the
+// venue, and for a ledger venue named alone. Only an expectation with no venue, or Bitkub,
+// reads the request log (exchange.req): it has no symbol, side or order ids and counts
+// order-create paths, which differ by venue (OKX creates through batch-orders).
 func OrderJournalKind(fields map[string]any) string {
 	for k := range fields {
 		if k != "venue" {
 			return "exchange.order"
 		}
+	}
+	if venue, _ := fields["venue"].(string); slices.Contains(ledgerVenues, venue) {
+		return "exchange.order"
 	}
 	return "exchange.req"
 }

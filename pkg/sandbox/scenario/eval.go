@@ -317,7 +317,7 @@ func shorthand(fields map[string]any, table map[string]string) (paths, rest map[
 // exchange.order replaces this, and adds symbol, side and the rest).
 var orderPaths = map[string][]string{
 	"binance":  {"/fapi/v1/order", "/fapi/v3/order", "/api/v3/order"},
-	"okx":      {"/api/v5/trade/order"},
+	"okx":      {"/api/v5/trade/order", "/api/v5/trade/batch-orders"}, // ccxt creates through batch-orders
 	"bitkub":   {"/api/v3/market/place-bid", "/api/v3/market/place-ask"},
 	"settrade": {"/api/seos/v3/"}, // the only POST under it is an order create (login is /api/oam)
 	"webull":   {"/openapi/trade/order/place"},

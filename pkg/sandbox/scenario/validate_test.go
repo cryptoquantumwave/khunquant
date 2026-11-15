@@ -97,7 +97,7 @@ func TestValidate_RequirementsNamePR(t *testing.T) {
 		t.Error("with no caps only static checks run")
 	}
 
-	f = parseString(t, base+"expect:\n  - order: {venue: okx, client_id: abc}\n  - order: {venue: okx, count: 1}\n")
+	f = parseString(t, base+"expect:\n  - order: {venue: okx, client_id: abc}\n  - order: {venue: bitkub, count: 1}\n")
 	issues = Validate(f, caps)
 	if got := issueAt(issues, "/expect/0/order/client_id"); !strings.Contains(got, "SBX-14a") {
 		t.Errorf("order.client_id: %q (%v)", got, issues)

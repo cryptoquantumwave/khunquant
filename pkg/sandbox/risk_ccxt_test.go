@@ -7,6 +7,7 @@ import (
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/exchanges/okx"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
@@ -76,10 +77,12 @@ func TestPositionRisk_CCXTFields(t *testing.T) {
 	}
 }
 
-// The OKX wire parses the same way: ccxt ignores mgnRatio and derives the ratio as the
-// maintenance margin over imr + upl, which the wire makes the position's cushion, so the
-// ratio is 1 at the liquidation price and never negative (a negative one makes perception
-// drop the whole account's sample). The contract size is 0.01: 10 contracts are 0.1 BTC.
+// The OKX wire, read as the OKX adapter reads it: through ccxt, then with the margin ratio
+// taken from mgnRatio (okx.FixPositionMarginRatio). It is the maintenance margin over the
+// equity left, 1 at the liquidation price and never negative. ccxt's own ratio, mmr over
+// imr + upl, is not: the wire sends OKX's real imr (notional / leverage), so it is negative
+// once the loss passes imr, as on the real venue (a negative one makes perception drop the
+// whole account's sample). The contract size is 0.01: 10 contracts are 0.1 BTC.
 func TestOKXPositions_CCXTFields(t *testing.T) {
 	var sim *sandbox.StateManager
 	url := ccxtRig(t, func(sm *sandbox.StateManager) {
@@ -100,12 +103,17 @@ func TestOKXPositions_CCXTFields(t *testing.T) {
 	if _, err := ex.LoadMarkets(); err != nil {
 		t.Fatal(err)
 	}
-	read := func() ccxt.Position {
+	raw := func() ccxt.Position {
 		ps, err := ex.FetchPositions(ccxt.WithFetchPositionsSymbols([]string{"BTC/USDT:USDT"}))
 		if err != nil || len(ps) != 1 {
 			t.Fatalf("FetchPositions = %d positions, %v", len(ps), err)
 		}
 		return ps[0]
+	}
+	read := func() ccxt.Position {
+		p := raw()
+		okx.FixPositionMarginRatio(&p)
+		return p
 	}
 	p := read()
 	wantNear(t, "entry", p.EntryPrice, 70000, 0)
@@ -138,5 +146,15 @@ func TestOKXPositions_CCXTFields(t *testing.T) {
 	sim.GetState("okx").MarkPrices["BTC-USDT-SWAP"] = 82000 // past it, with no liquidation run: never negative
 	if p = read(); p.MarginRatio == nil || *p.MarginRatio < 1 {
 		t.Errorf("margin ratio %v past the liquidation price, want at least 1", p.MarginRatio)
+	}
+
+	// ccxt's own number on the same wire, as on the real venue. At 72000 the loss of 200 is
+	// inside imr = 720: mmr / (imr + upl) = 28.8 / 520, already not the account's ratio.
+	// At 79000 the loss of 900 has passed imr = 790: negative.
+	sim.GetState("okx").MarkPrices["BTC-USDT-SWAP"] = 72000
+	wantNear(t, "ccxt's own margin ratio at 72000", raw().MarginRatio, 28.8/520, 1e-4)
+	sim.GetState("okx").MarkPrices["BTC-USDT-SWAP"] = 79000
+	if r := raw().MarginRatio; r == nil || *r >= 0 {
+		t.Errorf("ccxt's own margin ratio at 79000 = %v, want a negative number: the wire no longer shows what the real venue sends", r)
 	}
 }

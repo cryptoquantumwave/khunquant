@@ -158,7 +158,7 @@ func instanceSchema() json.RawMessage {
 		"op":        map[string]any{"type": "string", "enum": []string{"up", "down", "list", "restart", "logs", "snapshot", "restore", "snapshots", "snapshot_delete"}},
 		"label":     map[string]any{"type": "string", "description": "snapshot: a note kept in the manifest"},
 		"snapshot":  map[string]any{"type": "string", "description": "restore, snapshot_delete: the snapshot id (see snapshots); for restore, name is the instance it becomes (default: the one it was taken from)"},
-		"keep_home": map[string]any{"type": "boolean", "description": "down: keep the home (logs, config)"},
+		"keep_home": map[string]any{"type": "boolean", "description": "down: keep the home (logs, config); list shows it as stale once it is two minutes old, and a second down of the name then removes it"},
 		"mode":      map[string]any{"type": "string", "enum": []string{"graceful", "kill", "kill_at"}, "description": "restart: SIGTERM then SIGKILL, SIGKILL at once, or arm a crash point (kill_at)"},
 		"kill_at":   killAtSchema(),
 		"wait_wall": map[string]any{"type": "string", "description": "restart kill_at: how long calls wait for the restarted instance, a Go duration (default 60s, at most 10m)"},

@@ -212,7 +212,7 @@ func workflowsOp(deps func() Deps) lab.OpFunc {
 		if list == nil {
 			return nil, unavailable("the workflow engine")
 		}
-		f := journal.ListFilter{Since: a.Since, Limit: a.Limit}
+		f := journal.ListFilter{Since: a.Since, Kind: a.Kind, Limit: a.Limit} // the kind is in the query: a limit must not hide a match
 		for _, s := range a.Status {
 			f.Statuses = append(f.Statuses, journal.Status(s))
 		}
@@ -220,13 +220,10 @@ func workflowsOp(deps func() Deps) lab.OpFunc {
 		if err != nil {
 			return nil, err
 		}
-		out := []journal.Workflow{} // ListFilter has no kind: it is applied after the limit
-		for _, w := range ws {
-			if a.Kind == "" || w.Kind == a.Kind {
-				out = append(out, w)
-			}
+		if ws == nil {
+			ws = []journal.Workflow{}
 		}
-		return map[string]any{"workflows": out}, nil
+		return map[string]any{"workflows": ws}, nil
 	}
 }
 

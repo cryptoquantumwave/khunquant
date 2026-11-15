@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 )
@@ -477,23 +478,42 @@ func (v *env) evalOther(ctx context.Context, r ExpectResult, e *Expectation, lo,
 			r.Got += ": " + strings.Join(bad[:min(len(bad), 3)], " | ")
 		}
 	case "workflow":
-		r.Want = describe("workflow", f) + countText(e.Count, lo, hi)
-		raw, err := call(ctx, v.c, "inspect", "workflows", map[string]any{"kind": f["kind"]})
+		r.Want = describe("workflow", f) + countText(e.Count, lo, hi) + windowText(e)
+		// The kind and the state are in the query, so the row limit cannot hide a match; a
+		// workflow counts when it was created inside within / during (sim time).
+		args := map[string]any{"kind": f["kind"], "limit": journal.MaxListLimit}
+		if state, _ := f["state"].(string); state != "" {
+			args["status"] = []string{state}
+		}
+		raw, err := call(ctx, v.c, "inspect", "workflows", args)
 		if err != nil {
 			r.Got = err.Error()
 			return r, nil
 		}
 		var out struct {
-			Workflows []struct{ Kind, Status string }
+			Workflows []struct{ CreatedAt time.Time }
 		}
-		_ = json.Unmarshal(raw, &out)
+		if err := json.Unmarshal(raw, &out); err != nil {
+			r.Got = "the workflows could not be read: " + err.Error()
+			return r, nil
+		}
+		from, to, hasTo, _ := e.Within.Bounds()
+		dFrom, dTo := 0, 0
+		if e.During != "" {
+			dFrom, dTo, _ = ParseDuring(e.During)
+		}
 		n := 0
 		for _, w := range out.Workflows {
-			if state, _ := f["state"].(string); state == "" || w.Status == state {
-				n++
+			at := w.CreatedAt
+			if at.Before(v.start.Add(from)) || (hasTo && at.After(v.start.Add(to))) || (e.During != "" && !within(at.In(v.loc), dFrom, dTo)) {
+				continue
 			}
+			n++
 		}
 		r.OK, r.Got = n >= lo && (hi < 0 || n <= hi), fmt.Sprintf("%d workflows", n)
+		if len(out.Workflows) >= journal.MaxListLimit {
+			r.OK, r.Got = false, fmt.Sprintf("%d or more workflows of that kind: the list is cut at %d, so the count is not known", n, journal.MaxListLimit)
+		}
 	case "probe":
 		r.OK, r.Want, r.Got = v.probe(ctx, f)
 	}

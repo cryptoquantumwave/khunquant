@@ -377,3 +377,58 @@ func TestRestore_UnnamedSnapshotNeedsAName(t *testing.T) {
 		t.Errorf("instances = %+v, want other and b", s.List())
 	}
 }
+
+// No instance is called "snapshots" (AS2-2): its home would be <TmpDir>/kq-sbx-snapshots,
+// the snapshot store, and its down, or the session's end, would delete every snapshot.
+func TestUp_RefusesTheSnapshotStoresName(t *testing.T) {
+	s, base := snapSupervisor(t, 2)
+	if _, err := s.Up(context.Background(), UpOptions{Name: "snapshots", FixturesFrom: repoFixtures(t)}); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("up snapshots: err = %v, want the name refused as reserved", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "kq-sbx-snapshots")); err == nil {
+		t.Error("a refused up created the store directory as a home")
+	}
+	// The store keeps its snapshots when a normal instance goes down.
+	setup(t, s, "a", UpOptions{})
+	si, err := s.Snapshot(context.Background(), "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Up(context.Background(), UpOptions{Name: "snapshots", FixturesFrom: repoFixtures(t)}); err == nil {
+		t.Error("up snapshots was accepted with a store present")
+	}
+	if err := s.Down(context.Background(), "a", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(si.Dir); err != nil {
+		t.Errorf("the snapshot is gone: %v", err)
+	}
+	// Control: a name that only starts like it is an ordinary instance.
+	if info, err := s.Up(context.Background(), UpOptions{Name: "snapshots-2", FixturesFrom: repoFixtures(t)}); err != nil || info.Name != "snapshots-2" {
+		t.Errorf("up snapshots-2 = %+v, %v", info, err)
+	}
+}
+
+// A snapshot left in the instance's home (a take that never reached the store) is not in
+// the store's count: the next Snapshot clears it before asking for a new one (AS2-1).
+func TestSnapshot_ClearsWhatATakeLeftInTheHome(t *testing.T) {
+	s, _ := snapSupervisor(t, 1)
+	a := setup(t, s, "a", UpOptions{})
+	left := filepath.Join(a.Home, "lab", "snapshots", "left-behind")
+	put(t, a.Home, "lab/snapshots/left-behind/home/big.bin", "x")
+	si, err := s.Snapshot(context.Background(), "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); err == nil {
+		t.Error("the snapshot a take left in the home is still there")
+	}
+	if ents, _ := os.ReadDir(filepath.Join(a.Home, "lab", "snapshots")); len(ents) != 0 {
+		t.Errorf("the home still holds %d snapshot(s) after the move to the store", len(ents))
+	}
+	for _, f := range si.Manifest.Files {
+		if strings.HasPrefix(f.Path, "lab/snapshots") {
+			t.Errorf("the new snapshot holds %s", f.Path)
+		}
+	}
+}

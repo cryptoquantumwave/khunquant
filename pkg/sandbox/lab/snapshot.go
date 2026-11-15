@@ -71,6 +71,13 @@ func (l *Lab) snapshotTake(ctx context.Context, args json.RawMessage) (any, erro
 	if l.Clock.State().Mode != simclock.ModeManual {
 		return nil, Errorf(CodeFailed, "%v", ErrClockRunning)
 	}
+	// One snapshot at a time in the home. The supervisor moves each one to its store, which
+	// has the cap; a take that reaches this op directly (it is also a tool of the lab) would
+	// otherwise add a copy of the home, up to the size limit, on every call, in a directory
+	// the size limit does not count.
+	if ents, err := os.ReadDir(l.SnapshotsDir()); err == nil && len(ents) > 0 {
+		return nil, Errorf(CodeFailed, "snapshot %q is still in this instance's home; one at a time: the supervisor moves a snapshot to its store (sandbox_instance op=snapshot)", ents[0].Name())
+	}
 	if _, err := l.SettleWait(ctx, snapshotSettleCap); err != nil {
 		return nil, Errorf(CodeFailed, "snapshot: the instance is not settled: %v", err)
 	}
@@ -152,15 +159,18 @@ func (l *Lab) writeSnapshot(ctx context.Context, id, label string) (labsnap.Mani
 }
 
 // takeFile backs up a SQLite file through a fresh read-only connection (no component handle
-// is needed, and a store's journal mode is not changed), or copies any other file.
+// is needed, and a store's journal mode is not changed), or copies any other file. A file
+// isSQLite took for a database by the -wal or -shm beside it may be none: the agent can
+// write both names in its workspace. When SQLite itself says so, the file is copied like
+// any other, so such a pair cannot fail every take. No store this process has open is in
+// that state, so the copy opens no file SQLite holds locks on. Any other failure is of a
+// file that may be a real database, and still fails the take: its bytes alone, without
+// the -wal, would not be a consistent copy.
 func takeFile(ctx context.Context, f snapshotFile, dst string) error {
 	if f.sqlite {
-		db, err := sqlitex.Open(f.abs, sqlitex.ReadOnly())
-		if err != nil {
+		if err := backupFile(ctx, f.abs, dst); !sqlitex.IsNotADatabase(err) {
 			return err
 		}
-		defer db.Close()
-		return sqlitex.Backup(ctx, db, dst)
 	}
 	in, err := os.Open(f.abs)
 	if err != nil {
@@ -176,6 +186,16 @@ func takeFile(ctx context.Context, f snapshotFile, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// backupFile is the SQLite backup of src into dst, which is absent when it fails.
+func backupFile(ctx context.Context, src, dst string) error {
+	db, err := sqlitex.Open(src, sqlitex.ReadOnly())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return sqlitex.Backup(ctx, db, dst)
 }
 
 // copiedJournalSeq is the last seq of the journal copy at p (0 when there is none).

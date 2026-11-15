@@ -119,6 +119,68 @@ func TestSnapshotTake_FindsSQLiteByHeader(t *testing.T) {
 	_ = cp.Close()
 }
 
+// A file with a -wal or a -shm beside it is taken for a database without a look inside, and
+// the agent can write both names in its workspace (AS2-4). Such a pair used to fail every
+// take of the instance. SQLite says the file is not a database, so it is copied as it is;
+// a real database, open in WAL mode beside it, is still backed up through SQLite.
+func TestSnapshotTake_NotADatabaseIsCopiedAsBytes(t *testing.T) {
+	l := snapLab(t)
+	long := []byte(strings.Repeat("plain text that only has a -wal beside it\n", 8))
+	short := []byte("short")
+	writeHome(t, l, "workspace/x", long)
+	writeHome(t, l, "workspace/x-wal", []byte("not a wal"))
+	writeHome(t, l, "workspace/y", short)
+	writeHome(t, l, "workspace/y-shm", []byte("not a shm"))
+	for _, name := range []string{"x", "y"} {
+		if !isSQLite(filepath.Join(l.Home, "workspace", name)) {
+			t.Fatalf("%s is not a SQLite candidate: the test would not reach the backup", name)
+		}
+	}
+	dat := filepath.Join(l.Home, "workspace", "store.dat")
+	db, err := sqlitex.Open(dat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TABLE k (v TEXT); INSERT INTO k VALUES ('kept')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := take(t, l, "n-1"); err != nil {
+		t.Fatalf("a take with a text file beside a -wal: %v", err)
+	}
+	dir := filepath.Join(l.SnapshotsDir(), "n-1")
+	m, err := labsnap.Verify(dir, config.FormatVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, f := range m.Files {
+		have[f.Path] = true
+	}
+	if !have["workspace/x"] || !have["workspace/y"] || !have["workspace/store.dat"] || have["workspace/x-wal"] || have["workspace/y-shm"] {
+		t.Fatalf("files = %v", m.Files)
+	}
+	for name, want := range map[string][]byte{"x": long, "y": short} {
+		if got, err := os.ReadFile(filepath.Join(dir, "home", "workspace", name)); err != nil || string(got) != string(want) {
+			t.Errorf("%s in the snapshot = %q, %v; want the file's own bytes", name, got, err)
+		}
+		if got, err := os.ReadFile(filepath.Join(l.Home, "workspace", name)); err != nil || string(got) != string(want) {
+			t.Errorf("%s in the home after the take = %q, %v; want it unchanged", name, got, err)
+		}
+	}
+	// The real database went through SQLite: the row is in the copy, which needs no -wal.
+	cp, err := sqlitex.Open(filepath.Join(dir, "home", "workspace", "store.dat"), sqlitex.ReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v string
+	if err := cp.QueryRow(`SELECT v FROM k`).Scan(&v); err != nil || v != "kept" {
+		t.Errorf("backed-up row = %q, %v", v, err)
+	}
+	_ = cp.Close()
+}
+
 // An instance that is not settled is not snapshotted, and the error names the busy component.
 func TestSnapshotTake_RefusesUnsettled(t *testing.T) {
 	l := snapLab(t)
@@ -154,6 +216,9 @@ func TestSnapshotTake_CapIdAndLinks(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(l.SnapshotsDir(), "k-1", "home", "workspace", "link")); err == nil {
 		t.Error("a link was copied into the snapshot")
 	}
+	if err := os.RemoveAll(filepath.Join(l.SnapshotsDir(), "k-1")); err != nil { // one at a time in the home
+		t.Fatal(err)
+	}
 	f, err := os.Create(filepath.Join(l.Home, "workspace", "big"))
 	if err != nil {
 		t.Fatal(err)
@@ -186,5 +251,32 @@ func TestSnapshotTake_RecordsTheInstance(t *testing.T) {
 	}
 	if m.Instance != "alpha" {
 		t.Errorf("manifest instance = %q, want %q", m.Instance, "alpha")
+	}
+}
+
+// The home holds one snapshot at a time (AS2-1). The supervisor moves each take to its
+// store, which has the cap; the take op is also a tool of the lab, and a direct call used to
+// add a copy of the home on every call, in a directory the size limit does not count.
+func TestSnapshotTake_OneAtATimeInTheHome(t *testing.T) {
+	l := snapLab(t)
+	writeHome(t, l, "workspace/notes.txt", []byte("notes"))
+	if _, err := take(t, l, "one-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one-2", "one-3"} {
+		_, err := take(t, l, id)
+		if err == nil || !strings.Contains(err.Error(), "one at a time") {
+			t.Fatalf("take %s with one-1 still in the home: err = %v, want a refusal", id, err)
+		}
+	}
+	if ents, _ := os.ReadDir(l.SnapshotsDir()); len(ents) != 1 || ents[0].Name() != "one-1" {
+		t.Fatalf("the home holds %d snapshots, want only one-1", len(ents))
+	}
+	// Control: once it is moved out (what the supervisor does), the next take is accepted.
+	if err := os.Rename(filepath.Join(l.SnapshotsDir(), "one-1"), filepath.Join(t.TempDir(), "one-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := take(t, l, "one-2"); err != nil {
+		t.Fatalf("take after the first was moved out: %v", err)
 	}
 }

@@ -139,6 +139,22 @@ func (l *Lab) holdCall(ctx context.Context, exclusive bool) (release func(), err
 	}
 }
 
+// Shared runs f holding the call lock as Call holds it for an ordinary op, for a writer
+// that is not a group op (the dev-MCP fixture and simulator tools): a snapshot take waits
+// for f, and f waits for a take. The wait ends with ctx or after CallTimeout, and then f
+// does not run. f must not call Lab.Call or Shared: behind a waiting take that would wait
+// on itself.
+func (l *Lab) Shared(ctx context.Context, f func() error) error {
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	defer cancel()
+	release, err := l.holdCall(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return f()
+}
+
 // Call runs op of group with args under CallTimeout. The error is always an *Error:
 // a panic in the op and any plain error it returns both become CodeFailed.
 func (l *Lab) Call(ctx context.Context, group, op string, args json.RawMessage) (res any, err error) {

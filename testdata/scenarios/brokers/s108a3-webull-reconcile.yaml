@@ -8,9 +8,9 @@
 # (100) and treats a full page as unable to show absence (7cbd839b). The 12-order paging case is
 # covered where it can be set up, in Go tests in pkg/exchanges/webull, with the lost order a
 # resting limit beyond the 10th row: TestWebull_ReconcileReadsOnePage (found on the page of 100)
-# and, gated by KQ_KNOWN_BUG_WEBULL_SHORT_PAGE, TestWebull_ReconcileOnAShortPage (a venue page
-# cut at 10 rows is read as the whole listing and the order is placed again). The market order
-# here fills at once and is found in the history, so it cannot show paging. A scenario cannot
+# and TestWebull_ReconcileOnAShortPage (a venue page cut at 10 rows does not show the order; it
+# is found by its client order id through order/detail, which the reconcile asks first). The
+# market order here fills at once and is found by that lookup, so it cannot show paging. A scenario cannot
 # rest 12 orders on the account: the only way to place a resting order is
 # create_order, whose market-status gate reads the WALL clock (time.Now in
 # webull.GetMarketStatus), so it would pass or fail with the hour the suite runs at. The

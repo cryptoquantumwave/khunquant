@@ -95,7 +95,7 @@ func TestEval_MessageWithinDuring(t *testing.T) {
 	// to: a persona list and a group glob.
 	f.check(`{message: {to: [stranger, "group:*"], count: 0}}`, false)
 	f.check(`{message: {to: "group:*", count: 1}}`, true)
-	f.check(`{message: {to: "group:other", count: 0}}`, true)
+	f.check(`{message: {to: bob, count: 0}}`, true)
 
 	// severity, buttons, contains.
 	f.check(`{message: {to: owner, severity: warning, buttons: [mute], count: 1}}`, true)

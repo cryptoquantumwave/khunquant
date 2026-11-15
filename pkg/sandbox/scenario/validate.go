@@ -379,6 +379,9 @@ func (v *validator) modifiers(p string, e *Expectation) {
 // expectKind checks what one expectation kind needs from the instance.
 func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 	switch e.Kind {
+	case "message":
+		v.oneOf(kp, e.Fields, "severity", false, severities)
+		v.chatTargets(kp, e.Fields)
 	case "event":
 		k, _ := e.Fields["kind"].(string)
 		if k == "" {
@@ -398,9 +401,15 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 		if PayloadPaths[journal]["disposition"] != "" {
 			v.oneOf(kp, e.Fields, "disposition", true, dispositions)
 		}
+		if PayloadPaths[journal]["severity"] != "" {
+			v.oneOf(kp, e.Fields, "severity", true, severities)
+			v.trigger(kp, e.Fields)
+		}
 		v.payloadFields(kp, e, journal)
 	case "decision":
 		v.oneOf(kp, e.Fields, "disposition", true, dispositions)
+		v.oneOf(kp, e.Fields, "severity", true, severities)
+		v.trigger(kp, e.Fields)
 	case "order":
 		journal = OrderJournalKind(e.Fields)
 		for _, f := range []string{"symbol", "side", "reduce_only", "client_id", "status"} {
@@ -423,6 +432,7 @@ func (v *validator) expectKind(kp string, e *Expectation, journal string) {
 	case "workflow":
 		v.need(kp, "workflow", stepSpec{Group: "inspect", Op: "workflows", PR: "SBX-05"})
 		v.oneOf(kp, e.Fields, "state", false, workflowStates)
+		v.oneOf(kp, e.Fields, "kind", false, workflowKinds)
 	case "logs":
 		if lvl, ok := e.Fields["level"].(string); ok && !slices.Contains([]string{"ERROR", "WARN", "INFO"}, lvl) {
 			v.addf(kp+"/level", "must be ERROR, WARN or INFO")
@@ -449,6 +459,40 @@ func (v *validator) oneOf(kp string, fields map[string]any, f string, neg bool, 
 	}
 	if !isStr || !slices.Contains(values, s) {
 		v.addf(kp+"/"+f, "must be one of %s", strings.Join(values, ", "))
+	}
+}
+
+// trigger reports a trigger value that no TriggerID can contain (see triggerNames).
+func (v *validator) trigger(kp string, fields map[string]any) {
+	raw, ok := fields["trigger"]
+	if !ok {
+		return
+	}
+	if s, isStr := raw.(string); !isStr || !triggerKnown(s) {
+		v.addf(kp+"/trigger", "is not a trigger kind or id the pipeline writes (%s)", strings.Join(triggerNames, ", "))
+	}
+}
+
+// chatTargets reports a message's to that names no chat of the default simchat world.
+// An instance that configures its own personas or groups is not checked.
+func (v *validator) chatTargets(kp string, fields map[string]any) {
+	if cfg, _ := v.f.Instance.Config["channels"].(map[string]any); cfg != nil {
+		if _, own := cfg["simchat"]; own {
+			return
+		}
+	}
+	raw, ok := fields["to"]
+	if !ok {
+		return
+	}
+	to := strs(raw)
+	if len(to) == 0 {
+		v.addf(kp+"/to", "must be a chat or a list of chats")
+	}
+	for _, t := range to {
+		if !chatTargetKnown(t) {
+			v.addf(kp+"/to", "%q is not a chat of the simchat world: use a persona (%s), dm:<persona>, group:<name> or a glob of them", t, strings.Join(chatTargets(), ", "))
+		}
 	}
 }
 
@@ -502,10 +546,33 @@ func (v *validator) payloadFields(kp string, e *Expectation, journal string) {
 		switch {
 		case known && !s.has(p):
 			v.addf(kp+"/fields/"+esc(p), "no %s entry has this path (its payload has: %s)", journal, s.keys())
+		case known && err == nil && lo == 0 && s.opaque(p) && !v.usedPositively(journal, p):
+			v.addf(kp+"/fields/"+esc(p), "this path goes below a part of the %s payload that declares no keys (a tool's arguments, an event's own payload), so a misspelt key would match nothing and an absence count would pass whatever happened: use the same path in a positive expectation of this file (count 1 or more), which fails when the key is wrong", journal)
 		case !known && err == nil && lo == 0:
 			v.addf(kp+"/fields/"+esc(p), "the payload of %s is not declared here, so a misspelt path would match nothing and an absence count would pass whatever happened", journal)
 		}
 	}
+}
+
+// usedPositively says whether another expectation of the file reads path of the same
+// journal kind with a count that needs at least one match: a misspelling of it would fail
+// that expectation, so the path is known to be real.
+func (v *validator) usedPositively(journal, path string) bool {
+	for i := range v.f.Expect {
+		e := &v.f.Expect[i]
+		if e.Kind != "event" {
+			continue
+		}
+		k, _ := e.Fields["kind"].(string)
+		fields, _ := e.Fields["fields"].(map[string]any)
+		if lo, _, err := (labjournal.Match{Count: e.Count}).Bounds(); err != nil || lo < 1 || EventJournalKind(k) != journal {
+			continue
+		}
+		if _, ok := fields[path]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // realHosts are the registrable domains of the real services a scenario never names.

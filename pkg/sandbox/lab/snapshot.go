@@ -22,8 +22,11 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sqlitex"
 )
 
+// notManualHint says how to get a clock that advance and snapshot accept.
+const notManualHint = "start the instance with clock_mode manual (sandbox_instance op=up), or switch it with sandbox_clock set_mode manual"
+
 // ErrClockRunning: a snapshot needs a stopped sim clock, so sim time is the same in every file.
-var ErrClockRunning = errors.New("snapshot: clock must be in manual mode")
+var ErrClockRunning = errors.New("snapshot: clock must be in manual mode: " + notManualHint)
 
 // snapshotSettleCap bounds the settle of a take; the whole call has CallTimeout. A variable for tests.
 var snapshotSettleCap = 10 * time.Second

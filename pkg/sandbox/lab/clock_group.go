@@ -143,6 +143,9 @@ func (l *Lab) clockAdvance(ctx context.Context, args json.RawMessage) (any, erro
 		}
 	}
 	sum, err := l.Clock.Advance(ctx, target, l.Settle)
+	if errors.Is(err, simclock.ErrNotManual) { // sandbox_clock advance and sandbox_run_until both end here
+		return nil, fmt.Errorf("advance: %w: %s", err, notManualHint)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("advance: %w", err)
 	}

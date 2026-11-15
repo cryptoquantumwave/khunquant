@@ -26,7 +26,7 @@ type UpOptions struct {
 	// The clock options become the instance's KQ_SANDBOX_CLOCK_* environment (see
 	// clockEnv); a restart reads the saved clock.json instead.
 	ClockStart      string `json:"clock_start,omitempty" flag:"clock-start" desc:"Sim clock start, RFC 3339 (default: wall now)"`
-	ClockMode       string `json:"clock_mode,omitempty" flag:"clock-mode" desc:"Sim clock mode: manual, scaled or realtime (default: realtime)"`
+	ClockMode       string `json:"clock_mode,omitempty" flag:"clock-mode" desc:"Sim clock mode: manual, scaled or realtime (default: realtime; manual in sandbox_instance op=up)"`
 	ClockResolution string `json:"clock_resolution,omitempty" flag:"clock-resolution" desc:"Manual-mode clock quantum, a duration; 0 steps exactly (default: 1m)"`
 
 	// The simulated model (SBX-16). LLM is scripted (default), replay, record or live; the
@@ -48,17 +48,16 @@ type UpOptions struct {
 	// Env is extra child environment; only keys that AllowEnv has allowed pass.
 	Env map[string]string `json:"-"`
 
-	// ConfigPatch is merged into config.json and Workspace is written under
-	// <home>/workspace before the gateway starts (the scenario runner's instance block).
-	// Both are for Go callers: no flag and no JSON name, so neither `up` nor
-	// sandbox_instance can carry them. CheckConfigPatch and CheckWorkspacePath apply.
+	// ConfigPatch is merged into config.json, Workspace is written under <home>/workspace
+	// and Accounts name the venues that get a placeholder exchange account (see
+	// sandbox.ProfileOptions), all before the gateway starts: the scenario runner's instance
+	// block. They have no flag and no `json` name here: sandbox_instance op=up carries them as
+	// config_patch, workspace and accounts. Up checks them itself (CheckConfigPatch,
+	// CheckWorkspacePath, CheckAccounts, CheckAccountPatch), whoever the caller is, so a patch
+	// cannot unlock the instance and an account is only ever the constant placeholder.
 	ConfigPatch map[string]any    `json:"-"`
 	Workspace   map[string]string `json:"-"`
-
-	// Accounts are the venues the profile gives a placeholder exchange account (see
-	// sandbox.ProfileOptions). Like ConfigPatch it is for Go callers only: a flag or an MCP
-	// argument would let a tool caller turn on a venue the instance never configured.
-	Accounts []string `json:"-"`
+	Accounts    []string          `json:"-"`
 
 	// restore, set only by Restore, fills each attempt's home from a snapshot.
 	restore *restoreSpec `json:"-"`

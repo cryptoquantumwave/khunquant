@@ -154,6 +154,17 @@ The report names each failed expectation with what it wanted and what it got. `s
 --keep` keeps the home (logs, config) of a run that did not pass. To look around a live instance,
 start one with `sandbox_instance op=up` and use:
 
+`sandbox_instance op=up` takes a scenario's `instance:` block, so a hand-driven instance can be set up like a run's:
+`config_patch` (the `instance.config` merge patch: give it an owner and proactive with
+`{"proactive":{"enabled":true,"owner":{"channel":"simchat","chat_id":"dm:owner","sender_id":"simchat:owner"}}}`),
+`workspace` (`instance.workspace`: relative path to file content) and `accounts` (`instance.accounts`:
+venues that get the placeholder exchange account; seed its balances with `sandbox_account`). They
+pass the checks a scenario's do (a credential, a lock-owned key, a URL off this machine, a workspace
+path that leaves the workspace and a venue with no simulator are refused with the runner's error).
+The clock is manual unless you pass `clock_mode: realtime` or `scaled` (the CLI `sandbox up`
+defaults to realtime; pass `--clock-mode manual`). `sandbox_clock advance`, `sandbox_run_until` and
+`sandbox_instance op=snapshot` need a manual clock. Then:
+
 - `sandbox_inspect op=journal`, `sandbox_inspect op=decisions`, `sandbox_inspect op=policy`,
   `sandbox_inspect op=workflows` and `sandbox_inspect op=proposals`;
 - `list_llm_calls` and `read_llm_call` for what the model saw;

@@ -19,7 +19,7 @@ import (
 
 var (
 	// ErrClockRunning: a snapshot needs the sim clock stopped (manual mode).
-	ErrClockRunning = errors.New("snapshot: clock must be in manual mode")
+	ErrClockRunning = errors.New("snapshot: clock must be in manual mode: start the instance with clock_mode manual (sandbox_instance op=up), or switch it with sandbox_clock set_mode manual")
 	// ErrVersionMismatch: the snapshot was taken by another build of the binary.
 	ErrVersionMismatch = errors.New("snapshot: taken by a different binary")
 	// ErrMoneyAtRisk: a live or record instance is never snapshotted or restored, because a

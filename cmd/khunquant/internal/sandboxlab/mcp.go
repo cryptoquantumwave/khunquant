@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labclient"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/scenario"
@@ -109,7 +110,8 @@ func newMCPServer(sup *supervisor.Supervisor) *mcp.Server {
 	m.srv.AddTool(&mcp.Tool{
 		Name: "sandbox_instance",
 		Description: "Start, stop, restart and inspect locked sandbox instances of this binary. " +
-			"ops: up, down, list, restart (mode graceful|kill|kill_at), logs (tail, contains), " +
+			"ops: up {name?, config_patch?, workspace?, accounts?, clock_mode? (default manual), clock_start?, ...} (config_patch, workspace and accounts are a scenario's instance block and pass the same checks: " +
+			"config_patch {proactive:{enabled:true,owner:{channel:simchat,chat_id:dm:owner,sender_id:simchat:owner}}} makes an owner for sandbox_call_tool as owner, accounts [binance] a placeholder exchange account), down, list, restart (mode graceful|kill|kill_at), logs (tail, contains), " +
 			"snapshot {label?} (manual clock; settles, then freezes the instance), snapshots (list), snapshot_delete {snapshot}, restore {snapshot, name?} " +
 			"(the store keeps at most KQ_SANDBOX_MAX_SNAPSHOTS snapshots, default 20: a take beyond that is refused until one is deleted) " +
 			"(a new locked instance from a snapshot, also beside a running one; refused for live and record instances). " +
@@ -164,6 +166,11 @@ func instanceSchema() json.RawMessage {
 		"wait_wall": map[string]any{"type": "string", "description": "restart kill_at: how long calls wait for the restarted instance, a Go duration (default 60s, at most 10m)"},
 		"tail":      map[string]any{"type": "integer", "description": "logs: last lines, default 200, at most 2000"},
 		"contains":  map[string]any{"type": "string", "description": "logs: only lines containing this"},
+		// The instance block of a scenario file (instance.config, .workspace, .accounts): the
+		// supervisor applies the runner's checks to them, so an unlock attempt is refused here too.
+		"config_patch": map[string]any{"type": "object", "description": "up: a merge patch over the sandbox profile's config.json, as a scenario's instance.config (RFC 7386: null removes a key). Gives the instance an owner and proactive: {\"proactive\":{\"enabled\":true,\"owner\":{\"channel\":\"simchat\",\"chat_id\":\"dm:owner\",\"sender_id\":\"simchat:owner\"}}}. Refused: lock-owned keys, credentials, a URL that is not loopback, a real chat channel"},
+		"workspace":    map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "up: files to write under the instance's workspace, as a scenario's instance.workspace: relative path to content; a path that leads out of the workspace is refused"},
+		"accounts":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": sandbox.AccountVenues}, "description": "up: venues that get the placeholder exchange account (name main, constant credentials that are not real; never transfer scope), as a scenario's instance.accounts. Seed its balances with sandbox_account"},
 	}
 	for _, f := range supervisor.UpOptionFields() {
 		props[f.JSON] = map[string]any{"type": jsonType(f.Kind), "description": f.Desc}
@@ -209,6 +216,11 @@ type instanceArgs struct {
 	KillAt   *supervisor.KillAt `json:"kill_at"`
 	WaitWall string             `json:"wait_wall"`
 
+	// up: the scenario instance block, copied over UpOptions' Go-only fields in the handler.
+	ConfigPatch map[string]any    `json:"config_patch"`
+	Workspace   map[string]string `json:"workspace"`
+	Accounts    []string          `json:"accounts"`
+
 	Label    string `json:"label"`    // snapshot
 	Snapshot string `json:"snapshot"` // restore: the snapshot id (name: the instance it becomes)
 }
@@ -225,6 +237,12 @@ func (m *mcpServer) instanceHandler(ctx context.Context, req *mcp.CallToolReques
 		if a.Name == "" {
 			a.Name = "default"
 		}
+		// A manual clock is what snapshot, sandbox_clock advance and sandbox_run_until need,
+		// and what CLAUDE.md promises; clock_mode realtime or scaled stays available.
+		if a.ClockMode == "" {
+			a.ClockMode = "manual"
+		}
+		a.UpOptions.ConfigPatch, a.UpOptions.Workspace, a.UpOptions.Accounts = a.ConfigPatch, a.Workspace, a.Accounts
 		info, err := m.sup.Up(ctx, a.UpOptions)
 		if err != nil {
 			return errResult("%v", err), nil

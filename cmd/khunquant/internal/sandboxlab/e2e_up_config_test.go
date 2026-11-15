@@ -33,7 +33,8 @@ func TestE2E_UpWithOwnerAndAccountThenExplore(t *testing.T) {
 	}
 	defer func() { _ = cs.Close() }()
 
-	call := func(name string, args map[string]any) string {
+	// try returns the text of a call and whether it was an error result.
+	try := func(name string, args map[string]any) (string, bool) {
 		t.Helper()
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 		if err != nil {
@@ -47,10 +48,15 @@ func TestE2E_UpWithOwnerAndAccountThenExplore(t *testing.T) {
 		}
 		a, _ := json.Marshal(args)
 		t.Logf("> %s %s\n< %s", name, a, sb.String())
-		if res.IsError {
-			t.Fatalf("%s failed: %s", name, sb.String())
+		return sb.String(), res.IsError
+	}
+	call := func(name string, args map[string]any) string {
+		t.Helper()
+		out, isErr := try(name, args)
+		if isErr {
+			t.Fatalf("%s failed: %s", name, out)
 		}
-		return sb.String()
+		return out
 	}
 
 	call("sandbox_instance", map[string]any{
@@ -83,6 +89,23 @@ func TestE2E_UpWithOwnerAndAccountThenExplore(t *testing.T) {
 	}
 	if got := call("sandbox_instance", map[string]any{"op": "snapshot", "label": "explored"}); !strings.Contains(got, `"id"`) {
 		t.Errorf("snapshot = %s", got)
+	}
+	call("sandbox_instance", map[string]any{"op": "down"})
+
+	// clock_mode realtime is still available, and then advance, run_until and snapshot say how
+	// to get a manual clock (RDY-3).
+	call("sandbox_instance", map[string]any{"op": "up", "fixtures_from": repoFixtures(t), "clock_mode": "realtime"})
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"sandbox_clock", map[string]any{"op": "advance", "by": "10m"}},
+		{"sandbox_run_until", map[string]any{"target": "+10m"}},
+		{"sandbox_instance", map[string]any{"op": "snapshot"}},
+	} {
+		if out, isErr := try(c.tool, c.args); !isErr || !strings.Contains(out, "start the instance with clock_mode manual") {
+			t.Errorf("%s %v on a realtime clock: isError=%v, %q; want an error that says to start with clock_mode manual", c.tool, c.args, isErr, out)
+		}
 	}
 	call("sandbox_instance", map[string]any{"op": "down"})
 }

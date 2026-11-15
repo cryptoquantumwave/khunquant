@@ -24,6 +24,9 @@ import (
 // knownBugsEnv lets a known_bug scenario run (it is skipped and reported otherwise).
 const knownBugsEnv = "KQ_SCENARIO_KNOWN_BUGS"
 
+// runSignals end a run through Close; a variable so a test can pin it.
+var runSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
 // defaultTimeout is the default --timeout: the wall cap of one scenario.
 const defaultTimeout = 5 * time.Minute
 
@@ -248,8 +251,12 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 	if runtime.GOOS == "windows" {
 		return supervisor.ErrUnixOnly
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP (a closed terminal) cancels like the others, and a closed pipe (`| head`) becomes
+	// EPIPE instead of a SIGPIPE that kills the process: either way the deferred Close stops
+	// the instances and removes their homes (as sandbox mcp does).
+	ctx, stop := signal.NotifyContext(context.Background(), runSignals...)
 	defer stop()
+	signal.Ignore(syscall.SIGPIPE)
 	if o.timeout < 0 {
 		return &exitError{exitInvalid, "--timeout must not be negative"}
 	}

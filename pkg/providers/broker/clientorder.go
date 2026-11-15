@@ -94,9 +94,9 @@ func ClientOrderID(idemKey string, maxLen int) string {
 //     letters and digits). Orders are listed with it. It is capable for spot
 //     (equity) orders WITHOUT a by-ID lookup: FetchOrder(clientOrderID) exists,
 //     but its failures are untyped strings, so "no such order" cannot be told from
-//     an outage; the open and closed listings are searched instead. That the
-//     exchange refuses a repeated client_order_id is NOT ESTABLISHED. It has no
-//     futures.
+//     an outage. It is a ClientIDProbe instead: a hit is the order, and after a
+//     miss the open and closed listings are searched. That the exchange refuses a
+//     repeated client_order_id is NOT ESTABLISHED. It has no futures.
 //   - SimulationProvider (paper mode): never. Its FetchOrder returns an "open"
 //     order for any id, so a lookup would find a ghost, and its listings are empty.
 //
@@ -117,6 +117,18 @@ type ClientIDCapable interface {
 // listings for the ID.
 type ClientIDLookup interface {
 	FetchOrderByClientID(ctx context.Context, market, symbol, clientOrderID string) (order ccxt.Order, found bool, err error)
+}
+
+// ClientIDProbe is implemented by a ClientIDCapable adapter that can fetch one order
+// by its client order ID but cannot tell "the exchange has no such order" from a
+// failure, so it cannot be a ClientIDLookup (Webull: order/detail fails with untyped
+// strings). A hit is the order. A miss proves nothing: the reconcile goes on to the
+// listings exactly as it would without the probe. So the probe can only turn "placed
+// again" into "found", never the reverse. It is what finds an order the listings do
+// not show: one beyond the page read, or one the listing does not have yet (Webull
+// documents that its listings can lag and names this lookup as the current answer).
+type ClientIDProbe interface {
+	ProbeOrderByClientID(ctx context.Context, market, symbol, clientOrderID string) (order ccxt.Order, found bool)
 }
 
 // PagedListings is implemented by an adapter whose open-orders and closed-orders

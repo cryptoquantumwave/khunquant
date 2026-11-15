@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -83,6 +84,41 @@ func TestBackup_ConsistentUnderWrites(t *testing.T) {
 	}
 	if err := Backup(context.Background(), db, dst); err == nil {
 		t.Error("a backup over an existing file was allowed")
+	}
+}
+
+// SQLite's verdict that a file is no database is told apart from every other failure: the
+// sandbox snapshot copies such a file as bytes, and fails on any other error.
+func TestIsNotADatabase(t *testing.T) {
+	dir := t.TempDir()
+	text := filepath.Join(dir, "notes")
+	if err := os.WriteFile(text, []byte(strings.Repeat("plain text, not a database\n", 8)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cp := filepath.Join(dir, "notes-copy")
+	db, err := Open(text, ReadOnly())
+	if err == nil {
+		t.Cleanup(func() { _ = db.Close() })
+		err = Backup(context.Background(), db, cp)
+	}
+	if !IsNotADatabase(err) {
+		t.Fatalf("a text file: err = %v, want SQLITE_NOTADB", err)
+	}
+	if _, err := os.Stat(cp); err == nil {
+		t.Error("the refused backup left a copy")
+	}
+
+	// Controls: no error, and a failure that is not about the source.
+	if IsNotADatabase(nil) {
+		t.Error("nil is reported as not a database")
+	}
+	src := seedDB(t, filepath.Join(dir, "src.db"))
+	dst := filepath.Join(dir, "copy.db")
+	if err := Backup(context.Background(), src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := Backup(context.Background(), src, dst); err == nil || IsNotADatabase(err) {
+		t.Errorf("a backup over an existing file: err = %v, want an error that is not SQLITE_NOTADB", err)
 	}
 }
 

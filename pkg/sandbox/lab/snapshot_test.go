@@ -119,6 +119,68 @@ func TestSnapshotTake_FindsSQLiteByHeader(t *testing.T) {
 	_ = cp.Close()
 }
 
+// A file with a -wal or a -shm beside it is taken for a database without a look inside, and
+// the agent can write both names in its workspace (AS2-4). Such a pair used to fail every
+// take of the instance. SQLite says the file is not a database, so it is copied as it is;
+// a real database, open in WAL mode beside it, is still backed up through SQLite.
+func TestSnapshotTake_NotADatabaseIsCopiedAsBytes(t *testing.T) {
+	l := snapLab(t)
+	long := []byte(strings.Repeat("plain text that only has a -wal beside it\n", 8))
+	short := []byte("short")
+	writeHome(t, l, "workspace/x", long)
+	writeHome(t, l, "workspace/x-wal", []byte("not a wal"))
+	writeHome(t, l, "workspace/y", short)
+	writeHome(t, l, "workspace/y-shm", []byte("not a shm"))
+	for _, name := range []string{"x", "y"} {
+		if !isSQLite(filepath.Join(l.Home, "workspace", name)) {
+			t.Fatalf("%s is not a SQLite candidate: the test would not reach the backup", name)
+		}
+	}
+	dat := filepath.Join(l.Home, "workspace", "store.dat")
+	db, err := sqlitex.Open(dat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TABLE k (v TEXT); INSERT INTO k VALUES ('kept')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := take(t, l, "n-1"); err != nil {
+		t.Fatalf("a take with a text file beside a -wal: %v", err)
+	}
+	dir := filepath.Join(l.SnapshotsDir(), "n-1")
+	m, err := labsnap.Verify(dir, config.FormatVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, f := range m.Files {
+		have[f.Path] = true
+	}
+	if !have["workspace/x"] || !have["workspace/y"] || !have["workspace/store.dat"] || have["workspace/x-wal"] || have["workspace/y-shm"] {
+		t.Fatalf("files = %v", m.Files)
+	}
+	for name, want := range map[string][]byte{"x": long, "y": short} {
+		if got, err := os.ReadFile(filepath.Join(dir, "home", "workspace", name)); err != nil || string(got) != string(want) {
+			t.Errorf("%s in the snapshot = %q, %v; want the file's own bytes", name, got, err)
+		}
+		if got, err := os.ReadFile(filepath.Join(l.Home, "workspace", name)); err != nil || string(got) != string(want) {
+			t.Errorf("%s in the home after the take = %q, %v; want it unchanged", name, got, err)
+		}
+	}
+	// The real database went through SQLite: the row is in the copy, which needs no -wal.
+	cp, err := sqlitex.Open(filepath.Join(dir, "home", "workspace", "store.dat"), sqlitex.ReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v string
+	if err := cp.QueryRow(`SELECT v FROM k`).Scan(&v); err != nil || v != "kept" {
+		t.Errorf("backed-up row = %q, %v", v, err)
+	}
+	_ = cp.Close()
+}
+
 // An instance that is not settled is not snapshotted, and the error names the busy component.
 func TestSnapshotTake_RefusesUnsettled(t *testing.T) {
 	l := snapLab(t)

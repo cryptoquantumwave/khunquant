@@ -7,6 +7,8 @@ package okx
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	ccxt "github.com/ccxt/ccxt/go/v4"
@@ -357,7 +359,49 @@ func (a *OKXBrokerAdapter) FetchFuturesPositions(_ context.Context, symbols []st
 		opts = append(opts, ccxt.WithFetchPositionsSymbols(symbols))
 	}
 	err = catchPanic(func() error { positions, err = a.client.FetchPositions(opts...); return err })
+	for i := range positions {
+		FixPositionMarginRatio(&positions[i])
+	}
 	return
+}
+
+// marginRatioMax is the margin ratio reported for a position whose equity no longer
+// covers a tenth of its maintenance margin, or is gone: far past liquidation. The
+// number only has to stay finite and above every threshold a reader compares it with.
+const marginRatioMax = 10
+
+// FixPositionMarginRatio replaces the margin ratio ccxt derives for an OKX position
+// with the one OKX reports.
+//
+// ccxt (okx.go ParsePosition, v4.5.x) ignores OKX's mgnRatio and divides mmr by the
+// position's "collateral": imr + upl for a cross position. imr is the position's
+// initial margin requirement (about notional / leverage), not what backs it: the
+// cross wallet does. So once the loss passes imr, an adverse move of 1 / leverage,
+// the ratio is negative, and just before that it is huge, while the account may be
+// far from liquidation. A reader that refuses a negative number (perception) then
+// drops the whole account's sample exactly when the position is under stress.
+//
+// mgnRatio is equity over maintenance margin, 1 or below at liquidation. Its inverse
+// is the ratio the rest of this code reads: maintenance over collateral, the
+// fraction used, 1 at liquidation. With no mgnRatio, ccxt's number is kept for an
+// isolated position when it is a usable number, and dropped (unknown) otherwise.
+func FixPositionMarginRatio(p *ccxt.Position) {
+	if p == nil {
+		return
+	}
+	raw, _ := p.Info["mgnRatio"].(string)
+	if coverage, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && !math.IsNaN(coverage) {
+		ratio := float64(marginRatioMax)
+		if coverage > 1.0/marginRatioMax {
+			ratio = 1 / coverage
+		}
+		p.MarginRatio = &ratio
+		return
+	}
+	cross := p.MarginMode != nil && *p.MarginMode == "cross"
+	if r := p.MarginRatio; r != nil && (cross || math.IsNaN(*r) || math.IsInf(*r, 0) || *r < 0) {
+		p.MarginRatio = nil
+	}
 }
 
 func (a *OKXBrokerAdapter) FetchFuturesFundingRate(_ context.Context, symbol string) (rate ccxt.FundingRate, err error) {

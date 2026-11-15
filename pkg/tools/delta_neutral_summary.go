@@ -187,7 +187,11 @@ func (t *GetDeltaNeutralSummaryTool) Execute(ctx context.Context, args map[strin
 		out += fmt.Sprintf("  Est next funding:   %.4f USDT\n", snapshot.EstimatedNextFundingUSDT)
 		out += fmt.Sprintf("  Liquidation price:  %.4f\n", snapshot.LiquidationPrice)
 		out += fmt.Sprintf("  Liquidation dist:   %.2f%% (threshold: %.2f%%)\n", snapshot.LiquidationDistancePct, plan.RiskPolicy.MinLiquidationDistancePct)
-		out += fmt.Sprintf("  Margin ratio:       %.2f%% (%s)\n", snapshot.MarginRatioPct, snapshot.MarginState)
+		if snapshot.MarginIsKnown() {
+			out += fmt.Sprintf("  Margin ratio:       %.2f%% (%s)\n", snapshot.MarginRatioPct, snapshot.MarginState)
+		} else {
+			out += fmt.Sprintf("  Margin ratio:       unknown (%s)\n", snapshot.MarginState)
+		}
 
 		spotPnL := snapshot.SpotValueUSDT - plan.SpotNotionalUSDT
 		netPnL := snapshot.FuturesUnrealizedPnLUSDT + spotPnL

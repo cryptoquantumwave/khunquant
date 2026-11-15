@@ -11,8 +11,8 @@ write a cheaper test (unit test, replay case, red-team test).
   `./build/khunquant sandbox run --validate-only <file>`) reports every problem with a JSON
   pointer, and checks what the schema cannot (see the end of this file).
 - Run one: `sandbox_scenario op=run` with `file`, or `./build/khunquant sandbox run <file>`. A run
-  starts its own instance and the supervisor allows one, so stop yours first
-  (`sandbox_instance op=down`).
+  starts its own instance, which counts against the cap (`KQ_SANDBOX_MAX_INSTANCES`: 1 in
+  `.mcp.json`, 1 if unset, at most 8), so at the cap stop yours first (`sandbox_instance op=down`).
   Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.
 - A file `testdata/scenarios/<area>/<id>.yaml` has `scenario: <id>`. Ids are unique.
 
@@ -74,6 +74,12 @@ with an earlier price needs that history, so move the clock far enough first.
 `vol`, `seed`), `market.replay` (`symbol`, `timeframe`), `market.delist`, `market.relist`. The
 `venue` of a symbol must match the account that holds it.
 
+Model `recording` plays a recorded price file: `market: { BTC/USDT: { venue: okx, model:
+recording, path: testdata/replay/flash_crash/events.jsonl, align: start } }` (the key is the
+symbol; see `derivs/flash-crash-recording.yaml`), or the `market.recording` step with `symbol`
+and `path` (both required). `path` is relative to the working directory; the runner copies the file into the instance home, and it must be a valid
+recording (an empty or invalid file fails the run).
+
 ## Chat
 
 Personas are `owner`, `stranger`, `alice`, `bob`; `group:<name>` is a group chat (`team` has alice and
@@ -133,6 +139,11 @@ schema. Modifiers may sit inside the kind's mapping or beside it:
 - `within: { from: "+6m", to: "+10m" }`: offsets from `clock.start`; `during: "22:00-07:00"`: a
   daily window in the profile time zone.
 - A value may be negated with `!`: `decision: { reason: "!muted" }`.
+- `replay_match: <dedup-key prefix>` (a message expectation only) names a message that must not
+  be sent, so an exported replay case (see Debugging) gets a should-not-fire label for that key
+  in the `within` window. It needs `count: 0` and a closed `within` (`from` and `to`); the
+  validator refuses it otherwise. A positive message expectation with a closed `within` is
+  labelled should-fire from the dedup keys of the messages it matched, with no modifier.
 
 Always settle before asserting (the runner does between steps). The runner also adds implicit
 checks (`settled`, journal drops). `logs: { }` fails on unexpected error logs.
@@ -148,6 +159,36 @@ start one with `sandbox_instance op=up` and use:
 - `list_llm_calls` and `read_llm_call` for what the model saw;
 - `read_logs`, or `sandbox_instance op=logs`;
 - `sandbox_inspect op=settle` returns `busy` (the components that did not go idle) when a settle fails.
+
+To retry from a known point, take a snapshot (manual clock only): `sandbox_instance op=snapshot`,
+list them with `sandbox_instance op=snapshots`, start an instance from one with
+`sandbox_instance op=restore` (refused for live and record instances), and remove one with
+`sandbox_instance op=snapshot_delete`. A restore with no `name`, or with the name of the instance
+the snapshot was taken from, replaces that instance if it is running; give another `name` to start
+it beside the first. A snapshot is restored only by the build (version and commit) that took it.
+The store keeps at most `KQ_SANDBOX_MAX_SNAPSHOTS` (default 20, at most 200), and a take beyond
+that is refused until one is deleted.
+
+A green run can become a replay case: `./build/khunquant sandbox run --export-replay <dir> <file>`
+(add `--force` to replace a case), or `sandbox_scenario op=run` with `export_replay` (and `force`).
+Labels come from the scenario's message expectations. Through MCP the directory must lie inside
+the server's working directory, and `force` replaces only a directory that is a replay case:
+anything else there is refused. When the case does not reproduce every label, the run says so
+(`export warning:` on the CLI, `export_warnings` in the MCP result) and still writes it.
+`sandbox_inspect op=export_replay` (with `case` and `labels`) is the step underneath: it writes
+the case inside the instance home (`lab/export/<case>/`), which `down` deletes, and copies
+nothing out.
+
+The launcher can show the journal as a timeline, read-only. Start one launcher per instance with
+`KHUNQUANT_HOME=<home> KHUNQUANT_CONFIG=<home>/config.json <launcher> -port <N> -no-browser`. Do not
+save settings in that launcher: a save rewrites the instance's config.
+
+## Several instances
+
+With `KQ_SANDBOX_MAX_INSTANCES` above 1, `instance` (the name) is required on every tool call
+while more than one instance runs; the error lists them. It is optional while exactly one runs.
+`sandbox_instance op=list` shows them, and `down`, `restart` and `logs` take `name`. Each instance
+is a whole gateway process, and every start is checked against the supervisor's memory floor.
 
 ## Known bugs
 

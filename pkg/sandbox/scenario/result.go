@@ -72,6 +72,7 @@ type Result struct {
 type Report struct {
 	Scenario string
 	Status   Status
+	KnownBug string // the review ID of the open defect, for a known_bug scenario
 	Skipped  string
 	Runs     []*Result
 	Passed   int
@@ -102,6 +103,35 @@ func (r *Report) ExitCode() int {
 	}
 	if code == ExitFailed && r.Pass {
 		return 0 // a failed run inside pass_rate
+	}
+	return code
+}
+
+// Tag is what the report's heading and summary line carry for a known_bug scenario
+// ("[known_bug H8]"), so an expected red cannot be mistaken for a regression. An active
+// scenario has none.
+func (r *Report) Tag() string {
+	if r.Status != StatusKnownBug {
+		return ""
+	}
+	return "[known_bug " + r.KnownBug + "]"
+}
+
+// KnownBugFixed says that a known_bug scenario ran and passed: the defect looks fixed,
+// and the change that fixed it forgot to flip the status to active. It is a warning, not
+// a failure.
+func (r *Report) KnownBugFixed() bool {
+	return r.Status == StatusKnownBug && r.Skipped == "" && r.Pass && r.ExitCode() == 0
+}
+
+// GateExitCode is the exit status that decides a run. With knownBugsMayFail (the nightly
+// known-bug job) an expectation that failed in a known_bug scenario is expected and
+// counts as 0; everything else counts as ExitCode does: an active scenario that failed,
+// and an invalid scenario or an infrastructure failure of any scenario.
+func (r *Report) GateExitCode(knownBugsMayFail bool) int {
+	code := r.ExitCode()
+	if knownBugsMayFail && r.Status == StatusKnownBug && code == ExitFailed {
+		return 0
 	}
 	return code
 }

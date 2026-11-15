@@ -255,6 +255,7 @@ type Health struct {
 
 	LiquidationDistancePct float64
 	MarginRatioPct         float64
+	MarginRatioKnown       bool // false: MarginRatioPct 0 means unknown; read via MarginIsKnown
 	DeltaDriftPct          float64
 	LegMismatchPct         float64
 	FundingAPYPct          float64
@@ -269,6 +270,10 @@ type Health struct {
 	CooldownSeconds int
 	DataOK          bool
 }
+
+// MarginIsKnown reports whether MarginRatioPct is a reading: a non-zero value always
+// is; an exact 0 only when MarginRatioKnown says so (fail-safe: unknown otherwise).
+func (h Health) MarginIsKnown() bool { return h.MarginRatioKnown || h.MarginRatioPct != 0 }
 
 // Label is the label of the score.
 func (h Health) Label() string { return LabelForScore(h.Score) }
@@ -311,7 +316,6 @@ func (h Health) Encode() map[string]float64 {
 		keySilenced: float64(Mask(h.SilencedCodes)),
 		keyScore:    float64(h.Score),
 		keyLiq:      f(h.LiquidationDistancePct),
-		keyMargin:   f(h.MarginRatioPct),
 		keyDrift:    f(h.DeltaDriftPct),
 		keyLeg:      f(h.LegMismatchPct),
 		keyAPY:      f(h.FundingAPYPct),
@@ -325,6 +329,10 @@ func (h Health) Encode() map[string]float64 {
 	}
 	if h.PnLKnown {
 		m[keyPnL] = f(h.PnLUSDT)
+	}
+	// An unknown margin ratio is left out, like an unknown PnL: it is not 0.
+	if h.MarginIsKnown() {
+		m[keyMargin] = f(h.MarginRatioPct)
 	}
 	return m
 }
@@ -360,7 +368,6 @@ func Decode(m map[string]float64) (Health, error) {
 		BreachCodes:            FromMask(uint64(mask)),
 		SilencedCodes:          FromMask(uint64(silenced)),
 		LiquidationDistancePct: m[keyLiq],
-		MarginRatioPct:         m[keyMargin],
 		DeltaDriftPct:          m[keyDrift],
 		LegMismatchPct:         m[keyLeg],
 		FundingAPYPct:          m[keyAPY],
@@ -368,6 +375,11 @@ func Decode(m map[string]float64) (Health, error) {
 		IntervalSeconds:        int(math.Min(m[keyInterval], 7*24*3600)),
 		CooldownSeconds:        int(math.Min(m[keyCooldown], 30*24*3600)),
 		DataOK:                 m[keyDataOK] == 1,
+	}
+	// A report that predates the flag carries 0 for an unknown margin ratio and cannot be
+	// told from a reading of exactly 0: it reads as unknown.
+	if v, has := m[keyMargin]; has && v != 0 {
+		h.MarginRatioPct, h.MarginRatioKnown = v, true
 	}
 	if v, has := m[keyPnL]; has {
 		h.PnLUSDT, h.PnLKnown = v, true

@@ -470,6 +470,7 @@ func (s *DNPlans) payload(ctx context.Context, plan *deltaneutral.Plan, res delt
 		SilencedCodes:          s.silenced(ctx, plan.ID, res.Eval.BreachCodes),
 		LiquidationDistancePct: snap.LiquidationDistancePct,
 		MarginRatioPct:         snap.MarginRatioPct,
+		MarginRatioKnown:       snap.MarginIsKnown(),
 		DeltaDriftPct:          snap.DeltaDriftPct,
 		LegMismatchPct:         res.Eval.LegMismatchPct,
 		FundingAPYPct:          snap.FundingAPYPct,

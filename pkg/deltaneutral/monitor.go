@@ -236,6 +236,7 @@ func (m *Monitor) Check(ctx context.Context, plan Plan) (MonitorResult, error) {
 					}
 					if pos.MarginRatio != nil {
 						futuresState.MarginRatioPct = *pos.MarginRatio * 100 // Convert to percentage
+						futuresState.MarginRatioKnown = true
 					}
 				}
 			}

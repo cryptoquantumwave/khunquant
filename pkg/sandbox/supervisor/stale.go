@@ -11,14 +11,18 @@ import (
 )
 
 // staleAfter is how old a home must be before it can be stale: a supervisor of another
-// process may be starting an instance in it, and its pid file is not written yet.
+// process may be starting an instance in it, and its pid file is not written yet. It
+// also covers a caller's skip set that was read just before this supervisor's own Up
+// registered the name and made the home.
 const staleAfter = 2 * time.Minute
 
 // scanStale lists the kq-sbx-* homes under tmpDir that carry the instance marker, are
-// not in skip (the instances this supervisor runs) and have no live process. They are
-// listed, never adopted: nothing knows their token. A home whose process is alive, or
-// whose marker names a supervisor that is alive, belongs to another supervisor and is
-// left out. (A home of this process that is no longer in the table counts as alive.)
+// not in skip (the instances this supervisor runs or is starting) and have no live
+// process. They are listed, never adopted: nothing knows their token. A home whose
+// process is alive, or whose marker names another supervisor that is alive, belongs to
+// that supervisor and is left out. A marker that names this process is no owner: Up
+// registers a name before it makes the home, so a home of this process that is not in
+// skip is one `down keep_home` left, and nothing else can free its name (PR6-3).
 func scanStale(tmpDir string, skip map[string]bool) ([]Info, error) {
 	if tmpDir == "" {
 		tmpDir = os.TempDir()
@@ -43,8 +47,9 @@ func scanStale(tmpDir string, skip map[string]bool) ([]Info, error) {
 		// A marker that names its supervisor is stale only when that supervisor is gone
 		// too: it may be keeping a crashed instance to read its log or to restart it.
 		// Checked first so a live owner's pid file is not touched (the check below
-		// deletes a dead pid file). A marker with no supervisor keeps the pid rule.
-		if sp := markerSupervisor(dir); sp > 0 && processAlive(sp) {
+		// deletes a dead pid file). A marker with no supervisor, or with this process as
+		// its supervisor, keeps the pid rule.
+		if sp := markerSupervisor(dir); sp > 0 && sp != os.Getpid() && processAlive(sp) {
 			continue
 		}
 		if pf := pid.ReadPidFileWithCheck(dir); pf != nil {

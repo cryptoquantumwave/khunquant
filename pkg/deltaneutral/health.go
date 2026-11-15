@@ -24,6 +24,7 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 			EstimatedNextFundingUSDT: input.FundingInfo.EstimatedNextUSDT,
 			LiquidationPrice:         input.FuturesState.LiquidationPrice,
 			MarginRatioPct:           input.FuturesState.MarginRatioPct,
+			MarginRatioKnown:         input.FuturesState.MarginIsKnown(),
 			CrossExchange:            input.Plan.SpotProvider != input.Plan.FuturesProvider,
 			DataStatus:               DataStatusOK,
 		},
@@ -83,6 +84,10 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 
 	// Step 6: Classify margin state
 	marginState := classifyMargin(input.FuturesState.MarginRatioPct, liquidationDistance, input.Plan.RiskPolicy)
+	if input.Plan.Status != PlanStatusDraft && input.Plan.Status != PlanStatusReady {
+		// A plan with a position: see classifyMarginKnown. A draft or ready plan has none.
+		marginState = classifyMarginKnown(input.FuturesState, liquidationDistance, input.Plan.RiskPolicy)
+	}
 	result.Snapshot.MarginState = marginState
 
 	// Step 7: Cross-exchange flag (already set above)
@@ -226,6 +231,19 @@ func classifyFunding(fundingInfo FundingInfo, policy RiskPolicy) string {
 	}
 
 	return "neutral"
+}
+
+// classifyMarginKnown is classifyMargin for a futures state whose margin ratio may be
+// unknown. An unknown ratio is not 0% used: it adds nothing, so the liquidation distance
+// decides when there is one (a zero mark or liquidation price means there is none, see
+// computeLiquidationDistance). With neither, nothing says the position is safe, so the
+// state is "watch" (the existing state for a margin that needs a look), never "safe".
+func classifyMarginKnown(f FuturesState, liquidationDistancePct float64, policy RiskPolicy) string {
+	distKnown := f.MarkPrice != 0 && f.LiquidationPrice != 0
+	if !f.MarginIsKnown() && !distKnown {
+		return "watch"
+	}
+	return classifyMargin(f.MarginRatioPct, liquidationDistancePct, policy)
 }
 
 // classifyMargin classifies margin state based on ratio and liquidation distance

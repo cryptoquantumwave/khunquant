@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -15,9 +14,9 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
 )
 
-// S108A-3 at the wire. A Webull order whose answer was lost is reconciled by reading the
-// listings: the adapter has no lookup by client order ID (see ClientOrderIDKey), so the retry
-// looks for the ID on one open page and one history page. The order here is a buy limit below
+// S108A-3 at the wire. A Webull order whose answer was lost is reconciled by asking
+// order/detail for its client order ID (ProbeOrderByClientID) and, when that finds nothing,
+// by reading one open page and one history page. The order here is a buy limit below
 // the market: it rests among 12 other resting limits, so the open page is where it must be
 // found, and a list seed puts it beyond the 10th row, where a page of 10 would not show it.
 // (A market order fills at once and is found on a history page of one row, whatever the size
@@ -91,13 +90,23 @@ func retryOrder(e *env, req broker.OrderRequest, first time.Time) (ccxt.Order, b
 	return o, outcome, err
 }
 
-// The venue honours page_size: the retry reads the open page of 100, finds the resting order
-// on it beyond the 10th row, and places nothing: one create under its client order ID. On a
-// page of 10 rows the order would not be listed (the next test).
+// noDetail makes order/detail fail, so the probe misses and the reconcile is the listings
+// alone: what it was before the probe, and what it is when Webull's detail call is down.
+func noDetail(e *env) {
+	e.mu.Lock()
+	e.failDetail = true
+	e.mu.Unlock()
+}
+
+// The venue honours page_size and order/detail is down: the retry reads the open page of
+// 100, finds the resting order on it beyond the 10th row, and places nothing: one create
+// under its client order ID. On a page of 10 rows the order would not be listed (the next
+// tests).
 func TestWebull_ReconcileReadsOnePage(t *testing.T) {
 	e := newEnv(t, true)
 	req, cid, first := lostLimit(e)
 	hideBeyondTen(e, cid, 0)
+	noDetail(e)
 	o, outcome, err := retryOrder(e, req, first)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
@@ -110,17 +119,13 @@ func TestWebull_ReconcileReadsOnePage(t *testing.T) {
 	}
 }
 
-// Known defect, gated until it is fixed (delete the gate with the fix). The adapter asks for a
-// page of 100 and takes a page shorter than 100 for the whole listing (pageIsFull). A venue
-// that returns 10 rows when asked for 100 (the simulator's ListPageCap) leaves the resting
-// order off the page; the retry concludes that it is absent and places it again under the same
-// client order ID, which the simulator accepts by default. Whether Webull returns fewer rows
-// than asked while more exist is not stated in docs/webull-api-spec.md ("default 10, max
-// 100"). Run with KQ_KNOWN_BUG_WEBULL_SHORT_PAGE=1; it fails while the defect is open.
+// The adapter asks for a page of 100 and takes a page shorter than 100 for the whole listing
+// (pageIsFull). A venue that returns 10 rows when asked for 100 (the simulator's ListPageCap)
+// leaves the resting order off the page. Whether Webull ever does so is not stated in
+// docs/webull-api-spec.md ("default 10, max 100"); its listing pages do say that a listing
+// "may not return the most recent order data in real time". Either way the order is found by
+// its client order ID: order/detail is asked first, and nothing is placed.
 func TestWebull_ReconcileOnAShortPage(t *testing.T) {
-	if os.Getenv("KQ_KNOWN_BUG_WEBULL_SHORT_PAGE") != "1" {
-		t.Skip("known defect (a listing page cut below the page_size asked for is read as complete, so a lost order beyond it is placed again): set KQ_KNOWN_BUG_WEBULL_SHORT_PAGE=1 to reproduce it")
-	}
 	e := newEnv(t, true)
 	req, cid, first := lostLimit(e)
 	hideBeyondTen(e, cid, 10)
@@ -128,11 +133,44 @@ func TestWebull_ReconcileOnAShortPage(t *testing.T) {
 	if n := e.creates(cid); n != 1 {
 		t.Fatalf("%d orders booked under %s after the retry (outcome %q, err %v), want still 1: a page of 10 rows, asked for 100, was read as the whole listing", n, cid, outcome, err)
 	}
-	switch {
-	case err == nil && (outcome != broker.OutcomeFoundExisting || deref(o.Id) != cid):
-		t.Fatalf("retry returned %s with outcome %q, want the order %s found", deref(o.Id), outcome, cid)
-	case err != nil && !errors.Is(err, broker.ErrReconcileUnavailable) && !errors.Is(err, broker.ErrReconcileUnproven):
-		t.Fatalf("retry: %v, want the order found, or unavailable or unproven with nothing placed", err)
+	if err != nil || outcome != broker.OutcomeFoundExisting || deref(o.Id) != cid || deref(o.Status) != "open" {
+		t.Fatalf("retry returned %s (%s) with outcome %q, err %v: want the resting order %s found", deref(o.Id), deref(o.Status), outcome, err, cid)
+	}
+}
+
+// What is left open, pinned so that it is not mistaken for fixed: with order/detail down
+// (the probe misses) AND a page cut below the size asked for, the listings alone still read
+// the short page as complete, and a caller with no journal mark places the order again. The
+// simulator accepts the repeated client order ID. A journaled caller is not exposed: its mark
+// makes the empty answer unproven (the next test).
+func TestWebull_ReconcileOnAShortPage_DetailDownIsTheResidual(t *testing.T) {
+	e := newEnv(t, true)
+	req, cid, first := lostLimit(e)
+	hideBeyondTen(e, cid, 10)
+	noDetail(e)
+	if _, outcome, err := retryOrder(e, req, first); err != nil || outcome != broker.OutcomePlacedAfterReconcile {
+		t.Fatalf("retry: outcome %q, err %v; want the documented residual (placed after reconcile)", outcome, err)
+	}
+	if n := e.creates(cid); n != 2 {
+		t.Fatalf("%d orders booked under %s, want 2: if this is now 1 the residual is closed, so update this test and the comment on ProbeOrderByClientID", n, cid)
+	}
+}
+
+// The same residual with the journal's mark (broker.WithPriorSend, what approval.order and
+// dca.execute pass after a marked first attempt): the empty answer is not believed and
+// nothing is placed.
+func TestWebull_ReconcileOnAShortPage_DetailDownWithAMarkPlacesNothing(t *testing.T) {
+	e := newEnv(t, true)
+	req, cid, first := lostLimit(e)
+	hideBeyondTen(e, cid, 10)
+	noDetail(e)
+	_, err := broker.PlaceOrderIdempotent(context.Background(), e.a, req, lostKey, 2, first,
+		broker.WithClock(e.clk.Now), broker.WithPriorSend(true))
+	if !errors.Is(err, broker.ErrReconcileUnproven) {
+		t.Fatalf("retry: %v, want unproven", err)
+	}
+	if n := e.creates(cid); n != 1 {
+		t.Fatalf("%d orders booked under %s, want still 1", n, cid)
 	}
 }
 

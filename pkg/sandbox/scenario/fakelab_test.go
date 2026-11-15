@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/journal"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab"
 	labapi "github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/api"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/lab/inspect"
@@ -64,6 +65,7 @@ type fakeSup struct {
 	onUp     func(n int, i *fakeInstance) // after an instance is built (n from 1)
 	onPatch  func(i *fakeInstance, patch map[string]any) (changed bool, err error)
 	logs     []string
+	workflows func(context.Context, journal.ListFilter) ([]journal.Workflow, error) // the engine behind inspect workflows
 	upOpts   []supervisor.UpOptions // what each Up was given
 }
 
@@ -117,7 +119,9 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 	l.Settle = func(ctx context.Context) error { _, err := l.SettleWait(ctx, 300*time.Millisecond); return err }
 	l.DeclareKinds("chat.out", "clock.step", "settle", "config.reload", "event.*", "exchange.req", "llm.call")
 
-	deps := func() inspect.Deps { return inspect.Deps{SettleWait: l.SettleWait, Snapshot: l.Quiesce.Snapshot} }
+	deps := func() inspect.Deps {
+		return inspect.Deps{SettleWait: l.SettleWait, Snapshot: l.Quiesce.Snapshot, Workflows: f.workflows}
+	}
 	groups := []lab.Group{
 		inspect.Group(j, deps), l.ClockGroup(),
 		recorder(l, j, "chat", "send", "press", "react", "outbox", "set_state"),

@@ -47,6 +47,11 @@ func TestScenarioTool_RunIsSingleFlightAndBounded(t *testing.T) {
 	if res, _ := m.runOp(context.Background(), scenarioArgs{Op: "run", Inline: inline, Runs: maxMCPRuns + 1}); !res.IsError {
 		t.Error("a run asking for more than maxMCPRuns runs was accepted")
 	}
+	// The cap counts rows x runs: 3 rows at 7 runs is 21.
+	matrix := strings.Replace(inline, "scenario: ", "matrix: {m: [a, b, c]}\nscenario: ", 1)
+	if res, _ := m.runOp(context.Background(), scenarioArgs{Op: "run", Inline: matrix, Runs: 7}); !res.IsError {
+		t.Error("a matrix of 3 rows at 7 runs (21 in all) was accepted")
+	}
 	m.runMu.Lock()
 	res, _ := m.runOp(context.Background(), scenarioArgs{Op: "run", Inline: inline})
 	m.runMu.Unlock()

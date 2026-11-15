@@ -151,6 +151,13 @@ schema. Modifiers may sit inside the kind's mapping or beside it:
   must exist (the sets come from the code), and a `count: 0` on a payload path below a part that declares no
   keys (`args.*` of `tool.call`, `event.payload.*`) is refused unless the same file reads that path in a
   positive expectation, which fails when the key is misspelt.
+- `within` and `during` apply to journal kinds and to `workflow` (the time it was created);
+  `probe` and `logs` have no timestamps, and the validator refuses a window on them.
+- `order: { venue: okx }` counts the orders the simulator's ledger accepted (`exchange.order`,
+  `create`), whatever path the adapter used (ccxt creates OKX orders through `batch-orders`).
+  Bitkub has no ledger: `order: { venue: bitkub }` and an `order` with no venue read the request log.
+- With a `matrix`, every row must meet `pass_rate` by itself; a row that meets it with failed runs
+  prints `pass (flaky, 8 of 10)`, and a row below it fails the scenario.
 - A value may be negated with `!`: `decision: { reason: "!muted" }`.
 - `replay_match: <dedup-key prefix>` (a message expectation only) names a message that must not
   be sent, so an exported replay case (see Debugging) gets a should-not-fire label for that key

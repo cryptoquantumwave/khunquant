@@ -51,6 +51,7 @@ func Expand(f *File) ([]*File, error) {
 			return nil, err
 		}
 		g.MatrixRow = row
+		g.Runs = f.Runs // the row is decoded again from the raw file: keep a runs override
 		out = append(out, g)
 	}
 	return out, nil

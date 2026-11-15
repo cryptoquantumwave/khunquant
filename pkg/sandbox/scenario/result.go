@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox/labjournal"
@@ -76,7 +77,27 @@ type Report struct {
 	Skipped  string
 	Runs     []*Result
 	Passed   int
-	Pass     bool // Passed/len(Runs) >= pass_rate
+	Rows     []RowResult
+	Pass     bool // every row meets pass_rate
+}
+
+// RowResult is the runs of one matrix row (the only row, for a file with no matrix).
+type RowResult struct {
+	Matrix       map[string]string
+	Passed, Runs int
+	Pass         bool // Passed/Runs >= pass_rate
+}
+
+// Label is the row's verdict for a summary line: "pass", "pass (flaky, 8 of 10)" for a row
+// that met pass_rate with some failed runs, or "FAIL (3 of 10)".
+func (w RowResult) Label() string {
+	switch {
+	case !w.Pass:
+		return fmt.Sprintf("FAIL (%d of %d)", w.Passed, w.Runs)
+	case w.Passed < w.Runs:
+		return fmt.Sprintf("pass (flaky, %d of %d)", w.Passed, w.Runs)
+	}
+	return "pass"
 }
 
 // Process exit codes of a run, as `khunquant sandbox run` reports them.

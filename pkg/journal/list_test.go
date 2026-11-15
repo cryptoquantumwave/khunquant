@@ -50,3 +50,28 @@ func TestList_FiltersByStatusAndAge(t *testing.T) {
 		t.Errorf("StepKey = %q", got)
 	}
 }
+
+// A Kind filter is part of the query, so Limit counts only workflows of that kind: a kind
+// older than Limit newer workflows of another kind is still found.
+func TestList_KindIsFilteredBeforeTheLimit(t *testing.T) {
+	ctx := context.Background()
+	other := fiveSteps(newLedger(), newExchange())
+	other.Kind = "other"
+	n := newNode(t, dbPath(t), t0, []Definition{fiveSteps(newLedger(), newExchange()), other})
+
+	first := mustStart(t, n.Engine, "five", nil)
+	for range 3 {
+		n.clock.Advance(time.Minute)
+		mustStart(t, n.Engine, "other", nil)
+	}
+	got, err := n.List(ctx, ListFilter{Kind: "five", Limit: 2})
+	if err != nil || len(got) != 1 || got[0].ID != first {
+		t.Fatalf("Kind five, Limit 2 = %v, %v; want the one workflow behind three newer ones", got, err)
+	}
+	if got, err := n.List(ctx, ListFilter{Limit: 2}); err != nil || len(got) != 2 || got[0].Kind != "other" {
+		t.Fatalf("no kind, Limit 2 = %v, %v", got, err)
+	}
+	if got, err := n.List(ctx, ListFilter{Kind: "nope"}); err != nil || len(got) != 0 {
+		t.Fatalf("an unknown kind = %v, %v", got, err)
+	}
+}

@@ -104,23 +104,32 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Report, error) {
 		sctx, cancel = context.WithTimeoutCause(ctx, r.Timeout, errTimeout)
 		defer cancel()
 	}
+	rep.Pass = true
 	for _, g := range files {
+		row := RowResult{Matrix: g.MatrixRow}
 		for i := 1; i <= g.RunCount(); i++ {
 			if err := ctx.Err(); err != nil {
 				return rep, err
 			}
+			row.Runs++
 			if sctx.Err() != nil { // the cap ended an earlier run: the rest do not start
 				rep.Runs = append(rep.Runs, &Result{Scenario: g.Scenario, Matrix: g.MatrixRow, Run: i, StartSim: g.StartTime(), Infra: errTimeout.Error()})
 				continue
 			}
 			res := r.runOnce(sctx, g, i)
 			if res.Pass {
+				row.Passed++
 				rep.Passed++
 			}
 			rep.Runs = append(rep.Runs, res)
 		}
+		// Each matrix row meets pass_rate on its own: pooled, a row that fails every time
+		// would hide behind the rows that pass.
+		row.Pass = float64(row.Passed)/float64(row.Runs) >= f.RequiredPassRate()
+		rep.Rows = append(rep.Rows, row)
+		rep.Pass = rep.Pass && row.Pass
 	}
-	rep.Pass = len(rep.Runs) > 0 && float64(rep.Passed)/float64(len(rep.Runs)) >= f.RequiredPassRate()
+	rep.Pass = rep.Pass && len(rep.Runs) > 0
 	return rep, nil
 }
 

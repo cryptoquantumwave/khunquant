@@ -15,7 +15,7 @@ require (
 	github.com/ergochat/readline v0.1.3
 	github.com/expr-lang/expr v1.17.8
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
+	github.com/gomarkdown/markdown v0.0.0-20261109103609-13f93121d67a
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3

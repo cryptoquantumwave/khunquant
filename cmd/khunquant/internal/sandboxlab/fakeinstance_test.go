@@ -39,6 +39,7 @@ func TestHelperFakeInstance(t *testing.T) {
 	}
 	home, token := os.Getenv("KHUNQUANT_HOME"), os.Getenv("KQ_SANDBOX_TOKEN")
 	fmt.Println("fake instance starting, token=" + token)
+	fmt.Println("env KQ_SANDBOX_CLOCK_MODE=" + os.Getenv("KQ_SANDBOX_CLOCK_MODE")) // what op=up asked the clock to be
 
 	var cfg struct {
 		Gateway struct {

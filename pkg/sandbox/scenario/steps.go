@@ -222,8 +222,37 @@ func (s *runState) runStep(ctx context.Context, step *Step) error {
 			return err
 		}
 	}
-	_, err = call(ctx, s.c, spec.Group, spec.Op, args)
-	return err
+	expectUndelivered := false
+	if step.Kind == "chat" { // the runner's own key: the lab op decodes strictly and would refuse it
+		expectUndelivered, _ = args["expect_undelivered"].(bool)
+		delete(args, "expect_undelivered")
+	}
+	out, err := call(ctx, s.c, spec.Group, spec.Op, args)
+	if err != nil || step.Kind != "chat" {
+		return err
+	}
+	return checkDelivered(out, expectUndelivered)
+}
+
+// checkDelivered fails a chat step whose message did not reach the instance (a group message
+// with no mention, a sender allow_from refuses), so a scenario of "must not happen" checks
+// cannot pass without a turn. A step that tests the refusal says expect_undelivered: true, and
+// then a message that was delivered is the failure.
+func checkDelivered(out json.RawMessage, expectUndelivered bool) error {
+	var ans struct {
+		Delivered *bool  `json:"delivered"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal(out, &ans); err != nil || ans.Delivered == nil {
+		return fmt.Errorf("chat: the answer %q does not say whether the message was delivered", out)
+	}
+	switch {
+	case !*ans.Delivered && !expectUndelivered:
+		return fmt.Errorf("chat: the message was not delivered (%s); if the scenario tests a refusal, add expect_undelivered: true", ans.Reason)
+	case *ans.Delivered && expectUndelivered:
+		return errors.New("chat: expect_undelivered is set but the message was delivered")
+	}
+	return nil
 }
 
 // maxRecordingFile bounds a recording the runner copies into the home.

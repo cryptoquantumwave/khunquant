@@ -1,6 +1,7 @@
 package simchat
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -30,7 +31,10 @@ func schema(props ...string) json.RawMessage {
 }
 
 func decode(args json.RawMessage, v any) error {
-	if err := json.Unmarshal(args, v); err != nil {
+	// Strict: a misspelt key (mentoin: true) is a refusal, not a silently ignored argument.
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		return lab.Errorf(lab.CodeBadArgs, "%v", err)
 	}
 	return nil

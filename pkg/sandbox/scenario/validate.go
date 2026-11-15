@@ -291,6 +291,11 @@ func (v *validator) step(p string, s *Step, spec stepSpec) {
 		if s.Kind == "call_tool" && args["as"] == "cli" {
 			v.addf(p+"/as", "cli is the local console: it passes every owner gate whatever proactive.owner says, and no chat turn can carry it; use owner or a persona")
 		}
+		if x, ok := args["expect_undelivered"]; ok {
+			if _, isBool := x.(bool); !isBool || s.Kind != "chat" {
+				v.addf(p+"/expect_undelivered", "only a chat step takes expect_undelivered, and it is true or false")
+			}
+		}
 		for _, k := range []string{"wall_cap", "timeout_wall"} {
 			if str, ok := args[k].(string); ok {
 				if d, err := time.ParseDuration(str); err != nil || d <= 0 {

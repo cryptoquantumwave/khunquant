@@ -92,6 +92,11 @@ bob); `owner@group:team` speaks in a group.
 - chat.channel: { state: down }     # the chat channel is down; up brings it back
 ```
 
+A `chat` step whose message does not reach the instance (a group message with no `mention: true`, a
+persona that `allow_from` refuses) fails the step, so a scenario of "must not happen" checks cannot pass
+without a turn. A scenario that tests the refusal says so: `chat: { as: stranger, text: hi, expect_undelivered: true }`
+(and then a delivered message fails). An argument the chat ops do not know (`mentoin: true`) is refused.
+
 `on` selects the message by `to` and `contains`. Tools run as a persona with
 `call_tool: { as: owner, name: ..., args: {...} }`.
 

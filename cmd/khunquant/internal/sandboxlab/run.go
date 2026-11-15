@@ -295,6 +295,9 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 				continue
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%-8s %s (%d of %d runs)\n", rep.Verdict(), strings.TrimSpace(rep.Scenario+" "+rep.Tag()), rep.Passed, len(rep.Runs))
+			for _, line := range rep.RowLines() {
+				fmt.Fprintf(cmd.OutOrStdout(), "           %s\n", line)
+			}
 			if rep.KnownBugFixed() {
 				fmt.Fprintf(cmd.OutOrStdout(), "warning  known-bug scenario %s passed; the defect looks fixed, so flip its status to active and drop known_bug\n", rep.Scenario)
 			}

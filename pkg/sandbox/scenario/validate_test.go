@@ -97,7 +97,7 @@ func TestValidate_RequirementsNamePR(t *testing.T) {
 		t.Error("with no caps only static checks run")
 	}
 
-	f = parseString(t, base+"expect:\n  - order: {venue: okx, client_id: abc}\n  - order: {venue: okx, count: 1}\n")
+	f = parseString(t, base+"expect:\n  - order: {venue: okx, client_id: abc}\n  - order: {venue: bitkub, count: 1}\n")
 	issues = Validate(f, caps)
 	if got := issueAt(issues, "/expect/0/order/client_id"); !strings.Contains(got, "SBX-14a") {
 		t.Errorf("order.client_id: %q (%v)", got, issues)
@@ -246,6 +246,10 @@ func TestValidate_VacuousExpectationsAreRefused(t *testing.T) {
 		{`{message: {to: owner}, count: [1]}`, "/expect/0/count", "one value"},
 		{`{message: {to: owner, count: 0}, during: {from: "22:00"}}`, "/expect/0/during", "one value"},
 		{`{decision: {trigger: move_vs_vol}, count: ">= 0"}`, "/expect/0/count", "checks nothing"},
+		// a window on a kind without timestamps would be ignored (TRUST-11)
+		{`{logs: {}, within: {from: "+0m", to: "+1h"}}`, "/expect/0/within", "no timestamps"},
+		{`{logs: {level: WARN}, during: "22:00-07:00"}`, "/expect/0/during", "no timestamps"},
+		{`{probe: {alert_job_exists: x, equals: false}, within: {from: "+0m", to: "+1h"}}`, "/expect/0/within", "no timestamps"},
 		// payload paths
 		{`event: {kind: tool.call, fields: {nme: install_skill}, count: 0}`, "/expect/0/event/fields/nme", "no tool.call entry has this path"},
 		{`event: {kind: tool.call, fields: {nme: "!install_skill"}}`, "/expect/0/event/fields/nme", "no tool.call entry has this path"},

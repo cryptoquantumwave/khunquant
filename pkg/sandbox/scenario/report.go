@@ -27,6 +27,23 @@ func (r *Report) Verdict() string {
 	return "FAIL"
 }
 
+// RowLines is one line per matrix row ("[model=a]: pass (flaky, 8 of 10)"), and for a
+// scenario with no matrix a line only when its runs were flaky (the scenario's own verdict
+// says when it failed).
+func (r *Report) RowLines() []string {
+	var out []string
+	for _, w := range r.Rows {
+		if len(w.Matrix) > 0 || (w.Pass && w.Passed < w.Runs) {
+			line := w.Label()
+			if len(w.Matrix) > 0 {
+				line = strings.TrimSpace(matrixLabel(w.Matrix)) + ": " + line
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 // Markdown is the report a person or an agent acts on: per run, what failed with want,
 // got, the journal entries around it and the model's calls.
 func (r *Report) Markdown() string {
@@ -37,6 +54,9 @@ func (r *Report) Markdown() string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "%d of %d runs passed.\n", r.Passed, len(r.Runs))
+	for _, line := range r.RowLines() {
+		fmt.Fprintf(&b, "- %s\n", line)
+	}
 	for _, res := range r.Runs {
 		verdict := map[bool]string{true: "pass", false: "FAIL"}[res.Pass]
 		fmt.Fprintf(&b, "\n## Run %d%s: %s (%s of wall time, sim start %s)\n\n", res.Run, matrixLabel(res.Matrix), verdict,

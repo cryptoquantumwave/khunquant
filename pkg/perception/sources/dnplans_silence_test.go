@@ -27,11 +27,14 @@ func latestHealth(t *testing.T, r *dnRig, n int) planhealth.Health {
 	return h
 }
 
-func silenceRig(t *testing.T) (*dnRig, func(d time.Duration)) {
+// silenceRig starts the source after setup has stored the silences: the loop builds its
+// first report as soon as it runs, so a silence stored afterwards may or may not be in it.
+func silenceRig(t *testing.T, setup func(r *dnRig)) (*dnRig, func(d time.Duration)) {
 	t.Helper()
 	r := newDNRig(t, nil, dnPlan(7, "1m"))
 	r.store.silenceNow = r.clock.Now
 	r.checker.codes = []string{planhealth.CodeMarginCritical, planhealth.CodeLegMismatch, planhealth.CodeFundingNegative}
+	setup(r)
 	return r, r.run(t)
 }
 
@@ -57,8 +60,7 @@ func TestDNPlans_ReportCarriesTheCodesTheOwnerSilenced(t *testing.T) {
 }
 
 func TestDNPlans_ASilenceEndsWhenItsTimeIsUpAndTheNextReportDropsIt(t *testing.T) {
-	r, advance := silenceRig(t)
-	r.store.silence(7, planhealth.CodeLegMismatch, epoch.Add(90*time.Second))
+	r, advance := silenceRig(t, func(r *dnRig) { r.store.silence(7, planhealth.CodeLegMismatch, epoch.Add(90*time.Second)) })
 	waitFor(t, "the first event", func() bool { return len(r.out.events()) == 1 })
 	if h := latestHealth(t, r, 1); len(h.SilencedCodes) != 1 {
 		t.Fatalf("silenced at the start = %v", h.SilencedCodes)
@@ -78,8 +80,7 @@ func TestDNPlans_ASilenceEndsWhenItsTimeIsUpAndTheNextReportDropsIt(t *testing.T
 }
 
 func TestDNPlans_ClearedSilencesTakeEffectAtTheNextCheck(t *testing.T) {
-	r, advance := silenceRig(t)
-	r.store.silence(7, planhealth.CodeMarginCritical, epoch.Add(24*time.Hour))
+	r, advance := silenceRig(t, func(r *dnRig) { r.store.silence(7, planhealth.CodeMarginCritical, epoch.Add(24*time.Hour)) })
 	waitFor(t, "the first event", func() bool { return len(r.out.events()) == 1 })
 	if h := latestHealth(t, r, 1); len(h.SilencedCodes) != 1 {
 		t.Fatalf("silenced = %v", h.SilencedCodes)
@@ -94,8 +95,7 @@ func TestDNPlans_ClearedSilencesTakeEffectAtTheNextCheck(t *testing.T) {
 }
 
 func TestDNPlans_ASilenceOfACodeNotInBreachIsNotCarried(t *testing.T) {
-	r, _ := silenceRig(t)
-	r.store.silence(7, planhealth.CodeLiquidationDistanceLow, epoch.Add(time.Hour))
+	r, _ := silenceRig(t, func(r *dnRig) { r.store.silence(7, planhealth.CodeLiquidationDistanceLow, epoch.Add(time.Hour)) })
 	waitFor(t, "the first event", func() bool { return len(r.out.events()) == 1 })
 	if h := latestHealth(t, r, 1); len(h.SilencedCodes) != 0 {
 		t.Fatalf("silenced = %v", h.SilencedCodes)

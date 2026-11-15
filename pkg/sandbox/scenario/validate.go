@@ -368,6 +368,16 @@ func (v *validator) modifiers(p string, e *Expectation) {
 	if _, _, err := ParseDuring(e.During); e.During != "" && err != nil {
 		v.addf(p+"/during", "%v", err)
 	}
+	// A probe reads a value as it is now and the log lines carry no sim time: a window on
+	// either would be ignored, and an ignored window reads as a check it is not.
+	if e.Kind == "probe" || e.Kind == "logs" {
+		if e.Within != nil {
+			v.addf(p+"/within", "a %s expectation has no timestamps to window on: remove within", e.Kind)
+		}
+		if e.During != "" {
+			v.addf(p+"/during", "a %s expectation has no timestamps to window on: remove during", e.Kind)
+		}
+	}
 	if e.ReplayMatch != "" && e.Kind != "message" {
 		v.addf(p+"/replay_match", "only a message expectation has replay_match")
 	} else if e.ReplayMatch != "" {

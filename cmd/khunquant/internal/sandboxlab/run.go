@@ -227,6 +227,9 @@ func loadAll(cmd *cobra.Command, paths []string, llm string) ([]loaded, error) {
 			fmt.Fprintf(out, "skip    %s (valid; %s)\n", file, c.Skipped)
 		case c.ok():
 			fmt.Fprintf(out, "ok      %s\n", file)
+			for _, w := range scenario.Warnings(f) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning %s: %s\n", file, w)
+			}
 		default:
 			bad++
 			if c.Error != "" {

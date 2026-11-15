@@ -30,7 +30,13 @@ type evalFixture struct {
 	v  *env
 }
 
-func newEvalFixture(t *testing.T) *evalFixture {
+// newEvalFixture is an instance whose clock has reached 48 h past the start, far enough
+// for every window the tests use.
+func newEvalFixture(t *testing.T) *evalFixture { return newEvalFixtureReached(t, 48*time.Hour) }
+
+// newEvalFixtureReached is an instance whose sim clock stopped reach after the start: an
+// absence window is judged only as far as the run got.
+func newEvalFixtureReached(t *testing.T, reach time.Duration) *evalFixture {
 	t.Helper()
 	sup := newFakeSup(t)
 	info, err := sup.Up(context.Background(), supervisor.UpOptions{ClockStart: evalStart.Format(time.RFC3339), ClockMode: "manual"})
@@ -41,7 +47,9 @@ func newEvalFixture(t *testing.T) *evalFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &evalFixture{t: t, in: sup.order[0], v: newEnv(c, evalStart, ict)}
+	v := newEnv(c, evalStart, ict)
+	v.reached = func(context.Context) (time.Time, error) { return evalStart.Add(reach), nil } // the entries carry sim times of their own
+	return &evalFixture{t: t, in: sup.order[0], v: v}
 }
 
 // chatOut journals what simchat journals for a send: the OutMsg and sandbox:true.
@@ -95,7 +103,7 @@ func TestEval_MessageWithinDuring(t *testing.T) {
 	// to: a persona list and a group glob.
 	f.check(`{message: {to: [stranger, "group:*"], count: 0}}`, false)
 	f.check(`{message: {to: "group:*", count: 1}}`, true)
-	f.check(`{message: {to: "group:other", count: 0}}`, true)
+	f.check(`{message: {to: bob, count: 0}}`, true)
 
 	// severity, buttons, contains.
 	f.check(`{message: {to: owner, severity: warning, buttons: [mute], count: 1}}`, true)

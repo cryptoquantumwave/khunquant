@@ -92,6 +92,11 @@ bob); `owner@group:team` speaks in a group.
 - chat.channel: { state: down }     # the chat channel is down; up brings it back
 ```
 
+A `chat` step whose message does not reach the instance (a group message with no `mention: true`, a
+persona that `allow_from` refuses) fails the step, so a scenario of "must not happen" checks cannot pass
+without a turn. A scenario that tests the refusal says so: `chat: { as: stranger, text: hi, expect_undelivered: true }`
+(and then a delivered message fails). An argument the chat ops do not know (`mentoin: true`) is refused.
+
 `on` selects the message by `to` and `contains`. Tools run as a persona with
 `call_tool: { as: owner, name: ..., args: {...} }`.
 
@@ -135,9 +140,17 @@ One kind key per entry, plus an optional `id`: `message`, `event`, `decision`, `
 `workflow`, `proposal`, `policy`, `probe`, `llm`, `web`, `logs`. The fields of each kind are in the
 schema. Modifiers may sit inside the kind's mapping or beside it:
 
-- `count`: `1`, `">= 1"`, `"<= 2"`, `"0"` (absence). Give an absence check a `within` window (advice; the loader does not enforce it).
+- `count`: `1`, `">= 1"`, `"<= 2"`, `"0"` (absence). Give an absence check a `within` window (advice; the loader does not enforce it, but see the window check below).
 - `within: { from: "+6m", to: "+10m" }`: offsets from `clock.start`; `during: "22:00-07:00"`: a
-  daily window in the profile time zone.
+  daily window in the profile time zone, else in the offset `clock.start` is written in (the loader
+  warns on stderr when a file uses `during` or `run_until: next HH:MM` and sets no `profile.timezone`).
+- An absence check (`count: 0`, `"<= 2"`) with a `within` fails when the run's sim clock stopped before the
+  window ended (or began): the report names both times. "+26h" on a run that ends at +1h proves nothing.
+- A "must not happen" check must not pass because of a typo, so the loader checks the values:
+  `to` (a persona, `dm:<persona>`, `group:<name>` or a glob), `severity`, `trigger` and `workflow.kind`
+  must exist (the sets come from the code), and a `count: 0` on a payload path below a part that declares no
+  keys (`args.*` of `tool.call`, `event.payload.*`) is refused unless the same file reads that path in a
+  positive expectation, which fails when the key is misspelt.
 - A value may be negated with `!`: `decision: { reason: "!muted" }`.
 - `replay_match: <dedup-key prefix>` (a message expectation only) names a message that must not
   be sent, so an exported replay case (see Debugging) gets a should-not-fire label for that key

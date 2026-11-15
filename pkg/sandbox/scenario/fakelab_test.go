@@ -80,6 +80,12 @@ func recorder(l *lab.Lab, j *labjournal.Journal, name string, ops ...string) lab
 			if name == "call_tool" && strings.Contains(string(args), `"fail_tool"`) { // a tool that ran and failed
 				return map[string]any{"is_error": true, "for_llm": "the tool said no"}, nil
 			}
+			if name == "chat" && op == "send" { // simchat's answer: a persona called stranger is refused by allow_from
+				if strings.Contains(string(args), `"stranger"`) {
+					return map[string]any{"delivered": false, "reason": "the channel's allow_from refuses this sender"}, nil
+				}
+				return map[string]any{"delivered": true}, nil
+			}
 			return map[string]any{"ok": true}, nil
 		}})
 	}

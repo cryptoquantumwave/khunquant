@@ -1536,6 +1536,19 @@
         "chat": {
           "anyOf": [
             {
+              "properties": {
+                "expect_undelivered": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The message is expected not to reach the instance (a group message with no mention, a sender allow_from refuses). Without it a message that was not delivered fails the step."
+                }
+              },
               "type": "object",
               "required": [
                 "as",

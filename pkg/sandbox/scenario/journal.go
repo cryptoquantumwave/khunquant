@@ -81,6 +81,19 @@ func (s shape) has(path string) bool {
 	return true
 }
 
+// opaque says whether the dotted path goes below a part of the payload that declares no
+// keys (a tool's arguments, a bus event's own payload), where a misspelt key cannot be told
+// from a real one.
+func (s shape) opaque(path string) bool {
+	for _, seg := range strings.Split(path, ".") {
+		if s == nil {
+			return true
+		}
+		s = s[seg]
+	}
+	return false
+}
+
 func (s shape) keys() string { return strings.Join(slices.Sorted(maps.Keys(s)), ", ") }
 
 // jsonShape is the top level of a struct type's JSON form.

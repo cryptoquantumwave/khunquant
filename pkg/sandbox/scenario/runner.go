@@ -261,14 +261,38 @@ func (r *Runner) stepWall() time.Duration {
 	return 20 * time.Second
 }
 
-// zoneOf is the profile's time zone (UTC when it names none or one that does not load).
+// zoneOf is the time zone of `during` and `next HH:MM`: the profile's, else the fixed
+// offset clock.start is written in (UTC when it does not parse; Validate refuses that).
 func zoneOf(f *File) *time.Location {
 	if name, _ := f.Profile["timezone"].(string); name != "" {
 		if loc, err := time.LoadLocation(name); err == nil {
 			return loc
 		}
 	}
+	if t, err := time.Parse(time.RFC3339, f.Clock.Start); err == nil {
+		_, off := t.Zone()
+		return time.FixedZone(t.Format("-07:00"), off)
+	}
 	return time.UTC
+}
+
+// Warnings are what a loader should say about a valid file: a scenario that reads the
+// clock in a time zone (`during`, `run_until: next HH:MM`) without saying which one gets
+// the offset of clock.start, which is a fixed offset and has no daylight saving.
+func Warnings(f *File) []string {
+	if name, _ := f.Profile["timezone"].(string); name != "" {
+		return nil
+	}
+	zoned := slices.ContainsFunc(f.Expect, func(e Expectation) bool { return e.During != "" })
+	for _, st := range f.Timeline {
+		if v, ok := st.Scalar(); ok && st.Kind == "run_until" && strings.HasPrefix(strings.TrimSpace(v), "next ") {
+			zoned = true
+		}
+	}
+	if !zoned {
+		return nil
+	}
+	return []string{fmt.Sprintf("/profile/timezone is not set: during and next HH:MM use the offset of clock.start (%s)", zoneOf(f))}
 }
 
 // CapsOf is what an instance offers: its lab groups with their ops, and its journal kinds.

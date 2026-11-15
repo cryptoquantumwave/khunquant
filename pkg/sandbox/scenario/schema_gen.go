@@ -113,6 +113,10 @@ func (Step) JSONSchema() *jsonschema.Schema {
 		if len(spec.Req) > 0 { // the loader reads these from a mapping and reports each missing one
 			s.Type, s.Required = "object", spec.Req
 		}
+		if k == "chat" {
+			s.Properties = props("expect_undelivered", &jsonschema.Schema{Type: "boolean",
+				Description: "The message is expected not to reach the instance (a group message with no mention, a sender allow_from refuses). Without it a message that was not delivered fails the step."})
+		}
 		p.Set(k, s)
 	}
 	one := uint64(1)

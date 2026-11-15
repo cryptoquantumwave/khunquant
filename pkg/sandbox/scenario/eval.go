@@ -25,6 +25,8 @@ type env struct {
 	start time.Time // clock.start: the origin of within offsets
 	loc   *time.Location
 	logs  func() ([]string, error) // nil: no log source
+	// reached is the sim time the run got to; nil reads the instance's clock (a test sets it).
+	reached func(context.Context) (time.Time, error)
 	cache map[string]*fetched
 }
 
@@ -107,6 +109,12 @@ func (v *env) eval(ctx context.Context, i int, e *Expectation) (ExpectResult, []
 		return r, nil
 	}
 	r.Want = p.want + countText(e.Count, lo, hi) + windowText(e)
+	if lo == 0 && hi >= 0 && e.Within != nil { // an absence check: the run must have seen the whole window
+		if msg := v.windowNotReached(ctx, from, to, hasTo); msg != "" {
+			r.Got = msg
+			return r, nil
+		}
+	}
 	all, err := v.entriesOf(ctx, p.kinds)
 	if err != nil {
 		r.Got, r.err = "the journal could not be read: "+err.Error(), err
@@ -202,6 +210,30 @@ func countText(raw string, lo, hi int) string {
 		return ", count " + raw
 	case lo == 1 && hi < 0:
 		return ", at least 1"
+	}
+	return ""
+}
+
+// windowNotReached says why an absence window cannot be judged: the run's sim clock stopped
+// before the window ended (or began), so part of it was never simulated and "nothing
+// happened" holds only because nothing could have. "" when the run reached the whole window.
+func (v *env) windowNotReached(ctx context.Context, from, to time.Duration, hasTo bool) string {
+	read := v.reached
+	if read == nil {
+		read = func(ctx context.Context) (time.Time, error) { return clockNow(ctx, v.c) }
+	}
+	reached, err := read(ctx)
+	if err != nil {
+		return "the sim clock could not be read to check the window: " + err.Error()
+	}
+	end := v.start.Add(from)
+	what := "starts"
+	if hasTo {
+		end, what = v.start.Add(to), "ends"
+	}
+	if reached.Before(end) {
+		return fmt.Sprintf("the window %s at %s but the run reached only %s: an absence over time the run never simulated proves nothing; run on to %s or shorten the window",
+			what, end.Format(time.RFC3339), reached.Format(time.RFC3339), end.Format(time.RFC3339))
 	}
 	return ""
 }

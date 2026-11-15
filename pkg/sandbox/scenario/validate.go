@@ -167,6 +167,11 @@ func (v *validator) patch(base string, cfg map[string]any) {
 // blocks checks the top-level blocks that are applied through lab groups.
 func (v *validator) blocks() {
 	f := v.f
+	if name, _ := f.Profile["timezone"].(string); name != "" {
+		if _, err := time.LoadLocation(name); err != nil {
+			v.addf("/profile/timezone", "%q is not a time zone name (such as Asia/Bangkok): during and next HH:MM would silently use another zone", name)
+		}
+	}
 	if len(f.Profile) > 0 {
 		v.need("/profile", "profile", blockSpec["profile"])
 	}

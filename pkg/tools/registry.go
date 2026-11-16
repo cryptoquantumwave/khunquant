@@ -237,7 +237,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// turn that is allowed to propose orders (see ProposalScope). The tool loop has
 	// already marked the whole batch before any call of it ran; this covers a caller
 	// that reaches the registry directly, and is set before the call executes.
-	NoteToolCalls(ctx, name)
+	noteRegistryCall(ctx, name)
 
 	// C-2: enforce per-tool policy here rather than inside each tool. This is
 	// the single funnel for LLM-driven calls — Execute delegates to it — so a
@@ -249,6 +249,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// their own guard; see the paper-mode refusal in agent_delta_neutral.go.
 	if refusal := checkToolPolicy(ctx, name, args, toolDeclaresConfirm(tool.Parameters())); refusal != nil {
 		logger.WarnCF("tool", "Tool call refused by policy",
+			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
+		return refusal
+	}
+
+	// No egress after outside text: the last of the turn's own checks (see egress_gate.go).
+	if refusal := checkEgress(ctx, name); refusal != nil {
+		logger.WarnCF("tool", "Tool call refused: the turn already read outside text",
 			map[string]any{"tool": name, "origin": ToolOrigin(ctx)})
 		return refusal
 	}

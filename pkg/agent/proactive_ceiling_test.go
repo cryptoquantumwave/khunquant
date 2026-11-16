@@ -127,7 +127,10 @@ func TestProactiveCeiling_EveryRegisteredTool(t *testing.T) {
 			}
 
 			for _, n := range all {
-				res := stubs.ExecuteWithContext(ctx, n, nil, "telegram", "424242", nil)
+				// Each call is a turn of its own with the taint RunProactiveTurn gives it;
+				// the rule "no egress after outside text" is not what this test is about.
+				callCtx := proactive.WithTaint(ctx, proactive.NewTaint(proactive.TrustSystem))
+				res := stubs.ExecuteWithContext(callCtx, n, nil, "telegram", "424242", nil)
 				mu.Lock()
 				count := ran[n]
 				mu.Unlock()

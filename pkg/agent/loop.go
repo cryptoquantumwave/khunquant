@@ -1543,6 +1543,10 @@ func (al *AgentLoop) runAgentLoop(
 		// so a cron job - which tags at its own call site, before the loop is
 		// entered - keeps its "cron" tag here rather than being relabelled.
 		ctx = tools.WithToolOrigin(ctx, tools.OriginForChannel(opts.Channel))
+		// An autonomous turn carries a taint, whatever started it: the ledger of "has
+		// this turn read outside text" lives there (tools.checkEgress). RunProactiveTurn
+		// attached one already; the legacy heartbeat and cron turns come in without.
+		ctx = withAutonomousTaint(ctx)
 		// The sender is what an operator approval is bound to: only the person
 		// who made a request can approve it.
 		ctx = tools.WithToolSender(ctx, opts.SenderID)
@@ -2913,4 +2917,16 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 		return nil, false
 	}
 	return defaultAgent.Provider, true
+}
+
+// withAutonomousTaint gives an autonomous turn that has no taint one that starts at
+// untrusted. Untrusted is what the policy engine saw for such a turn before it had a
+// taint (turnTrust: no holder and no person means untrusted), so attaching the
+// holder for the egress ledger must not raise the trust the engine reads. A turn that
+// already carries a taint (RunProactiveTurn's) is returned unchanged.
+func withAutonomousTaint(ctx context.Context) context.Context {
+	if tools.IsAutonomousOrigin(tools.ToolOrigin(ctx)) && proactive.TaintFrom(ctx) == nil {
+		return proactive.WithTaint(ctx, proactive.NewTaint(proactive.TrustUntrusted))
+	}
+	return ctx
 }

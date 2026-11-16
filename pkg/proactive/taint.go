@@ -17,6 +17,15 @@ import (
 type Taint struct {
 	mu    sync.Mutex
 	floor Trust
+
+	// The outside-read ledger, kept apart from floor on purpose. The floor is
+	// lowered for a whole batch before any call of it runs, so it cannot say
+	// whether outside text was read by an EARLIER call. The ledger can: see
+	// BeginBatch.
+	seenOutside bool // some call of this turn has read, or is reading, outside text
+	baseSeen    bool // seenOutside as it stood before the current batch began
+	egressUsed  bool // the current batch has already spent its one egress call
+	pending     int  // calls of the current batch that have not yet reached the registry
 }
 
 // NewTaint returns a taint that starts at the given trust.
@@ -42,6 +51,65 @@ func (t *Taint) Lower(to Trust) {
 		t.floor = to
 	}
 	t.mu.Unlock()
+}
+
+// BeginBatch opens a batch of tool calls (the calls of one model response) and
+// returns nothing. outside says whether the batch holds a call that reads outside
+// text. The turn's state before the batch is kept as the batch's base, then the
+// ledger is updated, so every call of the batch sees the same base whatever order
+// the calls run in. size is the number of calls that will report in with CallDone.
+func (t *Taint) BeginBatch(size int, outside bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.baseSeen = t.seenOutside
+	t.egressUsed = false
+	t.pending = size
+	if outside {
+		t.seenOutside = true
+	}
+	t.mu.Unlock()
+}
+
+// BatchOpen reports whether a batch is open, that is, some call of it has not yet
+// reached CallDone.
+func (t *Taint) BatchOpen() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pending > 0
+}
+
+// CallDone records that one call of the open batch has reached the registry.
+func (t *Taint) CallDone() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.pending > 0 {
+		t.pending--
+	}
+	t.mu.Unlock()
+}
+
+// ClaimEgress asks for the right to send data out in the open batch. It is granted
+// when no call BEFORE the batch read outside text and no other call of the batch has
+// claimed it: the first egress of a clean turn, at most one per batch. A nil taint
+// grants nothing.
+func (t *Taint) ClaimEgress() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.baseSeen || t.egressUsed {
+		return false
+	}
+	t.egressUsed = true
+	return true
 }
 
 type taintKey struct{}

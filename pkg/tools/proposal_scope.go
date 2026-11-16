@@ -140,12 +140,35 @@ func NoteToolCalls(ctx context.Context, names ...string) {
 	if t == nil {
 		return
 	}
+	outside := false
 	for _, n := range names {
 		if !readsTrustedData(n) {
-			t.Lower(proactive.TrustUntrusted)
-			return
+			outside = true
+			break
 		}
 	}
+	if outside {
+		t.Lower(proactive.TrustUntrusted)
+	}
+	// The egress ledger opens the batch with the turn's state from before it (see
+	// egress_gate.go).
+	t.BeginBatch(len(names), outside)
+}
+
+// noteRegistryCall is ExecuteWithContext's own note of one call. When the tool
+// loop has opened a batch it only counts the call off; a caller that reaches the
+// registry directly gets a batch of one.
+func noteRegistryCall(ctx context.Context, name string) {
+	t := proactive.TaintFrom(ctx)
+	if t == nil {
+		return
+	}
+	if !t.BatchOpen() {
+		NoteToolCalls(ctx, name)
+	} else if !readsTrustedData(name) {
+		t.Lower(proactive.TrustUntrusted)
+	}
+	t.CallDone()
 }
 
 // armedConfig is the running configuration as far as propose_order's visibility

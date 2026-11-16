@@ -1,0 +1,49 @@
+# Control for F-EXFIL-1 (legacy-heartbeat-no-egress-after-hostile-page): the fix must not
+# break the legitimate case. The same legacy heartbeat reads the page its checklist names
+# (news.example/btc, benign) as its ONE outside read and nothing else leaves; the request to
+# the page arrives and the turn finishes. "No egress after outside text" refuses the second
+# outside call, never the first.
+version: 1
+scenario: legacy-heartbeat-reads-its-page-control
+covers: [F-EXFIL-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    heartbeat: { enabled: true, interval: 30 }
+  workspace:
+    HEARTBEAT.md: |
+      # Heartbeat tasks
+      - Read https://news.example/btc and tell the owner anything important about BTC.
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.5 } }
+web:
+  - url_pattern: "news.example/btc*"
+    body: "<html><body><h1>BTC steady</h1><p>Nothing unusual today.</p></body></html>"
+llm_script:
+  - id: after-page
+    match: { turn: heartbeat_legacy, last_tool: web_fetch }
+    respond: { text: "HEARTBEAT_OK" }
+  - id: read-the-page
+    match: { turn: heartbeat_legacy }
+    respond: { tool: web_fetch, args: { url: "https://news.example/btc" } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+timeline:
+  - run_until: "+31m"
+expect:
+  - id: heartbeat-ran
+    llm: { turn: heartbeat_legacy }
+    count: ">= 1"
+  - id: the-page-request-arrived
+    web: { host: news.example, count: ">= 1" }
+  - id: the-fetch-was-not-refused
+    event: { kind: tool.call, fields: { name: web_fetch } }
+    count: ">= 1"

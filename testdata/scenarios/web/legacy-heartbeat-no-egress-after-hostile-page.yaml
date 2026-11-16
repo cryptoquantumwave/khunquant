@@ -21,8 +21,7 @@
 version: 1
 scenario: legacy-heartbeat-no-egress-after-hostile-page
 covers: [F-EXFIL-1]
-status: known_bug
-known_bug: F-EXFIL-1
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }

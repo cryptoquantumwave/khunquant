@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 	"github.com/cryptoquantumwave/khunquant/pkg/utils"
@@ -325,6 +326,11 @@ func spawnSubTurn(ctx context.Context, al *AgentLoop, parentTS *turnState, cfg S
 	// Say it is a sub-turn too: with the origin and sender above it looks like the
 	// turn that spawned it, and what a model wrote for it is not that turn's person.
 	childCtx = tools.WithSubTurn(childCtx)
+	// The child shares its parent's taint, not a fresh one: what the parent read
+	// outside is read for the child too, and what the child reads binds the parent.
+	if t := proactive.TaintFrom(ctx); t != nil {
+		childCtx = proactive.WithTaint(childCtx, t)
+	}
 	// The job scope too: a child must not lose the ceiling's job-bound exception
 	// nor be able to claim one its parent did not have.
 	if scope, ok := tools.AutomationScopeFrom(ctx); ok {

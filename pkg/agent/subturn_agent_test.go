@@ -6,6 +6,7 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/bus"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -102,5 +103,35 @@ func TestDelegateToAnUnknownAgentFails(t *testing.T) {
 		TargetAgentID: "nobody",
 	}); err == nil {
 		t.Fatal("delegating to an unknown agent succeeded")
+	}
+}
+
+// A sub-turn of an autonomous turn shares the parent's taint: egress the parent could not
+// make after reading outside text, its child cannot either (F-EXFIL-1), and a clean parent's
+// first egress still works through a child.
+func TestSubTurnInheritsTheParentsEgressLedger(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		readFirst bool
+		wantCalls int
+	}{{"parent already read outside text", true, 0}, {"clean parent", false, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			al, tool := newTwoAgentLoop(t, tools.NameWebFetch)
+			taint := proactive.NewTaint(proactive.TrustSystem)
+			parent := &turnState{
+				ctx: context.Background(), turnID: "parent",
+				pendingResults: make(chan *tools.ToolResult, 1), session: &ephemeralSessionStore{},
+			}
+			ctx := withTurnState(proactive.WithTaint(tools.WithToolOrigin(context.Background(), tools.OriginHeartbeat), taint), parent)
+			if tc.readFirst {
+				tools.NoteToolCalls(ctx, tools.NameReadFile)
+			}
+			if _, err := NewSubTurnSpawner(al, "main").SpawnSubTurn(ctx, tools.SubTurnConfig{Model: "char-model"}); err != nil {
+				t.Fatalf("spawn: %v", err)
+			}
+			if n := len(tool.calls()); n != tc.wantCalls {
+				t.Errorf("child's web_fetch ran %d time(s), want %d", n, tc.wantCalls)
+			}
+		})
 	}
 }

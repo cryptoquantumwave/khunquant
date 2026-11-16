@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,8 +57,10 @@ func TestOwnerDial_ShadowRecordsLiveEnforcesOffDoesNothing(t *testing.T) {
 	if err := f.reload(withPolicy(config.ProactiveModeShadow, true)); err != nil {
 		t.Fatal(err)
 	}
-	if ran, text := tradeAs(f, "telegram:999"); !ran {
-		t.Fatalf("shadow enforced the dial: %q", text)
+	// The owner gate (tools/owner_gate.go) refuses another person's order in every mode,
+	// so what shadow shows is the dial's verdict in the record, not an order that ran.
+	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "ask the owner") {
+		t.Fatalf("shadow: another person's order ran=%v: %q", ran, text)
 	}
 	if n := denied(); n != 2 {
 		t.Fatalf("shadow: %d deny verdicts recorded today, want 2", n)
@@ -70,7 +73,7 @@ func TestOwnerDial_ShadowRecordsLiveEnforcesOffDoesNothing(t *testing.T) {
 	if f.services.Policy != nil {
 		t.Fatal("a policy runtime survived mode off")
 	}
-	if ran, text := tradeAs(f, "telegram:999"); !ran {
-		t.Fatalf("mode off enforced the dial: %q", text)
+	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "ask the owner") {
+		t.Fatalf("mode off: another person's order ran=%v: %q", ran, text)
 	}
 }

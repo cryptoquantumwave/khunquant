@@ -193,7 +193,7 @@ func TestCreateIntent_WebOwnerActivatesAndIsRecordedAsWeb(t *testing.T) {
 
 // Live policy and the kill gate see the web chat as the owner's own root turn: it
 // acts (also under the kill switch and after reading the web), and the same turn
-// from an unauthenticated connection is a stranger's - stopped by gate K.
+// from an unauthenticated connection is a stranger's - stopped by the owner gate.
 func TestLive_WebOwnerActsAndIsKillExempt(t *testing.T) {
 	armWebGate(t, true)
 	l := newLiveRig(t, nil)
@@ -213,7 +213,7 @@ func TestLive_WebOwnerActsAndIsKillExempt(t *testing.T) {
 	}
 
 	res := onPico(webTurn(false), NameCreateOrder, buyOrder("SOL/USDT", 3))
-	if !res.IsError || !strings.Contains(res.ForLLM, "Policy refused this call: K:") || l.trade.count() != 2 {
+	if !res.IsError || !strings.Contains(res.ForLLM, "ask the owner") || l.trade.count() != 2 {
 		t.Fatalf("an unauthenticated pico connection under the kill switch: error=%v runs=%d %q", res.IsError, l.trade.count(), res.ForLLM)
 	}
 	for _, d := range l.rows(t) {

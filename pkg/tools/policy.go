@@ -218,6 +218,9 @@ func enforceToolPolicy(ctx context.Context, name string, args map[string]any, de
 	// turns: may this turn call this tool at all? The per-tool rows below then
 	// apply to whatever the ceiling lets through, as they always did.
 	if !turnMayCall(ctx, name) {
+		if nonOwnerMayNotCall(ctx, name) {
+			return nonOwnerRefusal(name)
+		}
 		if ToolOrigin(ctx) == OriginProactive && ProactiveTurnKind(ctx) == proactive.TurnReflection {
 			return policyRefusal(name, fmt.Sprintf("tool %q is not permitted in a reflection turn. It can read the owner's profile "+
 				"and intents and declare its suggestions with %s; it cannot message, write, trade or change anything.",
@@ -317,8 +320,10 @@ func rowGate(ctx context.Context, name string) (kind rowKind, msg string) {
 // definitions with it, so what the model is shown and what it can run cannot
 // drift apart.
 //
-// A turn that is not autonomous may call anything here; its limits are the
-// per-tool rows, paper mode and approvals. An autonomous turn may call the
+// A turn that is not autonomous may call anything here, except that a person who is
+// not the owner is refused every trade, funds and owner-data read tool while an owner
+// is configured (owner_gate.go); its other limits are the per-tool rows, paper mode
+// and approvals. An autonomous turn may call the
 // read, notify and local-state classes, plus two exceptions that exist because
 // their jobs need them and that are bound to the job:
 //
@@ -344,6 +349,13 @@ func turnMayCall(ctx context.Context, name string) bool {
 	}
 	if name == NameRemember {
 		return rememberOpen(ctx)
+	}
+	// A person who is not the owner may not trade, move funds or read the owner's
+	// accounts while an owner is configured (see nonOwnerMayNotCall). Decided before
+	// the origin shortcuts below, which let a person's turn call anything; the same
+	// answer hides the tool's definition and refuses its call.
+	if nonOwnerMayNotCall(ctx, name) {
+		return false
 	}
 	origin := ToolOrigin(ctx)
 

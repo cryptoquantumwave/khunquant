@@ -1,0 +1,106 @@
+# HYP-2: a background proposal may sell the whole spot leg of an open delta-neutral plan, and
+# the card calls the sale "risk reducing". The plan's short is then left naked.
+#
+# Observed (B3 log, binance, plan 1 btc-hedge: 0.005 BTC spot + 0.005 BTC short, capital 1000
+# USDT, 1x): an unrelated liquidation_distance Warning (an ETH short on another venue) woke a
+# proactive turn that was scripted to call propose_order for a market sell of 0.005 BTC. The
+# card read "this order reduces risk, so it executes at the MARKET price" and nothing said the
+# BTC was the spot leg of an open plan. The owner approved, it filled, the short was naked.
+#
+# Why each piece of setup is there:
+#  - the plan is created, prepared and opened by the owner through the tools, so the spot leg
+#    exists and the plan is "open" exactly as in the log (0.005 BTC bought, 0.005 short sold);
+#  - the ETH short on okx with ETH 3000 -> 3400 is the unrelated trigger that wakes the
+#    background turn (liquidation_distance, Warning, trust exchange, no forced skill; a dn_health
+#    turn carries a forced skill and can never propose, so it could not show the bug);
+#  - approvals are on, because propose_order is registered only while they are;
+#  - clock.resolution 1s, because an approved card is verified by a poll (LAB-6).
+#
+# The correct behaviour: either no card is made for the sale, or the card does not tell the
+# owner that it reduces risk. The check is on the owner's messages, so a fix of either kind
+# turns it green with no edit here: no message to the owner says that SELL 0.005 BTC "reduces
+# risk". (The design preferred "no BTC/USDT sell is placed after the owner approves whatever card
+# exists", but pressing a card that a fix removed is a hard error in the runner, chat.press
+# fails the step with "no delivered message matches on", so that form cannot be written for
+# the refusal fix.) The control proactive-sell-spot-without-dn-plan-control shows that, with
+# no plan, the same proposal is made and, approved, places one sell.
+#
+# Fix direction (log): a proposal that would sell the spot leg of an open DN plan is refused
+# at propose time, or its card names the plan and does not call the sale risk reducing.
+version: 1
+scenario: proactive-cannot-propose-selling-dn-spot-leg
+covers: [HYP-2]
+status: known_bug
+known_bug: HYP-2
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance, okx]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true, expiry_minutes: 15 }
+      cognition: { enabled: true }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+  ETH/USDT: { venue: okx, model: set, price: 3000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+  okx:
+    balances: { USDT: 1000 }
+    positions: [{ symbol: ETH-USDT-SWAP, side: short, contracts: 1, entryPrice: 3000, leverage: 3, marginMode: isolated }]
+llm_script:
+  - id: propose-sell
+    match: { turn: proactive }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.005, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: done
+    match: { turn: proactive }
+    respond: { tool: respond_proactive, args: { decision: notify, text: "Margin on the ETH short is getting thin." } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+timeline:
+  - market.path: { symbol: ETH/USDT, venue: okx, to: 3400, over: 30m, shape: linear }
+  - run_until: "+40m"
+expect:
+  # Setup proof: the plan is open (a spot buy and a short were placed), the warning turn ran, and the
+  # model's propose_order reached the tool.
+  - id: the-plan-was-opened
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: the-short-was-opened
+    order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }
+  - id: the-warning-turn-ran
+    llm: { turn: proactive }
+    count: ">= 1"
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: ">= 1"
+  # The correct behaviour.
+  - id: no-card-calls-selling-the-spot-leg-risk-reducing
+    message: { to: owner, contains: ["SELL 0.005 BTC", "reduces risk"], count: 0 }
+    within: { from: "+0m", to: "+40m" }

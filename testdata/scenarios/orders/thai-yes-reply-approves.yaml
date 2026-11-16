@@ -1,0 +1,65 @@
+# FIX-REPLY (B3-9, D-1): a reply of "ใช่" (Thai "yes") to a pending card, in the owner chat, from
+# the owner, should approve it, as an exact "yes" does (the user's ruling U-T7). Only the reply
+# words are widened; the rest of the rule stays: only a reply to a pending card, from the owner,
+# counts, and a qualified reply stays chat (see qualified-yes-reply-does-not-approve).
+# Observed: the "ใช่" reply goes to the agent as an ordinary chat turn and decides nothing, so a
+# Thai-speaking owner cannot approve by reply (the buttons still work). The proposal stays pending
+# and no order is placed.
+# Setup that proves the file is real: the owner's turn reached propose_order, the card was
+# delivered (it is sc-1, the message the reply names), and the runner checks the reply was
+# delivered. The twin yes-reply-approves-control differs only in the reply text and passes.
+# Fix direction: accept the Thai yes word (and its kin) in the reply rule. A fix turns this
+# green without editing the expectations.
+version: 1
+scenario: thai-yes-reply-approves
+covers: [FIX-REPLY, B3-9, D-1]
+status: known_bug
+known_bug: FIX-REPLY
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      approvals: { enabled: true, expiry_minutes: 15 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 1000, BTC: 0.05 } }
+llm_script:
+  - id: propose-sell
+    match: { sender: "simchat:owner", prompt_contains: ["trim my btc"] }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.01, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please trim my btc" }
+timeline:
+  - advance: 1m
+  - chat: { as: owner, text: "ใช่", reply_to: sc-1 }
+  - advance: 5m
+expect:
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: 1
+  - id: card-delivered
+    message: { to: owner, contains: ["SELL 0.01 BTC"], buttons: [approve], count: 1 }
+  - id: proposal-approved
+    proposal: { kind: order, status: approved }
+    count: 1
+  - id: one-order-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 1
+  # The proposing turn makes two model calls (the propose_order call, then its closing text).
+  # A third would be the "yes" going to the agent as chat as well.
+  - id: reply-did-not-reach-the-agent
+    llm: {}
+    count: 2

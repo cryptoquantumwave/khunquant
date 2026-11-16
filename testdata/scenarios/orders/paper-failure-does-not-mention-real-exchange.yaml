@@ -1,0 +1,71 @@
+# O-11 (S3): in paper mode nothing real can exist, so no failure message may tell the owner that
+# the order "MAY OR MAY NOT HAVE BEEN PLACED" on the exchange or to "Check" it.
+# Observed (B9): a paper spot proposal whose approval.order workflow failed told the owner "the order
+# MAY OR MAY NOT HAVE BEEN PLACED on okx ... Check okx before doing anything else". The wording is
+# chosen by describeFailure/failureText (pkg/approval/execute.go, messages.go) from the place step
+# alone: a place step that started and never finished is "may exist", whatever the mode.
+# The failure in B9 came from the 1-minute clock quantum (LAB-6), which this file does not rely
+# on: it uses clock.resolution 1s. The failure here is a crash: the process is killed (SIGKILL)
+# right after the place step of approval.order was journaled as started. A real gateway can die
+# there too. Paper mode places a simulated order only, so nothing exists on any exchange.
+# Setup proof: the card was delivered and approved, the crash happened at the place step, and the
+# workflow ended failed (the paper simulation cannot prove the lost placement, so it gives up).
+# Fix direction: in paper mode (Proposal.Mode == paper) the failure text must say nothing real was
+# placed instead of sending the owner to the exchange.
+version: 1
+scenario: paper-failure-does-not-mention-real-exchange
+covers: [O-11]
+status: known_bug
+known_bug: O-11
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [okx]
+  config:
+    trading_risk: { paper_trading_mode: true }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      approvals: { enabled: true, expiry_minutes: 15 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 98000 }
+account:
+  okx: { balances: { USDT: 1000, BTC: 0.05 } }
+llm_script:
+  - id: propose-sell
+    match: { sender: "simchat:owner", prompt_contains: ["trim my btc"] }
+    respond: { tool: propose_order, args: { provider: okx, symbol: BTC/USDT, side: sell, type: market, amount: 0.01, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please trim my btc" }
+  - restart: { kill_at: { workflow: approval.order, step: place, point: after_started } }
+timeline:
+  - advance: 1m
+  - chat.press: { on: { to: "dm:owner", contains: ["SELL 0.01 BTC"] }, action: approve }
+  - advance: 5m
+  - advance: 10m
+expect:
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: 1
+  - id: card-says-paper
+    message: { to: owner, contains: ["PAPER", "Why: Trim"], count: 1 }
+  - id: crashed-at-the-place-step
+    event: { kind: crash, fields: { kind: approval.order, step: place, point: after_started }, count: 1 }
+  - id: the-owner-was-told-of-the-failure
+    message: { to: owner, contains: ["NOT executed"], count: 1 }
+  # Paper mode: no order reaches the venue, so there is nothing real the owner could check.
+  - id: no-real-order-exists
+    order: { venue: okx }
+    count: 0
+    within: { from: "+0m", to: "+15m" }
+  - id: no-message-sends-the-owner-to-the-real-exchange
+    message: { to: owner, contains: ["MAY OR MAY NOT"], count: 0 }
+    within: { from: "+0m", to: "+15m" }

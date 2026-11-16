@@ -1,0 +1,94 @@
+# F-DN-1: the DN monitor shows a sold spot leg as a perfect hedge, and says nothing.
+#
+# Observed (B3 log): with plan 1 open (0.005 BTC spot + 0.005 short), the spot BTC balance went to
+# 0. get_delta_neutral_plan still showed "Delta drift: 0.00%", "Threshold breached: false", health
+# "watch", and no dn_health alert reached the owner for 2 h 10 min of sim time. The cause is
+# pkg/deltaneutral/monitor.go (about lines 340-447): the spot quantity is the balance row for the
+# base asset plus earn positions, and it falls back to the PLAN NOTIONAL when no balance reply had
+# a row for the asset (a zero balance is left out of a reply) or when the value is under 1 % of the
+# notional ("assuming the spot leg is in an inaccessible earn product"). A full loss of the spot leg
+# is therefore read as a leg that is exactly the size of the plan.
+#
+# Why each piece of setup is there:
+#  - the plan is created, prepared and opened by the owner, so it is open with a spot buy and a short;
+#  - the spot leg is sold by the owner's own create_order market sell of the whole 0.005 BTC at +1m (the
+#    lab has no timeline step that seeds an account; a sale is a real way the leg is lost, and the
+#    simulator then holds no BTC row at all, which is the shape of the log). The control
+#    dn-spot-leg-doubled-alerts-control raises the balance instead and gets its alert, so the
+#    monitor, the warning pipeline and the delivery are shown to work;
+#  - clock.resolution 1s, because the DN open and the order go through verified workflows.
+#
+# The correct behaviour: a dn_health message reaches the owner within 15 minutes of the sale (the monitor
+# judges every 15 minutes). Setup proofs: the plan was opened, the sale was placed, and the monitor
+# ran after the sale (it read the futures position the monitor judges the plan from).
+#
+# Fix direction (log): a balance reply with no row for the asset is a zero balance, not "unknown",
+# and a spot value under the 1 % line is not replaced by the plan notional unless the earn lookup
+# actually found the asset.
+version: 1
+scenario: dn-spot-leg-gone-alerts
+covers: [F-DN-1]
+status: known_bug
+known_bug: F-DN-1
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+timeline:
+  - at: "+1m"
+    call_tool:
+      as: owner
+      name: create_order
+      args: { provider: binance, symbol: BTC/USDT, type: market, side: sell, amount: 0.005, confirm: true }
+  - run_until: "+2h"
+expect:
+  # Setup proof.
+  - id: the-plan-was-opened
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: the-spot-leg-was-sold
+    order: { venue: binance, symbol: BTC/USDT, side: sell, count: 1 }
+  # The monitor judged the plan after the sale, on data it counted as good (data_ok 1): it did run, and
+  # it is the judgement itself, not a silent monitor, that says nothing is wrong.
+  - id: the-monitor-judged-the-plan-after-the-sale
+    event: { kind: perception.plan.health, fields: { event.payload.health.data_ok: 1 } }
+    count: ">= 1"
+    within: { from: "+16m", to: "+2h" }
+  # The correct behaviour.
+  - id: dn-health-reaches-the-owner
+    message: { to: owner, contains: ["Delta-neutral"], count: ">= 1" }
+    within: { from: "+1m", to: "+20m" }

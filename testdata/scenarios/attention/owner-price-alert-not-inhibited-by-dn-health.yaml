@@ -1,0 +1,97 @@
+# HYP-3: the owner's own one-shot price alert is dropped by DN inhibition and spent.
+#
+# Observed (B1 log): with a delta-neutral plan open, the owner created set_price_alert BTC/USDT
+# above 99000 (the tool promises delivery at once, even in quiet hours). The owner then bought 0.005
+# more BTC spot, so the spot leg was 0.01 against a plan of 0.005 and the monitor raised a dn_health
+# leg-mismatch Warning, which was delivered. BTC then moved 98000 -> 100000 over 20 minutes. The
+# price_cross candidate carries OwnerRequested, and the attention decision was drop, reason
+# inhibited_by:dn_health:1:leg_mismatch. The alert is then done: spent, never delivered.
+# Cause: evaluate() in pkg/attention/rules.go applies inhibition (rule 5) before the
+# owner-requested path, and defaultInhibits suppresses price_cross: for an hour after
+# dn_health: on the same base asset.
+#
+# Why each piece of setup is there:
+#  - the plan is created, prepared and opened by the owner, so there is a plan whose health can be
+#    judged (the inhibitor is a dn_health item on BTC);
+#  - the spot leg is raised with an owner create_order buy through the tool (the lab has no timeline
+#    step that seeds an account, and a real purchase is the way the balance would change);
+#  - the alert is created in setup, before the clock moves;
+#  - clock.resolution 1s, because the DN open and the order go through verified workflows.
+#
+# The correct behaviour: the owner's alert reaches the owner. The check is on the message from the
+# alert, not on the decision reason, so any fix passes (inhibition applied after the owner path, an
+# exemption for owner-requested candidates, ...). The setup proofs: the dn_health Warning was
+# delivered before the cross, and a price_cross decision exists (so the alert did fire).
+#
+# Fix direction (log): owner-requested candidates are decided before inhibition is applied.
+version: 1
+scenario: owner-price-alert-not-inhibited-by-dn-health
+covers: [HYP-3]
+status: known_bug
+known_bug: HYP-3
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 99000, recurring: false }
+timeline:
+  - at: "+1m"
+    call_tool:
+      as: owner
+      name: create_order
+      args: { provider: binance, symbol: BTC/USDT, type: market, side: buy, amount: 0.005, confirm: true }
+  - run_until: "+20m"
+  - market.path: { symbol: BTC/USDT, venue: binance, to: 100000, over: 20m, shape: linear }
+  - run_until: "+1h"
+expect:
+  # Setup proof.
+  - id: the-extra-buy-was-placed
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 2 }
+  - id: dn-health-warning-delivered
+    message: { to: owner, severity: warning, contains: ["Delta-neutral"], count: ">= 1" }
+    within: { from: "+1m", to: "+20m" }
+  - id: the-alert-fired
+    decision: { trigger: price_cross }
+    count: ">= 1"
+  # The correct behaviour.
+  - id: owner-alert-reaches-the-owner
+    message: { to: owner, contains: ["BTC"], count: ">= 1" }
+    within: { from: "+29m", to: "+45m" }

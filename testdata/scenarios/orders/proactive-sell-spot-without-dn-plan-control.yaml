@@ -1,0 +1,65 @@
+# Control for proactive-cannot-propose-selling-dn-spot-leg (HYP-2). The same account, markets,
+# trigger and scripted propose_order, but there is no delta-neutral plan: the owner just holds
+# 0.005 BTC spot. The background turn's proposal of a market sell of that BTC must be created,
+# the owner approves the card, and exactly one sell is placed. This shows the proposal path
+# works in the lab, so a 0 in the known-bug file is the DN guard's doing and not a tool that is
+# off, a trigger that never fired or a card that could not be pressed.
+version: 1
+scenario: proactive-sell-spot-without-dn-plan-control
+covers: [HYP-2]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance, okx]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true, expiry_minutes: 15 }
+      cognition: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+  ETH/USDT: { venue: okx, model: set, price: 3000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.005 } }
+  okx:
+    balances: { USDT: 1000 }
+    positions: [{ symbol: ETH-USDT-SWAP, side: short, contracts: 1, entryPrice: 3000, leverage: 3, marginMode: isolated }]
+llm_script:
+  - id: propose-sell
+    match: { turn: proactive }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.005, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: done
+    match: { turn: proactive }
+    respond: { tool: respond_proactive, args: { decision: notify, text: "Margin on the ETH short is getting thin." } }
+timeline:
+  - market.path: { symbol: ETH/USDT, venue: okx, to: 3400, over: 30m, shape: linear }
+  - run_until: "+20m"
+  - chat.press: { on: { to: "dm:owner", contains: ["SELL 0.005 BTC"] }, action: approve }
+  - run_until: "+40m"
+expect:
+  - id: the-warning-turn-ran
+    llm: { turn: proactive }
+    count: ">= 1"
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: ">= 1"
+  - id: proposal-created
+    proposal: { kind: order, status: pending }
+    count: 1
+  # The very text the known-bug file asserts is absent: with no plan the card does say it reduces risk.
+  - id: the-card-says-it-reduces-risk
+    message: { to: owner, contains: ["SELL 0.005 BTC", "reduces risk"], count: 1 }
+    within: { from: "+0m", to: "+40m" }
+  - id: one-sell-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 1

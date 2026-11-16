@@ -1,0 +1,65 @@
+# Control for dn-spot-leg-gone-alerts (F-DN-1). The same plan, market, tools, owner and 15-minute
+# monitor, but the owner buys 0.005 BTC more at +1m instead of selling the leg: the spot leg is 0.01
+# against a plan of 0.005, a balance row is present, and the monitor reports a leg mismatch. The
+# dn_health warning must reach the owner, so the 0 of the known-bug file is the monitor's
+# plan-notional fallback and not a pipeline that cannot deliver a dn_health message in the lab.
+version: 1
+scenario: dn-spot-leg-doubled-alerts-control
+covers: [F-DN-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+timeline:
+  - at: "+1m"
+    call_tool:
+      as: owner
+      name: create_order
+      args: { provider: binance, symbol: BTC/USDT, type: market, side: buy, amount: 0.005, confirm: true }
+  - run_until: "+2h"
+expect:
+  - id: the-plan-was-opened
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 2 }
+  - id: the-monitor-judged-the-plan-after-the-extra-buy
+    event: { kind: perception.plan.health, fields: { event.payload.health.data_ok: 1 } }
+    count: ">= 1"
+    within: { from: "+16m", to: "+2h" }
+  - id: dn-health-reaches-the-owner
+    message: { to: owner, contains: ["Delta-neutral"], count: ">= 1" }
+    within: { from: "+1m", to: "+20m" }

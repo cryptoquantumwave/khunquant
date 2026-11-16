@@ -114,14 +114,33 @@ func TestLive_OwnerRootTurnOrdinaryTradeAllowed(t *testing.T) {
 	}
 }
 
-// TestKill_DeniesNonProtective, enforced: another person's trade is stopped by the
-// kill switch and the tool does not run; the same person's exit is not a K matter.
-func TestLive_KillDeniesNonProtective(t *testing.T) {
+// The owner gate (owner_gate.go) answers first for another person's trade, so the refusal
+// at the registry is its text, not the kill switch's.
+func TestLive_OwnerGateAnswersFirstUnderKillSwitch(t *testing.T) {
 	l := newLiveRig(t, nil)
 	l.killed.Store(true)
 	res := l.run(strangerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 1))
-	if !res.IsError || !strings.Contains(res.ForLLM, "Policy refused this call: K:") || l.trade.count() != 0 {
+	if !res.IsError || !strings.Contains(res.ForLLM, "ask the owner") || l.trade.count() != 0 {
 		t.Fatalf("a stranger's order under the kill switch: error=%v runs=%d %q", res.IsError, l.trade.count(), res.ForLLM)
+	}
+	if res.ForUser == "" {
+		t.Error("the operator is shown nothing")
+	}
+}
+
+// TestKill_DeniesNonProtective, enforced: the second line. With the owner gate bypassed
+// (the hook called directly), the kill switch still denies another person's trade and
+// writes an enforced deny row.
+func TestLive_KillDeniesNonProtective(t *testing.T) {
+	l := newLiveRig(t, nil)
+	l.killed.Store(true)
+	h := livePolicy.Load()
+	if h == nil {
+		t.Fatal("the live hook is not armed")
+	}
+	allow, res := h.BeforeTool(WithToolContext(strangerCtx(), "telegram", "c"), NameCreateOrder, buyOrder("BTC/USDT", 1))
+	if allow || res == nil || !res.IsError || !strings.Contains(res.ForLLM, "Policy refused this call: K:") {
+		t.Fatalf("a stranger's order under the kill switch: allow=%v %+v", allow, res)
 	}
 	if res.ForUser == "" {
 		t.Error("the operator is shown nothing")
@@ -132,12 +151,12 @@ func TestLive_KillDeniesNonProtective(t *testing.T) {
 	}
 }
 
-// Another person's trade is notify-only in live (the owner column is the owner's), and
+// Another person's trade is refused by the owner gate before the engine is asked, and
 // it is not a proposal, a card or an order.
 func TestLive_AnotherPersonCannotTradeAndNothingIsProposed(t *testing.T) {
 	l := newLiveRig(t, nil)
 	res := l.run(strangerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 1))
-	if !res.IsError || !strings.Contains(res.ForLLM, "may only inform the owner") || l.trade.count() != 0 {
+	if !res.IsError || !strings.Contains(res.ForLLM, "ask the owner") || l.trade.count() != 0 {
 		t.Fatalf("result = %+v, runs %d", res, l.trade.count())
 	}
 	if l.fp.count() != 0 {
@@ -258,7 +277,10 @@ func TestLive_BrakesUnderConcurrency(t *testing.T) {
 // A safety brake never blocks an exit: with the rate limit used up the owner can
 // still sell (spot sells reduce exposure) and close a position.
 func TestLive_ExitsExemptFromBrakes(t *testing.T) {
-	l := newLiveRig(t, func(c *config.Config) { c.TradingRisk.MaxOrdersPer10Min = 1; c.TradingRisk.SymbolAllowlist = []string{"BTC/USDT"} })
+	l := newLiveRig(t, func(c *config.Config) {
+		c.TradingRisk.MaxOrdersPer10Min = 1
+		c.TradingRisk.SymbolAllowlist = []string{"BTC/USDT"}
+	})
 	if res := l.run(ownerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 1)); res.IsError {
 		t.Fatal(res.ForLLM)
 	}
@@ -362,14 +384,17 @@ func TestVerdictRefusal_TextsAndNoProposal(t *testing.T) {
 	}
 }
 
-// Disarmed (shadow, off), the hook is not in the chain: nothing is enforced.
+// Disarmed (shadow, off), the hook is not in the chain: nothing is enforced. The call
+// that shows it is an owner's turn that has read the web, which only the engine stops
+// (a stranger's trade is stopped by the owner gate whatever the hook does).
 func TestLive_DisarmedEnforcesNothing(t *testing.T) {
 	l := newLiveRig(t, nil)
-	if res := l.run(strangerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 1)); !res.IsError {
-		t.Fatal("armed: a stranger's order ran")
+	ctx := proactive.WithTaint(ownerCtx(), proactive.NewTaint(proactive.TrustUntrusted))
+	if res := l.run(ctx, NameCreateOrder, buyOrder("BTC/USDT", 1)); !res.IsError {
+		t.Fatal("armed: an untrusted turn's order ran")
 	}
 	SetPolicyLive(nil)
-	if res := l.run(strangerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 1)); res.IsError || l.trade.count() != 1 {
+	if res := l.run(ctx, NameCreateOrder, buyOrder("BTC/USDT", 1)); res.IsError || l.trade.count() != 1 {
 		t.Fatalf("disarmed: %+v", res)
 	}
 }
@@ -389,7 +414,6 @@ func TestLive_NonMoneyToolsUntouched(t *testing.T) {
 		}
 	}
 }
-
 
 // The proposal is the question: the owner's propose_order passes the hook (an "ask"
 // for it is the call itself) and creates exactly the one proposal the tool makes.

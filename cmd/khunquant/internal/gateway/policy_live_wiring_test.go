@@ -46,7 +46,7 @@ func TestPolicyLive_ArmedOnlyWhenEverythingItNeedsIsThere(t *testing.T) {
 	if got := f.services.Policy.mode; got != config.ProactiveModeLive {
 		t.Fatalf("armed mode = %q, want live", got)
 	}
-	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "may only inform the owner") {
+	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "ask the owner") {
 		t.Fatalf("live: another person's order ran=%v: %q", ran, text)
 	}
 	if ran, text := tradeAs(f, "telegram:1001"); !ran {
@@ -60,8 +60,9 @@ func TestPolicyLive_ArmedOnlyWhenEverythingItNeedsIsThere(t *testing.T) {
 	if got := f.services.Policy.mode; got != config.ProactiveModeShadow {
 		t.Fatalf("armed mode = %q, want shadow", got)
 	}
-	if ran, text := tradeAs(f, "telegram:999"); !ran {
-		t.Fatalf("shadow enforced: %q", text)
+	// The owner gate refuses another person's order in every mode, the engine's mode aside.
+	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "ask the owner") {
+		t.Fatalf("shadow: another person's order ran=%v: %q", ran, text)
 	}
 
 	// Live again, but a share cap is set and no portfolio source exists: the cap
@@ -100,8 +101,8 @@ func TestPolicyLive_ArmedOnlyWhenEverythingItNeedsIsThere(t *testing.T) {
 	if f.services.Policy != nil {
 		t.Fatal("a policy runtime survived mode off")
 	}
-	if ran, text := tradeAs(f, "telegram:999"); !ran {
-		t.Fatalf("mode off enforced: %q", text)
+	if ran, text := tradeAs(f, "telegram:999"); ran || !strings.Contains(text, "ask the owner") {
+		t.Fatalf("mode off: another person's order ran=%v: %q", ran, text)
 	}
 }
 
@@ -110,7 +111,7 @@ func TestPolicyLive_ArmedOnlyWhenEverythingItNeedsIsThere(t *testing.T) {
 func TestPolicyLive_StatsShowModeDecisionsAndDropped(t *testing.T) {
 	t.Cleanup(func() { tools.SetPolicyShadow(nil); tools.SetPolicyLive(nil) })
 	f := newAssemblyFixture(t, withPolicy(config.ProactiveModeLive, true))
-	tradeAs(f, "telegram:999")  // notify_only
+	tradeAs(f, "telegram:999")  // refused by the owner gate; the engine's verdict is recorded beside it
 	tradeAs(f, "telegram:1001") // act
 	if !f.services.Policy.rec.Flush(5 * time.Second) {
 		t.Fatal("the recorder did not drain")
@@ -125,7 +126,7 @@ func TestPolicyLive_StatsShowModeDecisionsAndDropped(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil || got.Policy == nil {
 		t.Fatalf("no policy part in %s (%v)", body, err)
 	}
-	if got.Policy.Mode != "live" || got.Policy.DecisionsToday["notify_only"] < 1 || got.Policy.DecisionsToday["act"] < 1 || got.Policy.Dropped != 0 || got.Policy.StoreFailed != 0 {
+	if got.Policy.Mode != "live" || got.Policy.DecisionsToday["deny"] < 1 || got.Policy.DecisionsToday["act"] < 1 || got.Policy.Dropped != 0 || got.Policy.StoreFailed != 0 {
 		t.Fatalf("policy stats = %+v", got.Policy)
 	}
 

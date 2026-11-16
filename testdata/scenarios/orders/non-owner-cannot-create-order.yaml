@@ -10,11 +10,11 @@
 # at the tool, so a rule that never matched cannot pass the absence check.
 # Fix direction: when an owner is configured, trade, funds and automation tools refuse in any
 # turn whose sender is not the owner (or route to an owner approval card).
+# Setup proof: a class-ceiling refusal leaves no tool.call entry (labToolTap records in AfterTool only), so the refusal marker stands in for it.
 version: 1
 scenario: non-owner-cannot-create-order
 covers: [F-OWN-1]
-status: known_bug
-known_bug: F-OWN-1
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
@@ -39,6 +39,9 @@ llm_script:
     match: { sender: "simchat:bob", prompt_contains: ["buy a little btc"] }
     respond: { tool: create_order, args: { provider: binance, symbol: BTC/USDT, type: market, side: buy, amount: 0.02, confirm: true } }
     times: 1
+  - id: refused
+    match: { last_tool: create_order, last_tool_result_contains: ["ask the owner"] }
+    respond: { text: "REFUSED-ORDER" }
   - id: any
     match: {}
     respond: { text: "ok" }
@@ -48,9 +51,10 @@ setup:
 timeline:
   - advance: 2m
 expect:
-  - id: the-tool-was-reached-twice
-    event: { kind: tool.call, fields: { name: create_order } }
-    count: 2
+  - id: alice-call-was-refused
+    message: { to: "dm:alice", contains: ["REFUSED-ORDER"], count: 1 }
+  - id: bob-call-was-refused
+    message: { to: "group:team", contains: ["REFUSED-ORDER"], count: 1 }
   - id: no-order-from-a-non-owner
     order: { venue: binance }
     count: 0

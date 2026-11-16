@@ -33,6 +33,9 @@ import (
 type ApprovalOrderBackend struct {
 	cfg *config.Config
 	now func() time.Time
+	// dnLegs reads the spot legs of the open delta-neutral plans; nil means the
+	// workspace's store. Tests set it.
+	dnLegs dnLegSource
 }
 
 var _ approval.OrderBackend = (*ApprovalOrderBackend)(nil)
@@ -222,6 +225,9 @@ func (b *ApprovalOrderBackend) gateSpot(ctx context.Context, spec orderSpec) (ev
 		return evaluation{}, gateErr("market status", fmt.Errorf("market %s is currently closed", spec.symbol))
 	}
 	md, _ := p.(broker.MarketDataProvider)
+	if err := b.gateDNSpotLeg(ctx, spec, p); err != nil {
+		return evaluation{}, gateErr("delta-neutral", err)
+	}
 
 	// The USD value of the order is required: an unknown value refuses (a cap or
 	// not), and the cap is checked in USD, never as amount*price in the quote

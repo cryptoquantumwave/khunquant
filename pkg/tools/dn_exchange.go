@@ -640,9 +640,26 @@ func (a *ApprovalCloser) ProposeClose(ctx context.Context, r deltaneutral.CloseR
 	}
 	p, err := a.svc.Propose(ctx, req)
 	if err != nil {
-		return deltaneutral.Proposed{}, err
+		return deltaneutral.Proposed{}, &deltaneutral.CloseRefusal{Reason: closeRefusalReason(err), Err: err}
 	}
 	return deltaneutral.Proposed{ID: p.ID, Code: p.Code, ExpiresAt: p.ExpiresAt}, nil
+}
+
+// closeRefusalReason says, in a sentence for the owner and without internals, why the
+// approval service created no close proposal.
+func closeRefusalReason(err error) string {
+	var pe *approval.PendingError
+	switch {
+	case errors.As(err, &pe):
+		return "too many exit proposals are already waiting for a decision"
+	case errors.Is(err, approval.ErrHourlyLimit):
+		return "too many exit proposals were created in the last hour"
+	case errors.Is(err, approval.ErrUnavailable) && strings.Contains(err.Error(), "could not be delivered"):
+		return "the approval card could not be delivered to you, so the chat channel may be down"
+	case errors.Is(err, approval.ErrUnavailable):
+		return "approvals are not available"
+	}
+	return "it was refused by a safety check"
 }
 
 // Status is the proposal's status as the approval service names it.

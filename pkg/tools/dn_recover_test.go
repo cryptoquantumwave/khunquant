@@ -67,8 +67,8 @@ func TestDNRecover_ProposesCloseOrphan(t *testing.T) {
 	if w := r.drive(n, rec, false); w.Status != journal.StatusWaiting {
 		t.Fatalf("dn.recover should wait for the owner: %+v", w)
 	}
-	if r.alerts.count() != 1 {
-		t.Errorf("the owner is woken once per offer: %d alerts", r.alerts.count())
+	if r.alerts.count() != 2 {
+		t.Errorf("an offer is an alert and its outcome (F-DN-2): %d alerts", r.alerts.count())
 	}
 	if r.tg.count() != 1 {
 		t.Fatalf("%d cards", r.tg.count())
@@ -216,8 +216,8 @@ func TestDNRecover_ReOfferedOnScheduleAtMostSixTimes(t *testing.T) {
 	if r.world.placed("futures") != 1 {
 		t.Errorf("%d futures orders: nothing may be closed without an approval", r.world.placed("futures"))
 	}
-	if r.alerts.count() != deltaneutral.RecoverMaxOffers+1 {
-		t.Errorf("%d alerts: one per offer and a last \"still open\"", r.alerts.count())
+	if r.alerts.count() != 2*deltaneutral.RecoverMaxOffers+1 {
+		t.Errorf("%d alerts: an alert and its outcome per offer and a last \"still open\"", r.alerts.count())
 	}
 }
 

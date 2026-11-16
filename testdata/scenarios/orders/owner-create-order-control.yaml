@@ -1,0 +1,42 @@
+# Control for non-owner-cannot-create-order (F-OWN-1). The same account, market, enable flag
+# and scripted create_order sell, but the request comes from the owner in dm:owner. Exactly one
+# order must be placed, so the 0 of the known-bug file is the owner gate's doing and not a
+# tool that is off, an account that holds nothing or a market that is not wired.
+version: 1
+scenario: owner-create-order-control
+covers: [F-OWN-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.1 } }
+llm_script:
+  - id: sell
+    match: { sender: "simchat:owner", prompt_contains: ["sell a little btc"] }
+    respond: { tool: create_order, args: { provider: binance, symbol: BTC/USDT, type: market, side: sell, amount: 0.01, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "sell a little btc" }
+timeline:
+  - advance: 2m
+expect:
+  - id: the-tool-was-reached
+    event: { kind: tool.call, fields: { name: create_order } }
+    count: 1
+  - id: one-order-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 1

@@ -1,0 +1,65 @@
+# B6-6: a 30-minute market-data outage must not make a false price crossing, and must not
+# end the owner's alert. On Binance the owner has an alert "BTC above 99000". From +1m to
+# +31m Binance answers the ticker reads (GET /api/v3/ticker...) with its rate-limit error,
+# and the market source backs off. Inside the outage BTC goes 98000 -> 100000 (10m) -> 98000
+# (10m), a real excursion over the line that no read can see. Nothing may be reported for the
+# gap (no price_cross candidate and no message about BTC), and the alert must stay live:
+# after the outage BTC moves over the line for real and exactly one crossing is seen. That
+# last step is also the setup proof: the alert existed and the source judged it, so the
+# silence in the gap is the backoff's doing and not a dead alert.
+# The sibling known bug market-outage-tells-owner (O-13) is about the missing notice.
+version: 1
+scenario: market-outage-no-false-cross
+covers: [B6-6]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 99000, recurring: false }
+timeline:
+  - at: "+1m"
+    fault.add:
+      match: { venue: binance, path_prefix: /api/v3/ticker }
+      effect: { error: rate_limit }
+      when: { from: "+0m", to: "+30m" }
+  - at: "+5m"
+    market.path: { symbol: BTC/USDT, to: 100000, over: 10m, shape: linear }
+  - at: "+15m"
+    market.path: { symbol: BTC/USDT, to: 98000, over: 10m, shape: linear }
+  - run_until: "+50m"
+  - market.path: { symbol: BTC/USDT, to: 100500, over: 3m, shape: linear }
+  - run_until: "+70m"
+expect:
+  - id: the-fault-fired-on-the-ticker-reads
+    event: { kind: fault.fired, fields: { venue: binance } }
+    count: ">= 1"
+    within: { from: "+1m", to: "+31m" }
+  - id: no-crossing-seen-in-the-gap
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    count: 0
+    within: { from: "+1m", to: "+31m" }
+  - id: no-message-about-btc-in-the-gap
+    message: { to: owner, contains: ["BTC"] }
+    count: 0
+    within: { from: "+1m", to: "+31m" }
+  - id: the-alert-is-still-live-and-crosses-once-afterwards
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    count: 1
+    within: { from: "+50m", to: "+70m" }

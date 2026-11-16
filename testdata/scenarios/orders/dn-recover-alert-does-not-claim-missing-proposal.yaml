@@ -1,0 +1,108 @@
+# F-DN-2: the recovery alert says "A proposal to close it is waiting for your approval" before the
+# proposal is made, and when the proposal then fails the owner is left believing a card exists.
+#
+# Observed (B3 log): the owner had 3 pending buys, so ProposeClose was refused by the pending bound
+# (HYP-4; its own file is dn-recover-close-not-blocked-by-pending-buys), but the critical alert still
+# said "A proposal to close it is waiting for your approval". The text is written in alertText
+# (pkg/deltaneutral/recover.go, about line 395) from the fact that a proposer is wired, and the alert
+# is sent before ProposeClose is called; a refusal is only logged.
+#
+# This file makes ProposeClose fail in a way a HYP-4 fix does NOT cure, so fixing one defect cannot
+# turn the other file green. The pending bound is not involved: nothing is pending. The card is sent
+# to the owner directly (approval.Service.deliverCard, no retry), and while the chat channel is down
+# that delivery fails, which cancels the proposal ("card not delivered") and makes Propose return an
+# error. The alert goes by the attention outbox, which retries a protective Critical for an hour, so
+# it is delivered when the channel is back, still saying the proposal is waiting.
+# (Checked in code: a /stop does not work as the failure, because Propose refuses only a proposal that
+# is not risk reducing while the kill flag is set, and the close is reduce-only.)
+#
+# Why each piece of setup is there:
+#  - approvals on, because the proposer is wired only while they are (that is what the alert text keys on);
+#  - the spot buy of the open is refused by a fault (insufficient_funds), so the futures short is an orphan
+#    and recovery starts;
+#  - the chat channel goes down before the open and comes back at +1m, so the card is lost and the alert is not;
+#  - clock.resolution 1s, because the open is a verified workflow.
+#
+# The correct behaviour: no message to the owner says a proposal is waiting for approval while none
+# was created. The setup proofs: no proposal was created in the first 20 minutes (the next recovery
+# round is at +30m), and the unhedged alert itself was delivered.
+#
+# Fix direction (log): write the alert text after ProposeClose, from its result: say "waiting for
+# your approval" only when a proposal exists, else the "close it on the exchange or run
+# unwind_delta_neutral_position" text.
+version: 1
+scenario: dn-recover-alert-does-not-claim-missing-proposal
+covers: [F-DN-2]
+status: known_bug
+known_bug: F-DN-2
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true, expiry_minutes: 15 }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+llm_script:
+  - id: open
+    match: { sender: "simchat:owner", prompt_contains: ["open the plan"] }
+    respond: { tool: open_delta_neutral_position, args: { plan_id: 1, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - fault.add:
+      match: { venue: binance, order: create, market: spot }
+      effect: { order: reject, code: insufficient_funds }
+  - chat.channel: { state: down }
+  - chat: { as: owner, text: "open the plan" }
+timeline:
+  - at: "+1m"
+    chat.channel: { state: up }
+  - run_until: "+25m"
+expect:
+  # Setup proof: the short was placed and the spot buy was not (an orphan), the owner was told, and
+  # no proposal exists (so a "waiting" message would be false).
+  - id: the-short-was-placed
+    order: { venue: binance, symbol: "BTC/USDT:USDT", side: sell, count: 1 }
+  - id: no-spot-buy
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 0 }
+    within: { from: "+0m", to: "+25m" }
+  - id: owner-told-it-is-unhedged
+    message: { to: owner, severity: critical, contains: ["UNHEDGED"], count: ">= 1" }
+    within: { from: "+0m", to: "+25m" }
+  - id: no-proposal-was-created
+    proposal: { kind: order, status: pending }
+    count: 0
+    within: { from: "+0m", to: "+25m" }
+  # The correct behaviour.
+  - id: no-message-claims-a-proposal-is-waiting
+    message: { to: owner, contains: ["waiting for your approval"], count: 0 }
+    within: { from: "+0m", to: "+25m" }

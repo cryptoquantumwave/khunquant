@@ -1,0 +1,63 @@
+# B3-9: a qualified reply to a pending card ("yes, but only half") is not an approval. The rule
+# that FIX-REPLY widens (more yes words) must not widen into "anything that starts with yes": a
+# reply that changes the terms stays an ordinary chat turn. The proposal stays pending, no order is
+# placed, and the text reaches the agent (the scripted answer "heard-half" comes back to the
+# owner). Keep this green after the FIX-REPLY fix.
+version: 1
+scenario: qualified-yes-reply-does-not-approve
+covers: [FIX-REPLY, B3-9]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      approvals: { enabled: true, expiry_minutes: 15 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 1000, BTC: 0.05 } }
+llm_script:
+  - id: propose-sell
+    match: { sender: "simchat:owner", prompt_contains: ["trim my btc"] }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.01, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: half
+    match: { sender: "simchat:owner", prompt_contains: ["only half"] }
+    respond: { text: "heard-half" }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please trim my btc" }
+timeline:
+  - advance: 1m
+  - chat: { as: owner, text: "yes, but only half", reply_to: sc-1 }
+  - advance: 5m
+expect:
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: 1
+  - id: card-delivered
+    message: { to: owner, contains: ["SELL 0.01 BTC"], buttons: [approve], count: 1 }
+  - id: still-pending
+    proposal: { kind: order, status: pending }
+    count: 1
+  - id: not-approved
+    proposal: { kind: order, status: approved }
+    count: 0
+    within: { from: "+0m", to: "+6m" }
+  - id: no-order-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 0
+    within: { from: "+0m", to: "+6m" }
+  - id: reply-reached-the-agent
+    message: { to: owner, contains: ["heard-half"], count: 1 }

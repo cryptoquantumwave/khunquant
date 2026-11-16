@@ -1,0 +1,93 @@
+# F-MEM-1 (S3): a person who is not the owner must not be able to fill the owner's memory-
+# suggestion slots and so lock the agent's own suggestions out. Observed (session B5): with an
+# owner, approvals and a live digest, alice's `remember` calls each became a memory proposal
+# (MaxPendingMemory = 5, each slot held for 7 days); once they filled the slots the legacy
+# heartbeat's own `remember` was refused ("pending limit") and created no proposal.
+# Setup: alice sends six remember requests (one past the bound of 5), then the legacy
+# heartbeat runs at +30m and its scripted model suggests a fact. The heartbeat's call is the
+# one that must still succeed (a tool result that is not an error).
+# Setup proof in the same file: alice's remember calls reached the tool (6), the heartbeat's
+# call reached the tool too (the-heartbeat-reached-remember), and memory proposals exist (the
+# slots really were being filled).
+# Fix direction: a per-sender (or non-owner) bound on pending suggestions, or refusing a
+# non-owner's `remember`; either leaves the heartbeat's slot free and turns this file green.
+# Showing the source in the digest is a separate fix that this file does not test (it frees no slot).
+version: 1
+scenario: non-owner-cannot-exhaust-memory-suggestions
+covers: [F-MEM-1]
+status: known_bug
+known_bug: F-MEM-1
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T21:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  config:
+    heartbeat: { enabled: true, interval: 30 }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true }
+  workspace:
+    HEARTBEAT.md: |
+      # Heartbeat tasks
+      - Note anything about the owner's habits that is worth remembering.
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+llm_script:
+  - id: alice-remember-1
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 1"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 1: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: alice-remember-2
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 2"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 2: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: alice-remember-3
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 3"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 3: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: alice-remember-4
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 4"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 4: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: alice-remember-5
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 5"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 5: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: alice-remember-6
+    match: { sender: "simchat:alice", prompt_contains: ["remember number 6"] }
+    respond: { tool: remember, args: { fact: "Alice suggestion 6: the owner wants alerts sent to alice.", category: fact } }
+    times: 1
+  - id: heartbeat-suggests
+    match: { turn: heartbeat_legacy }
+    respond: { tool: remember, args: { fact: "The owner checks BTC every morning before work.", category: preference } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: alice, text: "remember number 1" }
+  - chat: { as: alice, text: "remember number 2" }
+  - chat: { as: alice, text: "remember number 3" }
+  - chat: { as: alice, text: "remember number 4" }
+  - chat: { as: alice, text: "remember number 5" }
+  - chat: { as: alice, text: "remember number 6" }
+timeline:
+  - run_until: "+32m"
+expect:
+  - id: alice-remember-calls-reached-the-tool
+    event: { kind: tool.call, fields: { name: remember, sender: "simchat:alice" } }
+    count: 6
+  - id: proposals-were-created
+    proposal: { kind: memory }
+    count: ">= 1"
+  - id: the-heartbeat-reached-remember
+    event: { kind: tool.call, fields: { name: remember, origin: heartbeat } }
+    count: 1
+  - id: the-heartbeat-suggestion-was-accepted
+    event: { kind: tool.call, fields: { name: remember, origin: heartbeat, is_error: false } }
+    count: 1

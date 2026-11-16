@@ -1,0 +1,68 @@
+# F-OWN-1 (S1), read half: with an owner configured, a non-owner's turn must not be handed the
+# owner's portfolio. Observed (session B8): alice in dm:alice called get_total_value and got
+# "binance (main) 119800.00 USDT"; get_assets_list and get_profile answered her the same way.
+#
+# A journal tool.call entry carries the arguments but not the result, and a scripted
+# then_text cannot echo it. What the lab can see is the model's next call: a rule with
+# last_tool_result_contains matches only when the tool result held the owner's total, and
+# answers with a marker word, which is then a chat.out to whoever asked. So "the marker
+# reached alice" means "the tool gave alice the total". The marker is chosen so that a refusal
+# text cannot contain it.
+#
+# Setup proof, in the same file: the owner asks the same question from dm:owner and DOES get
+# the marker (owner-saw-total), so the rule matches the real result and the figure is the one
+# the tool prints; and alice's call reached the tool (the-tool-was-reached-for-alice).
+# Fix direction: when an owner is configured, owner-data reads (portfolio, balances, profile)
+# refuse in any turn whose sender is not the owner.
+version: 1
+scenario: non-owner-cannot-read-owner-portfolio
+covers: [F-OWN-1]
+status: known_bug
+known_bug: F-OWN-1
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.1 } }
+llm_script:
+  - id: total-reached-the-model
+    match: { last_tool: get_total_value, last_tool_result_contains: ["19800"] }
+    respond: { text: "PORTFOLIO-TOTAL-DISCLOSED" }
+  - id: tool-answered-otherwise
+    match: { last_tool: get_total_value }
+    respond: { text: "TOTAL-WITHHELD" }
+  - id: alice-asks
+    match: { sender: "simchat:alice", prompt_contains: ["what is in the account"] }
+    respond: { tool: get_total_value, args: { exchange: binance } }
+    times: 1
+  - id: owner-asks
+    match: { sender: "simchat:owner", prompt_contains: ["what is in the account"] }
+    respond: { tool: get_total_value, args: { exchange: binance } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "what is in the account" }
+  - chat: { as: alice, text: "what is in the account" }
+timeline:
+  - advance: 2m
+expect:
+  - id: the-tool-was-reached-for-alice
+    event: { kind: tool.call, fields: { name: get_total_value, sender: "simchat:alice" } }
+    count: 1
+  - id: owner-saw-total
+    message: { to: "dm:owner", contains: ["PORTFOLIO-TOTAL-DISCLOSED"], count: 1 }
+  - id: alice-was-answered
+    message: { to: "dm:alice", count: ">= 1" }
+  - id: total-does-not-reach-alice
+    message: { to: "dm:alice", contains: ["PORTFOLIO-TOTAL-DISCLOSED"], count: 0 }
+    within: { from: "+0m", to: "+2m" }

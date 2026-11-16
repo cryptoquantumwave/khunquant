@@ -125,7 +125,8 @@ func refuseNonOwnerChange(ctx context.Context, tool, what string) *ToolResult {
 // own root conversation turn may run it. It is the same rule as refuseNonOwnerChange
 // (ownerOnlyApplies, so the owner's own sub-turn is refused too, and with no owner
 // configured nothing changes) worded for execution. Ad-hoc trading tools are not gated
-// here: a person on the allow-list keeps their own trades.
+// here but by the class rule in owner_gate.go: while an owner is configured a person
+// who is not the owner may not call any trade or funds tool, or read the owner's data.
 //
 // It runs first in the tool, before the plan is read, so nothing is executed, recorded
 // or revealed for a turn that is refused. A caller with a legitimate non-owner route

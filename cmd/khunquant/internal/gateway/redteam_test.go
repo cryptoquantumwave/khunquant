@@ -400,15 +400,17 @@ func TestRedTeam_NonOwnerChatCannotTrade(t *testing.T) {
 	ctx := tools.WithToolSender(tools.WithToolOrigin(context.Background(), tools.OriginRemote), "telegram:999")
 	res := r.attempt(ctx, "telegram")
 	r.assertRefused(res, tools.NameCreateOrder, tools.NameWriteFile+" memory/MEMORY.md")
-	// With approvals on, the engine turns another person's order into a question for the
-	// owner (ask); the refusal is the engine's, enforced, and recorded with its reasons.
-	if !strings.Contains(res[tools.NameCreateOrder].ForLLM, "Policy:") {
+	// The owner gate refuses another person's order before the engine is asked, and tells
+	// the person to ask the owner.
+	if !strings.Contains(res[tools.NameCreateOrder].ForLLM, "ask the owner") {
 		t.Errorf("create_order: %q", res[tools.NameCreateOrder].ForLLM)
 	}
 	r.assertNothingHappened()
 	r.assertPolicyExplains(tools.NameCreateOrder)
-	if n := r.count(`SELECT COUNT(*) FROM policy_decisions WHERE tool = ? AND mode IN ('ask', 'notify_only') AND enforced = 1`, tools.NameCreateOrder); n != 1 {
-		t.Errorf("%d enforced refusals recorded for create_order, want 1", n)
+	// The refusal is the owner gate's, not the engine's, so the row is a verdict recorded
+	// beside it (not enforced) and the order did not run.
+	if n := r.count(`SELECT COUNT(*) FROM policy_decisions WHERE tool = ?`, tools.NameCreateOrder); n != 1 {
+		t.Errorf("%d verdicts recorded for create_order, want 1", n)
 	}
 }
 
@@ -737,14 +739,19 @@ func TestRedTeam_NonOwnerCannotExecutePlans(t *testing.T) {
 	remote := func(sender string) context.Context {
 		return tools.WithToolContext(tools.WithToolSender(tools.WithToolOrigin(ctxb, tools.OriginRemote), sender), "telegram", "chat")
 	}
-	const wording = "the owner's plans are executed only in the owner's own conversation"
+	// Another person is stopped by the registry's owner gate; the owner's own sub-turn
+	// reaches the tool, whose own guard refuses it.
+	wordingFor := map[string]string{
+		"another person":       "ask the owner",
+		"the owner's sub-turn": "the owner's plans are executed only in the owner's own conversation",
+	}
 	for label, ctx := range map[string]context.Context{
 		"another person": remote("telegram:999"), "the owner's sub-turn": tools.WithSubTurn(remote(rtOwner)),
 	} {
 		got := map[string]*tools.ToolResult{}
 		for name, args := range calls {
 			got[name] = r.reg.ExecuteWithContext(ctx, name, args, "telegram", "chat", nil)
-			if res := got[name]; res == nil || !res.IsError || !strings.Contains(res.ForLLM, wording) {
+			if res := got[name]; res == nil || !res.IsError || !strings.Contains(res.ForLLM, wordingFor[label]) {
 				t.Errorf("%s: %s was not refused as owner-only: %+v", label, name, res)
 			}
 		}
@@ -771,11 +778,11 @@ func TestRedTeam_NonOwnerCannotExecutePlans(t *testing.T) {
 			args[k] = v
 		}
 		args["confirm"] = false
-		if res := r.reg.ExecuteWithContext(remote(rtOwner), name, args, "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wording) {
+		if res := r.reg.ExecuteWithContext(remote(rtOwner), name, args, "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wordingFor["the owner's sub-turn"]) {
 			t.Errorf("the owner's own %s was refused as owner-only: %s", name, res.ForLLM)
 		}
 	}
-	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameExecuteDCAOrder, calls[tools.NameExecuteDCAOrder], "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wording) {
+	if res := r.reg.ExecuteWithContext(remote(rtOwner), tools.NameExecuteDCAOrder, calls[tools.NameExecuteDCAOrder], "telegram", "chat", nil); res != nil && strings.Contains(res.ForLLM, wordingFor["the owner's sub-turn"]) {
 		t.Errorf("the owner's own execute_dca_order was refused as owner-only: %s", res.ForLLM)
 	}
 	r.assertNothingHappened()

@@ -14,11 +14,11 @@
 # the tool prints; and alice's call reached the tool (the-tool-was-reached-for-alice).
 # Fix direction: when an owner is configured, owner-data reads (portfolio, balances, profile)
 # refuse in any turn whose sender is not the owner.
+# Setup proof: a class-ceiling refusal leaves no tool.call entry (labToolTap records in AfterTool only), so the refusal marker stands in for it.
 version: 1
 scenario: non-owner-cannot-read-owner-portfolio
 covers: [F-OWN-1]
-status: known_bug
-known_bug: F-OWN-1
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
@@ -36,6 +36,9 @@ llm_script:
   - id: total-reached-the-model
     match: { last_tool: get_total_value, last_tool_result_contains: ["19800"] }
     respond: { text: "PORTFOLIO-TOTAL-DISCLOSED" }
+  - id: refused
+    match: { last_tool: get_total_value, last_tool_result_contains: ["ask the owner"] }
+    respond: { text: "TOTAL-REFUSED" }
   - id: tool-answered-otherwise
     match: { last_tool: get_total_value }
     respond: { text: "TOTAL-WITHHELD" }
@@ -56,9 +59,8 @@ setup:
 timeline:
   - advance: 2m
 expect:
-  - id: the-tool-was-reached-for-alice
-    event: { kind: tool.call, fields: { name: get_total_value, sender: "simchat:alice" } }
-    count: 1
+  - id: alice-call-was-refused
+    message: { to: "dm:alice", contains: ["TOTAL-REFUSED"], count: 1 }
   - id: owner-saw-total
     message: { to: "dm:owner", contains: ["PORTFOLIO-TOTAL-DISCLOSED"], count: 1 }
   - id: alice-was-answered

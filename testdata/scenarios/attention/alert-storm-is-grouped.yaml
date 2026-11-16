@@ -1,0 +1,80 @@
+# B10-1: a storm of alerts is grouped. Eight owner price alerts on BTC (81100 .. 81800)
+# all cross at the same instant (BTC 81000 -> 82000 in one step). The owner must get one
+# grouped message (the log saw "8 updates"), not eight, and the model is not called: the
+# alert messages are templates. The positive checks prove the setup: all eight crossings
+# reached the engine as candidates (so the grouping is the attention layer's doing and not
+# eight alerts that never fired).
+version: 1
+scenario: alert-storm-is-grouped
+covers: [B10-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 81000 }
+setup:
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81100, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81200, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81300, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81400, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81500, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81600, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81700, recurring: false }
+  - call_tool:
+      as: owner
+      name: set_price_alert
+      args: { action: create, provider: binance, symbol: BTC/USDT, condition: above, threshold: 81800, recurring: false }
+timeline:
+  - advance: 5m
+  - market.set: { symbol: BTC/USDT, price: 82000 }
+  - run_until: "+20m"
+expect:
+  - id: all-eight-crossings-were-seen
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    count: 8
+    within: { from: "+5m", to: "+20m" }
+  - id: one-grouped-message
+    message: { to: owner, contains: ["8 updates"] }
+    count: 1
+    within: { from: "+5m", to: "+20m" }
+  - id: not-eight-messages
+    message: { to: owner }
+    count: 1
+    within: { from: "+1m", to: "+20m" }
+  - id: no-model-call
+    llm: {}
+    count: 0
+    within: { from: "+1m", to: "+20m" }

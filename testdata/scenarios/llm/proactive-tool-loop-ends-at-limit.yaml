@@ -1,0 +1,76 @@
+# B10-2: a proactive turn whose model calls a tool forever ends at the product's iteration
+# limit, and the owner still gets the alert, once, as the template. Observed (session B10):
+# with agents.defaults.max_tool_iterations 5 and a proactive turn scripted to call get_ticker
+# forever, the turn "ended at max_tool_iterations without a decision", the outbox logged
+# "composer failed; delivering the template message", and the loop's own text ("I've reached
+# max_tool_iterations ... Increase max_tool_iterations in config.json") was NOT sent to the
+# owner.
+# Why the setup is needed:
+# - max_tool_iterations 5: the lab simulator has its own cap of 8 tool rounds per turn
+#   (maxToolRounds) and the product default is 30, so a loop test must lower the product limit
+#   below 8 or the simulator's cap, not the product's, would end the turn.
+# - a move_vs_vol Warning on a large holding (BTC 0.5 is about 29 % of the portfolio; the trigger
+#   composes with the model from 10 % weight up): that is what starts a proactive turn. The
+#   floor is lowered to 3 % so that a -10 % move is a Warning. A price alert is a template and
+#   never starts a turn. (An earlier tier-1 notice of -5 % goes out first as a plain template.)
+# - the script: the first rule makes the proactive turn call get_ticker; the rule chained on
+#   last_tool: get_ticker makes it call get_ticker again, for ever.
+# Setup proof in the same file: the proactive turn ran (llm turn proactive), get_ticker was
+# called exactly 5 times (the limit; the loop was real) and the alert reached the owner once.
+version: 1
+scenario: proactive-tool-loop-ends-at-limit
+covers: [B10-2]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-10-26T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    agents:
+      defaults:
+        max_tool_iterations: 5
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers:
+        mode: live
+        params:
+          move_vs_vol: { floor_crypto_pct: 3 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.5 } }
+llm_script:
+  - id: loop
+    match: { turn: proactive, last_tool: get_ticker }
+    respond: { tool: get_ticker, args: { provider: binance, symbol: BTC/USDT } }
+  - id: start-loop
+    match: { turn: proactive }
+    respond: { tool: get_ticker, args: { provider: binance, symbol: BTC/USDT } }
+timeline:
+  - run_until: "+75m"
+  - market.path: { symbol: BTC/USDT, to: 88200, over: 30m, shape: linear }
+  - run_until: "+120m"
+expect:
+  - id: the-proactive-turn-ran
+    llm: { turn: proactive }
+    count: ">= 1"
+    within: { from: "+75m", to: "+120m" }
+  - id: the-loop-called-the-tool-up-to-the-limit-and-no-further
+    event: { kind: tool.call, fields: { name: get_ticker, is_error: false } }
+    count: 5
+    within: { from: "+75m", to: "+120m" }
+  - id: the-alert-was-delivered-once-as-the-template
+    message: { to: owner, severity: warning, contains: ["BTC moved -10.0%"] }
+    count: 1
+    within: { from: "+75m", to: "+120m" }
+  - id: the-loops-own-text-is-not-sent-to-the-owner
+    message: { to: owner, contains: ["max_tool_iterations"] }
+    count: 0
+    within: { from: "+75m", to: "+120m" }

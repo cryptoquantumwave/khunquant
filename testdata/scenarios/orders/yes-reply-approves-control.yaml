@@ -1,0 +1,57 @@
+# Control for thai-yes-reply-approves (FIX-REPLY), and a regression for the reply rule itself: an
+# exact "yes" sent as a reply to a pending card, in the owner chat, from the owner, approves it
+# (B3-9). The reply is sent with reply_to naming the card (the first message the instance sent,
+# sc-1, which the card-delivered expectation checks is the card). The same file with a Thai yes
+# is the known bug; it differs in exactly the reply text.
+version: 1
+scenario: yes-reply-approves-control
+covers: [FIX-REPLY]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      approvals: { enabled: true, expiry_minutes: 15 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 1000, BTC: 0.05 } }
+llm_script:
+  - id: propose-sell
+    match: { sender: "simchat:owner", prompt_contains: ["trim my btc"] }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.01, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please trim my btc" }
+timeline:
+  - advance: 1m
+  - chat: { as: owner, text: "yes", reply_to: sc-1 }
+  - advance: 5m
+expect:
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: 1
+  - id: card-delivered
+    message: { to: owner, contains: ["SELL 0.01 BTC"], buttons: [approve], count: 1 }
+  - id: proposal-approved
+    proposal: { kind: order, status: approved }
+    count: 1
+  - id: one-order-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 1
+  # The proposing turn makes two model calls (the propose_order call, then its closing text).
+  # A third would be the "yes" going to the agent as chat as well.
+  - id: reply-did-not-reach-the-agent
+    llm: {}
+    count: 2

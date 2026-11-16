@@ -1,0 +1,57 @@
+# F-OWN-1 (S1): with an owner configured, a turn whose sender is not the owner must not place
+# an order on the owner's account. Observed (session B8): alice in dm:alice sold 0.01 BTC
+# (order 1001, filled) and bob in group:team, mentioned, bought 0.02 BTC (order 1002); the
+# owner was told nothing. Same family as S116C-1 (non-owner-cannot-flatten) but wider: the
+# plain create_order tool, not only the emergency flatten.
+# Setup that makes "no order" mean something: the tool is enabled in config (it is off by
+# default), binance holds BTC and USDT, and the market exists, so the tool places an order
+# for the owner (control: owner-create-order-control, the same file with the request from
+# dm:owner, places exactly one). the-tool-was-reached-twice proves both scripted calls arrived
+# at the tool, so a rule that never matched cannot pass the absence check.
+# Fix direction: when an owner is configured, trade, funds and automation tools refuse in any
+# turn whose sender is not the owner (or route to an owner approval card).
+version: 1
+scenario: non-owner-cannot-create-order
+covers: [F-OWN-1]
+status: known_bug
+known_bug: F-OWN-1
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.1 } }
+llm_script:
+  - id: alice-sells
+    match: { sender: "simchat:alice", prompt_contains: ["sell a little btc"] }
+    respond: { tool: create_order, args: { provider: binance, symbol: BTC/USDT, type: market, side: sell, amount: 0.01, confirm: true } }
+    times: 1
+  - id: bob-buys
+    match: { sender: "simchat:bob", prompt_contains: ["buy a little btc"] }
+    respond: { tool: create_order, args: { provider: binance, symbol: BTC/USDT, type: market, side: buy, amount: 0.02, confirm: true } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: alice, text: "sell a little btc" }
+  - chat: { as: "bob@group:team", text: "buy a little btc", mention: true }
+timeline:
+  - advance: 2m
+expect:
+  - id: the-tool-was-reached-twice
+    event: { kind: tool.call, fields: { name: create_order } }
+    count: 2
+  - id: no-order-from-a-non-owner
+    order: { venue: binance }
+    count: 0
+    within: { from: "+0m", to: "+2m" }

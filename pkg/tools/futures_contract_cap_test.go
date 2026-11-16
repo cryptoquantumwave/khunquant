@@ -119,6 +119,32 @@ func TestFuturesOpenPosition_Cap_MissingContractSizeFallsBackToOne(t *testing.T)
 	}
 }
 
+// HYP-1: a limit entry far below the mark is marketable; it is valued at the mark, so the
+// cap refuses it. 20 contracts x 10 CHZ x mark 5 = 1000 USD, but x limit 0.05 = 10 USD.
+func TestFuturesOpenPosition_Cap_LimitFarBelowMarkIsValuedAtMark(t *testing.T) {
+	const sym = "CHZ/USDT:USDT"
+	cs := 10.0
+	p := newCapTestProvider(sym, &cs, 5)
+	origFn := futuresProviderFn
+	origLimiter := broker.DefaultLimiter
+	futuresProviderFn = func(_ context.Context, _ *config.Config, _, _ string) (broker.FuturesProvider, error) { return p, nil }
+	broker.DefaultLimiter = unlimitedLimiter{}
+	t.Cleanup(func() { futuresProviderFn = origFn; broker.DefaultLimiter = origLimiter })
+	cfg := config.DefaultConfig()
+	cfg.TradingRisk.AllowLeverage = true
+	cfg.TradingRisk.MaxOrderValueUSD = 500
+	res := NewFuturesOpenPositionTool(cfg).Execute(context.Background(), map[string]any{
+		"provider": "okx", "symbol": sym, "side": "long", "type": "limit", "price": 0.05,
+		"amount": 20.0, "leverage": 5.0, "confirm": true,
+	})
+	if !res.IsError || !strings.Contains(res.ForLLM, "max_order_value_usd") || !strings.Contains(res.ForLLM, "1000.00") {
+		t.Fatalf("a limit worth ~1000 USD at the mark must be refused on the 500 USD cap, got: %s", res.ForLLM)
+	}
+	if p.orders != 0 {
+		t.Errorf("no order may be placed, got %d", p.orders)
+	}
+}
+
 // 20000 CHZ contracts x 10 x 0.074 = 14800 USD trips the large-position warning
 // even though contracts x price alone is only 1480 USD.
 func TestFuturesOpenPosition_LargePositionWarningUsesContractSize(t *testing.T) {
@@ -135,7 +161,8 @@ func TestFuturesOpenPosition_LargePositionWarningUsesContractSize(t *testing.T) 
 }
 
 func TestEstimateFuturesNotional_AppliesContractSize(t *testing.T) {
-	fp := &mockFuturesProvider{}
+	// Mark below the limit: the limit is the higher figure.
+	fp := &mockFuturesProvider{markPriceFn: func(context.Context, string) (float64, error) { return 0.05, nil }}
 	price := 0.074
 	n, _, err := estimateFuturesNotional(context.Background(), fp, "CHZ/USDT:USDT", 1351, 10, &price)
 	if err != nil {

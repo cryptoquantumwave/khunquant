@@ -72,8 +72,17 @@ func TestCreateOrder_SettradeTHBOrder_CapEnforcedViaFallbackRate(t *testing.T) {
 	if crypto.orderCount() != 0 {
 		t.Error("the rate provider was used to trade")
 	}
-	if got := stock.fetched(); len(got) != 1 || got[0] != "PTT" {
-		t.Errorf("settrade fetches = %v; want only the market order's PTT ticker", got)
+	// The stock ticker is read for each of the four orders priced: the market order's own
+	// price and, since a limit order is valued at max(limit, market) (HYP-1), the market
+	// reference of the three limit orders. Nothing but PTT is read there.
+	if got := stock.fetched(); len(got) != 4 {
+		t.Errorf("settrade fetches = %v; want four PTT tickers", got)
+	} else {
+		for _, sym := range got {
+			if sym != "PTT" {
+				t.Errorf("settrade fetches = %v; want only PTT", got)
+			}
+		}
 	}
 
 	// With no crypto provider configured there is no rate source anywhere:

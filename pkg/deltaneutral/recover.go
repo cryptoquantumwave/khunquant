@@ -59,6 +59,7 @@ type CloseRequest struct {
 	ReduceOnly bool
 	Rationale  string
 	Candidate  AlertResult
+	PlanID     int64
 }
 
 // Proposed identifies a created proposal.
@@ -356,7 +357,7 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 
 // closeRequest builds the close from the assessed numbers only.
 func (d *Deps) closeRequest(p *Plan, in RecoverInput, a Assessment, al AlertResult) (CloseRequest, error) {
-	r := CloseRequest{Candidate: al, Amount: a.OrphanAmount}
+	r := CloseRequest{Candidate: al, Amount: a.OrphanAmount, PlanID: in.PlanID}
 	switch a.Orphan {
 	case LegTypeFutures:
 		lo, err := d.Exchange.LegOrder(p, LegTypeFutures, a.OrphanAmount)

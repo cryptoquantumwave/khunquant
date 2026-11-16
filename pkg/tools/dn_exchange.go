@@ -629,6 +629,9 @@ func (a *ApprovalCloser) ProposeClose(ctx context.Context, r deltaneutral.CloseR
 		},
 		Rationale: r.Rationale, Origin: approval.OriginProactive, Trust: proactive.TrustSystem,
 		DeliverNow: r.Candidate.DeliverNow, CandidateID: r.Candidate.CandidateID,
+		// The recover close is counted apart from every other exit: a model turn's
+		// proactive proposals are exits too and must not keep it out. Only code sets this.
+		ProtectiveKey: fmt.Sprintf("protect:dn_recover:%d", r.PlanID),
 	}
 	if r.Market == approval.MarketFutures {
 		req.Order.Contracts = r.Amount

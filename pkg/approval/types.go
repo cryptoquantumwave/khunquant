@@ -320,6 +320,17 @@ const (
 	MaxPending = 3
 	// MaxPerHour is how many may be created in a rolling hour.
 	MaxPerHour = 10
+	// MaxPendingExit and MaxExitPerHour are the same two bounds for an order that only
+	// reduces exposure. They are counted apart from MaxPending and MaxPerHour so that
+	// risk-increasing proposals can never keep an exit from being proposed. A pending
+	// exit stops counting when it expires; the hourly count covers every exit created in
+	// the rolling hour, decided or not.
+	MaxPendingExit = 3
+	MaxExitPerHour = 10
+	// MaxPendingProtective and MaxProtectivePerHour bound the protective close that code
+	// proposes (ProposeRequest.ProtectiveKey), counted apart from every other exit.
+	MaxPendingProtective = 3
+	MaxProtectivePerHour = 10
 	// MaxPendingMandate and MaxMandatePerHour are the same two bounds for mandate cards
 	// and the questions of mandated runs, counted apart from orders so that they can
 	// never keep an order (an exit above all) from being proposed.

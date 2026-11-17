@@ -116,7 +116,7 @@ func TestEngine_EscalationAddsProseWhenTheTurnSucceeds(t *testing.T) {
 	c.Severity, c.Compose = proactive.SeverityWarning, proactive.ComposeLLM
 	p.eng.Emitter().Emit(candEvent(c))
 	waitFor(t, "the message", func() bool { return len(p.del.messages()) == 1 })
-	if m := p.del.messages()[0]; m.Title != "title esc" || m.Body != "Funding flipped negative." {
+	if m := p.del.messages()[0]; m.Title != "title esc" || m.Body != "Assistant's note: Funding flipped negative." {
 		t.Fatalf("message = %+v", m)
 	}
 }

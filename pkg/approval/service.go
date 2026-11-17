@@ -186,6 +186,12 @@ type ProposeRequest struct {
 	// requires a MandateID; a positive Expiry replaces the default life of the card.
 	MandateID string
 	Expiry    time.Duration
+	// ProtectiveKey is set by CODE only, never from a tool argument or a turn's context
+	// (propose_order cannot set it): the delta-neutral recover close. It must start with
+	// "protect:", and on a proactive, risk-reducing order it puts the proposal in a bound
+	// of its own, so pending proposals of a model turn cannot keep the close out. It is
+	// stored as the proposal's IntentID.
+	ProtectiveKey string
 }
 
 // Propose creates a pending proposal and delivers its card to the owner.
@@ -225,17 +231,20 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 	defer s.mu.Unlock()
 
 	now := s.now()
-	class := classOf(KindOrder, r.Origin)
+	// Prepare comes first: which bound the proposal is held to depends on whether the
+	// order only reduces exposure.
+	prep, err := s.o.Backend.Prepare(WithOrderOrigin(ctx, r.Origin), r.Order)
+	if err != nil {
+		return Proposal{}, err
+	}
+	protective := r.ProtectiveKey != "" && isProtectiveKey(r.ProtectiveKey) && r.Origin == OriginProactive && prep.Reducing
+	class := classOf(KindOrder, r.Origin, prep.Reducing, protective)
 	if codes, err := s.st.pendingCodes(ctx, now, class); err != nil {
 		return Proposal{}, err
 	} else if max, _, _ := class.bounds(); len(codes) >= max {
 		return Proposal{}, &PendingError{Codes: codes}
 	}
 
-	prep, err := s.o.Backend.Prepare(WithOrderOrigin(ctx, r.Origin), r.Order)
-	if err != nil {
-		return Proposal{}, err
-	}
 	if r.Origin == OriginProactive && !prep.Reducing {
 		return Proposal{}, ErrNotRiskReducing
 	}
@@ -256,6 +265,9 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 	}
 	if r.Expiry > 0 {
 		p.ExpiresAt = now.Add(r.Expiry)
+	}
+	if protective {
+		p.IntentID = r.ProtectiveKey
 	}
 	var card Card
 	for attempt := 0; ; attempt++ {

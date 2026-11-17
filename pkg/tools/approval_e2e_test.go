@@ -24,11 +24,16 @@ import (
 type fakeTelegram struct {
 	mu   sync.Mutex
 	msgs []notify.Notification
+	// down: the chat channel is out, so nothing is delivered (and nothing is recorded).
+	down bool
 }
 
 func (f *fakeTelegram) Deliver(_ context.Context, n notify.Notification) (notify.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.down {
+		return notify.Result{Reason: "chat channel down"}, nil
+	}
 	f.msgs = append(f.msgs, n)
 	return notify.Result{
 		Delivered: true, Route: proactive.OwnerRoute{Channel: "telegram", ChatID: "1001", SenderID: proposeOwner},

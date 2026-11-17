@@ -121,9 +121,13 @@ func (a outboxAlerts) clock() time.Time {
 }
 
 func (a outboxAlerts) Alert(ctx context.Context, al deltaneutral.RecoveryAlert) (deltaneutral.AlertResult, error) {
+	dedup := fmt.Sprintf("dn_recover:%d:%d:%d", al.PlanID, al.ExecutionID, al.Round)
+	if al.FollowUp {
+		dedup += ":outcome" // another message than the round's first alert, not a repeat of it
+	}
 	c := proactive.Candidate{
 		TriggerID:  fmt.Sprintf("dn_recover:%d", al.PlanID),
-		DedupKey:   fmt.Sprintf("dn_recover:%d:%d:%d", al.PlanID, al.ExecutionID, al.Round),
+		DedupKey:   dedup,
 		Severity:   proactive.SeverityCritical,
 		Protective: true,
 		Salience:   0.95,
@@ -134,9 +138,17 @@ func (a outboxAlerts) Alert(ctx context.Context, al deltaneutral.RecoveryAlert) 
 		Compose:    proactive.ComposeTemplate,
 		At:         a.clock(),
 	}
-	dec, err := a.ob.Submit(ctx, attention.Item{Candidate: c})
+	// Decide, then hand the decision over: the protective lane sends it and this call does
+	// not wait for the send (Submit would hold the workflow through the channel's retries
+	// while the chat channel is down, once per alert of the round, which is the case the
+	// outcome alert exists for). The decision is what a proposal for the same situation is
+	// bound to, so it is returned either way.
+	dec, err := a.ob.Decide(ctx, c)
 	if err != nil {
 		return deltaneutral.AlertResult{}, err
+	}
+	if a.ob.Accept(dec, attention.Item{Candidate: dec.Candidate}) == attention.HandoffClosed {
+		return deltaneutral.AlertResult{}, fmt.Errorf("%w: the attention outbox has stopped", deltaneutral.ErrAlertNotAccepted)
 	}
 	now := dec.Disposition == proactive.DispNotify || dec.Disposition == proactive.DispEscalate
 	return deltaneutral.AlertResult{CandidateID: dec.Candidate.ID, DeliverNow: now}, nil

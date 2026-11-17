@@ -83,6 +83,13 @@ type propClass int
 
 const (
 	classOrder propClass = iota
+	// classExit holds the orders that only shrink exposure. It is separate from classOrder so
+	// that the owner's risk-increasing proposals can never keep an exit from being proposed.
+	classExit
+	// classProtective holds the protective close that code proposes (the delta-neutral
+	// recover close). It is apart from classExit because every proactive proposal a model
+	// turn makes is also an exit: a few of those must not keep the protective close out.
+	classProtective
 	classMandate
 	classMemory
 	classReflection
@@ -96,8 +103,12 @@ func (c propClass) sql() string {
 		return `kind = 'memory'`
 	case classReflection:
 		return `kind IN ('trigger_param', 'intent_cleanup', 'mute')`
+	case classExit:
+		return `(kind = 'order' AND origin <> 'mandate' AND reducing = 1 AND intent_id NOT LIKE '` + protectivePrefix + `%')`
+	case classProtective:
+		return `(kind = 'order' AND origin = 'proactive' AND reducing = 1 AND intent_id LIKE '` + protectivePrefix + `%')`
 	}
-	return `NOT (kind IN ('mandate', 'memory', 'trigger_param', 'intent_cleanup', 'mute') OR origin = 'mandate')`
+	return `NOT (kind IN ('mandate', 'memory', 'trigger_param', 'intent_cleanup', 'mute') OR origin = 'mandate' OR reducing = 1)`
 }
 
 // bounds are how many may be pending at once and how many may be created in the window.
@@ -109,14 +120,19 @@ func (c propClass) bounds() (maxPending, maxWindow int, window time.Duration) {
 		return MaxPendingMemory, MaxMemoryPerDay, 24 * time.Hour
 	case classReflection:
 		return MaxPendingReflection, MaxReflectionPerDay, 24 * time.Hour
+	case classExit:
+		return MaxPendingExit, MaxExitPerHour, time.Hour
+	case classProtective:
+		return MaxPendingProtective, MaxProtectivePerHour, time.Hour
 	}
 	return MaxPending, MaxPerHour, time.Hour
 }
 
 // classOf says which bound a proposal is held to: mandate cards and the questions of a
 // mandated run live for hours and are made by code, memory suggestions are free text a
-// background turn wrote, and orders are everything else.
-func classOf(k Kind, o Origin) propClass {
+// background turn wrote, an order that only reduces exposure is an exit with a bound of
+// its own, and orders are everything else.
+func classOf(k Kind, o Origin, reducing, protective bool) propClass {
 	switch {
 	case k == KindMemory:
 		return classMemory
@@ -124,6 +140,10 @@ func classOf(k Kind, o Origin) propClass {
 		return classReflection
 	case k == KindMandate || o == OriginMandate:
 		return classMandate
+	case reducing && protective && o == OriginProactive:
+		return classProtective
+	case reducing:
+		return classExit
 	}
 	return classOrder
 }
@@ -189,7 +209,7 @@ var errCodeTaken = errors.New("approval: code already pending")
 // insert stores a new pending proposal if both bounds hold, in ONE statement so
 // two proposers racing cannot both pass a count that only one fits under.
 func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
-	class := classOf(p.Kind, p.Origin)
+	class := classOf(p.Kind, p.Origin, p.Reducing, isProtectiveKey(p.IntentID))
 	cls := class.sql()
 	maxPending, maxWindow, window := class.bounds()
 	windowStart := now.Add(-window)
@@ -363,3 +383,8 @@ func (s *store) prune(ctx context.Context, cutoff time.Time, limit int) (int, er
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// protectivePrefix starts the IntentID of a protective close (ProposeRequest.ProtectiveKey).
+const protectivePrefix = "protect:"
+
+func isProtectiveKey(k string) bool { return strings.HasPrefix(k, protectivePrefix) }

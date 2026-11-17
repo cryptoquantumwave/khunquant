@@ -376,7 +376,8 @@ func (g *Governor) gather(ctx context.Context, tx *sql.Tx, c proactive.Candidate
 	if f.SendsToday, f.JoinsPending, err = sendsToday(ctx, tx, pf.dayStartMs, pf.dayEndMs, leaseStart, g.groupWindow().Milliseconds(), nowMs); err != nil {
 		return nil, err
 	}
-	if !isProtectiveCritical(c) {
+	// An alert the owner set is never inhibited (rule 5), so no inhibitor is looked up.
+	if !isProtectiveCritical(c) && !c.OwnerRequested {
 		if f.InhibitedBy, err = g.inhibitedBy(ctx, tx, c, now, leaseStart); err != nil {
 			return nil, err
 		}

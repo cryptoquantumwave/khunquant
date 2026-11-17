@@ -208,7 +208,8 @@ type facts struct {
 //	3   state[c.DedupKey] severity >= c.Severity, in window    drop               dedup_same_tier
 //	3b  undelivered digest item, severity >= c.Severity        drop               dedup_queued
 //	4   c.Protective && c.Severity == Critical                 notify | escalate  protective
-//	5   a fresh inhibitor explains c (see InhibitRule)         drop               inhibited_by:<key>
+//	5   a fresh inhibitor explains c (see InhibitRule), and c is not c.OwnerRequested
+//	                                                           drop               inhibited_by:<key>
 //	6   now outside Profile.ActiveHours, and not c.OwnerRequested
 //	                                                           digest             quiet_hours
 //	7   c.Severity == Info                                     digest             info_to_digest
@@ -223,11 +224,15 @@ type facts struct {
 //	10  otherwise                                              notify             template
 //
 // A candidate with OwnerRequested (the firing of an alert the owner set) skips
-// rule 6 only: it is delivered in quiet hours as it would be in active hours, and
-// rules 9 and 10 then report owner_alert_quiet_hours instead of their own reason
-// when it is quiet hours. Rules 1 to 5, 7 and 8 apply to it unchanged, so it can
-// still be muted, dropped as a repeat, inhibited, only logged in shadow, held for
-// the digest as Info, or held for the digest over the daily budget.
+// rules 5 and 6: it is never inhibited (inhibition silences the system's own
+// redundant noise, and an alert the owner asked for is not that), and it is
+// delivered in quiet hours as it would be in active hours; rules 9 and 10 then
+// report owner_alert_quiet_hours instead of their own reason when it is quiet hours.
+// Rules 1 to 4, 7 and 8 apply to it unchanged, so it can still be muted (the owner's
+// own choice), dropped as a repeat (the owner was already told, or has it queued),
+// only logged in shadow, held for the digest as Info, or held for the digest over
+// the daily budget. So the only way an owner alert is dropped in live mode is that
+// the owner already has it, or asked not to hear it: TestOwnerAlert_DropsOnlyWhenOwnerHasIt.
 //
 // Rules 7b and 7c are the only place learning changes a disposition, and they can
 // only move a learnable candidate (see learnable: a Notice that is neither protective
@@ -251,7 +256,8 @@ type facts struct {
 //     decisions (only delivered state dedups it), so a caller that crashed
 //     between Decide and MarkDelivered cannot silence it.
 //   - Rule 5 runs after rule 4, so a protective Critical is never inhibited, and
-//     before rule 6, so an inhibited candidate is dropped rather than sent to
+//     a candidate with OwnerRequested is never inhibited either (the governor does
+//     not even look for an inhibitor for it). It runs before rule 6, so an inhibited candidate is dropped rather than sent to
 //     the digest: the inhibitor already told the owner. An inhibitor is a
 //     notify or escalate decision whose dedup key starts with
 //     InhibitRule.WhenPrefix, decided within InhibitRule.For, that was
@@ -310,7 +316,7 @@ func evaluate(c proactive.Candidate, f facts) (proactive.Disposition, string) {
 			return proactive.DispEscalate, ReasonProtective
 		}
 		return proactive.DispNotify, ReasonProtective
-	case f.InhibitedBy != "":
+	case f.InhibitedBy != "" && !c.OwnerRequested:
 		return proactive.DispDrop, ReasonInhibitedPrefix + f.InhibitedBy
 	case !f.InActiveHours && !c.OwnerRequested:
 		return proactive.DispDigest, ReasonQuietHours

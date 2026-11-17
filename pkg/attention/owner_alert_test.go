@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,7 @@ func TestOwnerAlert_DeliveredInQuietHours(t *testing.T) {
 	})
 }
 
+// Inhibition is the one drop rule an owner alert is exempt from (HYP-3); the rest still apply.
 func TestOwnerAlert_EveryOtherRuleStillApplies(t *testing.T) {
 	ctx := context.Background()
 
@@ -82,20 +84,6 @@ func TestOwnerAlert_EveryOtherRuleStillApplies(t *testing.T) {
 		expect(t, e.send(cand("price_cross:b:btc:above:70k", notice, ownerRequested)), proactive.DispNotify, ReasonOwnerAlertQuiet)
 		e.clock.Add(10 * time.Minute)
 		expect(t, e.decide(cand("price_cross:b:btc:above:70k", notice, ownerRequested)), proactive.DispDrop, ReasonDedupSame)
-	})
-	t.Run("inhibited by a delta-neutral row", func(t *testing.T) {
-		e := newEnv(t)
-		e.atNight()
-		e.send(cand("dn:7:margin", critical, protective, onSubject("BTC/USDT:USDT")))
-		d := e.decide(cand("price_cross:b:btc:above:70k", notice, ownerRequested, onSubject("BTC/USDT")))
-		expect(t, d, proactive.DispDrop, inhibitedBy("dn:7:margin"))
-	})
-	t.Run("inhibited by a liquidation row", func(t *testing.T) {
-		e := newEnv(t)
-		e.atNight()
-		e.send(cand("liquidation_distance:b:btc:tier1", critical, protective, onSubject("BTC/USDT:USDT")))
-		d := e.decide(cand("move_vs_vol:btc:up", notice, ownerRequested, onSubject("BTC/USDT")))
-		expect(t, d, proactive.DispDrop, inhibitedBy("liquidation_distance:b:btc:tier1"))
 	})
 	t.Run("shadow only logs", func(t *testing.T) {
 		e := newEnv(t)
@@ -125,9 +113,9 @@ func TestOwnerAlert_EveryOtherRuleStillApplies(t *testing.T) {
 	})
 }
 
-// Only rule 6 (quiet hours) looks at the mark: for every other set of facts a marked
-// candidate gets the same disposition as an unmarked one. The one reason that differs
-// is the ordinary delivery reason, which says it came at night.
+// Only rules 5 (inhibition) and 6 (quiet hours) look at the mark: for every other set of
+// facts a marked candidate gets the same disposition as an unmarked one. The one reason
+// that differs is the ordinary delivery reason, which says it came at night.
 func TestOwnerAlert_OnlyQuietHoursLooksAtTheMark(t *testing.T) {
 	for _, f := range []facts{
 		{Mode: modeLive, InActiveHours: false, Budget: 3},
@@ -148,6 +136,21 @@ func TestOwnerAlert_OnlyQuietHoursLooksAtTheMark(t *testing.T) {
 			pd, pr := evaluate(plain, f)
 			md, mr := evaluate(marked, f)
 			switch {
+			case strings.HasPrefix(pr, ReasonInhibitedPrefix):
+				// rule 5: the mark exempts it, and what follows is judged without the inhibitor.
+				nf := f
+				nf.InhibitedBy = ""
+				wd, wr := evaluate(plain, nf)
+				if wr == ReasonQuietHours {
+					nf.InActiveHours = true
+					wd, wr = evaluate(plain, nf)
+				}
+				if wr == ReasonTemplate || wr == ReasonComposeLLM {
+					wr = deliverReason(marked, f, wr)
+				}
+				if md != wd || mr != wr {
+					t.Errorf("%+v sev %s: marked = %s/%s, want %s/%s", f, sev, md, mr, wd, wr)
+				}
 			case pr == ReasonQuietHours:
 				// the one rule the mark skips: what follows it is judged as in active hours.
 				af := f
@@ -174,5 +177,79 @@ func TestOwnerAlert_MarkIsPartOfTheStoredCandidate(t *testing.T) {
 	var back proactive.Candidate
 	if err := json.Unmarshal(b, &back); err != nil || !back.OwnerRequested {
 		t.Fatalf("round trip = %+v, %v", back, err)
+	}
+}
+
+// HYP-3: an alert the owner set is never inhibited, in quiet hours or in active hours,
+// whatever inhibitor is fresh. An unmarked candidate of the same key still is.
+func TestOwnerAlert_NotInhibited(t *testing.T) {
+	for _, tc := range []struct{ name, inhibitor, alert string }{
+		{"dn", "dn:7:margin", "price_cross:b:btc:above:99k"},
+		{"dn_health", "dn_health:1:leg_mismatch", "price_cross:b:btc:above:99k"},
+		{"liquidation", "liquidation_distance:b:btc:tier1", "move_vs_vol:btc:up"},
+	} {
+		for _, night := range []bool{false, true} {
+			name := tc.name + "/day"
+			if night {
+				name = tc.name + "/night"
+			}
+			t.Run(name, func(t *testing.T) {
+				e := newEnv(t)
+				if night {
+					e.atNight()
+				}
+				e.send(cand(tc.inhibitor, critical, protective, onSubject("BTC/USDT:USDT")))
+				// a plain candidate is still inhibited
+				expect(t, e.decide(cand(tc.alert, notice, onSubject("BTC/USDT"))), proactive.DispDrop, inhibitedBy(tc.inhibitor))
+				// the owner's own alert is delivered
+				want := ReasonTemplate
+				if night {
+					want = ReasonOwnerAlertQuiet
+				}
+				e.clock.Add(time.Minute)
+				expect(t, e.decide(cand(tc.alert, notice, onSubject("BTC/USDT"), ownerRequested)), proactive.DispNotify, want)
+			})
+		}
+	}
+}
+
+// The delta-neutral health inhibitor exactly as the lab showed it: the owner's price_cross
+// follows a delivered dn_health Warning by 14 minutes.
+func TestOwnerAlert_DNHealthInhibitorDoesNotSpendIt(t *testing.T) {
+	e := newEnv(t)
+	e.send(cand("dn_health:1:leg_mismatch", warning, onSubject("BTC/USDT")))
+	e.clock.Add(14 * time.Minute)
+	d := e.send(cand("price_cross:b:btc:above:99000", notice, onSubject("BTC/USDT"), ownerRequested))
+	expect(t, d, proactive.DispNotify, ReasonTemplate)
+	if n := e.count(`SELECT COUNT(*) FROM attention_decisions WHERE id = ? AND disposition = 'notify' AND delivered = 1`, d.ID); n != 1 {
+		t.Fatalf("the owner's alert was not delivered (rows=%d)", n)
+	}
+}
+
+// After the HYP-3 fix the only live-mode reason to drop an owner's alert is that the owner
+// already has it (same firing delivered or in flight, or queued for the digest) or muted
+// it. So a one-shot alert marked done by that decision is never spent unseen.
+func TestOwnerAlert_DropsOnlyWhenOwnerHasIt(t *testing.T) {
+	allowed := map[string]bool{ReasonMuted: true, ReasonDedupSame: true, ReasonDedupQueued: true}
+	for _, active := range []bool{true, false} {
+		for _, muted := range []bool{false, true} {
+			for _, dedup := range []bool{false, true} {
+				for _, queued := range []bool{false, true} {
+					for _, inh := range []string{"", "dn_health:1:x"} {
+						for _, sends := range []int{0, 5} {
+							for _, sev := range []proactive.Severity{info, notice, warning, critical} {
+								f := facts{Mode: modeLive, InActiveHours: active, Muted: muted, DedupHit: dedup, QueuedHit: queued,
+									InhibitedBy: inh, SendsToday: sends, Budget: 3, Adapt: true, Responses: 100, Mean: 0, LowThreshold: 1}
+								c := proactive.Candidate{Severity: sev, DedupKey: "price_cross:k", OwnerRequested: true}
+								disp, reason := evaluate(c, f)
+								if disp == proactive.DispDrop && !allowed[reason] {
+									t.Errorf("%+v sev %s: owner alert dropped with %q", f, sev, reason)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }

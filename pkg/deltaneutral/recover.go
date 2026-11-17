@@ -34,6 +34,9 @@ type RecoveryAlert struct {
 	PlanID, ExecutionID int64
 	Round               int
 	Title, Detail       string
+	// FollowUp marks the message that reports how the round's close proposal ended. It is
+	// a message of its own, so it must not be deduplicated against the round's first alert.
+	FollowUp bool
 }
 
 // AlertResult says what attention decided about the candidate. A proposal made for
@@ -42,6 +45,16 @@ type AlertResult struct {
 	CandidateID string `json:"candidate_id,omitempty"`
 	DeliverNow  bool   `json:"deliver_now"`
 }
+
+// ErrAlertNotAccepted is what an Alerter returns when it could not take the alert at all
+// (the attention outbox has stopped, as in a shutdown). The alert step is then not
+// recorded as done: it is retried after a wait, and picked up again by the resumed
+// workflow after a restart, so the owner is not left without the alert.
+var ErrAlertNotAccepted = errors.New("deltaneutral: the alert could not be handed over")
+
+// alertStepOptions retry an alert the Alerter could not take (ErrAlertNotAccepted); any
+// other failure of delivery is logged by the step and does not fail it.
+var alertStepOptions = []journal.StepOption{journal.Retries(8), journal.Backoff(15 * time.Second)}
 
 // Alerter delivers an Alert. The gateway adapts the attention outbox to it.
 type Alerter interface {
@@ -59,6 +72,7 @@ type CloseRequest struct {
 	ReduceOnly bool
 	Rationale  string
 	Candidate  AlertResult
+	PlanID     int64
 }
 
 // Proposed identifies a created proposal.
@@ -93,9 +107,26 @@ type Withdrawal struct {
 	Cancelled, StillExecuting []string
 }
 
+// CloseRefusal is the error a CloseProposer returns when no proposal was created. Reason
+// is a short sentence for the owner (no internals); the wrapped error is for the log.
+type CloseRefusal struct {
+	Reason string
+	Err    error
+}
+
+func (e *CloseRefusal) Error() string { return e.Err.Error() }
+func (e *CloseRefusal) Unwrap() error { return e.Err }
+
 type proposeOut struct {
 	Proposed
 	Error string `json:"error,omitempty"`
+	// Reason says why no proposal was created, in words for the owner.
+	Reason string `json:"reason,omitempty"`
+	// Closed: the plan was closed after the assessment, so there is nothing left to close.
+	Closed bool `json:"closed,omitempty"`
+	// Maybe: an earlier attempt of this step may have created the proposal, so neither
+	// "waiting" nor "none" is known.
+	Maybe bool `json:"maybe,omitempty"`
 }
 
 // RecoverInput is the input of dn.recover.
@@ -248,6 +279,52 @@ func (d *Deps) runRecover(c *journal.Ctx, raw json.RawMessage) error {
 	}, journal.Retries(5), journal.Backoff(5*time.Second))
 }
 
+// outcomeAlert tells the owner how the round's close proposal ended. The first alert of
+// a round goes out before the proposal is attempted (the proposal is bound to that alert's
+// candidate), so it cannot say whether a proposal exists; this follow-up does. A failed
+// delivery is logged and never fails the round.
+func (d *Deps) outcomeAlert(c *journal.Ctx, in RecoverInput, a Assessment, round int, p proposeOut) error {
+	if d.Alerts == nil {
+		return nil
+	}
+	al := d.alertText(in, a, round, "UNHEDGED")
+	al.FollowUp = true
+	again := "Recovery will not try again."
+	if round < RecoverMaxOffers {
+		again = fmt.Sprintf("Recovery will try again in about %d minutes.", int(RecoverOfferEvery.Minutes()))
+	}
+	switch {
+	case p.ID != "":
+		al.Detail = a.baseDetail(in) + " A proposal to close it is waiting for your approval"
+		if p.Code != "" {
+			al.Detail += " (code " + p.Code + ")"
+		}
+		al.Detail += "."
+	case p.Closed:
+		al.Detail = "Nothing is left to close: the plan was closed while the close was being prepared."
+	case p.Maybe:
+		al.Detail = a.baseDetail(in) + " An earlier attempt may already have created a close proposal: check your pending approvals. " +
+			"If there is none, close it yourself on the exchange or run unwind_delta_neutral_position; nothing is closed automatically. " + again
+	default:
+		al.Detail = a.baseDetail(in) + fmt.Sprintf(" No close proposal could be created (%s). "+
+			"Close it yourself on the exchange or run unwind_delta_neutral_position; nothing is closed automatically. %s",
+			p.Reason, again)
+	}
+	err := c.Step(fmt.Sprintf("alert_outcome_%d", round), nil, func(ctx context.Context, _ int) (any, error) {
+		if _, aerr := d.Alerts.Alert(ctx, al); aerr != nil {
+			logger.WarnCF("deltaneutral", "Could not deliver the recovery outcome alert", map[string]any{"error": aerr.Error()})
+			if errors.Is(aerr, ErrAlertNotAccepted) {
+				return nil, aerr
+			}
+		}
+		return nil, nil
+	}, alertStepOptions...)
+	if err != nil && !isStepError(err) {
+		return err // suspended, interrupted: the workflow resumes at this step
+	}
+	return nil
+}
+
 // assessStep is the fresh read: the journal's numbers and the exchange's.
 func (d *Deps) assessStep(in RecoverInput) func(context.Context, int) (any, error) {
 	return func(ctx context.Context, _ int) (any, error) {
@@ -281,9 +358,12 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 		res, aerr := d.Alerts.Alert(ctx, d.alertText(in, a, round, "UNHEDGED"))
 		if aerr != nil {
 			logger.WarnCF("deltaneutral", "Could not deliver the recovery alert", map[string]any{"error": aerr.Error()})
+			if errors.Is(aerr, ErrAlertNotAccepted) {
+				return nil, aerr // not recorded as done: retried, and resumed after a restart
+			}
 		}
 		return res, nil
-	}); err != nil {
+	}, alertStepOptions...); err != nil {
 		if !isStepError(err) {
 			return false, err
 		}
@@ -297,30 +377,38 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 			// An earlier attempt may have created the proposal. A second one for the same
 			// orphan could close it twice over (a partial orphan leaves a hedged remainder
 			// the reduce-only gate would let a second close eat), so wait for the next round.
-			return proposeOut{Error: "an earlier attempt may already have proposed"}, nil
+			return proposeOut{Error: "an earlier attempt may already have proposed", Maybe: true}, nil
 		}
 		plan, perr := d.Store.GetPlan(ctx, in.PlanID)
 		if perr != nil {
 			return nil, perr
 		}
 		if plan.Status == PlanStatusClosed { // an unwind closed it since the assessment
-			return proposeOut{Error: "the plan was closed"}, nil
+			return proposeOut{Error: "the plan was closed", Closed: true}, nil
 		}
 		req, rerr := d.closeRequest(plan, in, a, al)
 		if rerr != nil {
-			return proposeOut{Error: rerr.Error()}, nil
+			return proposeOut{Error: rerr.Error(), Reason: "the close could not be sized"}, nil
 		}
 		pr, perr := d.Proposer.ProposeClose(ctx, req)
 		if perr != nil { // no owner route, a gate, too many pending: the next round tries again
 			logger.WarnCF("deltaneutral", "Could not propose closing the orphan", map[string]any{"round": round, "error": perr.Error()})
-			return proposeOut{Error: perr.Error()}, nil
+			out := proposeOut{Error: perr.Error(), Reason: "it was refused"}
+			var cr *CloseRefusal
+			if errors.As(perr, &cr) && cr.Reason != "" {
+				out.Reason = cr.Reason
+			}
+			return out, nil
 		}
 		return proposeOut{Proposed: pr}, nil
 	}); err != nil {
 		if !isStepError(err) {
 			return false, err
 		}
-		return false, nil
+		p = proposeOut{Error: err.Error(), Reason: "it could not be attempted"}
+	}
+	if err := d.outcomeAlert(c, in, a, round, p); err != nil {
+		return false, err
 	}
 	if p.ID == "" {
 		return false, nil
@@ -356,7 +444,7 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 
 // closeRequest builds the close from the assessed numbers only.
 func (d *Deps) closeRequest(p *Plan, in RecoverInput, a Assessment, al AlertResult) (CloseRequest, error) {
-	r := CloseRequest{Candidate: al, Amount: a.OrphanAmount}
+	r := CloseRequest{Candidate: al, Amount: a.OrphanAmount, PlanID: in.PlanID}
 	switch a.Orphan {
 	case LegTypeFutures:
 		lo, err := d.Exchange.LegOrder(p, LegTypeFutures, a.OrphanAmount)
@@ -384,14 +472,24 @@ func oppositeSide(s string) string {
 	return "buy"
 }
 
-func (d *Deps) alertText(in RecoverInput, a Assessment, round int, head string) RecoveryAlert {
-	title := fmt.Sprintf("Delta-neutral plan %d: %s position (%s #%d failed)", in.PlanID, head, in.word(), in.ExecutionID)
+// baseDetail is what every alert of a recovery says first: what is open, and what is unhedged.
+func (a Assessment) baseDetail(in RecoverInput) string {
 	detail := "What is open now: " + a.summary() + "."
 	if a.Orphan != "" {
 		detail += fmt.Sprintf(" Unhedged: %.8g %s.", a.OrphanAmount, a.Orphan)
 	}
-	if d.Proposer != nil && a.Unreadable == "" {
-		detail += " A proposal to close it is waiting for your approval."
+	return detail
+}
+
+// alertText is the first alert of a round, and the closing alerts. It is written before a
+// close proposal is attempted, so it never says one exists: with a proposer wired it says
+// a check is under way and the outcome follows (outcomeAlert); the closing alerts, and a
+// round with nobody to propose, say how to close it by hand.
+func (d *Deps) alertText(in RecoverInput, a Assessment, round int, head string) RecoveryAlert {
+	title := fmt.Sprintf("Delta-neutral plan %d: %s position (%s #%d failed)", in.PlanID, head, in.word(), in.ExecutionID)
+	detail := a.baseDetail(in)
+	if d.Proposer != nil && a.Unreadable == "" && round <= RecoverMaxOffers {
+		detail += " Checking whether a close can be proposed; the result follows in the next message."
 	} else {
 		detail += " Close it on the exchange or run unwind_delta_neutral_position; nothing is closed automatically."
 	}
@@ -428,6 +526,9 @@ func (d *Deps) settleRecovery(ctx context.Context, in RecoverInput, last Assessm
 		if d.Alerts != nil {
 			if _, aerr := d.Alerts.Alert(ctx, d.alertText(in, last, RecoverMaxOffers+1, head)); aerr != nil {
 				logger.WarnCF("deltaneutral", "Could not deliver the final recovery alert", map[string]any{"error": aerr.Error()})
+				if errors.Is(aerr, ErrAlertNotAccepted) {
+					return aerr // finalize is retried
+				}
 			}
 		}
 		return nil
@@ -466,6 +567,9 @@ func (d *Deps) settleRecovery(ctx context.Context, in RecoverInput, last Assessm
 	if d.Alerts != nil { // something is still recorded as open: say so
 		if _, aerr := d.Alerts.Alert(ctx, d.alertText(in, last, RecoverMaxOffers+2, "RECONCILE")); aerr != nil {
 			logger.WarnCF("deltaneutral", "Could not deliver the closing recovery alert", map[string]any{"error": aerr.Error()})
+			if errors.Is(aerr, ErrAlertNotAccepted) {
+				return aerr // finalize is retried
+			}
 		}
 	}
 	return nil

@@ -65,6 +65,22 @@ const (
 // exempt: it is never abandoned for a price move.
 const DefaultCollarPct = 1.0
 
+type orderOriginKey struct{}
+
+// WithOrderOrigin returns ctx carrying the origin of the proposal whose order is
+// about to be prepared or rechecked. The service sets it from the proposal's own
+// origin (never from an argument), so an OrderBackend can hold a background
+// proposal to rules the owner's own proposal is not held to.
+func WithOrderOrigin(ctx context.Context, o Origin) context.Context {
+	return context.WithValue(ctx, orderOriginKey{}, o)
+}
+
+// OrderOriginFrom returns the origin set by WithOrderOrigin, or "" when none is.
+func OrderOriginFrom(ctx context.Context) Origin {
+	o, _ := ctx.Value(orderOriginKey{}).(Origin)
+	return o
+}
+
 // OrderParams is the canonical, stored description of an order: everything the
 // card shows and everything the executor places comes from these fields, and the
 // hash covers them. Amount is in base units for spot and in CONTRACTS for futures
@@ -304,6 +320,17 @@ const (
 	MaxPending = 3
 	// MaxPerHour is how many may be created in a rolling hour.
 	MaxPerHour = 10
+	// MaxPendingExit and MaxExitPerHour are the same two bounds for an order that only
+	// reduces exposure. They are counted apart from MaxPending and MaxPerHour so that
+	// risk-increasing proposals can never keep an exit from being proposed. A pending
+	// exit stops counting when it expires; the hourly count covers every exit created in
+	// the rolling hour, decided or not.
+	MaxPendingExit = 3
+	MaxExitPerHour = 10
+	// MaxPendingProtective and MaxProtectivePerHour bound the protective close that code
+	// proposes (ProposeRequest.ProtectiveKey), counted apart from every other exit.
+	MaxPendingProtective = 3
+	MaxProtectivePerHour = 10
 	// MaxPendingMandate and MaxMandatePerHour are the same two bounds for mandate cards
 	// and the questions of mandated runs, counted apart from orders so that they can
 	// never keep an order (an exit above all) from being proposed.

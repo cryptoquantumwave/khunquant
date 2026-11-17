@@ -93,11 +93,15 @@ func (t *GetDeltaNeutralHistoryTool) Execute(ctx context.Context, args map[strin
 			if snap.ThresholdBreached {
 				breachMark = "⚠"
 			}
-			sb.WriteString(fmt.Sprintf("%-25s %-12s %-10d %-14.2f%% %-12.2f%% %s\n",
+			drift := fmt.Sprintf("%.2f%%", snap.DeltaDriftPct)
+			if snap.DataStatus != deltaneutral.DataStatusOK {
+				drift = "unknown"
+			}
+			sb.WriteString(fmt.Sprintf("%-25s %-12s %-10d %-14s %-12.2f%% %s\n",
 				snap.CheckedAt.Format("2006-01-02 15:04 UTC"),
 				snap.HealthLabel,
 				snap.HealthScore,
-				snap.DeltaDriftPct,
+				drift,
 				snap.LiquidationDistancePct,
 				breachMark,
 			))

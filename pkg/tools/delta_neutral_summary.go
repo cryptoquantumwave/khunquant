@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral/planhealth"
 )
 
 // GetDeltaNeutralSummaryTool returns the economic summary for a delta-neutral plan.
@@ -182,7 +184,7 @@ func (t *GetDeltaNeutralSummaryTool) Execute(ctx context.Context, args map[strin
 
 		out += fmt.Sprintf("Latest Monitor (as of %s):\n", snapshot.CheckedAt.Format("2006-01-02 15:04:05 UTC"))
 		out += fmt.Sprintf("  Health:             %s (score: %d/100)\n", snapshot.HealthLabel, snapshot.HealthScore)
-		out += fmt.Sprintf("  Delta drift:        %.2f%% (threshold: %.2f%%)\n", snapshot.DeltaDriftPct, plan.RiskPolicy.MaxDeltaDriftPct)
+		out += fmt.Sprintf("  Delta drift:        %s (threshold: %.2f%%)\n", snapshotDriftText(snapshot), plan.RiskPolicy.MaxDeltaDriftPct)
 		out += fmt.Sprintf("  Current funding:    %.4f%%\n", snapshot.CurrentFundingRate*100)
 		out += fmt.Sprintf("  Est next funding:   %.4f USDT\n", snapshot.EstimatedNextFundingUSDT)
 		out += fmt.Sprintf("  Liquidation price:  %.4f\n", snapshot.LiquidationPrice)
@@ -198,9 +200,16 @@ func (t *GetDeltaNeutralSummaryTool) Execute(ctx context.Context, args map[strin
 		out += "\nP&L Breakdown:\n"
 		out += "  Spot leg:\n"
 		out += fmt.Sprintf("    Entry notional:   %.4f USDT\n", plan.SpotNotionalUSDT)
-		out += fmt.Sprintf("    Current value:    %.4f USDT (price %.6f, qty %.4f)\n",
-			snapshot.SpotValueUSDT, snapshot.SpotPrice, snapshot.SpotQuantity)
-		out += fmt.Sprintf("    Spot unrealized:  %+.4f USDT\n", spotPnL)
+		if snapshot.DataStatus != deltaneutral.DataStatusOK {
+			out += fmt.Sprintf("    Current value:    unknown (data status %s)\n", snapshot.DataStatus)
+		} else {
+			out += fmt.Sprintf("    Current value:    %.4f USDT (price %.6f, qty %.4f)\n",
+				snapshot.SpotValueUSDT, snapshot.SpotPrice, snapshot.SpotQuantity)
+			out += fmt.Sprintf("    Spot unrealized:  %+.4f USDT\n", spotPnL)
+		}
+		if slices.Contains(snapshot.BreachCodes, planhealth.CodeSpotLegNotVisible) {
+			out += "    WARNING:          spot leg not visible: sold, or in an earn product the API cannot read\n"
+		}
 		out += "  Futures leg:\n"
 		out += fmt.Sprintf("    Futures unrealized: %+.4f USDT  (short mark-to-market)\n", snapshot.FuturesUnrealizedPnLUSDT)
 		out += fmt.Sprintf("  Net unrealized:     %+.4f USDT  (spot + futures, should be ~0)\n", netPnL)

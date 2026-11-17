@@ -309,11 +309,13 @@ func TestLive_UnknownUSDValueWithCapRefuses(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.ForLLM, "cannot be valued") || l.trade.count() != 0 {
 		t.Fatalf("an unvaluable order under a cap: %+v, runs %d", res, l.trade.count())
 	}
-	if res = l.run(ownerCtx(), NameCreateOrder, buyOrder("BTC/USDT", 5)); res.IsError { // 50 USD
-		t.Fatalf("50 USD under a 100 USD cap: %s", res.ForLLM)
-	}
-	if res = l.run(ownerCtx(), NameCreateOrder, buyOrder("ETH/USDT", 50)); !res.IsError { // 500 USD
-		t.Fatal("500 USD under a 100 USD cap was allowed")
+	// A limit order is valued at max(limit, market) (HYP-1), so it needs the market like a
+	// market order: with no market to read, even a 50 USD limit is unknown and refused
+	// under a cap, and so is a 500 USD one.
+	for _, o := range []map[string]any{buyOrder("BTC/USDT", 5), buyOrder("ETH/USDT", 50)} {
+		if res = l.run(ownerCtx(), NameCreateOrder, o); !res.IsError || !strings.Contains(res.ForLLM, "cannot be valued") {
+			t.Fatalf("a limit order with no market to value it against under a cap: %+v", res)
+		}
 	}
 }
 

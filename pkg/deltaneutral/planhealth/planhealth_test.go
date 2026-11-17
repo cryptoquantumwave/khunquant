@@ -16,7 +16,7 @@ func TestCodes_TableIsStable(t *testing.T) {
 		"data_unavailable", "margin_critical", "liquidation_distance_low", "funding_negative",
 		"funding_reversal", "margin_danger", "delta_drift_high", "funding_unavailable",
 		"funding_below_min", "exit_spread_target_met", "leg_mismatch", "recovery_required",
-		"max_drawdown_breached", "profit_target_met",
+		"max_drawdown_breached", "profit_target_met", "spot_leg_not_visible",
 	}
 	if got := Codes(); !slices.Equal(got, want) {
 		t.Fatalf("Codes() = %v", got)

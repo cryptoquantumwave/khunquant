@@ -398,6 +398,34 @@ func EstimateNotionalUSDWithFallback(ctx context.Context, cfg *config.Config, md
 	})
 }
 
+// EstimateOrderValueUSDWithFallback is EstimateNotionalUSDWithFallback for the
+// order-value CAP: the USD value an order is held to.
+//
+// A market order is valued at its resolved price, as before. A LIMIT order is
+// valued at amount x max(limit, market reference), where the reference is the bid
+// for a sell and the ask for a buy: a sell limit below the bid is marketable and
+// fills near the bid, so valuing it at its own limit would let an order far over
+// the cap through. The result is never lower than the limit-priced value.
+//
+// Only NotionalQuote.USD carries the higher value. Price and QuoteNotional stay the
+// limit-priced figures (what a buy limit can cost at most, which is what a balance
+// check needs). A limit order whose market reference cannot be resolved is an error
+// wrapping ErrNoPrice: with a cap set the caller refuses, as for any unknown value.
+func EstimateOrderValueUSDWithFallback(ctx context.Context, cfg *config.Config, md MarketDataProvider, symbol, side string, amount float64, price *float64) (NotionalQuote, error) {
+	nq, err := EstimateNotionalUSDWithFallback(ctx, cfg, md, symbol, side, amount, price)
+	if err != nil || price == nil {
+		return nq, err
+	}
+	ref, err := EstimateNotionalQuote(ctx, md, symbol, side, 1, nil)
+	if err != nil {
+		return NotionalQuote{}, fmt.Errorf("%w: the market price of %s is needed to value a limit order: %v", ErrNoPrice, symbol, err)
+	}
+	if ref.Price > *price && isPositiveFinite(nq.USD) {
+		nq.USD *= ref.Price / *price
+	}
+	return nq, nil
+}
+
 func estimateNotionalUSD(ctx context.Context, md MarketDataProvider, symbol, side string, amount float64, price *float64, convert func(quote string) (usdRate, error)) (NotionalQuote, error) {
 	nq, err := EstimateNotionalQuote(ctx, md, symbol, side, amount, price)
 	if err != nil {

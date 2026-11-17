@@ -65,6 +65,22 @@ const (
 // exempt: it is never abandoned for a price move.
 const DefaultCollarPct = 1.0
 
+type orderOriginKey struct{}
+
+// WithOrderOrigin returns ctx carrying the origin of the proposal whose order is
+// about to be prepared or rechecked. The service sets it from the proposal's own
+// origin (never from an argument), so an OrderBackend can hold a background
+// proposal to rules the owner's own proposal is not held to.
+func WithOrderOrigin(ctx context.Context, o Origin) context.Context {
+	return context.WithValue(ctx, orderOriginKey{}, o)
+}
+
+// OrderOriginFrom returns the origin set by WithOrderOrigin, or "" when none is.
+func OrderOriginFrom(ctx context.Context) Origin {
+	o, _ := ctx.Value(orderOriginKey{}).(Origin)
+	return o
+}
+
 // OrderParams is the canonical, stored description of an order: everything the
 // card shows and everything the executor places comes from these fields, and the
 // hash covers them. Amount is in base units for spot and in CONTRACTS for futures

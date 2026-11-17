@@ -191,7 +191,7 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	var nq broker.NotionalQuote
 	priced := false
 	if maxUSD := t.cfg.TradingRisk.MaxOrderValueUSD; maxUSD > 0 {
-		est, estErr := broker.EstimateNotionalUSDWithFallback(ctx, t.cfg, md, symbol, side, amount, price)
+		est, estErr := broker.EstimateOrderValueUSDWithFallback(ctx, t.cfg, md, symbol, side, amount, price)
 		if estErr != nil {
 			return ErrorResult(unmeasurableOrderMessage(symbol, providerID, estErr)).WithError(estErr)
 		}

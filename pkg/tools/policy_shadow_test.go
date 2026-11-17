@@ -464,9 +464,10 @@ func TestOrderValuer_NoNetwork(t *testing.T) {
 		return policy.ActionRequest{Provider: provider, Order: &policy.Order{Symbol: symbol, Side: "buy", Amount: 0.5, Price: p}}
 	}
 
-	// An explicit price on a USD-like quote is amount x price, with no lookup.
-	if usd, ok := v.NotionalUSD(context.Background(), req("noprovider-test", "BTC/USDT", &price)); !ok || usd != 10000 {
-		t.Errorf("explicit price on a USD quote = %v, %v, want 10000", usd, ok)
+	// A limit order is valued at max(limit, market), so it needs the market like a market
+	// order does (HYP-1): with no provider to ask it is unknown, never amount x limit.
+	if usd, ok := v.NotionalUSD(context.Background(), req("noprovider-test", "BTC/USDT", &price)); ok {
+		t.Errorf("a limit order with no market to read = %v, want unknown", usd)
 	}
 	// Anything that needs a lookup on a provider that does not exist is unknown.
 	for name, r := range map[string]policy.ActionRequest{
@@ -500,12 +501,46 @@ func TestPolicyEngine_CapWithUnknownValue_Denies(t *testing.T) {
 	if _, v := PolicyProbe(ctx, eng, NameCreateOrder, order); v.Mode != policy.ModeDeny {
 		t.Fatalf("an unvaluable market order under a cap: %s %v", v.Mode, v.Reasons)
 	}
-	order["price"], order["type"] = 50.0, "limit" // 50 USD, known without a lookup
-	if _, v := PolicyProbe(ctx, eng, NameCreateOrder, order); v.Mode != policy.ModeAct {
-		t.Fatalf("a 50 USD order under a 100 USD cap: %s %v", v.Mode, v.Reasons)
+	// A limit order is valued at max(limit, market) (HYP-1), so it needs the market too: with
+	// no market to read, even a 50 USD limit is unknown and refused under a cap.
+	order["price"], order["type"] = 50.0, "limit"
+	if _, v := PolicyProbe(ctx, eng, NameCreateOrder, order); v.Mode != policy.ModeDeny {
+		t.Fatalf("a limit order with no market to value it against under a 100 USD cap: %s %v", v.Mode, v.Reasons)
 	}
 	order["price"] = 500.0
 	if _, v := PolicyProbe(ctx, eng, NameCreateOrder, order); v.Mode != policy.ModeDeny {
 		t.Fatalf("a 500 USD order under a 100 USD cap: %s %v", v.Mode, v.Reasons)
+	}
+}
+
+// HYP-1: the engine's cap values a limit order at max(limit, market reference).
+func TestOrderValuer_LimitValuedAtMaxOfLimitAndMarket(t *testing.T) {
+	v := newPricedVenue(t, "valuer-limit")
+	v.setTicker("BASE/USDT", 100, 100, 100)
+	cfg := config.DefaultConfig()
+	val := orderValuer{cfg: func() *config.Config { return cfg }}
+	req := func(side string, price float64) policy.ActionRequest {
+		return policy.ActionRequest{Provider: v.id, Order: &policy.Order{Symbol: "BASE/USDT", Side: side, Amount: 5, Price: &price}}
+	}
+	for _, tc := range []struct {
+		name string
+		r    policy.ActionRequest
+		want float64
+	}{
+		{"sell limit far below the market", req("sell", 1), 500},
+		{"buy limit below the market", req("buy", 50), 500},
+		{"sell limit above the market", req("sell", 120), 600},
+		{"buy limit above the market", req("buy", 130), 650},
+	} {
+		if usd, ok := val.NotionalUSD(context.Background(), tc.r); !ok || usd != tc.want {
+			t.Errorf("%s = %v, %v, want %v", tc.name, usd, ok, tc.want)
+		}
+	}
+	// No market to compare with: unknown.
+	empty := newPricedVenue(t, "valuer-limit-noticker")
+	r := req("sell", 1)
+	r.Provider = empty.id
+	if usd, ok := val.NotionalUSD(context.Background(), r); ok {
+		t.Errorf("no ticker: valued at %v, want unknown", usd)
 	}
 }

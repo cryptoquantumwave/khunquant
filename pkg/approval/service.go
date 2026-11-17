@@ -232,7 +232,7 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		return Proposal{}, &PendingError{Codes: codes}
 	}
 
-	prep, err := s.o.Backend.Prepare(ctx, r.Order)
+	prep, err := s.o.Backend.Prepare(WithOrderOrigin(ctx, r.Origin), r.Order)
 	if err != nil {
 		return Proposal{}, err
 	}

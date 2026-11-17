@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
-	"github.com/cryptoquantumwave/khunquant/pkg/exchanges"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/policy"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
@@ -163,9 +162,9 @@ func orderFacts(args map[string]any, symbol, side string) *policy.Order {
 	return o
 }
 
-// orderValuer prices an order in USD for the engine's cap. It reads a ticker only
-// when it must: an order with an explicit price on a USD-like quote needs no
-// network. The engine bounds the call with a timeout; any error is "unknown".
+// orderValuer prices an order in USD for the engine's cap. It reads a ticker for every
+// order (a limit order too: it is valued at max(limit, market)); the
+// engine bounds the call with a timeout; any error is "unknown".
 type orderValuer struct{ cfg func() *config.Config }
 
 func (v orderValuer) NotionalUSD(ctx context.Context, r policy.ActionRequest) (float64, bool) {
@@ -174,9 +173,8 @@ func (v orderValuer) NotionalUSD(ctx context.Context, r policy.ActionRequest) (f
 	if o == nil || cfg == nil || r.Provider == "" || o.Symbol == "" {
 		return 0, false
 	}
-	if o.Price != nil && exchanges.USDLike(broker.SymbolQuote(o.Symbol, r.Provider)) {
-		return o.Amount * *o.Price, true
-	}
+	// A limit order is valued at max(limit, market reference) (HYP-1), so it needs the
+	// ticker like a market order does; there is no offline fast path for an explicit price.
 	p, err := broker.CreateProviderForAccount(r.Provider, r.Account, cfg)
 	if err != nil {
 		return 0, false
@@ -185,7 +183,7 @@ func (v orderValuer) NotionalUSD(ctx context.Context, r policy.ActionRequest) (f
 	if !ok {
 		return 0, false
 	}
-	est, err := broker.EstimateNotionalUSDWithFallback(ctx, cfg, md, o.Symbol, o.Side, o.Amount, o.Price)
+	est, err := broker.EstimateOrderValueUSDWithFallback(ctx, cfg, md, o.Symbol, o.Side, o.Amount, o.Price)
 	if err != nil || !est.USDKnown {
 		return 0, false
 	}

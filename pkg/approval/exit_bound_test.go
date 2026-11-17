@@ -3,14 +3,14 @@ package approval
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
 // HYP-4: every order-kind proposal is held to ONE bound (MaxPending = 3 at once,
-// MaxPerHour = 10), classOrder in store.go. That class holds the owner's own,
+// MaxPerHour = 10), classOrder in store.go. That class held the owner's own,
 // possibly risk-increasing, propose_order cards and the protective close that
 // dn.recover proposes (tools.ApprovalCloser.ProposeClose: OriginProactive,
 // TrustSystem, reducing). So three pending risk-increasing owner cards, or ten
@@ -18,18 +18,7 @@ import (
 // is live. Mandates, memory and reflection already have their own classes, "so
 // that they can never keep an order (an exit above all) from being proposed".
 //
-// The reproducers are of an unfixed defect and are gated behind KQ_REPRO_HYP4=1, so
-// the default suite stays green. The change that fixes the defect deletes the gate.
-// The controls run always.
-
-const hyp4Defect = "HYP-4: a protective exit proposal shares the order bound with risk-increasing ones"
-
-func skipUnlessHYP4(t *testing.T) {
-	t.Helper()
-	if os.Getenv("KQ_REPRO_HYP4") != "1" {
-		t.Skipf("reproducer of an unfixed defect (%s): set KQ_REPRO_HYP4=1 to run it", hyp4Defect)
-	}
-}
+// HYP-4 reproducers (they failed before classExit existed) and the exit bound itself.
 
 // ownerBuy is the owner's own risk-increasing proposal: a buy. The amount differs
 // per n so no two proposals share a hash.
@@ -76,10 +65,9 @@ func TestRepro_HYP4_Control_CloseProposedWithTwoPending(t *testing.T) {
 	}
 }
 
-// Reproducer: with 3 pending risk-increasing owner buys the close is refused with
+// With 3 pending risk-increasing owner buys the close is refused with
 // the PendingError text the caller sees; the exit should be created.
 func TestRepro_HYP4_CloseProposedWithThreePendingOwnerBuys(t *testing.T) {
-	skipUnlessHYP4(t)
 	w := newWorld(t)
 	p := w.newProc(t0)
 	w.fillOwnerBuys(p, MaxPending)
@@ -93,10 +81,9 @@ func TestRepro_HYP4_CloseProposedWithThreePendingOwnerBuys(t *testing.T) {
 	}
 }
 
-// Reproducer, the hourly form: ten proposals created in the hour (all since decided,
+// The hourly form: ten proposals created in the hour (all since decided,
 // so none is pending) keep the close out for the rest of the hour.
 func TestRepro_HYP4_CloseProposedAfterTenCreatedInTheHour(t *testing.T) {
-	skipUnlessHYP4(t)
 	w := newWorld(t)
 	p := w.newProc(t0)
 	w.backend.mu.Lock()
@@ -136,5 +123,88 @@ func TestRepro_HYP4_Control_HourlyBoundStillBindsOwnerProposals(t *testing.T) {
 	}
 	if _, err := p.svc.Propose(context.Background(), ownerReq(ownerBuy(99))); !errors.Is(err, ErrHourlyLimit) {
 		t.Fatalf("the 11th owner proposal in the hour: %v, want ErrHourlyLimit", err)
+	}
+}
+
+// The exit class has a bound of its own: MaxPendingExit exits at once.
+func TestHYP4_ExitPendingBoundStillHolds(t *testing.T) {
+	w := newWorld(t)
+	p := w.newProc(t0)
+	w.fillOwnerBuys(p, 0) // reducing = true from here on
+	for i := 0; i < MaxPendingExit; i++ {
+		req := closeRequest()
+		req.Order.Amount += float64(i) / 1000
+		if _, err := p.svc.Propose(context.Background(), req); err != nil {
+			t.Fatalf("exit %d: %v", i, err)
+		}
+	}
+	req := closeRequest()
+	req.Order.Amount = 0.9
+	_, err := p.svc.Propose(context.Background(), req)
+	var pe *PendingError
+	if !errors.As(err, &pe) || len(pe.Codes) != MaxPendingExit {
+		t.Fatalf("exit %d: %v, want a PendingError naming %d codes", MaxPendingExit+1, err, MaxPendingExit)
+	}
+}
+
+// ... and MaxExitPerHour exits created in the rolling hour; the bound frees with the hour.
+func TestHYP4_ExitHourlyBoundStillHolds(t *testing.T) {
+	w := newWorld(t)
+	p := w.newProc(t0)
+	w.fillOwnerBuys(p, 0)
+	for i := 0; i < MaxExitPerHour; i++ {
+		req := closeRequest()
+		req.Order.Amount += float64(i) / 1000
+		prop, err := p.svc.Propose(context.Background(), req)
+		if err != nil {
+			t.Fatalf("exit %d: %v", i, err)
+		}
+		if _, err := p.svc.Decide(context.Background(), prop.Code, prop.Nonce, false, ownerID); err != nil {
+			t.Fatalf("reject %d: %v", i, err)
+		}
+	}
+	req := closeRequest()
+	req.Order.Amount = 0.9
+	if _, err := p.svc.Propose(context.Background(), req); !errors.Is(err, ErrHourlyLimit) {
+		t.Fatalf("exit %d in the hour: %v, want ErrHourlyLimit", MaxExitPerHour+1, err)
+	}
+	p.clock.Advance(time.Hour + time.Minute)
+	if _, err := p.svc.Propose(context.Background(), req); err != nil {
+		t.Fatalf("an hour later the exit must be proposed: %v", err)
+	}
+}
+
+// Exits do not use up the owner's risk-increasing bound either.
+func TestHYP4_PendingExitsDoNotBlockOwnerBuys(t *testing.T) {
+	w := newWorld(t)
+	p := w.newProc(t0)
+	w.fillOwnerBuys(p, 0)
+	for i := 0; i < MaxPendingExit; i++ {
+		req := closeRequest()
+		req.Order.Amount += float64(i) / 1000
+		if _, err := p.svc.Propose(context.Background(), req); err != nil {
+			t.Fatalf("exit %d: %v", i, err)
+		}
+	}
+	w.backend.mu.Lock()
+	w.backend.reducing = false
+	w.backend.mu.Unlock()
+	if _, err := p.svc.Propose(context.Background(), ownerReq(ownerBuy(1))); err != nil {
+		t.Fatalf("an owner buy with %d exits pending: %v", MaxPendingExit, err)
+	}
+}
+
+// The risk-increasing class keeps its bound: the owner's fourth pending buy is refused.
+func TestHYP4_OrderClassPendingBoundStillHolds(t *testing.T) {
+	w := newWorld(t)
+	p := w.newProc(t0)
+	w.fillOwnerBuys(p, MaxPending)
+	w.backend.mu.Lock()
+	w.backend.reducing = false
+	w.backend.mu.Unlock()
+	_, err := p.svc.Propose(context.Background(), ownerReq(ownerBuy(99)))
+	var pe *PendingError
+	if !errors.As(err, &pe) || len(pe.Codes) != MaxPending {
+		t.Fatalf("fourth pending buy: %v, want a PendingError naming %d codes", err, MaxPending)
 	}
 }

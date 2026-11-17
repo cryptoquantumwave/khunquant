@@ -80,7 +80,7 @@ func TestDNUnwind_EndsRecoveryAndWithdrawsItsProposal(t *testing.T) {
 	// Time passing wakes nothing: no new offer, no order but the open and the unwind's close.
 	r.clock.Advance(2 * time.Hour)
 	r.drive(n, rec, true)
-	if r.tg.count() != 1 || r.alerts.count() != 1 {
+	if r.tg.count() != 1 || r.alerts.count() != 2 { // the first offer's alert and its outcome
 		t.Errorf("%d cards, %d alerts: the owner was asked again", r.tg.count(), r.alerts.count())
 	}
 	if f := r.world.placed("futures"); f != 2 {
@@ -228,7 +228,7 @@ func TestDNRecover_WakesToAClosedPlanAndProposesNothing(t *testing.T) {
 	if w := r.drive(n, rec, true); w.Status != journal.StatusSucceeded {
 		t.Fatalf("dn.recover: %+v", w)
 	}
-	if r.tg.count() != 1 || r.alerts.count() != 1 {
+	if r.tg.count() != 1 || r.alerts.count() != 2 { // the first offer's alert and its outcome
 		t.Errorf("%d cards, %d alerts: the owner was asked about a closed plan", r.tg.count(), r.alerts.count())
 	}
 	if e, _ := n.store.GetExecution(context.Background(), execID); e.State != string(deltaneutral.ExecutionStateFailed) {

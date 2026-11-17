@@ -572,7 +572,8 @@ func strPtr2(s string) *string  { return &s }
 func f64Ptr(f float64) *float64 { return &f }
 
 func TestEstimateFuturesNotional_ExplicitPrice(t *testing.T) {
-	fp := &mockFuturesProvider{}
+	// The mark is below the limit, so the limit is the higher figure (a limit is valued at max(limit, mark)).
+	fp := &mockFuturesProvider{markPriceFn: func(context.Context, string) (float64, error) { return 40000, nil }}
 	price := 50000.0
 	notional, src, err := estimateFuturesNotional(context.Background(), fp, "BTC/USDT:USDT", 0.1, 1, &price)
 	if err != nil {

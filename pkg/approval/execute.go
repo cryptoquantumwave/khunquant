@@ -150,7 +150,7 @@ func (s *Service) stepRecheck(ctx context.Context, id string) (Rechecked, error)
 	if err := s.stale(p); err != nil {
 		return Rechecked{}, err
 	}
-	rc, err := s.o.Backend.Recheck(ctx, op)
+	rc, err := s.o.Backend.Recheck(WithOrderOrigin(ctx, p.Origin), op)
 	if err != nil {
 		return Rechecked{}, err
 	}

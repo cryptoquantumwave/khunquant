@@ -227,7 +227,7 @@ func legacyEvaluate(c proactive.Candidate, f facts) (proactive.Disposition, stri
 			return proactive.DispEscalate, ReasonProtective
 		}
 		return proactive.DispNotify, ReasonProtective
-	case f.InhibitedBy != "":
+	case f.InhibitedBy != "" && !c.OwnerRequested:
 		return proactive.DispDrop, ReasonInhibitedPrefix + f.InhibitedBy
 	case !f.InActiveHours && !c.OwnerRequested:
 		return proactive.DispDigest, ReasonQuietHours

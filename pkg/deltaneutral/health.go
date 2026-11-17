@@ -127,6 +127,12 @@ func Evaluate(input EvaluationInput) HealthEvaluation {
 	if legBreach {
 		breachCodes = append(breachCodes, planhealth.CodeLegMismatch)
 	}
+	// The spot reads succeeded and found no leg (or under 1% of it): say so. Report only;
+	// nothing acts on this code. A draft or ready plan has no spot leg yet.
+	if input.SpotState.NotVisible && input.SpotState.Available &&
+		input.Plan.Status != PlanStatusDraft && input.Plan.Status != PlanStatusReady {
+		breachCodes = append(breachCodes, planhealth.CodeSpotLegNotVisible)
+	}
 	if input.Plan.Status == PlanStatusRecoveryRequired {
 		breachCodes = append(breachCodes, planhealth.CodeRecoveryRequired)
 	}
@@ -406,6 +412,11 @@ func legMismatch(in EvaluationInput) (pct float64, breach bool) {
 		if !finiteNum(v) {
 			return 0, false
 		}
+	}
+	if spotQty <= 0 && in.SpotState.NotVisible && size > 0 && contracts > 0 {
+		// A spot leg that is not there against a futures leg that is: the whole short is
+		// unmatched. Shown as 100%, never as 0.
+		return 100, true
 	}
 	if spotQty <= 0 || size <= 0 || contracts < 0 {
 		return 0, false

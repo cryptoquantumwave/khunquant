@@ -51,7 +51,8 @@ func TestApprovalBackend_PrepareSpotDirectionAndPricing(t *testing.T) {
 		t.Errorf("a buy: reducing=%v ref=%v (the ask)", got.Reducing, got.Params.RefPrice)
 	}
 
-	// A limit order is valued at its limit and referenced to the market.
+	// A limit order is valued at the higher of its limit and the market (HYP-1: a sell limit
+	// below the bid fills near the bid) and referenced to the market.
 	limit := 59000.0
 	req := spotReq(v.id, "sell", 0.01)
 	req.Type, req.Price = "limit", &limit
@@ -59,7 +60,7 @@ func TestApprovalBackend_PrepareSpotDirectionAndPricing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Params.RefPrice != 59990 || math.Abs(got.Params.NotionalUSD-590) > 1e-6 || got.Params.Price == nil || *got.Params.Price != limit {
+	if got.Params.RefPrice != 59990 || math.Abs(got.Params.NotionalUSD-599.9) > 1e-6 || got.Params.Price == nil || *got.Params.Price != limit {
 		t.Errorf("limit params = %+v", got.Params)
 	}
 }

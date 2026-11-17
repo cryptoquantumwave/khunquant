@@ -185,6 +185,10 @@ type SpotState struct {
 	Price     float64
 	Quantity  float64
 	ValueUSDT float64
+	// NotVisible: the spot reads succeeded but the base asset has no row, or under 1% of
+	// the plan's spot notional (sold, or held where the API cannot read it). Quantity and
+	// ValueUSDT are then the real (small or zero) figures, never the plan's.
+	NotVisible bool
 }
 
 // FuturesState describes the futures leg's position and risk metrics

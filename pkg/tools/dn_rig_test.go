@@ -24,11 +24,15 @@ import (
 type fakeAlerts struct {
 	mu  sync.Mutex
 	got []deltaneutral.RecoveryAlert
+	err error // when set, the alert is refused and not recorded
 }
 
 func (f *fakeAlerts) Alert(_ context.Context, a deltaneutral.RecoveryAlert) (deltaneutral.AlertResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return deltaneutral.AlertResult{}, f.err
+	}
 	f.got = append(f.got, a)
 	return deltaneutral.AlertResult{CandidateID: fmt.Sprintf("cand-%d", len(f.got)), DeliverNow: true}, nil
 }

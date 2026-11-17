@@ -127,6 +127,17 @@ func estimateFuturesNotional(ctx context.Context, fp broker.FuturesProvider, sym
 		return n, source, nil
 	}
 	if price != nil && *price > 0 {
+		// A limit order is valued at max(limit, mark), like a spot one (HYP-1): a limit
+		// far below the mark is marketable and fills near the market, so valuing it at
+		// its own limit would let it past max_order_value_usd. With no mark to compare
+		// against, the order cannot be valued: an error, never the limit's lower figure.
+		ref, ok := futuresMarkReference(ctx, fp, symbol)
+		if !ok {
+			return 0, "", fmt.Errorf("cannot value a limit order on %s: its mark price is unavailable to compare with the limit", symbol)
+		}
+		if ref > *price {
+			return value(ref, "mark")
+		}
 		return value(*price, "explicit")
 	}
 	if mark, err := fp.FetchFuturesMarkPrice(ctx, symbol); err == nil && mark > 0 {
@@ -136,6 +147,18 @@ func estimateFuturesNotional(ctx context.Context, fp broker.FuturesProvider, sym
 		return value(*rate.MarkPrice, "funding_mark")
 	}
 	return 0, "", fmt.Errorf("cannot estimate notional for %s: mark price and funding rate unavailable", symbol)
+}
+
+// futuresMarkReference is the market reference of a futures symbol: the mark price,
+// else the funding rate's mark.
+func futuresMarkReference(ctx context.Context, fp broker.FuturesProvider, symbol string) (float64, bool) {
+	if mark, err := fp.FetchFuturesMarkPrice(ctx, symbol); err == nil && mark > 0 {
+		return mark, true
+	}
+	if rate, err := fp.FetchFuturesFundingRate(ctx, symbol); err == nil && rate.MarkPrice != nil && *rate.MarkPrice > 0 {
+		return *rate.MarkPrice, true
+	}
+	return 0, false
 }
 
 // validateActiveSwapMarket loads futures markets and validates the symbol is

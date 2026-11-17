@@ -7,14 +7,23 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/attention"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 )
 
 const (
 	// composeProseRunes caps the prose a model turn may add to a message.
 	composeProseRunes = 600
+
+	// NoteLabel is the label every model-written note carries, on the same line as
+	// the note: model text reaches the owner only where it is marked as the
+	// model's, so it cannot pass for the alert's own text, a system line or a card.
+	// Alert messages are not localised (no language reaches the renderer), so
+	// there is one English label.
+	NoteLabel = "Assistant's note: "
 
 	// maxForcedSkills and maxSkillNameRunes bound the skills a compose turn
 	// carries in full.
@@ -84,6 +93,7 @@ type ComposerStats struct {
 	Composed uint64 // prose was added to the template
 	Silent   uint64 // the model had nothing to add: the template went out as it was
 	Failed   uint64 // the turn failed: the template went out as it was
+	Refused  uint64 // the model's note failed validation: the template went out without it
 	// Protective counts groups with a protective Critical, handed over without a turn.
 	Protective uint64
 }
@@ -94,7 +104,8 @@ type ComposerStats struct {
 //
 // What stays with the code: the title, the evidence, the severity, the dedup key,
 // the intervention ID and the decisions of the message. The model's text is
-// prose, nothing else, cleaned to one line and capped.
+// a note, nothing else: labelled "Assistant's note:" on the same line, validated
+// as one plain paragraph and capped, and refused (not repaired) when it fails.
 //
 // Every way the turn can fail leaves the template message to be delivered, so
 // nothing is lost: an error, a timeout, a cancelled context, a model that
@@ -117,7 +128,7 @@ type Composer struct {
 	run TurnRunner
 	sem chan struct{}
 
-	composed, silent, failed, protective atomic.Uint64
+	composed, silent, failed, refused, protective atomic.Uint64
 }
 
 var _ attention.Composer = (*Composer)(nil)
@@ -129,7 +140,7 @@ func NewComposer(run TurnRunner) *Composer {
 
 // Stats returns the counters.
 func (c *Composer) Stats() ComposerStats {
-	return ComposerStats{Composed: c.composed.Load(), Silent: c.silent.Load(), Failed: c.failed.Load(), Protective: c.protective.Load()}
+	return ComposerStats{Composed: c.composed.Load(), Silent: c.silent.Load(), Failed: c.failed.Load(), Refused: c.refused.Load(), Protective: c.protective.Load()}
 }
 
 // Compose implements attention.Composer.
@@ -172,16 +183,25 @@ func (c *Composer) Compose(ctx context.Context, m attention.Message, items []att
 		return m, fmt.Errorf("compose: %w", err)
 	}
 
-	prose := proseOf(res)
+	prose, perr := proseOf(res)
+	if perr != nil {
+		// Refused, not repaired: what the owner reads is exactly what the model
+		// wrote, or nothing of it. The template goes out as it is.
+		c.refused.Add(1)
+		logger.WarnCF("proactive", "model note refused; delivering the message without it",
+			map[string]any{"intervention_id": m.InterventionID, "reason": perr.Error()})
+		return m, nil
+	}
 	if prose == "" {
 		c.silent.Add(1)
 		return m, nil // the template stands; see the type comment
 	}
-	out := m // title, severity, key and the rest stay exactly as rendered
+	note := NoteLabel + prose // the label shares the line with the text
+	out := m                  // title, severity, key and the rest stay exactly as rendered
 	if strings.TrimSpace(m.Body) == "" {
-		out.Body = prose
+		out.Body = note
 	} else {
-		out.Body = m.Body + "\n\n" + prose
+		out.Body = m.Body + "\n\n" + note
 	}
 	c.composed.Add(1)
 	return out, nil
@@ -211,20 +231,56 @@ func forcedSkills(cands []proactive.Candidate) []string {
 
 // proseOf is the text the turn's decisions add: a notify, ask or propose
 // decision contributes its text (and an ask its question), a silent one nothing.
-func proseOf(res TurnResult) string {
+// Each part must be one plain paragraph (see cleanNote); one that is not refuses
+// the whole note rather than being stripped.
+func proseOf(res TurnResult) (string, error) {
 	var parts []string
 	for _, d := range res.Decisions {
 		if d.Kind == proactive.DecideSilent {
 			continue
 		}
-		if t := attention.CleanLine(d.Text, composeProseRunes); t != "" {
+		t, err := cleanNote(d.Text)
+		if err != nil {
+			return "", err
+		}
+		if t != "" {
 			parts = append(parts, t)
 		}
 		if d.Kind == proactive.DecideAsk {
-			if q := attention.CleanLine(d.Question, composeProseRunes); q != "" {
+			q, err := cleanNote(d.Question)
+			if err != nil {
+				return "", err
+			}
+			if q != "" {
 				parts = append(parts, q)
 			}
 		}
 	}
-	return attention.CleanLine(strings.Join(parts, " "), composeProseRunes)
+	out := strings.Join(parts, " ")
+	if n := len([]rune(out)); n > composeProseRunes {
+		return "", fmt.Errorf("note is %d characters; at most %d are allowed", n, composeProseRunes)
+	}
+	return out, nil
+}
+
+// cleanNote applies the rules of approval.CleanRationale (this package may not
+// import approval) with the note's own cap: one paragraph of at most
+// composeProseRunes characters; any control, line-break or invisible formatting
+// character (bidi overrides included) refuses the text. A newline is refused
+// because it would let the model start a line of its own ("SYSTEM: ...") after
+// the label.
+func cleanNote(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if n := len([]rune(s)); n > composeProseRunes {
+		return "", fmt.Errorf("note is %d characters; at most %d are allowed", n, composeProseRunes)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return "", errors.New("note must be one plain paragraph: control, line-break and invisible formatting characters are not allowed")
+		}
+	}
+	return s, nil
 }

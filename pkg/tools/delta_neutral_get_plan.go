@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral/planhealth"
 )
 
 // GetDeltaNeutralPlanTool retrieves a single delta-neutral plan with its latest snapshot.
@@ -116,7 +118,7 @@ func (t *GetDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]a
 		out += "\n"
 		out += fmt.Sprintf("Latest Snapshot (as of %s):\n", snapshot.CheckedAt.Format("2006-01-02 15:04:05 UTC"))
 		out += fmt.Sprintf("  Health:             %s (score: %d)\n", snapshot.HealthLabel, snapshot.HealthScore)
-		out += fmt.Sprintf("  Delta drift:        %.2f%%\n", snapshot.DeltaDriftPct)
+		out += fmt.Sprintf("  Delta drift:        %s\n", snapshotDriftText(snapshot))
 		out += fmt.Sprintf("  Current funding:    %.4f%% (est next: %.4f USDT)\n", snapshot.CurrentFundingRate*100, snapshot.EstimatedNextFundingUSDT)
 		out += fmt.Sprintf("  Liquidation dist:   %.2f%% (price: %.4f)\n", snapshot.LiquidationDistancePct, snapshot.LiquidationPrice)
 		if snapshot.MarginIsKnown() {
@@ -127,8 +129,15 @@ func (t *GetDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]a
 
 		spotPnL := snapshot.SpotValueUSDT - plan.SpotNotionalUSDT
 		netPnL := snapshot.FuturesUnrealizedPnLUSDT + spotPnL
-		out += fmt.Sprintf("  Spot leg:           value %.4f USDT  entry notional %.4f USDT  spot PnL %+.4f USDT\n",
-			snapshot.SpotValueUSDT, plan.SpotNotionalUSDT, spotPnL)
+		if snapshot.DataStatus != deltaneutral.DataStatusOK {
+			out += fmt.Sprintf("  Spot leg:           unknown (data status %s)  entry notional %.4f USDT\n", snapshot.DataStatus, plan.SpotNotionalUSDT)
+		} else {
+			out += fmt.Sprintf("  Spot leg:           value %.4f USDT  entry notional %.4f USDT  spot PnL %+.4f USDT\n",
+				snapshot.SpotValueUSDT, plan.SpotNotionalUSDT, spotPnL)
+		}
+		if slices.Contains(snapshot.BreachCodes, planhealth.CodeSpotLegNotVisible) {
+			out += "  WARNING:            spot leg not visible: sold, or in an earn product the API cannot read\n"
+		}
 		out += fmt.Sprintf("  Futures leg upl:    %+.4f USDT  (short mark-to-market via OKX upl field)\n", snapshot.FuturesUnrealizedPnLUSDT)
 		out += fmt.Sprintf("  Net unrealized:     %+.4f USDT  (spot + futures; delta-neutral target ≈ 0)\n", netPnL)
 		out += fmt.Sprintf("  Threshold breached: %v\n", snapshot.ThresholdBreached)
@@ -159,4 +168,17 @@ func (t *GetDeltaNeutralPlanTool) Execute(ctx context.Context, args map[string]a
 	}
 
 	return UserResult(out)
+}
+
+// snapshotDriftText is a snapshot's delta drift for an owner: "unknown" when the check's
+// data was not OK (the figure is then not a reading, and never shown as 0), and flagged
+// when the spot leg was not visible (the figure is then the real gap).
+func snapshotDriftText(s *deltaneutral.MonitorSnapshot) string {
+	if s.DataStatus != deltaneutral.DataStatusOK {
+		return fmt.Sprintf("unknown (data status %s)", s.DataStatus)
+	}
+	if slices.Contains(s.BreachCodes, planhealth.CodeSpotLegNotVisible) {
+		return fmt.Sprintf("%.2f%% (spot leg not visible)", s.DeltaDriftPct)
+	}
+	return fmt.Sprintf("%.2f%%", s.DeltaDriftPct)
 }

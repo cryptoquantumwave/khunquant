@@ -338,15 +338,18 @@ func (m *Monitor) Check(ctx context.Context, plan Plan) (MonitorResult, error) {
 				}
 
 				totalQty := 0.0
-				fetchedAny := false
+				balanceRead := false // the spot balance reply was received (it may hold no row)
+				earnReadFailed := false
 
-				// 1. Real spot / trading-account balance.
+				// 1. Real spot / trading-account balance. A reply with no row for the
+				// asset is a zero balance (exchanges leave zero balances out), not a
+				// failed read.
 				if pp, ok := spotFetcher.(balanceReader); ok {
 					if balances, balErr := pp.GetBalances(ctx); balErr == nil {
+						balanceRead = true
 						for _, b := range balances {
 							if b.Asset == baseCur {
 								totalQty += b.Free
-								fetchedAny = true
 							}
 						}
 					} else {
@@ -364,10 +367,10 @@ func (m *Monitor) Check(ctx context.Context, plan Plan) (MonitorResult, error) {
 						for _, p := range positions {
 							if p.Asset == baseCur {
 								totalQty += p.Amount
-								fetchedAny = true
 							}
 						}
 					} else {
+						earnReadFailed = true
 						logger.WarnCF("dn-monitor", "Failed to fetch earn positions", map[string]any{
 							"plan_id": planID, "error": epErr.Error(),
 						})
@@ -418,27 +421,39 @@ func (m *Monitor) Check(ctx context.Context, plan Plan) (MonitorResult, error) {
 					}
 				}
 
-				// Fall back to plan notional in two cases:
-				//  a) Both API calls failed (APIs down) — avoid false drift alarm.
-				//  b) Balance found but < 1% of expected notional — spot is likely
-				//     subscribed to an earn product whose API is not accessible
-				//     (e.g. OKX Simple Earn Flexible, which is not exposed by CCXT).
-				//     Use plan notional as proxy so the monitor doesn't false-alarm.
+				// The spot leg is never assumed. Three outcomes, none of them the plan notional:
+				//  - visible: a quantity worth at least 1% of the plan's spot notional was
+				//    read: it is judged as read;
+				//  - not visible: the reads SUCCEEDED and the asset has no row, or under 1%
+				//    of the notional (sold, transferred, liquidated, or held in an earn
+				//    product the API cannot read, e.g. OKX Simple Earn Flexible): the real
+				//    (small or zero) quantity is kept and the plan is flagged;
+				//  - unknown: a read FAILED (or there is no price): data not OK, exactly as
+				//    when the ticker fails. An earn read that failed only matters when the
+				//    balance alone shows no leg, since earn can only add to it.
 				valueUSDT := totalQty * spotState.Price
-				earnGap := plan.SpotNotionalUSDT > 0 &&
-					valueUSDT < plan.SpotNotionalUSDT*0.01
-
-				if fetchedAny && !earnGap {
+				gap := totalQty <= 0 || (plan.SpotNotionalUSDT > 0 && valueUSDT < plan.SpotNotionalUSDT*0.01)
+				switch {
+				case !balanceRead || spotState.Price <= 0:
+					spotState.Available = false
+					logger.WarnCF("dn-monitor", "Spot leg unknown: the spot balance could not be read; data not OK", map[string]any{
+						"plan_id": planID, "balance_read": balanceRead, "price": spotState.Price,
+					})
+				case gap && earnReadFailed:
+					spotState.Available = false
+					logger.WarnCF("dn-monitor", "Spot leg unknown: no spot balance and the earn read failed; data not OK", map[string]any{
+						"plan_id": planID, "real_value_usdt": valueUSDT, "plan_notional_usdt": plan.SpotNotionalUSDT,
+					})
+				case gap:
 					spotState.Quantity = totalQty
 					spotState.ValueUSDT = valueUSDT
-				} else {
-					if fetchedAny && earnGap {
-						logger.WarnCF("dn-monitor", "Spot balance near-zero vs plan notional — assuming spot leg is in an inaccessible earn product; using plan notional for drift", map[string]any{
-							"plan_id": planID, "real_value_usdt": valueUSDT, "plan_notional_usdt": plan.SpotNotionalUSDT,
-						})
-					}
-					spotState.Quantity = plan.SpotNotionalUSDT / spotState.Price
-					spotState.ValueUSDT = plan.SpotNotionalUSDT
+					spotState.NotVisible = true
+					logger.WarnCF("dn-monitor", "Spot leg not visible: sold, or in an earn product the API cannot read", map[string]any{
+						"plan_id": planID, "quantity": totalQty, "real_value_usdt": valueUSDT, "plan_notional_usdt": plan.SpotNotionalUSDT,
+					})
+				default:
+					spotState.Quantity = totalQty
+					spotState.ValueUSDT = valueUSDT
 				}
 			}
 		}

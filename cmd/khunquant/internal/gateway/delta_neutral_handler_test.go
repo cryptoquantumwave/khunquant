@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/cron"
 	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral"
+	"github.com/cryptoquantumwave/khunquant/pkg/deltaneutral/planhealth"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/tools"
 )
@@ -243,8 +245,10 @@ func TestMonitorSpotBalance_Split(t *testing.T) {
 	}
 }
 
-// TestMonitorSpotBalance_FallbackOnAPIFailure verifies plan notional is used when both fail.
-func TestMonitorSpotBalance_FallbackOnAPIFailure(t *testing.T) {
+// TestMonitorSpotBalance_BothReadsFailIsDataNotOK verifies that when both the balance and
+// the earn read fail, the plan notional is NOT assumed for the spot leg (F-DN-1): the check
+// is data not OK and raises data_unavailable.
+func TestMonitorSpotBalance_BothReadsFailIsDataNotOK(t *testing.T) {
 	store := newMonitorStore(t)
 	id, jobName := seedMonitorPlan(t, store, "mockspot")
 
@@ -258,9 +262,14 @@ func TestMonitorSpotBalance_FallbackOnAPIFailure(t *testing.T) {
 	if snap == nil {
 		t.Fatal("expected a snapshot to be saved")
 	}
-	// fallback: spot value = plan.SpotNotionalUSDT = 44.44
-	if snap.SpotValueUSDT < 44.0 || snap.SpotValueUSDT > 45.0 {
-		t.Errorf("expected fallback spot value ~44.44, got %.4f", snap.SpotValueUSDT)
+	if snap.DataStatus == deltaneutral.DataStatusOK {
+		t.Errorf("data status %q: failed reads must not be data OK", snap.DataStatus)
+	}
+	if snap.SpotValueUSDT > 1 {
+		t.Errorf("spot value %.4f: the plan notional (~44.44) must not be assumed", snap.SpotValueUSDT)
+	}
+	if !slices.Contains(snap.BreachCodes, planhealth.CodeDataUnavailable) {
+		t.Errorf("breach codes %v, want %s", snap.BreachCodes, planhealth.CodeDataUnavailable)
 	}
 }
 

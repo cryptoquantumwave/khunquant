@@ -314,6 +314,7 @@ var dnFindingsEN = map[string]string{
 	planhealth.CodeRecoveryRequired:       "recovery required",
 	planhealth.CodeMaxDrawdownBreached:    "drawdown limit breached",
 	planhealth.CodeProfitTargetMet:        "profit target met",
+	planhealth.CodeSpotLegNotVisible:      "spot leg not visible: sold, or in an earn product the API cannot read",
 }
 
 var dnFindingsTH = map[string]string{
@@ -331,6 +332,7 @@ var dnFindingsTH = map[string]string{
 	planhealth.CodeRecoveryRequired:       "ต้องกู้คืนแผน",
 	planhealth.CodeMaxDrawdownBreached:    "ขาดทุนเกินขีดจำกัด",
 	planhealth.CodeProfitTargetMet:        "ถึงเป้ากำไรแล้ว",
+	planhealth.CodeSpotLegNotVisible:      "มองไม่เห็นฝั่ง spot: ขายไปแล้ว หรืออยู่ในผลิตภัณฑ์ earn ที่ API อ่านไม่ได้",
 }
 
 var dnActionsTH = map[string]string{
@@ -341,6 +343,7 @@ var dnActionsTH = map[string]string{
 	planhealth.CodeRecoveryRequired:       "แผนต้องกู้คืน: การดำเนินการยังไม่เสร็จ ตรวจสอบแต่ละฝั่งแล้วทำให้เสร็จหรือปิดแผนด้วยตนเอง",
 	planhealth.CodeMaxDrawdownBreached:    "ขาดทุนของแผนเกินขีดจำกัด ตรวจสอบและพิจารณาปิดแผน",
 	planhealth.CodeProfitTargetMet:        "ถึงเป้ากำไรของแผนแล้ว พิจารณาปิดแผนเพื่อล็อกกำไร",
+	planhealth.CodeSpotLegNotVisible:      "มองไม่เห็นฝั่ง spot: ขายไปแล้ว หรืออยู่ในผลิตภัณฑ์ earn ที่ API อ่านไม่ได้ ตรวจสอบยอด spot ถ้าขายไปแล้ว ฝั่ง short จะไม่มีตัวป้องกัน ระบบไม่ทำอะไรให้อัตโนมัติ",
 }
 
 func dnFinding(thai bool, code string) string {

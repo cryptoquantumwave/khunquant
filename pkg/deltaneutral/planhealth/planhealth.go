@@ -52,6 +52,7 @@ const (
 	CodeRecoveryRequired       = "recovery_required"
 	CodeMaxDrawdownBreached    = "max_drawdown_breached"
 	CodeProfitTargetMet        = "profit_target_met"
+	CodeSpotLegNotVisible      = "spot_leg_not_visible"
 )
 
 type codeInfo struct {
@@ -76,6 +77,7 @@ var table = [...]codeInfo{
 	{CodeRecoveryRequired, ClassDanger},
 	{CodeMaxDrawdownBreached, ClassDanger},
 	{CodeProfitTargetMet, ClassWarn},
+	{CodeSpotLegNotVisible, ClassDanger},
 }
 
 // Codes lists every breach code in bit order.
@@ -142,6 +144,8 @@ func RecommendedAction(codes []string) string {
 		}
 	}
 	switch {
+	case hasAny(codes, CodeSpotLegNotVisible):
+		return ActionText(CodeSpotLegNotVisible)
 	case hasAny(codes, CodeFundingNegative, CodeFundingUnavailable, CodeMarginDanger):
 		return "Plan health has degraded. Review position and consider unwinding or rebalancing."
 	case hasAny(codes, CodeLegMismatch):
@@ -182,6 +186,8 @@ func ActionText(code string) string {
 		return "The plan's loss has passed its drawdown limit. Review it and consider unwinding."
 	case CodeProfitTargetMet:
 		return "The plan's profit target is met. Consider unwinding to lock in the gain."
+	case CodeSpotLegNotVisible:
+		return "Spot leg not visible: sold, or in an earn product the API cannot read. Check the spot balance; if it was sold, the short is unhedged. Nothing is done automatically."
 	}
 	return RecommendedAction([]string{code})
 }

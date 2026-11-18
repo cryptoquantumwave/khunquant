@@ -96,6 +96,7 @@ func (h *Handler) registerAgentProactiveRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/agent/proactive/owner", h.handleProactiveOwnerPut)
 	mux.HandleFunc("DELETE /api/agent/proactive/owner", h.handleProactiveOwnerDelete)
 	mux.HandleFunc("PUT /api/agent/proactive/modes", h.handleProactiveModesPut)
+	mux.HandleFunc("PUT /api/agent/proactive/subsystems", h.handleProactiveSubsystemsPut)
 	mux.HandleFunc("GET /api/agent/proactive/profile", h.handleProactiveProfileGet)
 	mux.HandleFunc("PUT /api/agent/proactive/profile", h.handleProactiveProfilePut)
 	mux.HandleFunc("GET /api/agent/proactive/decisions", h.handleProactiveDecisions)
@@ -364,6 +365,12 @@ type proactiveStatusResponse struct {
 	Configured      proactiveConfiguredView `json:"configured"`
 	Downgrades      []string                `json:"downgrades"`
 	ValidationError string                  `json:"validation_error"`
+	// Subsystems are the perception, triggers, approvals, cognition and news
+	// settings (agent_proactive_subsystems.go).
+	Subsystems proactiveSubsystemsView `json:"subsystems"`
+	// PaperTradingMode is trading_risk.paper_trading_mode, read-only here: it is set
+	// on the Config page.
+	PaperTradingMode bool `json:"paper_trading_mode"`
 }
 
 func modeOr(raw, def string) string {
@@ -401,6 +408,7 @@ func buildProactiveStatus(p config.ProactiveConfig) proactiveStatusResponse {
 			Digest:        p.Attention.Digest,
 		},
 		Downgrades: append([]string{}, eff.Downgrades...),
+		Subsystems: buildSubsystemsView(p),
 	}
 	if err := config.ValidateProactive(p); err != nil {
 		resp.ValidationError = err.Error()
@@ -414,7 +422,7 @@ func (h *Handler) handleProactiveStatus(w http.ResponseWriter, _ *http.Request) 
 		writeJSONError(w, http.StatusInternalServerError, "failed to load config")
 		return
 	}
-	writeJSON(w, http.StatusOK, buildProactiveStatus(cfg.Proactive))
+	writeJSON(w, http.StatusOK, proactiveStatusFor(cfg))
 }
 
 // ---- Owner ------------------------------------------------------------------
@@ -448,7 +456,7 @@ func (h *Handler) handleProactiveOwnerPut(w http.ResponseWriter, r *http.Request
 		writeProactiveError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildProactiveStatus(cfg.Proactive))
+	writeJSON(w, http.StatusOK, proactiveStatusFor(cfg))
 }
 
 func (h *Handler) handleProactiveOwnerDelete(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +471,7 @@ func (h *Handler) handleProactiveOwnerDelete(w http.ResponseWriter, r *http.Requ
 		writeProactiveError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildProactiveStatus(cfg.Proactive))
+	writeJSON(w, http.StatusOK, proactiveStatusFor(cfg))
 }
 
 // ---- Modes ------------------------------------------------------------------
@@ -531,7 +539,7 @@ func (h *Handler) handleProactiveModesPut(w http.ResponseWriter, r *http.Request
 		writeProactiveError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildProactiveStatus(cfg.Proactive))
+	writeJSON(w, http.StatusOK, proactiveStatusFor(cfg))
 }
 
 // ---- Profile ----------------------------------------------------------------

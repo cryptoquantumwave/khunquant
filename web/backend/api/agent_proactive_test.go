@@ -128,6 +128,7 @@ var proactiveRoutes = []struct{ method, path string }{
 	{http.MethodPut, "/api/agent/proactive/owner"},
 	{http.MethodDelete, "/api/agent/proactive/owner"},
 	{http.MethodPut, "/api/agent/proactive/modes"},
+	{http.MethodPut, "/api/agent/proactive/subsystems"},
 	{http.MethodGet, "/api/agent/proactive/profile"},
 	{http.MethodPut, "/api/agent/proactive/profile"},
 	{http.MethodGet, "/api/agent/proactive/decisions"},

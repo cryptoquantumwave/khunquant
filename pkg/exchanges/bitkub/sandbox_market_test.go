@@ -56,14 +56,17 @@ func sandboxAdapter(t *testing.T, book *market.Book) *BitkubBrokerAdapter {
 	return a
 }
 
+// fixtureBTCTHB is BTC_THB in workspace/sandbox/bitkub: 98,000 USDT at 34 THB each.
+const fixtureBTCTHB = 3332000
+
 // The recorded ticker fixture must be found under the symbol the adapter asks for.
 func TestSandboxFixture_TickerUsesAdapterSymbol(t *testing.T) {
 	a := sandboxAdapter(t, market.NewBook(market.Options{}))
 	tk, err := a.FetchTicker(context.Background(), "BTC/THB")
-	if err != nil || tk.Last == nil || *tk.Last != 1234567.89 {
+	if err != nil || tk.Last == nil || *tk.Last != fixtureBTCTHB {
 		t.Fatalf("FetchTicker(BTC/THB) from the fixture = %+v (%v)", tk, err)
 	}
-	if px, err := a.FetchPrice(context.Background(), "BTC", "THB"); err != nil || px != 1234567.89 {
+	if px, err := a.FetchPrice(context.Background(), "BTC", "THB"); err != nil || px != fixtureBTCTHB {
 		t.Errorf("FetchPrice(BTC, THB) = %v (%v)", px, err)
 	}
 }
@@ -82,7 +85,7 @@ func TestRender_Bitkub_TVHistory(t *testing.T) {
 
 	tk, err := a.FetchTicker(ctx, "BTC/THB")
 	want, _ := book.Price("bitkub", btcthb, time.Now())
-	if err != nil || tk.Last == nil || *tk.Last < 3_000_000 || *tk.Last > want+1000 || *tk.Last == 1234567.89 {
+	if err != nil || tk.Last == nil || *tk.Last < 3_000_000 || *tk.Last > want+1000 || *tk.Last == fixtureBTCTHB {
 		t.Fatalf("FetchTicker = %+v (%v), want the book's price (about %v), not the fixture's", tk, err, want)
 	}
 	bars, err := a.FetchOHLCV(ctx, "BTC/THB", "1m", nil, 5)

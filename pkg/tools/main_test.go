@@ -21,7 +21,20 @@ import (
 // swap it in-test do so only to avoid this coupling, and those swaps stay
 // correct and harmless. A future test that wants real limiting should install
 // its own bucket and restore the previous value, as those do.
+//
+// It also points KHUNQUANT_HOME at a throwaway directory. config.DefaultConfig puts the
+// workspace under it, and a paper-mode order writes the paper order book into the
+// workspace (broker.PaperBookRelPath): without this, a test that builds a default
+// config and places a paper order would write into the developer's real ~/.khunquant.
 func TestMain(m *testing.M) {
 	broker.DefaultLimiter = unlimitedLimiter{}
-	os.Exit(m.Run())
+	home, err := os.MkdirTemp("", "khunquant-tools-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("KHUNQUANT_HOME", home)
+	code := m.Run()
+	broker.ClosePaperBooks()
+	os.RemoveAll(home)
+	os.Exit(code)
 }

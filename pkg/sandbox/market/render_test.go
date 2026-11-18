@@ -255,10 +255,10 @@ func TestRender_OKXTickersAndCandles_CCXTParses(t *testing.T) {
 
 func TestRender_UnknownSymbolFallsThrough(t *testing.T) {
 	r, _ := pathRig(t)
+	// Binance's 24h tickers are not here: the shipped fixtures answer the unscoped all-symbols
+	// route (the matcher cannot say "no symbol parameter"), so a symbol with no model gets that array,
+	// not a 404. Its klines are scoped per symbol, so they still fall through.
 	for _, tc := range []struct{ venue, host, path string }{
-		{"binance", "api.binance.com", "/api/v3/ticker/24hr?symbol=XRPUSDT"},
-		{"binance", "api.binance.com", "/api/v3/ticker/24hr?symbols=%5B%22XRPUSDT%22%5D"},
-		{"binance", "fapi.binance.com", "/fapi/v1/ticker/24hr?symbol=XRPUSDT"},
 		{"binance", "api.binance.com", "/api/v3/klines?symbol=XRPUSDT&interval=1m"},
 		{"okx", "www.okx.com", "/api/v5/market/ticker?instId=XRP-USDT"},
 		{"okx", "www.okx.com", "/api/v5/market/tickers?instType=FUTURES"},
@@ -271,7 +271,7 @@ func TestRender_UnknownSymbolFallsThrough(t *testing.T) {
 	}
 	// With no model at all the market stage is invisible: a batch is not answered with [].
 	empty := newFeedRig(t)
-	if code, body := empty.get(t, "binance", "api.binance.com", "/api/v3/ticker/24hr"); code != 404 {
+	if code, body := empty.get(t, "okx", "www.okx.com", "/api/v5/market/tickers?instType=FUTURES"); code != 404 {
 		t.Errorf("an empty book answered the all-tickers route: %d %s", code, body)
 	}
 }

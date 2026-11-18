@@ -98,16 +98,21 @@ func TestSimulationProvider_LimitSell_MarketableFills(t *testing.T) {
 func TestSimulationProvider_CancelOrder(t *testing.T) {
 	sim := setupSimProvider(50000)
 	ctx := context.Background()
+	px := 40000.0
+	placed, err := sim.CreateOrder(ctx, "BTC/USDT", "limit", "buy", 1, &px, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	order, err := sim.CancelOrder(ctx, "order-123", "BTC/USDT")
+	order, err := sim.CancelOrder(ctx, *placed.Id, "BTC/USDT")
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
 	if order.Status == nil || *order.Status != "canceled" {
 		t.Errorf("expected status canceled, got %v", order.Status)
 	}
-	if order.Id == nil || *order.Id != "order-123" {
-		t.Errorf("expected id order-123, got %v", order.Id)
+	if order.Id == nil || *order.Id != *placed.Id {
+		t.Errorf("expected id %s, got %v", *placed.Id, order.Id)
 	}
 }
 
@@ -361,13 +366,18 @@ func TestSimulationProvider_LoadMarkets_DelegatesSuccessfully(t *testing.T) {
 func TestSimulationProvider_FetchOrder(t *testing.T) {
 	sim := setupSimProvider(50000)
 	ctx := context.Background()
+	px := 40000.0
+	placed, err := sim.CreateOrder(ctx, "BTC/USDT", "limit", "buy", 1, &px, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	order, err := sim.FetchOrder(ctx, "order-456", "BTC/USDT")
+	order, err := sim.FetchOrder(ctx, *placed.Id, "BTC/USDT")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if order.Id == nil || *order.Id != "order-456" {
-		t.Errorf("expected id 'order-456', got %v", order.Id)
+	if order.Id == nil || *order.Id != *placed.Id {
+		t.Errorf("expected id %q, got %v", *placed.Id, order.Id)
 	}
 	if order.Status == nil || *order.Status != "open" {
 		t.Errorf("expected status 'open', got %v", order.Status)

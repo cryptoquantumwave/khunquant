@@ -86,14 +86,19 @@ func OrderOriginFrom(ctx context.Context) Origin {
 // hash covers them. Amount is in base units for spot and in CONTRACTS for futures
 // (computed by code from a notional; never taken from the model).
 type OrderParams struct {
-	Provider string   `json:"provider"`
-	Account  string   `json:"account"`
-	Market   string   `json:"market"`
-	Symbol   string   `json:"symbol"`
-	Side     string   `json:"side"` // buy | sell
-	Type     string   `json:"type"` // market | limit
-	Amount   float64  `json:"amount"`
-	Price    *float64 `json:"price,omitempty"` // limit price
+	Provider string  `json:"provider"`
+	Account  string  `json:"account"`
+	Market   string  `json:"market"`
+	Symbol   string  `json:"symbol"`
+	Side     string  `json:"side"` // buy | sell
+	Type     string  `json:"type"` // market | limit
+	Amount   float64 `json:"amount"`
+	// QuoteAmount is the quote-currency amount a spot order was sized from
+	// ("buy 20 USDT of BTC"); Amount is the base quantity computed from it, and
+	// is what is placed. Informational: it is in the hash and on the card so the
+	// owner sees what they were asked for, and nothing executes from it.
+	QuoteAmount float64  `json:"quote_amount,omitempty"`
+	Price       *float64 `json:"price,omitempty"` // limit price
 	// ReduceOnly is a futures order that can only shrink a position.
 	ReduceOnly bool `json:"reduce_only"`
 	// PositionSide and MarginMode are futures-only, read from the account by code.
@@ -164,6 +169,10 @@ type OrderRequest struct {
 	// are computed from it); it is ignored for spot.
 	Amount      float64
 	NotionalUSD float64
+	// QuoteAmount sizes a SPOT order in the symbol's quote currency, as an
+	// alternative to Amount (exactly one of them); the backend converts it to a base
+	// amount. It is refused for futures.
+	QuoteAmount float64
 	// Contracts is an exact futures contract count for a REDUCE-ONLY order, set by
 	// code only (the delta-neutral recovery closes exactly the quantity it assessed;
 	// a notional would round it). propose_order never sets it, and the backend

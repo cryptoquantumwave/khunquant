@@ -45,16 +45,12 @@ func (t *GetOpenOrdersTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("provider is required")
 	}
 
-	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
-	}
+	return listPaperAndReal(t.cfg, providerID, account, func(tp broker.TradingProvider, paper bool) *ToolResult {
+		return t.list(ctx, tp, paper, providerID, account, symbol)
+	})
+}
 
-	tp, ok := p.(broker.TradingProvider)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("provider %q does not support order management", providerID))
-	}
-
+func (t *GetOpenOrdersTool) list(ctx context.Context, tp broker.TradingProvider, paper bool, providerID, account, symbol string) *ToolResult {
 	orders, err := tp.FetchOpenOrders(ctx, symbol)
 	if err != nil {
 		if hint := reauthHint(err, providerID, account); hint != nil {
@@ -64,11 +60,11 @@ func (t *GetOpenOrdersTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if len(orders) == 0 {
-		return UserResult(fmt.Sprintf("No open orders on %s%s.", providerID, tern(symbol != "", " for "+symbol, "")))
+		return UserResult(paperPrefix(paper) + fmt.Sprintf("No open orders on %s%s.", providerID, tern(symbol != "", " for "+symbol, "")))
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Open orders on %s (%d):\n\n", providerID, len(orders)))
+	sb.WriteString(paperPrefix(paper) + fmt.Sprintf("Open orders on %s (%d):\n\n", providerID, len(orders)))
 	sb.WriteString(fmt.Sprintf("%-16s  %-12s  %-6s  %-6s  %12s  %12s  %-10s\n", "ID", "Symbol", "Side", "Type", "Amount", "Price", "Status"))
 	sb.WriteString(fmt.Sprintf("%-16s  %-12s  %-6s  %-6s  %12s  %12s  %-10s\n",
 		strings.Repeat("-", 16), strings.Repeat("-", 12), strings.Repeat("-", 6), strings.Repeat("-", 6), strings.Repeat("-", 12), strings.Repeat("-", 12), strings.Repeat("-", 10)))

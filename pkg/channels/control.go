@@ -85,7 +85,9 @@ type ControlReply struct {
 // implementation.
 type ControlRouter interface {
 	// TryHandle returns (reply, true) when the input is a control command it has
-	// dealt with, and false for everything else. It must return false quickly and
+	// dealt with, and false for everything else (a false return may still carry a
+	// reply with text, which the channel says before the message goes on to the
+	// agent). It must return false quickly and
 	// without I/O for an input it does not recognise.
 	TryHandle(ctx context.Context, in ControlInput) (ControlReply, bool)
 	// Recognises reports, with no I/O, whether in would be treated as a control
@@ -219,6 +221,9 @@ func (c *BaseChannel) routeControl(
 		return true
 	}
 	if !handled {
+		// A router may answer an input it did not take (a hint to the sender); the
+		// message still goes on to the agent.
+		c.sendControlReply(ctx, in, reply)
 		observeReply(ctx, r, in)
 		return false
 	}

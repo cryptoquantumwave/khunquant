@@ -30,6 +30,12 @@ func (d *Dispatcher) cmdYes(ctx context.Context, in Input) (Reply, error) {
 	return d.decideCommand(ctx, in, true), nil
 }
 
+// cmdNo is a reply to an approval card that says "no": the same path as the Reject
+// button and /reject, for the card TryHandle found.
+func (d *Dispatcher) cmdNo(ctx context.Context, in Input) (Reply, error) {
+	return d.decideCommand(ctx, in, false), nil
+}
+
 func (d *Dispatcher) decideCommand(ctx context.Context, in Input, approve bool) Reply {
 	st := stateOf(ctx)
 	verb := "/reject"

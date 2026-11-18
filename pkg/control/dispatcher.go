@@ -128,6 +128,7 @@ func New(deps Deps, opts ...Option) *Dispatcher {
 	d.handlers[cmdApprove] = &entry{ownerOnly: true, h: d.cmdApprove}
 	d.handlers[cmdReject] = &entry{ownerOnly: true, h: d.cmdReject}
 	d.handlers[cmdYes] = &entry{ownerOnly: true, h: d.cmdYes}
+	d.handlers[cmdNo] = &entry{ownerOnly: true, h: d.cmdNo}
 	d.handlers[cmdSnooze] = &entry{ownerOnly: true, h: d.cmdSnooze}
 	d.handlers[cmdMute] = &entry{ownerOnly: true, h: d.cmdMute}
 	d.handlers[cmdUnmute] = &entry{ownerOnly: true, h: d.cmdUnmute}
@@ -175,10 +176,42 @@ func (d *Dispatcher) Recognises(in Input) bool {
 	if !ok {
 		return false
 	}
-	if c.name == cmdYes {
+	if isCardReply(c) {
 		return d.standing(d.deps.Load(), in) == standOwner
 	}
 	return true
+}
+
+// isCardReply is whether c is a plain yes/no reply that must point at a pending card.
+func isCardReply(c command) bool { return c.name == cmdYes || c.name == cmdNo }
+
+// cardReplyHint answers a message that is not a command but replies, in the owner's
+// own chat, to a pending approval card (a qualified "yes but half", say). The message
+// still goes to the agent as chat: the reply is (hint, false), which the channel
+// sends and then carries on. Anything else, in particular every ordinary message
+// and every reply to something that is not a pending card, gets nothing.
+func (d *Dispatcher) cardReplyHint(ctx context.Context, in Input) (Reply, bool) {
+	text := strings.TrimSpace(in.Text)
+	if in.Callback != nil || in.Forwarded || in.ReplyToMessageID == "" || text == "" || text[0] == '/' {
+		return Reply{}, false
+	}
+	deps := d.deps.Load()
+	if deps == nil || deps.Approvals == nil || d.standing(deps, in) != standOwner {
+		return Reply{}, false
+	}
+	p, err := deps.Approvals.PendingByCard(ctx, in.Channel, in.ChatID, in.ReplyToMessageID)
+	if err != nil {
+		return Reply{}, false
+	}
+	return Reply{Text: cardReplyHintText(p.Code)}, false
+}
+
+// cardReplyHintText is what the owner is told when a reply to a card was not a decision.
+func cardReplyHintText(code string) string {
+	return fmt.Sprintf("That reply was not taken as a decision on proposal %[1]s. Decide it with the card's buttons, "+
+		"/approve %[1]s or /reject %[1]s, or reply with just yes or no.\n"+
+		"คำตอบนี้ไม่ได้ถือเป็นการตัดสินใจเกี่ยวกับข้อเสนอ %[1]s ใช้ปุ่มบนการ์ด, /approve %[1]s หรือ /reject %[1]s "+
+		"หรือตอบสั้น ๆ ว่า ใช่ หรือ ไม่", code)
 }
 
 // callState is what a handler is given through its context.
@@ -228,7 +261,7 @@ const handleTimeout = 30 * time.Second
 func (d *Dispatcher) TryHandle(ctx context.Context, in Input) (Reply, bool) {
 	c, ok := classify(in)
 	if !ok {
-		return Reply{}, false
+		return d.cardReplyHint(ctx, in)
 	}
 	deps := d.deps.Load()
 
@@ -236,7 +269,7 @@ func (d *Dispatcher) TryHandle(ctx context.Context, in Input) (Reply, bool) {
 	// sends it in their own chat and it points at a pending card; "yes" to anything
 	// else is ordinary chat and goes to the agent as it always did.
 	var card *approval.Proposal
-	if c.name == cmdYes {
+	if isCardReply(c) {
 		if d.standing(deps, in) != standOwner || deps.Approvals == nil {
 			return Reply{}, false
 		}

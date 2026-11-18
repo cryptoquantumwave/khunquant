@@ -11,6 +11,7 @@ const (
 	cmdApprove   = "approve"
 	cmdReject    = "reject"
 	cmdYes       = "yes" // a reply to an approval card that says "approve" in other words
+	cmdNo        = "no"  // a reply to an approval card that says "reject" in other words
 	cmdSnooze    = "snooze"
 	cmdMute      = "mute"
 	cmdUnmute    = "unmute"
@@ -64,8 +65,13 @@ func classify(in Input) (command, bool) {
 		return command{}, false
 	}
 	if text[0] != '/' {
-		if in.ReplyToMessageID != "" && isYes(text) {
-			return command{name: cmdYes}, true
+		if in.ReplyToMessageID != "" {
+			if approve, ok := replyDecision(text); ok {
+				if approve {
+					return command{name: cmdYes}, true
+				}
+				return command{name: cmdNo}, true
+			}
 		}
 		return command{}, false
 	}
@@ -94,17 +100,63 @@ func classify(in Input) (command, bool) {
 	return command{}, false
 }
 
-// yesWords are the replies to an approval card that approve it, compared in lower
-// case: approve | yes | ok | อนุมัติ | ตกลง.
-var yesWords = map[string]bool{
-	"approve": true, "yes": true, "ok": true, "อนุมัติ": true, "ตกลง": true,
+// The words that decide an approval card when they are the WHOLE reply to it (the
+// user's ruling U-T18). This is the one place to change them. Compared after
+// normalizeReply: surrounding whitespace and trailing punctuation removed, ASCII
+// letters folded to lower case (so write the ASCII words in lower case here).
+// Anything else, a qualified reply ("yes but half", "ใช่ แต่ครึ่งเดียว") included, is
+// ordinary chat.
+var (
+	// approveReplyWords approve the card's proposal.
+	approveReplyWords = map[string]bool{
+		"yes": true, "y": true, "ok": true, "okay": true, "approve": true,
+		"ใช่": true, "ตกลง": true, "โอเค": true, "อนุมัติ": true,
+	}
+	// rejectReplyWords reject it.
+	rejectReplyWords = map[string]bool{
+		"no": true, "n": true, "reject": true,
+		"ไม่": true, "ไม่ใช่": true, "ปฏิเสธ": true,
+	}
+)
+
+// replyTrailingPunct is what normalizeReply strips from the end of a reply: full stop,
+// exclamation and question marks, and their full-width and ideographic forms.
+const replyTrailingPunct = ".!?\u3002\uFF01\uFF1F\uFF0E"
+
+// normalizeReply trims whitespace and trailing punctuation and folds ASCII case
+// (only ASCII: it never touches Thai, so a Thai word compares as typed).
+func normalizeReply(text string) string {
+	text = strings.TrimSpace(text)
+	for {
+		t := strings.TrimSpace(strings.TrimRight(text, replyTrailingPunct))
+		if t == text {
+			break
+		}
+		text = t
+	}
+	b := []byte(text)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
-func isYes(text string) bool {
-	if len(text) > 32 {
-		return false
+// replyDecision reports whether text, as the whole reply to a card, is a decision,
+// and which one.
+func replyDecision(text string) (approve, ok bool) {
+	if len(text) > 64 {
+		return false, false
 	}
-	return yesWords[strings.ToLower(text)]
+	w := normalizeReply(text)
+	switch {
+	case approveReplyWords[w]:
+		return true, true
+	case rejectReplyWords[w]:
+		return false, true
+	}
+	return false, false
 }
 
 func classifyCallback(cb *Callback) (command, bool) {

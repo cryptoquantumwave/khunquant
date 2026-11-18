@@ -741,11 +741,18 @@ func TestPlaceIdempotent_PaperModeNeverReachesTheLiveProvider(t *testing.T) {
 	if err != nil || o.Id == nil || !strings.HasPrefix(*o.Id, broker.PaperOrderIDPrefix) {
 		t.Fatalf("%v %v", o.Id, err)
 	}
-	// The simulation forgets and is not capable: a retry reconciles in it, finds
-	// nothing, and stops as unproven. Nothing is placed, anywhere.
+	// The simulation keeps a paper order book and is not capable of client order
+	// IDs: a retry reconciles by shape in the book, finds the order it placed, and
+	// returns it. Nothing is placed twice, in the simulation or anywhere.
 	clk.Advance(time.Minute)
-	_, err = run(t, sim, limitReq(1, 100), 2, clk)
-	wantKind(t, err, broker.ErrReconcileUnproven)
+	again, err := run(t, sim, limitReq(1, 100), 2, clk)
+	if err != nil || again.Id == nil || *again.Id != *o.Id {
+		t.Fatalf("retry = %v %v, want the first order %s", again.Id, err, *o.Id)
+	}
+	open, err := sim.FetchOpenOrders(context.Background(), "")
+	if err != nil || len(open) != 1 {
+		t.Fatalf("open paper orders = %d (%v), want exactly 1", len(open), err)
+	}
 	if n := live.total("create", "open", "closed", "trades", "fetch", "lookup", "fopen", "positions"); n != 0 {
 		t.Errorf("%d calls reached the live provider in paper mode", n)
 	}

@@ -203,6 +203,9 @@ func (e *dcaExchange) Fetch(ctx context.Context, p *dca.Plan, orderID string) (d
 	if broker.IsPaperMode(e.cfg) {
 		return dca.Fill{}, errNoFetchInPaper
 	}
+	if err := broker.RefusePaperIDWhileLive(e.cfg, orderID); err != nil {
+		return dca.Fill{}, err
+	}
 	tp, _, err := broker.TradingProviderFor(e.cfg, p.Provider, p.Account)
 	if err != nil {
 		return dca.Fill{}, err

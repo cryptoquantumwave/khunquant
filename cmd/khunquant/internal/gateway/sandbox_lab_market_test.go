@@ -92,7 +92,8 @@ func TestLockedGatewayMarketGroupPricesFillsAndJournalsRequests(t *testing.T) {
 	}
 
 	// exchange.req: one entry per request; the stage that answered, or none.
-	if code, _ := sandboxCall(t, f, "GET", "binance/api.binance.com/api/v3/ticker/24hr?symbol=NOPE"); code != http.StatusNotFound {
+	// (klines, not the 24h ticker: the shipped fixtures answer the ticker's all-symbols route for any symbol)
+	if code, _ := sandboxCall(t, f, "GET", "binance/api.binance.com/api/v3/klines?symbol=NOPE&interval=1m"); code != http.StatusNotFound {
 		t.Fatalf("unmatched request = %d, want the router's 404", code)
 	}
 	reqs := journalEntries(t, f.url("/api/sandbox/lab/inspect"), "exchange.req")

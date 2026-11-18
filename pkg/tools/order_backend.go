@@ -599,6 +599,9 @@ func (b *ApprovalOrderBackend) Fetch(ctx context.Context, p approval.OrderParams
 		if broker.IsPaperMode(b.cfg) {
 			return approval.Fill{}, errNoFetchInPaper
 		}
+		if gerr := broker.RefusePaperIDWhileLive(b.cfg, id); gerr != nil {
+			return approval.Fill{}, gerr
+		}
 		tp, _, terr := broker.TradingProviderFor(b.cfg, p.Provider, p.Account)
 		if terr != nil {
 			return approval.Fill{}, terr

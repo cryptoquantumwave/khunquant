@@ -20,7 +20,7 @@ func writeWorkspace(t *testing.T) string {
 	for _, rel := range []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "memory/paper/paper_orders.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md", "reports/today.md",
 	} {
@@ -70,7 +70,7 @@ func mustRefuseWrite(t *testing.T, what string, res *ToolResult, wantFragment st
 // what they hold, the rest of memory/ says it is the agent's memory.
 func refusalFragment(rel string) string {
 	low := strings.ToLower(filepath.ToSlash(filepath.Clean(rel)))
-	for _, store := range []string{"memory/dca", "memory/delta_neutral", "memory/snapshots", "memory/proactive"} {
+	for _, store := range []string{"memory/dca", "memory/delta_neutral", "memory/snapshots", "memory/proactive", "memory/paper"} {
 		if strings.HasPrefix(low, store) {
 			return "holds scheduler / safety / prompt state"
 		}
@@ -97,7 +97,7 @@ func TestAutonomousWrite_ProtectedPathsRefused(t *testing.T) {
 	protected := []string{
 		"cron/jobs.json", "state/daily_loss.json", "state.json", "sessions/main.jsonl",
 		"skills/x/SKILL.md", "memory/dca/dca.db", "memory/delta_neutral/delta_neutral.db",
-		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
+		"memory/snapshots/snapshots.db", "memory/proactive/proactive.db", "memory/paper/paper_orders.db", "sandbox/webull/.webull-sessions.yml", "whatsapp/store.db", "pairing/requests.json", "calendar/set_holidays.json", "calendar/us_holidays.json", "replay/20261019.jsonl",
 		"AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md",
 		"memory/MEMORY.md", "memory/notes.md", "memory/202610/20261019.md", "HEARTBEAT.md",
 	}

@@ -1,6 +1,7 @@
 package broker_test
 
 import (
+	"os"
 	"context"
 	"errors"
 	"strings"
@@ -24,6 +25,12 @@ func (r readOnlyProvider) GetMarketStatus(context.Context, string) (broker.Marke
 func paperCfg(on bool) *config.Config {
 	cfg := &config.Config{}
 	cfg.TradingRisk.PaperTradingMode = on
+	// The paper order book lives in the workspace: give it a throwaway one.
+	ws, err := os.MkdirTemp("", "khunquant-mode-test-ws-")
+	if err != nil {
+		panic(err)
+	}
+	cfg.Agents.Defaults.Workspace = ws
 	return cfg
 }
 

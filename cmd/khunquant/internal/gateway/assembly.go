@@ -274,6 +274,10 @@ type assemblyDeps struct {
 	// the caller of buildServices.
 	Demands perception.DemandSource
 
+	// lateDemands answers for the registry's demands while the trigger factories are
+	// built, before the registry exists (attachTriggers sets it); portfolioConfig reads it.
+	lateDemands *lateDemands
+
 	// Reload selects wording of console and log lines ("restarted" vs "started").
 	// It must never change what is built.
 	Reload bool

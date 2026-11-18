@@ -15,6 +15,7 @@ type msgText struct {
 	stoppedBeforePlacing string
 	notPlaced            func(code, reason string) string
 	mayExist             func(code, reason, where string) string
+	paperFailed          func(code, reason string) string
 	receipt              func(tag, code, side, amount, unit, where string, extra []string) string
 	order, status        string
 	gotPrice             func(avg, ref, pct string) string
@@ -36,6 +37,9 @@ var msgs = map[string]msgText{
 		mayExist: func(code, reason, where string) string {
 			return "Proposal " + code + ": the order MAY OR MAY NOT HAVE BEEN PLACED on " + where + " (" + reason + "). " +
 				"Check " + where + " before doing anything else, and do not approve it again until you have."
+		},
+		paperFailed: func(code, reason string) string {
+			return "Proposal " + code + " was a PAPER (simulated) order. It failed and NOTHING was placed on the exchange: " + reason
 		},
 		receipt: func(tag, code, side, amount, unit, where string, extra []string) string {
 			return tag + "Proposal " + code + " executed: " + side + " " + amount + " " + unit + " on " + where + ". " + strings.Join(extra, " ")
@@ -63,6 +67,9 @@ var msgs = map[string]msgText{
 		mayExist: func(code, reason, where string) string {
 			return "ข้อเสนอ " + code + ": คำสั่งอาจถูกส่งไปที่ " + where + " แล้วหรือไม่ก็ได้ (" + reason + ") " +
 				"โปรดตรวจที่ " + where + " ก่อนทำอย่างอื่น และอย่าอนุมัติซ้ำจนกว่าจะตรวจแล้ว"
+		},
+		paperFailed: func(code, reason string) string {
+			return "ข้อเสนอ " + code + " เป็นคำสั่งแบบ PAPER (จำลอง) และล้มเหลว ไม่มีการส่งคำสั่งใด ๆ ไปที่ exchange: " + reason
 		},
 		receipt: func(tag, code, side, amount, unit, where string, extra []string) string {
 			return tag + "ข้อเสนอ " + code + " ดำเนินการแล้ว: " + side + " " + amount + " " + unit + " ที่ " + where + " " + strings.Join(extra, " ")
@@ -134,6 +141,13 @@ func receiptText(p Proposal, op OrderParams, rc Rechecked, placed Placed, fill F
 // failureText is the message for an execution that ended without a completed order.
 func failureText(p Proposal, op OrderParams, f failure) string {
 	m := msgs[langOf(p.Lang)]
+	// Mode decides, not the configured paper flag now: stepRecheck refuses an order
+	// whose mode differs from Proposal.Mode before the place step, so p.Mode is the
+	// mode the order ran under. Only an exact ModePaper is simulated; an empty or
+	// unknown mode, and real_exit, keep the live wording (checking is harmless).
+	if p.Mode == ModePaper {
+		return m.paperFailed(p.Code, f.reason)
+	}
 	if f.mayExist {
 		where := op.Provider
 		if where == "" {

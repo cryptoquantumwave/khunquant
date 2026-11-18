@@ -148,6 +148,8 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 	cfg := d.Cfg
 	ctx, cancel := context.WithTimeout(context.Background(), triggerBuildTimeout)
 	defer cancel()
+	late := &lateDemands{}
+	d.lateDemands = late
 	reg, err := triggers.NewRegistry(ctx, db,
 		// Read on every evaluation and every poll of the demands.
 		func() string { return cfg.Proactive.Effective().TriggersMode },
@@ -158,6 +160,7 @@ func (rt *perceptionRuntime) attachTriggers(d *assemblyDeps, opts *engine.Option
 		return
 	}
 	rt.triggers = reg
+	late.set(reg)
 	rt.portfolioStats = d.Shared.portfolioShared()
 	have := triggerFactories(*d)
 	if have[triggers.KindExternal] != nil {

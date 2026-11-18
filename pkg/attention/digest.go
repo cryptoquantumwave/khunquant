@@ -477,6 +477,17 @@ func memoryCode(d Decision) string {
 	return oneLine(strings.TrimPrefix(d.Candidate.TriggerID, proactive.MemoryTriggerPrefix), 16)
 }
 
+// memorySource is who suggested the memory, on a line of its own that the fact (a "> "
+// line) cannot imitate. The name is remote-authored, so it is flattened to one line again
+// here; a candidate queued before the source was recorded says it is unknown.
+func memorySource(d Decision) string {
+	s := oneLine(d.Candidate.Source, 64)
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 func memoryFact(d Decision) string { return oneLine(d.Candidate.Quote, proactive.MaxQuoteRunes) }
 
 func rankedMemory(decisions []Decision) []Decision {
@@ -503,7 +514,7 @@ func renderMemoryBlock(memory []Decision, withFacts bool) string {
 	for _, d := range shown {
 		lines = append(lines, "• "+oneLine(d.Candidate.Title, maxDigestLineRune))
 		if withFacts {
-			lines = append(lines, "  > "+memoryFact(d))
+			lines = append(lines, "  suggested by: "+memorySource(d), "  > "+memoryFact(d))
 		}
 		code := memoryCode(d)
 		lines = append(lines, "  Save: /approve "+code+"   Discard: /reject "+code)

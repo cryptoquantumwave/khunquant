@@ -238,7 +238,7 @@ func (s *Service) Propose(ctx context.Context, r ProposeRequest) (Proposal, erro
 		return Proposal{}, err
 	}
 	protective := r.ProtectiveKey != "" && isProtectiveKey(r.ProtectiveKey) && r.Origin == OriginProactive && prep.Reducing
-	class := classOf(KindOrder, r.Origin, prep.Reducing, protective)
+	class := classOf(KindOrder, r.Origin, prep.Reducing, protective, false)
 	if codes, err := s.st.pendingCodes(ctx, now, class); err != nil {
 		return Proposal{}, err
 	} else if max, _, _ := class.bounds(); len(codes) >= max {

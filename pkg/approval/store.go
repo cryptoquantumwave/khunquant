@@ -91,7 +91,12 @@ const (
 	// turn makes is also an exit: a few of those must not keep the protective close out.
 	classProtective
 	classMandate
+	// classMemory holds the memory suggestions of the agent itself and of the owner.
 	classMemory
+	// classMemoryPerson holds the suggestions a person who is not the owner made. It is apart
+	// from classMemory so that no stranger can fill the agent's slots (F-MEM-1), and each
+	// suggester is further held to a bound of their own (see store.insert).
+	classMemoryPerson
 	classReflection
 )
 
@@ -100,7 +105,9 @@ func (c propClass) sql() string {
 	case classMandate:
 		return `(kind = 'mandate' OR origin = 'mandate')`
 	case classMemory:
-		return `kind = 'memory'`
+		return `(kind = 'memory' AND intent_id NOT LIKE '` + suggesterPrefix + `%')`
+	case classMemoryPerson:
+		return `(kind = 'memory' AND intent_id LIKE '` + suggesterPrefix + `%')`
 	case classReflection:
 		return `kind IN ('trigger_param', 'intent_cleanup', 'mute')`
 	case classExit:
@@ -118,6 +125,8 @@ func (c propClass) bounds() (maxPending, maxWindow int, window time.Duration) {
 		return MaxPendingMandate, MaxMandatePerHour, time.Hour
 	case classMemory:
 		return MaxPendingMemory, MaxMemoryPerDay, 24 * time.Hour
+	case classMemoryPerson:
+		return MaxPendingMemoryPersons, MaxMemoryPersonsPerDay, 24 * time.Hour
 	case classReflection:
 		return MaxPendingReflection, MaxReflectionPerDay, 24 * time.Hour
 	case classExit:
@@ -132,8 +141,10 @@ func (c propClass) bounds() (maxPending, maxWindow int, window time.Duration) {
 // mandated run live for hours and are made by code, memory suggestions are free text a
 // background turn wrote, an order that only reduces exposure is an exit with a bound of
 // its own, and orders are everything else.
-func classOf(k Kind, o Origin, reducing, protective bool) propClass {
+func classOf(k Kind, o Origin, reducing, protective, person bool) propClass {
 	switch {
+	case k == KindMemory && person:
+		return classMemoryPerson
 	case k == KindMemory:
 		return classMemory
 	case IsReflectionKind(k):
@@ -198,8 +209,10 @@ func scanProposal(r rowScanner) (Proposal, error) {
 	return p, nil
 }
 
-// errBounds says which bound refused an insert.
-type errBounds struct{ hourly bool }
+// errBounds says which bound refused an insert: the window (hourly, or daily for a class
+// whose window is a day) or the pending count. suggester says that it was the bound of one
+// suggester that refused it, not the class's own.
+type errBounds struct{ hourly, suggester bool }
 
 func (e errBounds) Error() string { return "approval: proposal bounds reached" }
 
@@ -209,19 +222,26 @@ var errCodeTaken = errors.New("approval: code already pending")
 // insert stores a new pending proposal if both bounds hold, in ONE statement so
 // two proposers racing cannot both pass a count that only one fits under.
 func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
-	class := classOf(p.Kind, p.Origin, p.Reducing, isProtectiveKey(p.IntentID))
+	class := classOf(p.Kind, p.Origin, p.Reducing, isProtectiveKey(p.IntentID), isSuggesterKey(p.IntentID))
 	cls := class.sql()
 	maxPending, maxWindow, window := class.bounds()
 	windowStart := now.Add(-window)
+	// A person's suggestions are also bounded one suggester at a time, in the same statement.
+	suggesterCond, suggesterArgs := "", []any(nil)
+	if class == classMemoryPerson {
+		suggesterCond = ` AND (SELECT COUNT(*) FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND intent_id = ?) < ?
+		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND intent_id = ?) < ?`
+		suggesterArgs = []any{ms(now), p.IntentID, MaxPendingPerSuggester, ms(windowStart), p.IntentID, MaxMemoryPerSuggesterPerDay}
+	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO proposals
 		(id, code, nonce, kind, params, hash, summary, rationale, origin, mode, reducing, candidate_id, intent_id,
 		 intervention_id, lang, status, created_at_ms, expires_at_ms)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?
 		WHERE (SELECT COUNT(*) FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND `+cls+`) < ?
-		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND `+cls+`) < ?`,
-		p.ID, p.Code, p.Nonce, string(p.Kind), string(p.Params), p.Hash[:], p.Summary, p.Rationale, string(p.Origin),
-		p.Mode, boolInt(p.Reducing), p.CandidateID, p.IntentID, p.InterventionID, p.Lang, ms(p.CreatedAt), ms(p.ExpiresAt),
-		ms(now), maxPending, ms(windowStart), maxWindow)
+		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND `+cls+`) < ?`+suggesterCond,
+		append([]any{p.ID, p.Code, p.Nonce, string(p.Kind), string(p.Params), p.Hash[:], p.Summary, p.Rationale, string(p.Origin),
+			p.Mode, boolInt(p.Reducing), p.CandidateID, p.IntentID, p.InterventionID, p.Lang, ms(p.CreatedAt), ms(p.ExpiresAt),
+			ms(now), maxPending, ms(windowStart), maxWindow}, suggesterArgs...)...)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return errCodeTaken
@@ -229,8 +249,15 @@ func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
 		return fmt.Errorf("approval: insert proposal: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		var pending int
+		var pending, mine, mineWindow int
 		_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND `+cls, ms(now)).Scan(&pending)
+		if class == classMemoryPerson {
+			_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND intent_id = ?`,
+				ms(now), p.IntentID).Scan(&mine)
+			_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND intent_id = ?`,
+				ms(windowStart), p.IntentID).Scan(&mineWindow)
+			return errBounds{hourly: pending < maxPending && mine < MaxPendingPerSuggester, suggester: mine >= MaxPendingPerSuggester || mineWindow >= MaxMemoryPerSuggesterPerDay}
+		}
 		return errBounds{hourly: pending < maxPending}
 	}
 	return nil

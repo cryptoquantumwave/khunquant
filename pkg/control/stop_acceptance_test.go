@@ -73,7 +73,7 @@ type stampedProposals struct {
 	s *stamps
 }
 
-func (p stampedProposals) CancelPending(ctx context.Context, r string) ([]approval.Cancelled, error) {
+func (p stampedProposals) CancelPending(ctx context.Context, r string) (approval.PendingOutcome, error) {
 	p.s.mark("4 proposals cancelled")
 	return p.fakeProposals.CancelPending(ctx, r)
 }
@@ -265,7 +265,7 @@ func TestStop_Acceptance_NoNonProtectiveActivityAfterwards(t *testing.T) {
 		t.Errorf("/stop took %v, want under 2s", took)
 	}
 	mustContain(t, "summary", reply, "Stopped.", "Cancelled 1 turn, 2 workflows (dca.execute x2), 1 proposal; revoked 1 mandate; cancelled 1 open order",
-		"Protective, still running: dn.unwind", "Use /resume")
+		"Protective, still running: dn.unwind", "/resume allows new trades")
 
 	// The turn really was cancelled, within a second of the command.
 	select {

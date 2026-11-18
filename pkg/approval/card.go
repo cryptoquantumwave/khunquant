@@ -46,6 +46,7 @@ func (c Card) Text() string {
 type cardView struct {
 	ModeTag, Code, SideWord, Amount, Unit, USD, TypeWord, PriceText string
 	Provider, Account, RefPrice, Collar, Why, Expires, Outcome      string
+	QuoteSize                                                       string
 	PriceLine                                                       string
 	Minutes                                                         int
 	ReduceOnly                                                      bool
@@ -128,6 +129,16 @@ func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 // usd formats a USD value to cents.
 func usd(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
 
+// quoteOf returns the quote asset of a unified symbol ("BTC/USDT" -> "USDT").
+func quoteOf(symbol string) string {
+	_, rest, ok := strings.Cut(symbol, "/")
+	if !ok {
+		return ""
+	}
+	q, _, _ := strings.Cut(rest, ":")
+	return q
+}
+
 // baseOf returns the base asset of a unified symbol ("BTC/USDT" -> "BTC").
 func baseOf(symbol string) string {
 	if i := strings.Index(symbol, "/"); i > 0 {
@@ -179,6 +190,9 @@ func RenderOrderCard(p Proposal, op OrderParams, loc Locale, outcome string) (Ca
 		if op.Price != nil {
 			view.PriceText = num(*op.Price)
 		}
+	}
+	if op.QuoteAmount > 0 {
+		view.QuoteSize = num(op.QuoteAmount) + " " + quoteOf(op.Symbol)
 	}
 	if op.Market == MarketFutures {
 		view.Unit = w.contracts + " " + op.Symbol

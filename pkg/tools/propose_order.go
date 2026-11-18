@@ -53,8 +53,9 @@ func (t *ProposeOrderTool) Description() string {
 	return "Suggest an order to the owner for approval. Nothing is placed: the owner receives a card built by the system from " +
 		"these parameters with Approve and Reject buttons, and the order is placed only if they approve it before it expires. " +
 		"The system fills in the reference price, the USD value and the safety checks; do not describe the order in the rationale, " +
-		"which is optional, one plain sentence, and is shown under a Why label. Futures sizes are given as notional_usd (the " +
-		"system computes the contracts). There is no confirm flag and no extra order params. A proposal made from a background " +
+		"which is optional, one plain sentence, and is shown under a Why label. Spot sizes are given as amount (base units) or " +
+		"quote_amount (an amount of the quote currency, e.g. 20 for 20 USDT of BTC/USDT; the system converts it, and the owner approves the " +
+		"exact converted amount). Futures sizes are given as notional_usd (the system computes the contracts). There is no confirm flag and no extra order params. A proposal made from a background " +
 		"turn can only reduce risk."
 }
 
@@ -73,7 +74,8 @@ func (t *ProposeOrderTool) Parameters() map[string]any {
 			"type": map[string]any{
 				"type": "string", "enum": []string{"market", "limit"}, "description": "Order type (default market).",
 			},
-			"amount":       map[string]any{"type": "number", "description": "Spot only: quantity in base currency units."},
+			"amount":       map[string]any{"type": "number", "description": "Spot only: quantity in base currency units. Give exactly one of amount and quote_amount."},
+			"quote_amount": quoteAmountSchema(),
 			"notional_usd": map[string]any{"type": "number", "description": "Futures only: the order's size in USD; contracts are computed by the system."},
 			"price":        map[string]any{"type": "number", "description": "Limit price (limit orders only)."},
 			"reduce_only": map[string]any{
@@ -109,11 +111,19 @@ func (t *ProposeOrderTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult("propose_order has no confirm flag: the owner's approval is the confirmation")
 	}
 
+	quoteAmount, quoteGiven, quoteErr := quoteAmountArg(args)
+	if quoteErr != nil {
+		return ErrorResult(quoteErr.Error())
+	}
+	if quoteGiven && args["amount"] != nil {
+		return ErrorResult("give either amount (base units) or quote_amount (quote currency), not both")
+	}
 	order := approval.OrderRequest{
 		Provider: stringArg(args, "provider"), Account: stringArg(args, "account"),
 		Market: stringArg(args, "market"), Symbol: stringArg(args, "symbol"),
 		Side: stringArg(args, "side"), Type: stringArg(args, "type"),
 		Amount: numberArg(args, "amount"), NotionalUSD: numberArg(args, "notional_usd"),
+		QuoteAmount: quoteAmount,
 	}
 	if v, ok := args["price"].(float64); ok {
 		order.Price = &v

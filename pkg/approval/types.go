@@ -294,6 +294,10 @@ var (
 	ErrHourlyLimit = errors.New("approval: too many proposals in the last hour")
 	// ErrUnavailable: approvals cannot run (no owner route, delivery disabled, service not wired).
 	ErrUnavailable = errors.New("approval: approvals are not available")
+	// ErrCardNotDelivered: the proposal's card did not reach the owner (the chat channel is down),
+	// so the proposal was cancelled and nobody saw it. It is an ErrUnavailable, and a refusal that
+	// may pass: trying again once the channel is back can succeed.
+	ErrCardNotDelivered = fmt.Errorf("%w: the card could not be delivered to the owner", ErrUnavailable)
 )
 
 // PendingError is the refusal for a fourth pending proposal; it names the codes.

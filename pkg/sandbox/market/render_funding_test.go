@@ -106,7 +106,7 @@ func TestRender_MarkAndFunding_Wire(t *testing.T) {
 func TestRender_BitkubWire(t *testing.T) {
 	r := newFeedRig(t)
 	// No THB model: the recorded fixture answers, unchanged.
-	if code, body := r.get(t, "bitkub", "api.bitkub.com", "/api/v3/market/ticker"); code != 200 || !strings.Contains(body, "1234567.89") {
+	if code, body := r.get(t, "bitkub", "api.bitkub.com", "/api/v3/market/ticker"); code != 200 || !strings.Contains(body, "3332000.00") {
 		t.Fatalf("unmodelled ticker = %d %s, want the fixture", code, body)
 	}
 	r.sawStage(t, "bitkub", "/api/v3/market/ticker", "fixtures")

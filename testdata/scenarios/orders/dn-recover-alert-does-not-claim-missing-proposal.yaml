@@ -23,16 +23,28 @@
 #  - the chat channel goes down before the open and comes back at +1m, so the card is lost and the alert is not;
 #  - clock.resolution 1s, because the open is a verified workflow.
 #
-# The correct behaviour: no message to the owner says a proposal is waiting for approval while none
-# was created. The setup proofs: no proposal was created in the first 20 minutes (the next recovery
-# round is at +30m), and the unhedged alert itself was delivered.
+# The correct behaviour (F-DN-2): no message to the owner says a proposal is waiting for approval while
+# none was created. The first alert of a round says a check is under way; the outcome follows.
 #
-# Fix direction (log): write the alert text after ProposeClose, from its result: say "waiting for
+# F-DN-3: the same route used to leave the owner with NO close proposal until the next round (+30m),
+# although the channel was back after a minute. The recovery now retries the proposal inside the round
+# (1, 3, 7 and 15 minutes in) when, and only when, the card could not be delivered. So here: the first
+# try fails (channel down), the channel is back at +1m, and a retry creates the proposal; only then does
+# the owner get the outcome message that says it is waiting, with its code.
+#
+# The setup proofs: the unhedged alert itself was delivered, and the first alert does not claim a proposal.
+# The no-false-waiting check is by content, not by time window: on this route the first alert is delivered
+# when the channel returns (+1m), the same minute the retry creates the proposal and the outcome follows, so
+# no time window separates "before the proposal exists" from "after". The first alert is the message that
+# carries "Checking whether a close can be proposed"; it must never say "waiting for your approval", and the
+# message that does say so must come after a pending proposal exists (it names the proposal's code).
+#
+# Fix direction (log, F-DN-2): write the alert text after ProposeClose, from its result: say "waiting for
 # your approval" only when a proposal exists, else the "close it on the exchange or run
 # unwind_delta_neutral_position" text.
 version: 1
 scenario: dn-recover-alert-does-not-claim-missing-proposal
-covers: [F-DN-2]
+covers: [F-DN-2, F-DN-3]
 status: active
 llm: scripted
 level: wire
@@ -97,11 +109,18 @@ expect:
   - id: owner-told-it-is-unhedged
     message: { to: owner, severity: critical, contains: ["UNHEDGED"], count: ">= 1" }
     within: { from: "+0m", to: "+25m" }
-  - id: no-proposal-was-created
+  - id: first-alert-says-a-check-is-under-way
+    message: { to: owner, contains: ["Checking whether a close can be proposed"], count: 1 }
+    within: { from: "+0m", to: "+25m" }
+  # F-DN-2: no alert that is written before the proposal exists claims one.
+  - id: no-message-claims-a-proposal-is-waiting-before-it-exists
+    message: { to: owner, contains: ["Checking whether a close can be proposed", "waiting for your approval"], count: 0 }
+    within: { from: "+0m", to: "+25m" }
+  # F-DN-3: the channel is back at +1m, and the round's retry creates the proposal well before the next round (+30m).
+  - id: a-close-proposal-exists-by-10m
     proposal: { kind: order, status: pending }
-    count: 0
-    within: { from: "+0m", to: "+25m" }
-  # The correct behaviour.
-  - id: no-message-claims-a-proposal-is-waiting
-    message: { to: owner, contains: ["waiting for your approval"], count: 0 }
-    within: { from: "+0m", to: "+25m" }
+    count: 1
+    within: { from: "+0m", to: "+10m" }
+  - id: owner-told-the-close-is-waiting-with-its-code
+    message: { to: owner, severity: critical, contains: ["waiting for your approval (code "], count: 1 }
+    within: { from: "+1m", to: "+10m" }

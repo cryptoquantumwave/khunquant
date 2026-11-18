@@ -131,7 +131,11 @@ func (t *dataStale) Evaluate(_ context.Context, v worldmodel.View, _ worldmodel.
 		}
 		limit := time.Duration(float64(src.ExpectedEvery) * t.p.Factor)
 		quiet = silent > limit
-		if ss, ok := v.SourceState(src.Name); ok && ss.Degraded && ss.ConsecutiveDegraded >= staleUnreadableAfter {
+		need := staleUnreadableAfter
+		if src.UnreadableAfter > 0 {
+			need = src.UnreadableAfter
+		}
+		if ss, ok := v.SourceState(src.Name); ok && ss.Degraded && ss.ConsecutiveDegraded >= need {
 			unreadable = true
 		}
 		bad := quiet || unreadable

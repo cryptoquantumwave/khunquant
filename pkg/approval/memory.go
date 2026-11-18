@@ -3,7 +3,9 @@ package approval
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,10 +33,27 @@ const OriginSuggestion Origin = "suggestion"
 const (
 	// MaxFactRunes bounds a fact.
 	MaxFactRunes = 500
-	// MaxPendingMemory is how many memory suggestions may wait for a decision.
+	// MaxPendingMemory is how many memory suggestions of the agent itself (and of the owner's
+	// own non-root turns) may wait for a decision. It counts nobody else's.
 	MaxPendingMemory = 5
-	// MaxMemoryPerDay is how many may be created in a rolling day.
+	// MaxMemoryPerDay is how many of those may be created in a rolling day.
 	MaxMemoryPerDay = 10
+	// MaxPendingPerSuggester is how many suggestions one person who is not the owner may
+	// have waiting. Two is enough for an honest "remember this" and leaves a stranger
+	// able to put little in front of the owner.
+	MaxPendingPerSuggester = 2
+	// MaxMemoryPerSuggesterPerDay is how many one such person may create in a rolling day.
+	// It is above the pending bound so that a decided suggestion frees a slot, and low
+	// enough that a person cannot turn the digest into their own channel.
+	MaxMemoryPerSuggesterPerDay = 4
+	// MaxPendingMemoryPersons is how many suggestions all such people together may have
+	// waiting, so that many senders cannot flood the digest. It never touches
+	// MaxPendingMemory.
+	MaxPendingMemoryPersons = 5
+	// MaxMemoryPersonsPerDay is how many all such people together may create in a rolling day.
+	MaxMemoryPersonsPerDay = 10
+	// MaxSuggesterNameRunes bounds the name of a suggester shown in the digest.
+	MaxSuggesterNameRunes = 32
 	// MemoryExpiry is how long the owner has to decide.
 	MemoryExpiry = 7 * 24 * time.Hour
 	// MaxDigestMemoryCards is how many suggestions of one digest get buttons
@@ -61,6 +80,11 @@ var ErrMemoryUnavailable = errors.New("approval: memory suggestions are not avai
 // ErrMemoryDaily: too many memory suggestions in the last day.
 var ErrMemoryDaily = errors.New("approval: too many memory suggestions today")
 
+// ErrMemorySuggesterFull: the bound of a person who is not the owner is reached. It says
+// nothing about how many suggestions wait, whose they are or what they say.
+var ErrMemorySuggesterFull = errors.New("approval: you already have memory suggestions waiting for the owner's decision; " +
+	"try again after they have been decided or have expired")
+
 // MemoryParams is the canonical, hashed description of a suggested memory.
 type MemoryParams struct {
 	Fact     string `json:"fact"`
@@ -68,6 +92,100 @@ type MemoryParams struct {
 	// Source says which kind of turn suggested it (heartbeat, cron, proactive, sub_turn,
 	// non_owner); it is a label for the owner and is never an instruction.
 	Source string `json:"source"`
+	// By says who suggested it when that was not the agent itself: SuggestedByOwner or
+	// SuggestedByPerson. Empty means the agent (and is how every suggestion made before
+	// this field existed reads).
+	By string `json:"by,omitempty"`
+	// Who is the cleaned name of the person (By is SuggestedByPerson), channel included:
+	// "alice (telegram)". It is remote-authored text, shown to the owner on a line of its own.
+	Who string `json:"who,omitempty"`
+}
+
+// Who suggested a memory.
+const (
+	SuggestedByOwner  = "owner"
+	SuggestedByPerson = "person"
+)
+
+// Suggester is the author of a suggestion. The zero value is the agent itself.
+type Suggester struct {
+	// Kind is "" (the agent: a heartbeat, a job, a sub-turn of one), SuggestedByOwner (the
+	// owner's own turn that is not their root conversation) or SuggestedByPerson.
+	Kind string
+	// Channel and ID name a person stably (the bound is kept per Channel and ID). Name is
+	// what the channel calls them, and may be empty.
+	Channel, ID, Name string
+}
+
+// suggesterPrefix starts the key stored in the proposal's intent_id column (which a
+// memory proposal otherwise leaves empty) for a suggestion made by a person.
+const suggesterPrefix = "suggester:"
+
+func isSuggesterKey(k string) bool { return strings.HasPrefix(k, suggesterPrefix) }
+
+// suggesterKey is the stable key the per-suggester bound is counted by: a digest of the
+// channel and sender id, so it has a fixed size and cannot carry text.
+func suggesterKey(channel, id string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(channel)) + "\x00" + strings.ToLower(strings.TrimSpace(id))))
+	return suggesterPrefix + hex.EncodeToString(sum[:16])
+}
+
+// cleanName reduces remote-authored text to a short single-line label: invalid UTF-8,
+// control, line-break and invisible formatting characters (bidi included) are dropped,
+// white space collapses, the brackets that would let it imitate the "(channel)" part and
+// the quote marker are removed, and it is cut at max runes.
+func cleanName(s string, max int) string {
+	var b strings.Builder
+	for _, r := range strings.ToValidUTF8(s, "") {
+		switch {
+		case unicode.IsSpace(r):
+			b.WriteRune(' ')
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
+		case r == '(' || r == ')' || r == '>' || r == '<':
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if rs := []rune(out); len(rs) > max {
+		out = strings.TrimSpace(string(rs[:max]))
+	}
+	return out
+}
+
+// maxWhoRunes bounds a stored label: a name, a space and a bracketed channel.
+const maxWhoRunes = MaxSuggesterNameRunes + 3 + 16
+
+// SuggesterLabel is how a person is named in the digest: "name (channel)", or
+// "id (channel)" when the channel gave no name (or one that cleans to nothing).
+func SuggesterLabel(s Suggester) string {
+	ch := cleanName(s.Channel, 16)
+	name := cleanName(s.Name, MaxSuggesterNameRunes)
+	if name == "" {
+		name = cleanName(s.ID, MaxSuggesterNameRunes)
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	if ch == "" {
+		return name
+	}
+	return name + " (" + ch + ")"
+}
+
+// SourceText is what the digest says about who suggested the memory: "the assistant",
+// "you" (the owner) or the person's label.
+func (m MemoryParams) SourceText() string {
+	switch m.By {
+	case SuggestedByOwner:
+		return "you"
+	case SuggestedByPerson:
+		if m.Who != "" {
+			return m.Who
+		}
+		return "unknown"
+	}
+	return "the assistant"
 }
 
 // CleanFact reduces a fact to one clean line: white space (line breaks included)
@@ -107,6 +225,12 @@ func validateMemoryParams(m MemoryParams) error {
 		return errors.New("category must be preference, fact or plan_note")
 	case strings.TrimSpace(m.Source) == "" || len(m.Source) > 32:
 		return errors.New("a memory suggestion names the kind of turn that made it")
+	case m.By != "" && m.By != SuggestedByOwner && m.By != SuggestedByPerson:
+		return errors.New("a memory suggestion is by the agent, the owner or a person")
+	case m.By == SuggestedByPerson && (m.Who == "" || len([]rune(m.Who)) > maxWhoRunes || strings.ContainsAny(m.Who, "\n\r<>")):
+		return errors.New("a suggestion by a person names them")
+	case m.By != SuggestedByPerson && m.Who != "":
+		return errors.New("only a suggestion by a person carries a name")
 	}
 	return nil
 }
@@ -166,6 +290,8 @@ type MemoryDigest interface {
 // context by the tool; the fact and category are the model's, cleaned here.
 type MemoryRequest struct {
 	Fact, Category, Source string
+	// Suggester is who made it; the zero value is the agent itself.
+	Suggester Suggester
 	// Expiry replaces MemoryExpiry when positive (the nightly reflection's is shorter).
 	Expiry time.Duration
 }
@@ -184,7 +310,19 @@ func (s *Service) ProposeMemory(ctx context.Context, r MemoryRequest) (Proposal,
 	if err != nil {
 		return Proposal{}, err
 	}
-	params, err := canonicalMemory(MemoryParams{Fact: fact, Category: r.Category, Source: r.Source})
+	mp := MemoryParams{Fact: fact, Category: r.Category, Source: r.Source}
+	key := ""
+	switch r.Suggester.Kind {
+	case "":
+	case SuggestedByOwner:
+		mp.By = SuggestedByOwner
+	case SuggestedByPerson:
+		mp.By, mp.Who = SuggestedByPerson, SuggesterLabel(r.Suggester)
+		key = suggesterKey(r.Suggester.Channel, r.Suggester.ID)
+	default:
+		return Proposal{}, errors.New("approval: unknown suggester")
+	}
+	params, err := canonicalMemory(mp)
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -194,13 +332,17 @@ func (s *Service) ProposeMemory(ctx context.Context, r MemoryRequest) (Proposal,
 	defer s.mu.Unlock()
 
 	now := s.now()
-	if codes, err := s.st.pendingCodes(ctx, now, classMemory); err != nil {
-		return Proposal{}, err
-	} else if len(codes) >= MaxPendingMemory {
-		return Proposal{}, &PendingError{Codes: codes}
+	// The agent's and the owner's suggestions are checked here (and named in the refusal);
+	// a person's are held to their own bounds by the insert, whose refusal names nothing.
+	if key == "" {
+		if codes, err := s.st.pendingCodes(ctx, now, classMemory); err != nil {
+			return Proposal{}, err
+		} else if len(codes) >= MaxPendingMemory {
+			return Proposal{}, &PendingError{Codes: codes}
+		}
 	}
 	p := Proposal{
-		ID: proactive.NewID(), Nonce: newNonce(), Kind: KindMemory, Params: params, Hash: hashOf(KindMemory, params),
+		IntentID: key, ID: proactive.NewID(), Nonce: newNonce(), Kind: KindMemory, Params: params, Hash: hashOf(KindMemory, params),
 		Origin: OriginSuggestion, Mode: ModeLive, Lang: langOf(s.locale(ctx).Lang), Status: StatusPending,
 		CreatedAt: now, ExpiresAt: now.Add(MemoryExpiry),
 	}
@@ -219,6 +361,12 @@ func (s *Service) ProposeMemory(ctx context.Context, r MemoryRequest) (Proposal,
 	var bounds errBounds
 	switch {
 	case errors.As(err, &bounds):
+		if key != "" {
+			if bounds.hourly && !bounds.suggester {
+				return Proposal{}, ErrMemoryDaily
+			}
+			return Proposal{}, ErrMemorySuggesterFull
+		}
 		if bounds.hourly {
 			return Proposal{}, ErrMemoryDaily
 		}
@@ -230,7 +378,7 @@ func (s *Service) ProposeMemory(ctx context.Context, r MemoryRequest) (Proposal,
 	err = s.o.Digest.QueueForDigest(ctx, proactive.Candidate{
 		TriggerID: proactive.MemoryTriggerPrefix + p.Code, DedupKey: "memory:" + p.ID,
 		Severity: proactive.SeverityInfo, Salience: 0.4, Subject: "memory", Title: p.Summary,
-		Quote: fact, Trust: proactive.TrustUntrusted, Compose: proactive.ComposeTemplate, At: now,
+		Quote: fact, Source: mp.SourceText(), Trust: proactive.TrustUntrusted, Compose: proactive.ComposeTemplate, At: now,
 	})
 	if err != nil {
 		// A suggestion the owner will never see must not hold a pending slot for a week.

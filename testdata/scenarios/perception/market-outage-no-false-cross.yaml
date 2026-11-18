@@ -7,7 +7,7 @@
 # after the outage BTC moves over the line for real and exactly one crossing is seen. That
 # last step is also the setup proof: the alert existed and the source judged it, so the
 # silence in the gap is the backoff's doing and not a dead alert.
-# The sibling known bug market-outage-tells-owner (O-13) is about the missing notice.
+# The sibling market-outage-tells-owner (O-13) checks the owner is told the source is blind.
 version: 1
 scenario: market-outage-no-false-cross
 covers: [B6-6]

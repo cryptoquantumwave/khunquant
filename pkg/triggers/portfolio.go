@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/calendar"
 	"github.com/cryptoquantumwave/khunquant/pkg/proactive"
 	"github.com/cryptoquantumwave/khunquant/pkg/worldmodel"
@@ -80,6 +81,11 @@ type StaleSource struct {
 	// Active says whether anything depends on the source right now (the futures
 	// source matters only while a position is open). Nil means yes.
 	Active func(v worldmodel.View) bool
+	// UnreadableAfter is how many degraded reports in a row make the source
+	// "unreadable". Zero means the default (3). A source that reports degraded only
+	// once, after it has failed several reads itself and then backs off (the market
+	// source), names 1: it never sends a second report while the outage lasts.
+	UnreadableAfter int
 }
 
 // AnyFuturesPosition returns an Active func that is true while any of the accounts
@@ -92,6 +98,27 @@ func AnyFuturesPosition(accounts func() []string) func(v worldmodel.View) bool {
 		}
 		for _, a := range accounts() {
 			if ps, ok := v.FuturesPositions(a); ok && len(ps) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// AnyCryptoMarketDemand returns an Active func that is true while the demands in force
+// ask the market source for a price or candles of a crypto venue (a price alert, a
+// watch, an indicator crossing). With no such demand the source makes no request, so
+// its silence is not an outage; and the source reads equity venues (Settrade, Webull)
+// too, whose closed hours are not crypto's, so only crypto demands count (see the
+// market entry in the gateway's StaleSources). A nil source is never active.
+func AnyCryptoMarketDemand(demands perception.DemandSource) func(v worldmodel.View) bool {
+	return func(worldmodel.View) bool {
+		if demands == nil {
+			return false
+		}
+		for _, d := range demands.Demands() {
+			if (d.Kind == perception.DemandTicker || d.Kind == perception.DemandOHLCV) &&
+				perception.ClassifyPosition(d.Provider, "", "") == perception.ClassCrypto {
 				return true
 			}
 		}

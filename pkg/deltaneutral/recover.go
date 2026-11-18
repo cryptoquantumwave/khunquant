@@ -13,6 +13,14 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
 )
 
+// recoverCardRetryAt are the times, from the start of a round, at which the round tries to
+// propose the close again after its card could not be delivered (the chat channel is down):
+// 1, 3, 7 and 15 minutes in, which is a backoff of 1, 2, 4 and 8 minutes. At most
+// 1+len attempts per round, all of them before the round's own window (RecoverOfferEvery)
+// ends, and an undelivered card does not use up the hour's bound of protective proposals
+// (approval's store), so the retries cannot lock the owner out of the close.
+var recoverCardRetryAt = [...]time.Duration{1 * time.Minute, 3 * time.Minute, 7 * time.Minute, 15 * time.Minute}
+
 // Bounds of dn.recover.
 const (
 	// RecoverOfferEvery is the least time between two offers to close the same orphan.
@@ -112,6 +120,10 @@ type Withdrawal struct {
 type CloseRefusal struct {
 	Reason string
 	Err    error
+	// Transient: the refusal may pass by itself, because the approval card could not be
+	// delivered (the chat channel is down) and nobody saw the proposal. Every other refusal
+	// (a bound, a gate, no owner) is left to the next round.
+	Transient bool
 }
 
 func (e *CloseRefusal) Error() string { return e.Err.Error() }
@@ -127,6 +139,13 @@ type proposeOut struct {
 	// Maybe: an earlier attempt of this step may have created the proposal, so neither
 	// "waiting" nor "none" is known.
 	Maybe bool `json:"maybe,omitempty"`
+	// Transient: no proposal was created because the card could not be delivered; the round
+	// tries again (recoverCardRetryAt).
+	Transient bool `json:"transient,omitempty"`
+	// Gone: on the retry's fresh read nothing is left to close.
+	Gone bool `json:"gone,omitempty"`
+	// Fresh is the retry's own read of the orphan; the close and the outcome are about it.
+	Fresh *Assessment `json:"fresh,omitempty"`
 }
 
 // RecoverInput is the input of dn.recover.
@@ -250,7 +269,7 @@ func (d *Deps) runRecover(c *journal.Ctx, raw json.RawMessage) error {
 			reason = "nothing_to_close"
 			break
 		}
-		closed, err := d.offer(c, in, a, round)
+		closed, err := d.offer(c, in, a, round, offeredAt)
 		if err != nil {
 			return err
 		}
@@ -283,7 +302,10 @@ func (d *Deps) runRecover(c *journal.Ctx, raw json.RawMessage) error {
 // a round goes out before the proposal is attempted (the proposal is bound to that alert's
 // candidate), so it cannot say whether a proposal exists; this follow-up does. A failed
 // delivery is logged and never fails the round.
-func (d *Deps) outcomeAlert(c *journal.Ctx, in RecoverInput, a Assessment, round int, p proposeOut) error {
+//
+// sinceOffer is how long after the round began its last attempt was made, which is what the
+// "tries again in about N minutes" counts back from.
+func (d *Deps) outcomeAlert(c *journal.Ctx, in RecoverInput, a Assessment, round int, p proposeOut, sinceOffer time.Duration) error {
 	if d.Alerts == nil {
 		return nil
 	}
@@ -291,7 +313,7 @@ func (d *Deps) outcomeAlert(c *journal.Ctx, in RecoverInput, a Assessment, round
 	al.FollowUp = true
 	again := "Recovery will not try again."
 	if round < RecoverMaxOffers {
-		again = fmt.Sprintf("Recovery will try again in about %d minutes.", int(RecoverOfferEvery.Minutes()))
+		again = fmt.Sprintf("Recovery will try again in about %d minutes.", int((RecoverOfferEvery-sinceOffer).Round(time.Minute).Minutes()))
 	}
 	switch {
 	case p.ID != "":
@@ -302,6 +324,8 @@ func (d *Deps) outcomeAlert(c *journal.Ctx, in RecoverInput, a Assessment, round
 		al.Detail += "."
 	case p.Closed:
 		al.Detail = "Nothing is left to close: the plan was closed while the close was being prepared."
+	case p.Gone:
+		al.Detail = "Nothing is left to close: the unhedged position was gone when the close was about to be proposed."
 	case p.Maybe:
 		al.Detail = a.baseDetail(in) + " An earlier attempt may already have created a close proposal: check your pending approvals. " +
 			"If there is none, close it yourself on the exchange or run unwind_delta_neutral_position; nothing is closed automatically. " + again
@@ -349,7 +373,7 @@ func (d *Deps) assessStep(in RecoverInput) func(context.Context, int) (any, erro
 
 // offer runs the alert, propose and wait_decision steps of one round. closed
 // reports an approved close the approval service has executed.
-func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (closed bool, err error) {
+func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int, offeredAt time.Time) (closed bool, err error) {
 	var al AlertResult
 	if err := c.Step(fmt.Sprintf("alert_%d", round), &al, func(ctx context.Context, _ int) (any, error) {
 		if d.Alerts == nil {
@@ -386,28 +410,44 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 		if plan.Status == PlanStatusClosed { // an unwind closed it since the assessment
 			return proposeOut{Error: "the plan was closed", Closed: true}, nil
 		}
-		req, rerr := d.closeRequest(plan, in, a, al)
-		if rerr != nil {
-			return proposeOut{Error: rerr.Error(), Reason: "the close could not be sized"}, nil
-		}
-		pr, perr := d.Proposer.ProposeClose(ctx, req)
-		if perr != nil { // no owner route, a gate, too many pending: the next round tries again
-			logger.WarnCF("deltaneutral", "Could not propose closing the orphan", map[string]any{"round": round, "error": perr.Error()})
-			out := proposeOut{Error: perr.Error(), Reason: "it was refused"}
-			var cr *CloseRefusal
-			if errors.As(perr, &cr) && cr.Reason != "" {
-				out.Reason = cr.Reason
-			}
-			return out, nil
-		}
-		return proposeOut{Proposed: pr}, nil
+		return d.proposeOnce(ctx, plan, in, a, al, round), nil
 	}); err != nil {
 		if !isStepError(err) {
 			return false, err
 		}
 		p = proposeOut{Error: err.Error(), Reason: "it could not be attempted"}
 	}
-	if err := d.outcomeAlert(c, in, a, round, p); err != nil {
+	// The card could not be delivered, so no one saw a proposal: try again in this round, at
+	// fixed times counted from its start, instead of leaving the owner without a close card
+	// until the next round. Each retry is a step of its own after a journaled sleep, so a
+	// restart resumes at the right one, and a retry whose earlier try died mid-way (attempt
+	// above 1) never proposes again. Any other refusal ends the round's attempts here.
+	cur, sinceOffer := a, time.Duration(0)
+	for k := 0; k < len(recoverCardRetryAt) && p.Transient && p.ID == ""; k++ {
+		if recoverCardRetryAt[k] >= RecoverOfferEvery { // the next round's window
+			break
+		}
+		if err := c.SleepUntil(offeredAt.Add(recoverCardRetryAt[k])); err != nil {
+			return false, err
+		}
+		var q proposeOut
+		if err := c.Step(fmt.Sprintf("propose_%d_retry_%d", round, k+1), &q, func(ctx context.Context, attempt int) (any, error) {
+			if attempt > 1 {
+				return proposeOut{Error: "an earlier attempt may already have proposed", Maybe: true}, nil
+			}
+			return d.retryPropose(ctx, in, al, round), nil
+		}); err != nil {
+			if !isStepError(err) {
+				return false, err
+			}
+			q = proposeOut{Error: err.Error(), Reason: "it could not be attempted"}
+		}
+		p, sinceOffer = q, recoverCardRetryAt[k]
+		if q.Fresh != nil {
+			cur = *q.Fresh
+		}
+	}
+	if err := d.outcomeAlert(c, in, cur, round, p, sinceOffer); err != nil {
 		return false, err
 	}
 	if p.ID == "" {
@@ -440,6 +480,55 @@ func (d *Deps) offer(c *journal.Ctx, in RecoverInput, a Assessment, round int) (
 		}
 	}
 	return false, nil
+}
+
+// proposeOnce asks the proposer for the close of the assessed orphan and says what came of it.
+// A refusal is logged and returned as an outcome, never as an error: the next round (or, when
+// the card could not be delivered, the next retry) tries again.
+func (d *Deps) proposeOnce(ctx context.Context, plan *Plan, in RecoverInput, a Assessment, al AlertResult, round int) proposeOut {
+	req, rerr := d.closeRequest(plan, in, a, al)
+	if rerr != nil {
+		return proposeOut{Error: rerr.Error(), Reason: "the close could not be sized"}
+	}
+	pr, perr := d.Proposer.ProposeClose(ctx, req)
+	if perr != nil { // no owner route, a gate, too many pending, a card that was not delivered
+		logger.WarnCF("deltaneutral", "Could not propose closing the orphan", map[string]any{"round": round, "error": perr.Error()})
+		out := proposeOut{Error: perr.Error(), Reason: "it was refused"}
+		var cr *CloseRefusal
+		if errors.As(perr, &cr) {
+			if cr.Reason != "" {
+				out.Reason = cr.Reason
+			}
+			out.Transient = cr.Transient
+		}
+		return out
+	}
+	return proposeOut{Proposed: pr}
+}
+
+// retryPropose is one retry of a close whose card could not be delivered. It reads the plan
+// and the orphan afresh first, as the round's assessment did: a plan closed since, or an
+// orphan that is gone, ends the retries with no proposal, and the close is sized from what
+// is open now. A failed read is retried like the card.
+func (d *Deps) retryPropose(ctx context.Context, in RecoverInput, al AlertResult, round int) proposeOut {
+	v, err := d.assessStep(in)(ctx, 1)
+	if err != nil {
+		return proposeOut{Error: err.Error(), Reason: "the exchange could not be read", Transient: true}
+	}
+	fresh := v.(Assessment)
+	switch {
+	case fresh.PlanClosed:
+		return proposeOut{Error: "the plan was closed", Closed: true}
+	case fresh.Orphan == "":
+		return proposeOut{Error: "nothing is left to close", Gone: true, Fresh: &fresh}
+	}
+	plan, err := d.Store.GetPlan(ctx, in.PlanID)
+	if err != nil {
+		return proposeOut{Error: err.Error(), Reason: "the plan could not be read", Transient: true}
+	}
+	out := d.proposeOnce(ctx, plan, in, fresh, al, round)
+	out.Fresh = &fresh
+	return out
 }
 
 // closeRequest builds the close from the assessed numbers only.

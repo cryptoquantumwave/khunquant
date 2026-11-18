@@ -18,10 +18,10 @@ func buyBTC() OrderRequest {
 	return o
 }
 
-// CancelPending cancels every pending proposal, a reducing one included, and edits
-// each card; it touches nothing that was already decided, and a second call finds
-// nothing.
-func TestCancelPending_CancelsEveryPendingProposalAndEditsCards(t *testing.T) {
+// CancelPending cancels the pending proposal that adds risk and edits its card, and
+// keeps the reducing one; it touches nothing that was already decided, and a second
+// call finds nothing more to cancel.
+func TestCancelPending_CancelsRiskAddingProposalsAndEditsCards(t *testing.T) {
 	w := newWorld(t)
 	p := w.newProc(t0)
 	w.backend.reducing = true
@@ -37,13 +37,14 @@ func TestCancelPending_CancelsEveryPendingProposalAndEditsCards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("cancelled %d proposals, want 2: %+v", len(got), got)
+	if len(got.Cancelled) != 1 || len(got.Kept) != 1 {
+		t.Fatalf("cancelled %d and kept %d proposals, want 1 and 1: %+v", len(got.Cancelled), len(got.Kept), got)
 	}
-	for _, id := range []string{exit.ID, buy.ID} {
-		if cur := p.get(id); cur.Status != StatusCancelled || cur.Outcome != "kill switch" {
-			t.Errorf("proposal %s: status %s outcome %q", cur.Code, cur.Status, cur.Outcome)
-		}
+	if cur := p.get(buy.ID); cur.Status != StatusCancelled || cur.Outcome != "kill switch" {
+		t.Errorf("proposal %s: status %s outcome %q", cur.Code, cur.Status, cur.Outcome)
+	}
+	if cur := p.get(exit.ID); cur.Status != StatusPending || got.Kept[0].Code != exit.Code {
+		t.Errorf("the exit %s is %s, kept %+v", cur.Code, cur.Status, got.Kept)
 	}
 	if cur := p.get(decided.ID); cur.Status != StatusRejected {
 		t.Errorf("a decided proposal changed: %s", cur.Status)
@@ -54,10 +55,10 @@ func TestCancelPending_CancelsEveryPendingProposalAndEditsCards(t *testing.T) {
 			cancelledCards++
 		}
 	}
-	if cancelledCards != 2 {
-		t.Errorf("%d cards edited to say cancelled, want 2: %v", cancelledCards, w.editor.all())
+	if cancelledCards != 1 {
+		t.Errorf("%d cards edited to say cancelled, want 1: %v", cancelledCards, w.editor.all())
 	}
-	if again, err := p.svc.CancelPending(context.Background(), "kill switch"); err != nil || len(again) != 0 {
+	if again, err := p.svc.CancelPending(context.Background(), "kill switch"); err != nil || len(again.Cancelled) != 0 || len(again.Kept) != 1 {
 		t.Errorf("second CancelPending = %+v, %v", again, err)
 	}
 }

@@ -59,7 +59,7 @@ func TestStop_Sequence_FlagFirstAndSummary(t *testing.T) {
 	text := sum.Text()
 	for _, want := range []string{
 		"Stopped.", "Cancelled 2 turns, 2 workflows (approval.order, dca.execute), 3 proposals; revoked 2 mandates; cancelled 1 open order.",
-		"buy BTC/USDT on okx", "Monitoring and notifications stay on. Use /resume to allow approvals again; mandates must be approved again.",
+		"buy BTC/USDT on okx", "Monitoring and notifications stay on. /resume allows new trades and automatic actions again; mandates must be approved again.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)

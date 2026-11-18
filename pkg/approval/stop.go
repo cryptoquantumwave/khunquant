@@ -11,28 +11,73 @@ import (
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
-// Cancelled names a proposal CancelPending cancelled.
+// Cancelled names a proposal CancelPending cancelled or kept.
 type Cancelled struct {
 	Code string
 	Kind Kind
 }
 
-// CancelPending cancels every pending proposal, whatever it proposes (an order that
-// only reduces risk included: the owner can approve a new one after /resume, and
-// approving a reducing order while the kill switch is engaged is allowed anyway),
-// and edits each delivered card to say so. It is the kill switch's step for
-// proposals. A proposal that is no longer pending (decided in the meantime) is not
-// touched. A failure on one proposal does not stop the others; the first error is
-// returned with what was cancelled.
-func (s *Service) CancelPending(ctx context.Context, reason string) ([]Cancelled, error) {
+// PendingOutcome is what CancelPending did: the proposals it cancelled, and the
+// risk-reducing ones it left pending so that the owner can still close positions.
+type PendingOutcome struct {
+	Cancelled []Cancelled
+	Kept      []Cancelled
+}
+
+// keptOnStop says whether /stop leaves a pending proposal alone: only an order that
+// the store recorded as one that can only shrink exposure (an owner exit or a
+// protective close, classExit and classProtective). The decision is made from the
+// stored class fields, never from text. Everything else is cancelled: an order that
+// adds risk, a mandate, a memory or reflection proposal, and any kind this code does
+// not know (it fails toward stopping).
+func keptOnStop(p Proposal) bool {
+	if p.Kind != KindOrder {
+		return false
+	}
+	switch classOf(p.Kind, p.Origin, p.Reducing, isProtectiveKey(p.IntentID), isSuggesterKey(p.IntentID)) {
+	case classExit, classProtective:
+		return true
+	}
+	return false
+}
+
+// CancelPending is the kill switch's step for proposals. It cancels every pending
+// proposal that could add risk or moves no money (an order that is not reducing, a
+// mandate, a memory or reflection proposal), and edits each delivered card to say so.
+// A pending exit or protective proposal is kept: an order that only reduces exposure
+// is never stopped by the kill flag (approving one while stopped is allowed, and its
+// gates all run), so cancelling it would take away the card the owner was about to
+// use to get out. A proposal that is no longer pending (decided in the meantime) is
+// not touched. A failure on one proposal does not stop the others; the first error is
+// returned with what was done.
+func (s *Service) CancelPending(ctx context.Context, reason string) (PendingOutcome, error) {
 	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
 	pending, err := s.st.list(ctx, `status = 'pending' ORDER BY created_at_ms LIMIT 200`)
 	if err != nil {
-		return nil, err
+		return PendingOutcome{}, err
 	}
-	return s.cancelAll(ctx, pending, reason, func(lang string) string { return OutcomeText(lang, StatusCancelled) })
+	var (
+		cancelIt []Proposal
+		out      PendingOutcome
+	)
+	for _, p := range pending {
+		if keptOnStop(p) {
+			// One past its expiry and not swept yet is not offered to the owner as kept.
+			if p.ExpiresAt.After(s.now()) {
+				out.Kept = append(out.Kept, Cancelled{Code: p.Code, Kind: p.Kind})
+			}
+			continue
+		}
+		cancelIt = append(cancelIt, p)
+	}
+	done, err := s.cancelAll(ctx, cancelIt, reason, func(lang string) string { return OutcomeText(lang, StatusCancelled) })
+	out.Cancelled = done
+	return out, err
 }
+
+// OwnerLang is the language the owner's cards and replies are worded in ("en" or "th").
+func (s *Service) OwnerLang(ctx context.Context) string { return langOf(s.locale(ctx).Lang) }
 
 // ReasonPlanClosed is the outcome CancelForClosedPlan records.
 const ReasonPlanClosed = "plan closed"

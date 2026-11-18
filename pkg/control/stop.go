@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	stoppedText = "Stopped acting: approvals and automatic actions are refused until /resume. " +
-		"Monitoring and notifications stay on."
+	stoppedText = "Stopped acting: new trades and automatic actions are refused until /resume. " +
+		"Orders that only reduce risk can still be approved. Monitoring and notifications stay on."
 	killOffText = "The kill switch is not available here (proactive features are off or the state could not be opened)."
 )
 

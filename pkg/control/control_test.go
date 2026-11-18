@@ -99,7 +99,7 @@ func TestControl_OwnerCommands(t *testing.T) {
 		{name: "useful on something that is not an alert", text: "/useful", meta: replyMeta("777"),
 			reply: []string{"not one of my alerts"}},
 		{name: "whoami", text: "/whoami", reply: []string{"sender_id: telegram:" + ownerUser, "You are the configured owner (this is the owner chat)."}},
-		{name: "stop", text: "/stop", reply: []string{"Stopped acting: approvals and automatic actions are refused until /resume. Monitoring and notifications stay on."},
+		{name: "stop", text: "/stop", reply: []string{"Stopped acting: new trades and automatic actions are refused until /resume. Orders that only reduce risk can still be approved. Monitoring and notifications stay on."},
 			check: func(t *testing.T, r *rig) {
 				if !r.kill.Killed() || r.kill.by != "telegram:"+ownerUser {
 					t.Errorf("kill = %v by %q", r.kill.Killed(), r.kill.by)

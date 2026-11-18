@@ -3,20 +3,18 @@
 # owner, approvals and a live digest, alice's `remember` calls each became a memory proposal
 # (MaxPendingMemory = 5, each slot held for 7 days); once they filled the slots the legacy
 # heartbeat's own `remember` was refused ("pending limit") and created no proposal.
-# Setup: alice sends six remember requests (one past the bound of 5), then the legacy
+# Fixed: a person who is not the owner is held to a bound of her own (2 pending, 4 a day), apart
+# from the agent's bound of 5, and the digest names who suggested each fact.
+# Setup: alice sends six remember requests (past her bound of 2), then the legacy
 # heartbeat runs at +30m and its scripted model suggests a fact. The heartbeat's call is the
 # one that must still succeed (a tool result that is not an error).
 # Setup proof in the same file: alice's remember calls reached the tool (6), the heartbeat's
 # call reached the tool too (the-heartbeat-reached-remember), and memory proposals exist (the
 # slots really were being filled).
-# Fix direction: a per-sender (or non-owner) bound on pending suggestions, or refusing a
-# non-owner's `remember`; either leaves the heartbeat's slot free and turns this file green.
-# Showing the source in the digest is a separate fix that this file does not test (it frees no slot).
 version: 1
 scenario: non-owner-cannot-exhaust-memory-suggestions
 covers: [F-MEM-1]
-status: known_bug
-known_bug: F-MEM-1
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-11-16T21:00:00+07:00", mode: manual, resolution: 1s }
@@ -91,3 +89,8 @@ expect:
   - id: the-heartbeat-suggestion-was-accepted
     event: { kind: tool.call, fields: { name: remember, origin: heartbeat, is_error: false } }
     count: 1
+  - id: the-digest-names-alice-as-the-suggester
+    message: { to: owner, contains: ["suggested by: alice (simchat)"], count: ">= 1" }
+  - id: alice-is-held-to-two-suggestions-and-the-heartbeat-adds-one
+    proposal: { kind: memory }
+    count: 3

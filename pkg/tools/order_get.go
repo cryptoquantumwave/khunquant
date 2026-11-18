@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
-	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 )
 
 // GetOrderTool retrieves a single order by ID.
@@ -46,14 +45,9 @@ func (t *GetOrderTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("provider and order_id are required")
 	}
 
-	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
-	}
-
-	tp, ok := p.(broker.TradingProvider)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("provider %q does not support order management", providerID))
+	tp, paper, fail := orderByIDProvider(t.cfg, providerID, account, orderID)
+	if fail != nil {
+		return fail
 	}
 
 	order, err := tp.FetchOrder(ctx, orderID, symbol)
@@ -64,7 +58,7 @@ func (t *GetOrderTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("FetchOrder %s: %v", orderID, err)).WithError(err)
 	}
 
-	out := fmt.Sprintf("Order %s on %s:\n", orderID, providerID)
+	out := paperPrefix(paper) + fmt.Sprintf("Order %s on %s:\n", orderID, providerID)
 	if order.Symbol != nil {
 		out += fmt.Sprintf("  Symbol:    %s\n", *order.Symbol)
 	}

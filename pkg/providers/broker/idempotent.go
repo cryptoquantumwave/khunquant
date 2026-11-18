@@ -244,9 +244,10 @@ func (p *placer) report(o PlaceOutcome, cid string) {
 //     itself, from the raw page, for the open and the closed listing alike.
 //     It cannot report a page the exchange cut below the size asked for, nor a
 //     listing that lags: a ClientIDProbe (Webull) is asked for the order first.
-//   - In paper mode the simulation is in memory and forgets, and is not
-//     capable: its listings are empty, so a retry ends in ErrReconcileUnproven.
-//     Nothing is placed, in the simulation or anywhere, and no live call is made.
+//   - In paper mode the simulation keeps a paper order book (PaperBook) and is not
+//     capable: a retry reconciles by shape in the book and finds the order it
+//     placed. Nothing is placed twice, in the simulation or anywhere, and no live
+//     call is made.
 //   - A repeated client order ID is refused by the exchange only if it enforces
 //     uniqueness; the pinned source does not show that it does (Binance documents
 //     uniqueness among open orders only), so the lookup, not the exchange, is

@@ -321,9 +321,9 @@ func (s *Service) deliverCard(ctx context.Context, p *Proposal, card Card) error
 		if err != nil {
 			reason = err.Error()
 		}
-		_, _ = s.st.cancel(context.WithoutCancel(ctx), p.ID, "card not delivered", s.now())
+		_, _ = s.st.cancel(context.WithoutCancel(ctx), p.ID, outcomeCardNotDelivered, s.now())
 		p.Status = StatusCancelled
-		return fmt.Errorf("%w: the card could not be delivered to the owner (%s)", ErrUnavailable, reason)
+		return fmt.Errorf("%w (%s)", ErrCardNotDelivered, reason)
 	}
 	p.CardChannel, p.CardChatID, p.CardMessageIDs = res.Route.Channel, res.Route.ChatID, res.PlatformMessageIDs
 	if err := s.st.setCard(context.WithoutCancel(ctx), p.ID, p.CardChannel, p.CardChatID, p.CardMessageIDs); err != nil {

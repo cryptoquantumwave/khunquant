@@ -216,6 +216,9 @@ type errBounds struct{ hourly, suggester bool }
 
 func (e errBounds) Error() string { return "approval: proposal bounds reached" }
 
+// outcomeCardNotDelivered is the outcome of a proposal cancelled because its card did not reach the owner.
+const outcomeCardNotDelivered = "card not delivered"
+
 // errCodeTaken: another pending proposal holds the code.
 var errCodeTaken = errors.New("approval: code already pending")
 
@@ -233,12 +236,21 @@ func (s *store) insert(ctx context.Context, p Proposal, now time.Time) error {
 		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND intent_id = ?) < ?`
 		suggesterArgs = []any{ms(now), p.IntentID, MaxPendingPerSuggester, ms(windowStart), p.IntentID, MaxMemoryPerSuggesterPerDay}
 	}
+	// A protective close whose card never reached the owner was seen by no one and is not an
+	// offer: it does not use up the hour's bound, so the recovery's retries while the chat
+	// channel is down cannot lock the owner out of the exit once the channel is back. Only
+	// the protective class, which code alone proposes and dn.recover retries on a fixed
+	// schedule; every other class counts such a proposal as before.
+	windowCls := cls
+	if class == classProtective {
+		windowCls += ` AND NOT (status = 'cancelled' AND outcome = '` + outcomeCardNotDelivered + `')`
+	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO proposals
 		(id, code, nonce, kind, params, hash, summary, rationale, origin, mode, reducing, candidate_id, intent_id,
 		 intervention_id, lang, status, created_at_ms, expires_at_ms)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?
 		WHERE (SELECT COUNT(*) FROM proposals WHERE status = 'pending' AND expires_at_ms > ? AND `+cls+`) < ?
-		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND `+cls+`) < ?`+suggesterCond,
+		  AND (SELECT COUNT(*) FROM proposals WHERE created_at_ms > ? AND `+windowCls+`) < ?`+suggesterCond,
 		append([]any{p.ID, p.Code, p.Nonce, string(p.Kind), string(p.Params), p.Hash[:], p.Summary, p.Rationale, string(p.Origin),
 			p.Mode, boolInt(p.Reducing), p.CandidateID, p.IntentID, p.InterventionID, p.Lang, ms(p.CreatedAt), ms(p.ExpiresAt),
 			ms(now), maxPending, ms(windowStart), maxWindow}, suggesterArgs...)...)

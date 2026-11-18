@@ -13,6 +13,7 @@ import { MutesSection } from "@/components/proactive/mutes-section"
 import { OwnerSection } from "@/components/proactive/owner-section"
 import { ProfileSection } from "@/components/proactive/profile-section"
 import { StopSection } from "@/components/proactive/stop-section"
+import { SubsystemsSection } from "@/components/proactive/subsystems-section"
 import { TimelineSection } from "@/components/proactive/timeline-section"
 import { Button } from "@/components/ui/button"
 
@@ -93,6 +94,7 @@ function SettingsView() {
         <>
           <OwnerSection status={status} />
           <ModesSection status={status} />
+          <SubsystemsSection status={status} />
         </>
       )}
       <ProfileSection />

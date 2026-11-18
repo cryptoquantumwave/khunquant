@@ -27,6 +27,67 @@ export interface ProactiveStatus {
   }
   downgrades: string[]
   validation_error: string
+  subsystems: Subsystems
+  // trading_risk.paper_trading_mode, read-only here; it is set on the Config page.
+  paper_trading_mode: boolean
+}
+
+export interface PerceptionSettings {
+  enabled: boolean
+  market_poll_seconds: number
+  reads_per_minute_limit: number
+  snapshot_minutes: number
+}
+
+export interface CognitionSettings {
+  enabled: boolean
+  max_concurrent_llm: number
+  wakes_per_hour: number
+  tokens_per_day: number
+  proactive_model: string
+}
+
+export interface NewsSettings {
+  enabled: boolean
+  interval_minutes: number
+  max_assets: number
+  max_parses_per_run: number
+  max_parses_per_day: number
+  run_seconds: number
+}
+
+export interface Subsystems {
+  configured: {
+    perception: PerceptionSettings
+    triggers: { mode: string }
+    approvals: { enabled: boolean; expiry_minutes: number }
+    cognition: CognitionSettings
+    news: NewsSettings
+  }
+  effective: {
+    perception: boolean
+    triggers_mode: string
+    approvals: boolean
+    cognition: boolean
+    news: boolean
+  }
+  limits: {
+    news_min_interval_minutes: number
+    news_max_assets_cap: number
+  }
+  // Codes of unmet requirements, for switches that are on: proactive_off,
+  // news_needs_cognition, news_needs_triggers, news_needs_web_search,
+  // triggers_need_perception.
+  notes: string[]
+}
+
+// A partial update; a missing group or field is left as it is.
+export interface SubsystemsInput {
+  perception?: Partial<PerceptionSettings>
+  triggers?: { mode?: string }
+  approvals?: { enabled?: boolean; expiry_minutes?: number }
+  cognition?: Partial<CognitionSettings>
+  news?: Partial<NewsSettings>
 }
 
 export interface OwnerInput {
@@ -130,6 +191,12 @@ export function clearProactiveOwner(): Promise<ProactiveStatus> {
 
 export function putProactiveModes(modes: ModesInput): Promise<ProactiveStatus> {
   return sendJSON<ProactiveStatus>("/modes", "PUT", modes)
+}
+
+export function putProactiveSubsystems(
+  input: SubsystemsInput,
+): Promise<ProactiveStatus> {
+  return sendJSON<ProactiveStatus>("/subsystems", "PUT", input)
 }
 
 export function getProactiveProfile(): Promise<ProfileState> {

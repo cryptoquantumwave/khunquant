@@ -309,7 +309,11 @@ type Candidate struct {
 	// It is shown to the owner under Detail as quoted lines; it is NEVER written into
 	// the owner's session and never given to a model. The registry refuses more than
 	// MaxQuoteRunes characters or MaxQuoteLines lines, and control characters.
-	Quote       string
+	Quote string
+	// Source says who suggested the memory a memory-suggestion candidate announces ("the
+	// assistant", "you", or a person's cleaned name and channel). It is built by code from
+	// the stored proposal and shown by the digest on a line of its own.
+	Source      string
 	Evidence    map[string]any // numbers for templates; never restated by the LLM
 	IntentID    string
 	Trust       Trust

@@ -640,7 +640,12 @@ func (a *ApprovalCloser) ProposeClose(ctx context.Context, r deltaneutral.CloseR
 	}
 	p, err := a.svc.Propose(ctx, req)
 	if err != nil {
-		return deltaneutral.Proposed{}, &deltaneutral.CloseRefusal{Reason: closeRefusalReason(err), Err: err}
+		return deltaneutral.Proposed{}, &deltaneutral.CloseRefusal{
+			Reason: closeRefusalReason(err), Err: err,
+			// Only an undelivered card may pass by itself (the chat channel comes back); a bound,
+			// a gate or a missing owner will not.
+			Transient: errors.Is(err, approval.ErrCardNotDelivered),
+		}
 	}
 	return deltaneutral.Proposed{ID: p.ID, Code: p.Code, ExpiresAt: p.ExpiresAt}, nil
 }
@@ -654,7 +659,7 @@ func closeRefusalReason(err error) string {
 		return "too many exit proposals are already waiting for a decision"
 	case errors.Is(err, approval.ErrHourlyLimit):
 		return "too many exit proposals were created in the last hour"
-	case errors.Is(err, approval.ErrUnavailable) && strings.Contains(err.Error(), "could not be delivered"):
+	case errors.Is(err, approval.ErrCardNotDelivered):
 		return "the approval card could not be delivered to you, so the chat channel may be down"
 	case errors.Is(err, approval.ErrUnavailable):
 		return "approvals are not available"

@@ -1,27 +1,24 @@
-# O-13 (S3): a 30-minute market-data outage gives the owner no notice, so their price alerts
-# are blind and they do not know it. Observed (session B6): the owner has "BTC above 99000" on
-# Binance; Binance answers the ticker reads (GET /api/v3/ticker...) with its rate-limit error
-# from +1m to +31m, and the market source logs "backing off". Inside the outage BTC goes
-# 98000 -> 100000 -> 98000, a real excursion over the line that nobody can see. No "data
-# source quiet" notice reached the owner for the market source (only the portfolio one).
-# Cause in the code: portfolioConfig (cmd/khunquant/internal/gateway/portfolio_triggers_wiring.go)
-# hands the data_stale trigger two sources, "portfolio" and "futures"; the "market" source
-# (pkg/perception/sources/market.go, Name "market") is not among them.
-# Expected: within the outage the owner gets a notice that the market source is quiet or
-# unreadable ("Data source quiet: market", pkg/triggers/datastale.go), so the alerts that rely
-# on it are known to be blind. The check is a message to the owner naming "market" (the
-# portfolio notice does not contain it) within +1m..+45m, which covers the outage and the
-# recovery. Fix direction: add the market source to StaleSources (Active while any price
-# alert or watch depends on it).
+# O-13 (S3, fixed): a 30-minute market-data outage must tell the owner that the market source is
+# blind, so the price alerts that rely on it are known to be blind. The owner has "BTC above
+# 99000" on Binance; Binance answers the ticker reads (GET /api/v3/ticker...) with its
+# rate-limit error from +1m to +31m, and the market source backs off. Inside the outage BTC goes
+# 98000 -> 100000 -> 98000, a real excursion over the line that nobody can see (that stays
+# unseen: the notice is what tells the owner they were blind).
+# The market source is one of data_stale's sources (portfolioConfig in
+# cmd/khunquant/internal/gateway/portfolio_triggers_wiring.go), Active while a crypto price is
+# demanded. The source reports the provider degraded once, after three failed polls (about +8m),
+# and backs off without a second report, so the notice that fires is "Data source unreadable:
+# market" (pkg/triggers/datastale.go, StaleSource.UnreadableAfter 1), at about +8m.
+# The check is a message to the owner naming "market" (the portfolio notice does not contain
+# it) within +1m..+45m, which covers the outage and the recovery.
 # Setup proof in the same file: the fault really blinded the source (no crossing was seen in
 # the gap; the sibling active file market-outage-no-false-cross shows that the same run
 # without the fault sees the crossing at +10m) and the alert is still live afterwards (one
-# crossing after the outage), so the missing notice is not a dead alert or a missing fault.
+# crossing after the outage), so the notice is not a dead alert or a missing fault.
 version: 1
 scenario: market-outage-tells-owner
 covers: [O-13]
-status: known_bug
-known_bug: O-13
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }

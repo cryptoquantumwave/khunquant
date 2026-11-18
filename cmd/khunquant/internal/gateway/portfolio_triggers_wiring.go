@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
 	"github.com/cryptoquantumwave/khunquant/pkg/intent"
 	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception"
 	"github.com/cryptoquantumwave/khunquant/pkg/perception/calendar"
+	"github.com/cryptoquantumwave/khunquant/pkg/perception/sources"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/broker"
 	"github.com/cryptoquantumwave/khunquant/pkg/reflection"
 	"github.com/cryptoquantumwave/khunquant/pkg/triggers"
@@ -65,18 +68,69 @@ func portfolioConfig(d assemblyDeps) triggers.PortfolioConfig {
 	accounts := futuresAccountKeys(d.Cfg)
 	cfg.FuturesAccounts = func() []string { return accounts }
 	cfg.StaleSources = func() []triggers.StaleSource {
+		// The market source reads for any price alert or watch whether or not an account is
+		// named here, so it is listed on its own: the demands decide whether it matters.
+		// It speaks once per poll (a price alert never asks for less than
+		// PriceCrossPollInterval) and is Active only while a crypto price is demanded. It
+		// also reads equity venues; their market hours are not crypto's and the world model
+		// keeps one health record for the whole source, so only crypto demands make it
+		// Active.
+		out := []triggers.StaleSource{{
+			Name: "market", ExpectedEvery: marketExpectedEvery(d.Cfg), Market: calendar.Crypto,
+			Active: triggers.AnyCryptoMarketDemand(demandsOf(d)),
+			// The source reports a provider degraded once, after sources.HealthAfterFailures
+			// failed polls, then backs off and says nothing more until the provider
+			// answers: one report already is an outage, and a second never comes.
+			UnreadableAfter: 1,
+		}}
 		if len(accounts) == 0 {
-			return nil // no exchange account: neither money source exists
+			return out // no exchange account: neither money source exists
 		}
-		return []triggers.StaleSource{
-			{Name: "portfolio", ExpectedEvery: cfg.SnapshotEvery, Market: calendar.Crypto},
-			{
+		return append(out,
+			triggers.StaleSource{Name: "portfolio", ExpectedEvery: cfg.SnapshotEvery, Market: calendar.Crypto},
+			triggers.StaleSource{
 				Name: "futures", ExpectedEvery: futuresActiveEvery, Market: calendar.Crypto,
 				Active: triggers.AnyFuturesPosition(cfg.FuturesAccounts),
-			},
-		}
+			})
 	}
 	return cfg
+}
+
+// marketExpectedEvery is how often the market source normally speaks for a price alert: its
+// poll interval, or the interval the alerts ask for when that is longer (the source never
+// reads a series more often than either).
+func marketExpectedEvery(cfg *config.Config) time.Duration {
+	poll := time.Duration(cfg.Proactive.Perception.MarketPollSeconds) * time.Second
+	if poll <= 0 {
+		poll = sources.DefaultMarketPoll
+	}
+	return max(poll, triggers.PriceCrossPollInterval)
+}
+
+// lateDemands is the demand source of the triggers registry, handed out before the
+// registry exists (the factories that need it are built first). It answers with no
+// demands until set.
+type lateDemands struct{ src atomic.Pointer[perception.DemandSource] }
+
+func (l *lateDemands) set(s perception.DemandSource) { l.src.Store(&s) }
+
+// Demands implements perception.DemandSource.
+func (l *lateDemands) Demands() []perception.Demand {
+	if p := l.src.Load(); p != nil && *p != nil {
+		return (*p).Demands()
+	}
+	return nil
+}
+
+// demandsOf is the demand source portfolioConfig reads: the registry's, once it exists.
+func demandsOf(d assemblyDeps) perception.DemandSource {
+	if d.Demands != nil {
+		return d.Demands
+	}
+	if d.lateDemands != nil {
+		return d.lateDemands
+	}
+	return nil
 }
 
 // futuresAccountKeys are the "provider/account" keys the futures source reads (it

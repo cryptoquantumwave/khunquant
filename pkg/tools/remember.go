@@ -13,8 +13,8 @@ import (
 
 	"github.com/cryptoquantumwave/khunquant/pkg/approval"
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
-	"github.com/cryptoquantumwave/khunquant/pkg/identity"
 	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
+	"github.com/cryptoquantumwave/khunquant/pkg/identity"
 )
 
 // MemoryProposer is what remember needs from the approval service to SUGGEST a memory.
@@ -174,12 +174,37 @@ func (t *RememberTool) suggest(ctx context.Context, cfg *config.Config, fact, ca
 	if !sameDir(t.workspace, cfg.WorkspacePath()) {
 		return ErrorResult("memories can be suggested only from the main agent's workspace; this agent has a workspace of its own")
 	}
-	p, err := svc.ProposeMemory(ctx, approval.MemoryRequest{Fact: fact, Category: category, Source: memorySource(ctx)})
+	p, err := svc.ProposeMemory(ctx, approval.MemoryRequest{
+		Fact: fact, Category: category, Source: memorySource(ctx), Suggester: memorySuggester(ctx, cfg),
+	})
 	if err != nil {
 		return ErrorResult("refused: " + err.Error()).WithError(err)
 	}
 	return SilentResult(fmt.Sprintf("Memory suggestion %s queued. The owner will see it in the next daily digest and "+
 		"decides whether to keep it; nothing is saved until then.", p.Code))
+}
+
+// memorySuggester says who a suggestion is from, for the digest and for the bound it is
+// counted against. A turn a person started (not an autonomous one) is the owner's when its
+// sender is the owner (a sub-turn of their conversation, for instance) and otherwise that
+// person's, a sub-turn included: the sender is set once and a delegated task keeps it.
+// Everything else is the agent itself. A person is named by channel and sender id: the
+// tool context carries no display name, and an id cannot be chosen by the sender.
+func memorySuggester(ctx context.Context, cfg *config.Config) approval.Suggester {
+	if IsAutonomousOrigin(ToolOrigin(ctx)) {
+		return approval.Suggester{}
+	}
+	switch _, v := checkOwnerTurn(ctx, cfg, false); v {
+	case ownerYes:
+		return approval.Suggester{Kind: approval.SuggestedByOwner}
+	case ownerOther:
+		id := canonicalSender(ctx)
+		if platform, rest, ok := identity.ParseCanonicalID(id); ok {
+			return approval.Suggester{Kind: approval.SuggestedByPerson, Channel: platform, ID: rest}
+		}
+		return approval.Suggester{Kind: approval.SuggestedByPerson, Channel: ToolChannel(ctx), ID: id}
+	}
+	return approval.Suggester{}
 }
 
 // sameDir reports whether two workspace paths are the same directory.

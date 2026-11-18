@@ -109,19 +109,41 @@ func (b *ApprovalOrderBackend) Prepare(ctx context.Context, req approval.OrderRe
 		return approval.Prepared{}, errors.New("the price collar must be a positive percentage of at most 50")
 	}
 
+	var quoteAmount float64
 	switch spec.market {
 	case approval.MarketSpot:
+		if req.QuoteAmount != 0 && strings.Contains(spec.symbol, ":") {
+			return approval.Prepared{}, errors.New(quoteAmountContractRefusal(spec.symbol))
+		}
 		if strings.Contains(spec.symbol, ":") {
 			return approval.Prepared{}, errors.New(approval.ErrSpotContractSymbol)
-		}
-		if !positiveFinite(req.Amount) {
-			return approval.Prepared{}, errors.New("amount must be a positive, finite number of base units")
 		}
 		if spec.reduceOnly {
 			return approval.Prepared{}, errors.New("reduce_only applies to futures orders only")
 		}
-		spec.amount = req.Amount
+		switch {
+		case req.QuoteAmount != 0 && req.Amount != 0:
+			return approval.Prepared{}, errors.New("give either amount (base units) or quote_amount (quote currency), not both")
+		case req.QuoteAmount != 0:
+			// Converted here, by code, to the base amount that is stored, hashed and
+			// placed; every gate below runs on that amount.
+			if !positiveFinite(req.QuoteAmount) {
+				return approval.Prepared{}, errors.New("quote_amount must be a positive, finite number")
+			}
+			sized, err := b.sizeByQuote(ctx, spec, req.QuoteAmount)
+			if err != nil {
+				return approval.Prepared{}, err
+			}
+			spec.amount, quoteAmount = sized.Base, sized.QuoteAmount
+		case !positiveFinite(req.Amount):
+			return approval.Prepared{}, errors.New("amount must be a positive, finite number of base units (or give quote_amount)")
+		default:
+			spec.amount = req.Amount
+		}
 	default:
+		if req.QuoteAmount != 0 {
+			return approval.Prepared{}, errors.New(quoteAmountContractRefusal(spec.symbol))
+		}
 		spec.symbol = normalizeFuturesSymbol(spec.symbol)
 		if req.Contracts != 0 {
 			// An exact count, from code, and only for an order that cannot add risk:
@@ -150,11 +172,29 @@ func (b *ApprovalOrderBackend) Prepare(ctx context.Context, req approval.OrderRe
 	}
 	params := approval.OrderParams{
 		Provider: spec.provider, Account: spec.account, Market: spec.market, Symbol: spec.symbol,
-		Side: spec.side, Type: spec.orderType, Amount: spec.amount, Price: spec.price,
+		Side: spec.side, Type: spec.orderType, Amount: spec.amount, QuoteAmount: quoteAmount, Price: spec.price,
 		ReduceOnly: spec.reduceOnly, PositionSide: ev.positionSide, MarginMode: ev.marginMode,
 		RefPrice: ev.ref, NotionalUSD: ev.notionalUSD, PriceCollarPct: collar,
 	}
 	return approval.Prepared{Params: params, Reducing: ev.reducing, Mode: ev.mode}, nil
+}
+
+// sizeByQuote converts a spot quote amount to a base amount. Permission comes
+// first, as in the gate that runs again on the converted order, so an account
+// without trade scope learns nothing about the market.
+func (b *ApprovalOrderBackend) sizeByQuote(ctx context.Context, spec orderSpec, quoteAmount float64) (quoteSizing, error) {
+	if err := broker.CheckPermission(b.cfg, spec.provider, spec.account, config.ScopeTrade); err != nil {
+		return quoteSizing{}, gateErr("permission", err)
+	}
+	_, p, err := broker.TradingProviderFor(b.cfg, spec.provider, spec.account)
+	if err != nil {
+		if errors.Is(err, broker.ErrOrderExecutionUnsupported) {
+			return quoteSizing{}, fmt.Errorf("provider %q does not support order execution", spec.provider)
+		}
+		return quoteSizing{}, fmt.Errorf("provider %q: %w", spec.provider, err)
+	}
+	md, _ := p.(broker.MarketDataProvider)
+	return sizeSpotByQuote(ctx, md, spec.symbol, spec.side, spec.price, quoteAmount)
 }
 
 // contractsFor converts a USD size into a contract count with the shared helpers.

@@ -163,6 +163,8 @@ func validateOrderParams(p OrderParams) error {
 		return errors.New("type must be market or limit")
 	case !finitePositive(p.Amount):
 		return errors.New("amount must be a positive, finite number")
+	case p.QuoteAmount != 0 && (!finitePositive(p.QuoteAmount) || p.Market != MarketSpot):
+		return errors.New("quote amount must be a positive, finite number on a spot order")
 	case !finitePositive(p.RefPrice):
 		return errors.New("reference price must be a positive, finite number")
 	case !finitePositive(p.NotionalUSD):

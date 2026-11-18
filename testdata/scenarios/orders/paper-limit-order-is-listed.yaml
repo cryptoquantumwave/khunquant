@@ -1,0 +1,68 @@
+# L-1: in paper mode a limit order the owner placed vanished. Observed live: create_order limit
+# buy 0.1 BTC/USDT @ 65000 on OKX answered "[PAPER] Simulated order ... paper-...-1 ... Status:
+# open", and the very next get_open_orders said "No open orders on okx".
+# Cause: the paper simulation was stateless (broker.SimulationProvider kept no order book).
+# Fixed: every simulated order is recorded in the paper order book (broker.PaperBook,
+# memory/paper/paper_orders.db), so it is listed, fetched, cancelled and found in history.
+# The scripted model answers from what the tool printed: ORDER-LISTED when get_open_orders
+# shows the paper order and ORDER-VANISHED when it says there is none. Cancel is covered by
+# the tool tests (the scripted model cannot know the generated order ID). Nothing real is
+# placed: the exchange sees no order.
+version: 1
+scenario: paper-limit-order-is-listed
+covers: [L-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [okx]
+  config:
+    trading_risk: { paper_trading_mode: true }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 98000 }
+account:
+  okx: { balances: { USDT: 100000, BTC: 0.05 } }
+llm_script:
+  - id: listed
+    match: { last_tool: get_open_orders, last_tool_result_contains: ["Open orders on okx", "paper-"] }
+    respond: { text: "ORDER-LISTED" }
+  - id: vanished
+    match: { last_tool: get_open_orders, last_tool_result_contains: ["No open orders"] }
+    respond: { text: "ORDER-VANISHED" }
+  - id: placed
+    match: { last_tool: create_order, last_tool_result_contains: ["[PAPER]", "paper-"] }
+    respond: { text: "ORDER-PLACED" }
+  - id: place
+    match: { sender: "simchat:owner", prompt_contains: ["place the limit buy"] }
+    respond: { tool: create_order, args: { provider: okx, symbol: BTC/USDT, type: limit, side: buy, amount: 0.1, price: 65000, confirm: true } }
+    times: 1
+  - id: list
+    match: { sender: "simchat:owner", prompt_contains: ["what orders are open"] }
+    respond: { tool: get_open_orders, args: { provider: okx } }
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "place the limit buy" }
+timeline:
+  - advance: 1m
+  - chat: { as: owner, text: "what orders are open" }
+  - advance: 1m
+expect:
+  - id: the-limit-order-was-placed-in-paper-mode
+    message: { to: owner, contains: ["ORDER-PLACED"], count: 1 }
+  - id: the-open-order-is-listed
+    message: { to: owner, contains: ["ORDER-LISTED"], count: 1 }
+  - id: the-order-did-not-vanish
+    message: { to: owner, contains: ["ORDER-VANISHED"], count: 0 }
+    within: { from: "+0m", to: "+2m" }
+  - id: nothing-reached-the-exchange
+    order: { venue: okx }
+    count: 0
+    within: { from: "+0m", to: "+2m" }

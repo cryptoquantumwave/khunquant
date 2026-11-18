@@ -64,16 +64,12 @@ func (t *GetTradeHistoryTool) Execute(ctx context.Context, args map[string]any) 
 		limit = maxTradeHistoryLimit
 	}
 
-	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
-	}
+	return listPaperAndReal(t.cfg, providerID, account, func(tp broker.TradingProvider, paper bool) *ToolResult {
+		return t.list(ctx, tp, paper, providerID, account, symbol, since, limit)
+	})
+}
 
-	tp, ok := p.(broker.TradingProvider)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("provider %q does not support order management", providerID))
-	}
-
+func (t *GetTradeHistoryTool) list(ctx context.Context, tp broker.TradingProvider, paper bool, providerID, account, symbol string, since *int64, limit int) *ToolResult {
 	trades, err := tp.FetchMyTrades(ctx, symbol, since, limit)
 	if err != nil {
 		if hint := reauthHint(err, providerID, account); hint != nil {
@@ -83,11 +79,11 @@ func (t *GetTradeHistoryTool) Execute(ctx context.Context, args map[string]any) 
 	}
 
 	if len(trades) == 0 {
-		return UserResult(fmt.Sprintf("No trade history found on %s.", providerID))
+		return UserResult(paperPrefix(paper) + fmt.Sprintf("No trade history found on %s.", providerID))
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Trade history on %s (%d trades):\n\n", providerID, len(trades)))
+	sb.WriteString(paperPrefix(paper) + fmt.Sprintf("Trade history on %s (%d trades):\n\n", providerID, len(trades)))
 	sb.WriteString(fmt.Sprintf("%-24s  %-12s  %-6s  %12s  %12s  %14s\n", "Time", "Symbol", "Side", "Amount", "Price", "Cost"))
 	sb.WriteString(fmt.Sprintf("%-24s  %-12s  %-6s  %12s  %12s  %14s\n",
 		strings.Repeat("-", 24), strings.Repeat("-", 12), strings.Repeat("-", 6), strings.Repeat("-", 12), strings.Repeat("-", 12), strings.Repeat("-", 14)))

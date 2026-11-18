@@ -111,8 +111,15 @@ func TestFDN2_RecoverAlertDoesNotClaimAProposalThatWasNotCreated(t *testing.T) {
 	r := newDNRig(t, true)
 	n, rec, _ := failedSecondLeg(t, r)
 	r.tg.down = true
+	t0 := r.clock.Now()
 	if w := r.drive(n, rec, false); w.Status != journal.StatusWaiting {
-		t.Fatalf("dn.recover: %+v, want it to wait for the next offer", w)
+		t.Fatalf("dn.recover: %+v, want it to wait for the retry", w)
+	}
+	// F-DN-3: the round retries the card while the channel is down (1, 3, 7, 15 minutes in);
+	// the outcome is sent when the retries are over.
+	for _, at := range retryOffsets() {
+		advanceTo(r, t0, at)
+		r.drive(n, rec, false)
 	}
 	if r.tg.count() != 0 {
 		t.Fatalf("a card was delivered while the channel is down: %d", r.tg.count())
@@ -128,7 +135,7 @@ func TestFDN2_RecoverAlertDoesNotClaimAProposalThatWasNotCreated(t *testing.T) {
 	for _, want := range []string{
 		"No close proposal could be created (the approval card could not be delivered to you, so the chat channel may be down)",
 		"unwind_delta_neutral_position",
-		"Recovery will try again in about 30 minutes.",
+		"Recovery will try again in about 15 minutes.",
 	} {
 		if !strings.Contains(al[1].Detail, want) {
 			t.Errorf("outcome alert lacks %q:\n%s", want, al[1].Detail)

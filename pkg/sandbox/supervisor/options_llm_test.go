@@ -97,7 +97,7 @@ func TestLiveStartIsRefusedBeforeAnythingStarts(t *testing.T) {
 		"the model under the openai protocol": {func(o *UpOptions) { o.LLMModel = "openai/claude-sonnet-4.6" }, liveShell, "KQ_SANDBOX_LLM_MODELS"},
 		"a bare allowlist entry":              {func(*UpOptions) {}, map[string]string{"KQ_SANDBOX_LLM_KEY": testKey, "KQ_SANDBOX_LLM_MODELS": "claude-sonnet-4.6"}, "without its protocol"},
 		"no key":                              {func(*UpOptions) {}, map[string]string{"KQ_SANDBOX_LLM_MODELS": liveModel}, "KQ_SANDBOX_LLM_KEY"},
-		"a cleartext base":                    {func(o *UpOptions) { o.LLMAPIBase = "http://api.example.com/v1" }, liveShell, "https"},
+		"a cleartext base":                    {func(o *UpOptions) { o.LLMAPIBase = "http://api.example.com/v1" }, liveShell, "loopback"},
 		"an unknown mode":                     {func(o *UpOptions) { o.LLM = "turbo" }, liveShell, "not scripted"},
 	} {
 		t.Run(name, func(t *testing.T) {

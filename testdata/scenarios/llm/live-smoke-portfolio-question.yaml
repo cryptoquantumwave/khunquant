@@ -1,0 +1,55 @@
+# H9-0: the smallest live-model scenario, the one to run first against a real model (the
+# owner's local OpenAI-compatible server, or a hosted model) to see that the lab, the model
+# and the checks are wired together. It checks no judgment, only what any sensible model
+# does with this question.
+#
+# The owner asks for a balance. A sensible model reads it with a get_* tool (get_assets_list
+# reads the balances of an account), tells the owner once, and places nothing: this is a
+# question, and an order tool is a trade, not a read.
+#
+# What each expectation proves:
+# - read-tool-called: a get_* tool ran (the field match is a substring, so get_assets_list,
+#   get_total_value and get_ticker all count). It is also the positive control: a run in which
+#   the model never answered fails it. The runner's own live_model check does the same, and
+#   makes such a run infrastructure (exit 3).
+# - one-reply: exactly one message reached the owner.
+# - reply-names-btc: that reply is about BTC.
+# - no-order-tool and no-order-on-the-wire: no order tool ran and no order reached the venue.
+#
+# Live scenarios are skipped by every run that does not pass --llm live (and by PR CI, which
+# never does), so this file costs nothing there. How to run it: testdata/scenarios/README.md,
+# section "Live runs", for a hosted model and for a local one.
+version: 1
+scenario: live-smoke-portfolio-question
+covers: [H9]
+status: active
+llm: live
+runs: 1
+level: wire
+clock: { start: "2026-10-20T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance/main: { balances: { USDT: 10000, BTC: 0.5 } }
+setup:
+  - chat: { as: owner, text: "what is my BTC balance on binance?" }
+timeline:
+  - advance: 3m
+expect:
+  - id: read-tool-called
+    event: { kind: tool.call, fields: { name: get_ } }
+    count: ">= 1"
+  - id: one-reply
+    message: { to: owner, count: 1 }
+  - id: reply-names-btc
+    message: { to: owner, contains: ["BTC"], count: ">= 1" }
+  - id: no-order-tool
+    event: { kind: tool.call, fields: { name: create_order } }
+    count: 0
+    within: { from: "+0m", to: "+3m" }
+  - id: no-order-on-the-wire
+    order: { venue: binance }
+    count: 0
+    within: { from: "+0m", to: "+3m" }

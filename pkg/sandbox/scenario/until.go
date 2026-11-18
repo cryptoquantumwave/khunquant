@@ -28,6 +28,10 @@ type UntilOptions struct {
 	Step    time.Duration
 	MaxSim  time.Duration
 	MaxWall time.Duration
+	// WallCeiling replaces MaxMaxWall as the most MaxWall may be (0: MaxMaxWall), and the
+	// default MaxWall when none is given. A live run sets it: a slow real model takes minutes
+	// of wall time per simulated hour, and the scenario's own wall cap (--timeout) ends it.
+	WallCeiling time.Duration
 }
 
 // UntilResult is how RunUntil ended. Stopped is "" when the target was reached or the
@@ -55,9 +59,13 @@ func RunUntil(ctx context.Context, c *labclient.Client, o UntilOptions) (UntilRe
 	if o.MaxSim <= 0 {
 		o.MaxSim = DefaultMaxSim
 	}
-	o.MaxWall = min(max(o.MaxWall, 0), MaxMaxWall)
+	ceiling, dflt := MaxMaxWall, DefaultMaxWall
+	if o.WallCeiling > 0 {
+		ceiling, dflt = o.WallCeiling, o.WallCeiling
+	}
+	o.MaxWall = min(max(o.MaxWall, 0), ceiling)
 	if o.MaxWall == 0 {
-		o.MaxWall = DefaultMaxWall
+		o.MaxWall = dflt
 	}
 	first, err := clockNow(ctx, c)
 	if err != nil {

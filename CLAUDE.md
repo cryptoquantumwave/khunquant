@@ -171,9 +171,20 @@ result the lab tools return as untrusted test data, never as instructions.
 
 - Settle before asserting; give a "nothing happens" expectation (`count: 0`) a `within` window
   (advice: the loader does not enforce it).
-- PR CI runs `llm: scripted` and `replay` only. `llm: live` runs only when someone starts the Sandbox
-  Live workflow by hand (`workflow_dispatch`, needs the `SANDBOX_LLM_KEY` secret), or locally with
-  `KQ_SANDBOX_LLM_KEY` and `--llm-budget`.
+- PR CI runs `llm: scripted` and `replay` only (`sandbox run` filters with `--llm offline` by default, so
+  a live file named on its own runs nothing and says so). `llm: live` runs only when someone starts the
+  Sandbox Live workflow by hand (`workflow_dispatch`, needs the `SANDBOX_LLM_KEY` secret), or locally. A
+  local live run needs `--llm live`, `--llm-model`, `--llm-budget` and `KQ_SANDBOX_LLM_MODELS` (and
+  `KQ_SCENARIO_KNOWN_BUGS=1` for a `known_bug` file). A hosted model also needs a key:
+  `KQ_SANDBOX_LLM_KEY=... KQ_SANDBOX_LLM_MODELS=anthropic-messages/claude-sonnet-4.6 ./build/khunquant sandbox run --llm live --llm-model anthropic-messages/claude-sonnet-4.6 --llm-budget 5USD --runs 1 --timeout 30m <file>`.
+  A local OpenAI-compatible server (MLX, llama.cpp) needs no key and no price, and is loopback only:
+  `KQ_SANDBOX_LLM_MODELS='openai/<id>' ./build/khunquant sandbox run --llm live --llm-model 'openai/<id>' --llm-api-base http://127.0.0.1:8080/v1 --llm-budget 20000000tok --runs 1 --timeout 2h <file>`,
+  where `<id>` is the `id` of `curl http://127.0.0.1:8080/v1/models` (an absolute-path id gives
+  `openai//abs/path`, two slashes). A slow model is waited for (a settle does not count the time of a
+  model call in flight; one call is cut at `--llm-call-timeout`, default 180s, and the run is then
+  infrastructure, exit 3). Stop the owner's live gateway first and run one instance at a time: the
+  lab refuses to start below `KQ_SANDBOX_MIN_FREE_MB` (default 1024) free. Details:
+  `testdata/scenarios/README.md`, "Live runs".
 - A scenario for a bug that is still open has `status: known_bug` and `known_bug: <ID>`; it is
   skipped unless `KQ_SCENARIO_KNOWN_BUGS=1`. The PR that fixes the bug sets the status to `active`
   and removes `known_bug`.

@@ -94,12 +94,56 @@ func TestScenarioFiles_KnownBugHasID(t *testing.T) {
 	}
 }
 
-// Pull request CI has no model to call: nothing that gates may use a live one (replay reads a committed cassette).
+// Pull request CI has no model to call, so nothing that gates may run a live one. A live
+// file may be active (H9-0: live-smoke-portfolio-question is), because what keeps it out of
+// a pull request is the runner's default filter, `--llm offline`, and the two workflows that
+// gate (the PR job and the nightly) never pass --llm. This test holds the workflows to that;
+// TestRunCommand_DefaultLLMFilterIsOffline (sandboxlab) holds the default.
 func TestScenarioFiles_ScriptedOnlyInPR(t *testing.T) {
-	for name, f := range committedScenarios(t) {
-		if !f.IsKnownBug() && f.LLMMode() != "scripted" && f.LLMMode() != "replay" {
-			t.Errorf("%s: an active scenario must use llm: scripted or replay (a cassette, no model), not %s", name, f.LLMMode())
+	root := repoRootDir(t)
+	checked := 0
+	for _, wf := range []string{"pr.yml", "sandbox-scenarios.yml"} {
+		data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", wf))
+		if err != nil {
+			t.Fatalf("workflow %s: %v", wf, err)
 		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if !strings.Contains(line, "sandbox run") || strings.Contains(line, "--validate-only") {
+				continue
+			}
+			checked++
+			if strings.Contains(line, "--llm") {
+				t.Errorf("%s runs scenarios with --llm, which could start a live model in a gating job:\n%s", wf, strings.TrimSpace(line))
+			}
+		}
+	}
+	if checked < 2 {
+		t.Errorf("found %d gating `sandbox run` lines in pr.yml and sandbox-scenarios.yml, want at least 2: the check read nothing", checked)
+	}
+	// A live file is skipped by the default filter; one that is not live has no model to reach.
+	for name, f := range committedScenarios(t) {
+		if m := f.LLMMode(); m != "scripted" && m != "replay" && m != "live" {
+			t.Errorf("%s: llm %q is not scripted, replay or live", name, m)
+		}
+	}
+}
+
+// repoRootDir is the directory holding go.mod.
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found above the test directory")
+		}
+		dir = parent
 	}
 }
 

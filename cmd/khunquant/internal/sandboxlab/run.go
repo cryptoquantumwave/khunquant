@@ -151,6 +151,7 @@ type runOptions struct {
 	runs                              int
 	report, binary, llm, fixtures     string
 	llmModel, budget, seed, cassettes string
+	llmAPIBase, llmCallTimeout        string
 	settleCap, timeout                time.Duration
 	exportReplay                      string
 	force, knownBugsMayFail           bool
@@ -164,7 +165,9 @@ func newRunCommand() *cobra.Command {
 		Long: "Run (or, with --validate-only, only check) scenario files, one fresh locked instance per run, one at a time.\n" +
 			"A path is a file or a directory; the default is " + scenario.DefaultDir + ". --llm picks the files by their llm\n" +
 			"field (offline by default: scripted and replay, which need no model API and no key; live needs " + sandbox.EnvLLMKey + ",\n" +
-			sandbox.EnvLLMModels + " (<protocol>/<model> entries) and --llm-model, --llm-budget, and is skipped without a key). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
+			sandbox.EnvLLMModels + " (<protocol>/<model> entries) and --llm-model, --llm-budget, and is skipped without a key;\n" +
+			"a local OpenAI-compatible server needs none: --llm live --llm-model openai/<id> --llm-api-base http://127.0.0.1:8080/v1\n" +
+			"--llm-budget 20000000tok, loopback only). " + knownBugsEnv + "=1 also runs known_bug scenarios.\n" +
 			"Exit status: 0 all pass, 1 an expectation failed, 2 an invalid scenario, 3 an infrastructure failure.\n" +
 			"--known-bugs-may-fail (the nightly known-bug job): a known_bug scenario that fails does not set the status, an active one still does,\n" +
 			"and a known_bug scenario that passes is a \"warning\" line, not a failure.",
@@ -186,6 +189,8 @@ func newRunCommand() *cobra.Command {
 	f.DurationVar(&o.timeout, "timeout", defaultTimeout, "Wall cap of one scenario, all its runs; over it is an infrastructure failure, exit 3 (0: none)")
 	f.StringVar(&o.llmModel, "llm-model", "", "Live runs: the real model, <protocol>/<model>")
 	f.StringVar(&o.budget, "llm-budget", "", "Live runs: spending cap per instance, e.g. 2USD or 200000tok (required for live)")
+	f.StringVar(&o.llmAPIBase, "llm-api-base", "", "Live runs: base URL of a local OpenAI-compatible model server, loopback only (e.g. http://127.0.0.1:8080/v1); with openai/<model> no "+sandbox.EnvLLMKey+" is needed")
+	f.StringVar(&o.llmCallTimeout, "llm-call-timeout", "", "Live runs: wall limit of one model call, a Go duration (default 180s); a call over it makes the run an infrastructure failure")
 	f.StringVar(&o.seed, "seed", "", "Seed of the instances' nonces and ids (default: derived from each instance name; 0: none)")
 	f.StringVar(&o.exportReplay, "export-replay", "", "After a passing run, write its journal as a replay case to <dir>/<scenario>/ (testdata/replay layout); refused when the case exists")
 	f.BoolVar(&o.knownBugsMayFail, "known-bugs-may-fail", false, "A known_bug scenario whose expectation fails does not fail the run (an active one, an invalid scenario and an infrastructure failure still do)")
@@ -225,6 +230,9 @@ func loadAll(cmd *cobra.Command, paths []string, llm string) ([]loaded, error) {
 		switch {
 		case c.Skipped != "" && c.ok():
 			fmt.Fprintf(out, "skip    %s (valid; %s)\n", file, c.Skipped)
+			if f != nil && f.LLMMode() == "live" { // RDY-6: the default filter is offline, so a live file named on its own runs nothing
+				fmt.Fprintf(cmd.ErrOrStderr(), "hint    %s is a live scenario and was not run: pass --llm live (see testdata/scenarios/README.md)\n", file)
+			}
 		case c.ok():
 			fmt.Fprintf(out, "ok      %s\n", file)
 			for _, w := range scenario.Warnings(f) {
@@ -263,13 +271,21 @@ func runScenarios(cmd *cobra.Command, o runOptions, paths []string) error {
 	if o.timeout < 0 {
 		return &exitError{exitInvalid, "--timeout must not be negative"}
 	}
+	if o.llmAPIBase != "" {
+		if err := sandbox.LLMAPIBaseLoopback(o.llmAPIBase); err != nil {
+			return &exitError{exitInvalid, "--llm-api-base: " + err.Error()}
+		}
+	}
+	if _, err := sandbox.ParseLLMCallTimeout(o.llmCallTimeout); err != nil {
+		return &exitError{exitInvalid, "--llm-call-timeout: " + err.Error()}
+	}
 	sup, closeSup, err := newInstances(o.binary)
 	if err != nil {
 		return &exitError{exitInfra, err.Error()}
 	}
 	defer func() { _ = closeSup(context.WithoutCancel(ctx)) }()
 	runner := &scenario.Runner{Sup: sup, Timeout: o.timeout, KnownBugs: os.Getenv(knownBugsEnv) == "1", Keep: o.keep, FixturesFrom: o.fixtures, SettleCap: o.settleCap, Log: cmd.ErrOrStderr(),
-		CassetteDir: o.cassettes, LLMModel: o.llmModel, LLMBudget: o.budget, Seed: o.seed,
+		CassetteDir: o.cassettes, LLMModel: o.llmModel, LLMBudget: o.budget, Seed: o.seed, LLMAPIBase: o.llmAPIBase, LLMCallTimeout: o.llmCallTimeout,
 		ExportDir: o.exportReplay, ExportForce: o.force}
 
 	var reports []*scenario.Report

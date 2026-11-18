@@ -76,6 +76,12 @@ type Report struct {
 type Registry struct {
 	mu sync.RWMutex
 	qs map[string]Quiescer
+	// external, when set, says whether the gateway is waiting on something outside the lab's
+	// control (a call to a real model that takes a minute). Wall time spent while it is true
+	// does not count against a settle's wall cap: the work is in flight, not stuck. The
+	// caller's context still ends the wait, so an advance's wall budget cuts it and the next
+	// call settles again.
+	external func() bool
 }
 
 // NewRegistry returns an empty registry.
@@ -86,6 +92,21 @@ func (r *Registry) Register(q Quiescer) {
 	r.mu.Lock()
 	r.qs[q.Name()] = q
 	r.mu.Unlock()
+}
+
+// SetExternalWait sets the check that makes a settle's wall cap stop counting (see Registry).
+func (r *Registry) SetExternalWait(f func() bool) {
+	r.mu.Lock()
+	r.external = f
+	r.mu.Unlock()
+}
+
+// ExternalWait reports whether the gateway is waiting on something outside the lab now.
+func (r *Registry) ExternalWait() bool {
+	r.mu.RLock()
+	f := r.external
+	r.mu.RUnlock()
+	return f != nil && f()
 }
 
 // list returns the quiescers sorted by name, without holding the lock while they run.
@@ -136,8 +157,15 @@ func (r *Registry) SettleReport(ctx context.Context, wallCap time.Duration) (Rep
 	deadline := start.Add(wallCap)
 	rep := Report{}
 	gap, clean := MinGap, 0
+	last := start
 	for {
 		rep.Polls++
+		//simclock:wall the settle cap is wall time
+		now := time.Now()
+		if r.ExternalWait() {
+			deadline = deadline.Add(now.Sub(last)) // time spent waiting on a real model is not busy time
+		}
+		last = now
 		if busy := r.busy(); len(busy) == 0 {
 			clean++
 			rep.Busy = nil // the last poll was clean: an error below names no stale poll

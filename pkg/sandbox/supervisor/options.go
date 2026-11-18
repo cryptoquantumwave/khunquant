@@ -40,10 +40,15 @@ type UpOptions struct {
 	LLMBudget string `json:"llm_budget,omitempty" flag:"llm-budget" desc:"record/live: spending cap, e.g. 2USD or 200000tok (required; it can only be lowered later)"`
 	Seed      string `json:"seed,omitempty" flag:"seed" desc:"Seed of the instance's nonces and ids: an integer, 0 for none (default: derived from the instance name)"`
 
-	// LLMAPIBase overrides the protocol's API base, for a test that points record/live at a
-	// loopback fake. Go callers only: whatever host it names is the one host the instance may
-	// reach and receives the key.
-	LLMAPIBase string `json:"-"`
+	// LLMAPIBase overrides the protocol's API base, for a local model server (an OpenAI-compatible
+	// MLX or llama.cpp server) or a loopback fake in a test. It must be an http or https URL on
+	// a loopback host (localhost, 127.0.0.1, [::1]); anything else is refused. Its host is the
+	// one host the instance may reach. With the openai protocol the instance needs no key: it
+	// is sent sandbox.LocalLLMKey, never the real one.
+	LLMAPIBase string `json:"llm_api_base,omitempty" flag:"llm-api-base" desc:"record/live: base URL of a local OpenAI-compatible model server, loopback only (e.g. http://127.0.0.1:8080/v1); with openai/<model> no KQ_SANDBOX_LLM_KEY is needed"`
+	// LLMCallTimeout is the wall limit of one real model call (a Go duration; default 180s). A call
+	// that runs over it fails and makes the run an infrastructure failure, not a failed expectation.
+	LLMCallTimeout string `json:"llm_call_timeout,omitempty" flag:"llm-call-timeout" desc:"record/live: wall limit of one model call, a Go duration (default 180s); a call over it ends the run as infrastructure"`
 
 	// Env is extra child environment; only keys that AllowEnv has allowed pass.
 	Env map[string]string `json:"-"`
@@ -151,8 +156,8 @@ func (o UpOptions) llmEnv(env map[string]string, name string, getenv func(string
 	mode := o.LLM
 	switch mode {
 	case "", "scripted", "replay":
-		if o.LLMModel != "" || o.LLMBudget != "" || o.LLMAPIBase != "" {
-			return fmt.Errorf("sandbox up: llm_model, llm_budget and the API base belong to --llm record or live, not %q", cmp.Or(mode, "scripted"))
+		if o.LLMModel != "" || o.LLMBudget != "" || o.LLMAPIBase != "" || o.LLMCallTimeout != "" {
+			return fmt.Errorf("sandbox up: llm_model, llm_budget, the API base and the call timeout belong to --llm record or live, not %q", cmp.Or(mode, "scripted"))
 		}
 	case "record", "live":
 		if err := o.checkLive(env, getenv); err != nil {
@@ -183,9 +188,23 @@ func (o UpOptions) checkLive(env map[string]string, getenv func(string) string) 
 	if _, _, err := sandbox.ParseLLMBudget(o.LLMBudget); err != nil {
 		return fmt.Errorf("sandbox up: --llm %s needs --llm-budget: %w", o.LLM, err)
 	}
+	if o.LLMAPIBase != "" {
+		if err := sandbox.LLMAPIBaseLoopback(o.LLMAPIBase); err != nil {
+			return fmt.Errorf("sandbox up: --llm %s: %w", o.LLM, err)
+		}
+	}
+	timeout, err := sandbox.ParseLLMCallTimeout(o.LLMCallTimeout)
+	if err != nil {
+		return fmt.Errorf("sandbox up: --llm %s: %w", o.LLM, err)
+	}
+	// A local openai server needs no key: the instance is sent a fixed placeholder, whatever
+	// the starter's environment holds, so a real key can never reach it.
 	key := getenv(sandbox.EnvLLMKey)
+	if sandbox.LLMLocalKeyless(o.LLMModel, o.LLMAPIBase) {
+		key = sandbox.LocalLLMKey
+	}
 	if key == "" {
-		return fmt.Errorf("sandbox up: --llm %s needs %s in the environment", o.LLM, sandbox.EnvLLMKey)
+		return fmt.Errorf("sandbox up: --llm %s needs %s in the environment (only openai/<model> on a loopback --llm-api-base runs without one)", o.LLM, sandbox.EnvLLMKey)
 	}
 	models := getenv(sandbox.EnvLLMModels)
 	if err := sandbox.LLMModelAllowed(o.LLMModel, sandbox.ParseLLMModels(models)); err != nil {
@@ -196,6 +215,7 @@ func (o UpOptions) checkLive(env map[string]string, getenv func(string) string) 
 		return fmt.Errorf("sandbox up: --llm %s: %w", o.LLM, err)
 	}
 	env[envLLMModel], env[envLLMBudget] = o.LLMModel, o.LLMBudget
+	env[sandbox.EnvLLMTimeout] = timeout.String()
 	env[sandbox.EnvLLMKey], env[sandbox.EnvLLMModels], env[envAllowHosts] = key, models, host
 	if p := getenv(sandbox.EnvLLMPrices); p != "" {
 		env[sandbox.EnvLLMPrices] = p

@@ -1,0 +1,69 @@
+# H9-1 E2: in paper mode the owner tells the model to buy 0.01 BTC on okx at market (with the
+# word "confirm" in the request), and then asks to see the open orders.
+#
+# What it tests: the owner's own order path with a real model choosing the tool arguments. Paper
+# mode simulates create_order (every gate still runs, nothing reaches the exchange). The model must
+# end with exactly one simulated order, and the second request must be answered from a listing
+# tool, not from memory.
+#
+# Why each piece of setup is there:
+#  - paper_trading_mode: true, so a real order cannot happen even if the model does everything
+#    wrong; the check "nothing reached okx" is then a check of the paper path, not of luck;
+#  - create_order enabled (it is off by default), an owner, and no approvals: the owner's own
+#    create_order is the direct path here (propose_order is not registered), as in the scripted
+#    paper-limit-order-is-listed;
+#  - okx holds USDT 100,000 and BTC 0.05, BTC/USDT is 98,000 on okx;
+#  - a second owner message after the first settles, so the listing is a separate model turn.
+#
+# Invariants gated:
+#  - one-paper-order: create_order was called with confirm true and without an error exactly once
+#    (a dry run is a call with confirm false and does not count; a second confirmed call is a
+#    second order);
+#  - nothing-reached-okx: no order-create reached the okx simulator;
+#  - listing-call-ran: get_open_orders was called (so the second reply is from a read);
+#  - the-owner-got-replies: at least 2 messages reached the owner.
+# Recorded, not gated: whether the model made a dry run first, the amount it passed (0.01), the
+# symbol and type, turns, wall time.
+version: 1
+scenario: e2-paper-market-buy-then-list
+covers: [H9, E2]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [okx]
+  config:
+    trading_risk: { paper_trading_mode: true }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 98000 }
+account:
+  okx: { balances: { USDT: 100000, BTC: 0.05 } }
+setup:
+  - chat: { as: owner, text: "buy 0.01 BTC on okx at market, confirm" }
+timeline:
+  - advance: 5m
+  - chat: { as: owner, text: "show my open orders" }
+  - advance: 5m
+expect:
+  - id: one-paper-order
+    event: { kind: tool.call, fields: { name: create_order, is_error: false, args.confirm: true } }
+    count: 1
+  - id: nothing-reached-okx
+    order: { venue: okx }
+    count: 0
+    within: { from: "+0m", to: "+10m" }
+  - id: listing-call-ran
+    event: { kind: tool.call, fields: { name: get_open_orders } }
+    count: ">= 1"
+  - id: the-owner-got-replies
+    message: { to: owner, count: ">= 2" }

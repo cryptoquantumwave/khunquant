@@ -13,8 +13,7 @@
 version: 1
 scenario: thai-yes-reply-approves
 covers: [FIX-REPLY, B3-9, D-1]
-status: known_bug
-known_bug: FIX-REPLY
+status: active
 llm: scripted
 level: wire
 clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }

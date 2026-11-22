@@ -13,8 +13,10 @@
 // # What is recognised
 //
 //	/approve CODE, /reject CODE   the owner's decision on a proposal (a 4-character code)
-//	"yes" etc. as a reply to a    approves THAT card's proposal, only if the replied-to
-//	  pending approval card       message is a pending card
+//	"yes" etc. as a reply to a    approves (yes, y, ok, okay, approve, ใช่, ตกลง, โอเค, อนุมัติ) or
+//	  pending approval card       rejects (no, n, reject, ไม่, ไม่ใช่, ปฏิเสธ) THAT card's proposal,
+//	                                only if the replied-to message is a pending card; any other
+//	                                reply to it is chat plus a hint (see approveReplyWords)
 //	/snooze [1h|4h|1d]            as a reply to an alert: mute exactly its dedup keys (default 1h)
 //	/mute TRIGGER, /unmute        mute or unmute a trigger kind or id (30 days)
 //	/useful, /notuseful           as a reply to an alert: recorded in pkg/feedback with

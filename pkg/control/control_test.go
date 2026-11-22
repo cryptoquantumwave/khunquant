@@ -357,7 +357,7 @@ func TestControl_ReplyApproveOnlyForPendingCard(t *testing.T) {
 	card := approval.Proposal{Code: "7F3K", Summary: "buy 1 ETH on okx", Status: approval.StatusPending}
 	setup := func(r *rig) { r.appr.cards["telegram|"+ownerChat+"|500"] = card }
 
-	for _, word := range []string{"yes", "Yes", "OK", "approve", " Approve ", "อนุมัติ", "ตกลง"} {
+	for _, word := range []string{"yes", "Yes", "OK", "approve", " Approve ", "อนุมัติ", "ตกลง", "ใช่", "โอเค", "y", "Okay", "yes!", " ใช่ "} {
 		t.Run("approves "+word, func(t *testing.T) {
 			r := newRig(t, "telegram", nil)
 			setup(r)
@@ -384,12 +384,69 @@ func TestControl_ReplyApproveOnlyForPendingCard(t *testing.T) {
 		r.ch.say(ownerUser, ownerChat, "yes", replyMeta("500"))
 		assertAgentGot(t, r, "yes")
 	})
-	t.Run("other words are ordinary chat", func(t *testing.T) {
-		for _, w := range []string{"yes please", "yes!", "no", "yess", "ok then"} {
+	t.Run("other words are ordinary chat plus a hint", func(t *testing.T) {
+		for _, w := range []string{"yes please", "yes but half", "yess", "ok then", "ใช่ แต่ครึ่งเดียว", "ไม่แน่ใจ", "yesterday", "no way", "👍"} {
 			r := newRig(t, "telegram", nil)
 			setup(r)
 			r.ch.say(ownerUser, ownerChat, w, replyMeta("500"))
+			got := r.inbound()
+			if len(got) != 1 || got[0].Content != w {
+				t.Fatalf("%q: inbound = %+v, want the single message", w, got)
+			}
+			if len(r.appr.calls()) != 0 {
+				t.Errorf("%q: Decide was called", w)
+			}
+			mustContain(t, "hint for "+w, r.ch.onlyReply(t).Content, "/approve 7F3K", "/reject 7F3K", "yes or no", "ใช่")
+		}
+	})
+	t.Run("rejects by reply", func(t *testing.T) {
+		for _, word := range []string{"no", "No.", " N ", "reject", "ไม่", "ไม่ใช่", "ปฏิเสธ", "ไม่ "} {
+			r := newRig(t, "telegram", nil)
+			setup(r)
+			r.ch.say(ownerUser, ownerChat, word, replyMeta("500"))
+			mustContain(t, "reply", r.ch.onlyReply(t).Content, "Rejected proposal 7F3K", "Nothing was placed")
+			want := []decideCall{{Code: "7F3K", Sender: "telegram:" + ownerUser, Approve: false}}
+			if got := r.appr.calls(); !reflect.DeepEqual(got, want) {
+				t.Errorf("%q: Decide calls = %+v, want %+v", word, got, want)
+			}
+			if got := r.inbound(); len(got) != 0 {
+				t.Errorf("%q reached the agent: %+v", word, got)
+			}
+		}
+	})
+	t.Run("a non-owner's Thai yes decides nothing and gets no hint", func(t *testing.T) {
+		r := newRig(t, "telegram", nil)
+		setup(r)
+		r.ch.say(otherUser, ownerChat, "ใช่", replyMeta("500"))
+		assertAgentGot(t, r, "ใช่")
+		r.ch.say(otherUser, ownerChat, "ใช่ แต่ครึ่งเดียว", replyMeta("500"))
+		assertAgentGot(t, r, "ใช่ แต่ครึ่งเดียว")
+	})
+	t.Run("a reply to a decided card is ordinary chat with no hint", func(t *testing.T) {
+		r := newRig(t, "telegram", nil) // the card is not pending: the store answers not found
+		for _, w := range []string{"ใช่", "ไม่", "yes but half"} {
+			r.ch.say(ownerUser, ownerChat, w, replyMeta("500"))
 			assertAgentGot(t, r, w)
+		}
+	})
+	t.Run("ordinary chat and a reply to another message get no hint", func(t *testing.T) {
+		r := newRig(t, "telegram", nil)
+		setup(r)
+		r.ch.say(ownerUser, ownerChat, "how is btc", nil)
+		assertAgentGot(t, r, "how is btc")
+		r.ch.say(ownerUser, ownerChat, "yes but half", replyMeta("501"))
+		assertAgentGot(t, r, "yes but half")
+	})
+	t.Run("a second yes after a button decided the card decides nothing again", func(t *testing.T) {
+		r := newRig(t, "telegram", nil)
+		setup(r)
+		r.ch.say(ownerUser, ownerChat, "ใช่", replyMeta("500"))
+		mustContain(t, "reply", r.ch.onlyReply(t).Content, "Approved proposal 7F3K")
+		// The card is decided now: the store no longer finds it pending.
+		delete(r.appr.cards, "telegram|"+ownerChat+"|500")
+		r.ch.say(ownerUser, ownerChat, "ใช่", replyMeta("500"))
+		if got := len(r.appr.calls()); got != 1 {
+			t.Errorf("Decide calls = %d, want 1", got)
 		}
 	})
 	t.Run("a non-owner's yes to the card is ordinary chat", func(t *testing.T) {

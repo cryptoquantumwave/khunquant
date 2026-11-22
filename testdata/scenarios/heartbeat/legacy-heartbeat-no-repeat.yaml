@@ -11,17 +11,26 @@
 # - reported-at-least-once: the owner was told about the move (after the greeting's reply). A
 #   legacy heartbeat reaches the owner only through the model's own message call, so without
 #   it a run whose heartbeats sent nothing would pass the two bounds below.
-# - quiet-at-night: nothing reached the owner between 22:00 and 07:00.
+# - quiet-at-night: nothing reached the owner between 22:00 and 07:00 Bangkok time. The file
+#   states its zone in `profile:` (TRUST-5): without it the owner's profile had no time zone, so
+#   the legacy guardrail "quiet hours 22:00-07:00 in the timezone in USER.md" had no zone to
+#   read, the run was not a Bangkok night, and a 22:00-07:00 window read in UTC would cover the
+#   greeting's reply (09:30 +07:00 is 02:30 UTC). With the zone stated the greeting is outside the
+#   window and the night of 20 to 21 October is inside it.
 # - reported-at-most-twice: the one move was not reported again every half hour (the bug).
 # The runner also checks every live run itself (live_model): a run in which no model call was
 # answered, or the budget refused one, is an infrastructure failure (exit 3), not a failed
 # expectation (exit 1), so a dead key, a wrong model id or a spent budget is never read as
 # "the bug is still there" (nor, as before, as "fixed").
 #
-# This one talks to the real model. It runs only with `--llm live` and needs
-# KQ_SANDBOX_LLM_KEY, KQ_SANDBOX_LLM_MODELS, --llm-model and --llm-budget; without a key the
-# runner skips it ("live: no key") and does not fail. It is checked by --validate-only like
-# any other file. The job that runs it is opt-in and dispatch-only: .github/workflows/sandbox-live.yml.
+# This one talks to the real model. It runs only with `--llm live` and, being a known_bug
+# file, only with KQ_SCENARIO_KNOWN_BUGS=1. A hosted model needs KQ_SANDBOX_LLM_KEY,
+# KQ_SANDBOX_LLM_MODELS, --llm-model and --llm-budget; without a key the runner skips it
+# ("live: no key") and does not fail. A local OpenAI-compatible server needs no key: see
+# testdata/scenarios/README.md, "Live runs". It is checked by --validate-only like any other
+# file. The job that runs it is opt-in and dispatch-only: .github/workflows/sandbox-live.yml.
+# The run simulates 22.5 hours at a 30-minute heartbeat, about 45 model calls or more: give
+# `sandbox run` a --timeout of hours, not the default five minutes, with a slow local model.
 version: 1
 scenario: legacy-heartbeat-no-repeat
 covers: [H9, S110B-1]
@@ -36,9 +45,14 @@ matrix:
     - "# Heartbeat tasks\n- If SOL moved more than 5% in the last hour, tell the owner. Keep a ledger of what you already reported in memory/heartbeat-ledger.md and never report the same move twice.\n"
     - "# Heartbeat tasks\n- If SOL moved more than 5% in the last hour, tell the owner once. Look at your earlier messages in this session and do not repeat a move you already reported.\n"
 level: wire
+profile: { timezone: Asia/Bangkok, active_hours: { start: "07:00", end: "22:00" } }
 clock: { start: "2026-10-20T09:30:00+07:00", mode: manual }
 instance:
-  config: { heartbeat: { enabled: true, interval: 30 } } # proactive off: the legacy path
+  # proactive stays off (the legacy path); proactive.owner is only there so that `profile:` can be
+  # written (update_profile needs a configured owner) and names the owner's chat.
+  config:
+    heartbeat: { enabled: true, interval: 30 }
+    proactive: { owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" } }
   workspace: { HEARTBEAT.md: "${template}" }
 market:
   SOL/USDT: { venue: binance, model: set, price: 180 }

@@ -50,6 +50,11 @@ type Runner struct {
 	LLMBudget   string
 	Seed        string
 	Getenv      func(string) string
+	// LLMAPIBase is a loopback base URL (a local OpenAI-compatible server); with the openai
+	// protocol the run needs no key. LLMCallTimeout is the wall limit of one model call ("" is
+	// the supervisor's default); a call over it makes the run infrastructure.
+	LLMAPIBase     string
+	LLMCallTimeout string
 
 	// ExportDir, when set, makes the first passing run of each scenario export its journal
 	// as a replay case to <ExportDir>/<scenario with - as _>/ (export.go); ExportForce
@@ -64,6 +69,9 @@ func (r *Runner) liveSkip() string {
 	get := r.Getenv
 	if get == nil {
 		get = os.Getenv
+	}
+	if sandbox.LLMLocalKeyless(r.LLMModel, r.LLMAPIBase) {
+		return "" // a local openai server: the instance is sent a placeholder key
 	}
 	if get(sandbox.EnvLLMKey) == "" {
 		return "live: no key (" + sandbox.EnvLLMKey + " is not set)"
@@ -173,6 +181,7 @@ func (r *Runner) runOnce(ctx context.Context, f *File, run int) (res *Result) {
 		FixturesFrom: r.FixturesFrom, ClockStart: f.Clock.Start, ClockMode: "manual", ClockResolution: f.Clock.Resolution,
 		ConfigPatch: f.Instance.Config, Workspace: f.Instance.Workspace, Accounts: f.Instance.Accounts,
 		LLM: f.LLMMode(), LLMModel: r.liveOnly(f, r.LLMModel), LLMBudget: r.liveOnly(f, r.LLMBudget), Seed: r.Seed,
+		LLMAPIBase: r.liveOnly(f, r.LLMAPIBase), LLMCallTimeout: r.liveOnly(f, r.LLMCallTimeout),
 	})
 	if err != nil {
 		res.Infra = "instance did not start: " + err.Error()
@@ -333,8 +342,43 @@ func (s *runState) requirements(ctx context.Context, f *File) []Issue {
 // fail records why a run stopped: a settle that did not pass or an instance that is gone
 // is infrastructure (exit 3), anything else a failed step.
 func (s *runState) fail(ctx context.Context, where string, err error) {
+	s.failStep(ctx, where, err)
+	if s.res.Infra != "" && s.f.LLMMode() == "live" && ctx.Err() == nil {
+		// A model call that ran past its wall limit is the likeliest reason a live run stopped
+		// short (the turn then retries and the settle gives up): say so, once.
+		if n := s.timedOutCalls(ctx); n > 0 && !strings.Contains(s.res.Infra, timeoutNote) {
+			s.res.Infra += fmt.Sprintf("; %d model call(s) %s (--llm-call-timeout; the model server is too slow or hung)", n, timeoutNote)
+		}
+	}
+}
+
+// timeoutNote is how a run's infrastructure reason says a model call timed out.
+const timeoutNote = "ran past the wall timeout"
+
+// timedOutCalls counts the model calls of the run that ran past their wall limit.
+func (s *runState) timedOutCalls(ctx context.Context) int {
+	calls, err := s.env.entriesOf(ctx, []string{"llm.call", "llm.complete"})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, c := range calls {
+		var p struct {
+			Timeout bool `json:"timeout"`
+		}
+		if json.Unmarshal(c.Payload, &p) == nil && p.Timeout {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *runState) failStep(ctx context.Context, where string, err error) {
 	var se *SettleError
+	var ws *wallStop
 	switch {
+	case errors.As(err, &ws):
+		s.res.Infra = fmt.Sprintf("%s: %v", where, ws)
 	case errors.As(err, &se):
 		s.res.Settle = se.Busy
 		if len(se.Busy) == 0 {
@@ -412,14 +456,18 @@ func (s *runState) liveCheck(ctx context.Context) ExpectResult {
 		r.OK, r.Got = false, "the journal could not be read: "+err.Error()
 		return r
 	}
-	answered, firstErr := 0, ""
+	answered, timedOut, firstErr := 0, 0, ""
 	for _, c := range calls {
 		var p struct {
-			Rule  string `json:"rule"`
-			Error string `json:"error"`
+			Rule    string `json:"rule"`
+			Error   string `json:"error"`
+			Timeout bool   `json:"timeout"`
 		}
 		if json.Unmarshal(c.Payload, &p) != nil {
 			continue
+		}
+		if p.Timeout {
+			timedOut++
 		}
 		switch {
 		case p.Error != "":
@@ -441,6 +489,9 @@ func (s *runState) liveCheck(ctx context.Context) ExpectResult {
 	}
 	r.Got = fmt.Sprintf("%d of %d model calls answered", answered, len(calls))
 	switch {
+	case timedOut > 0: // the model server was too slow or hung: nothing was learned about the code
+		r.OK = false
+		r.Got += fmt.Sprintf("; %d model call(s) %s (--llm-call-timeout; the model server is too slow or hung)", timedOut, timeoutNote)
 	case refused > 0:
 		r.OK = false
 		r.Got += fmt.Sprintf("; the budget refused %d (raise --llm-budget)", refused)

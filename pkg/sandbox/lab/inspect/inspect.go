@@ -36,6 +36,9 @@ type Deps struct {
 	// it when set. Snapshot lists every quiescer and its state, without waiting (the idle op).
 	SettleWait func(ctx context.Context, wallCap time.Duration) (quiesce.Report, error)
 	Snapshot   func() []quiesce.Status
+	// ModelInFlight says whether a call to a real model is running now. The settle op reports
+	// it when it gave up, so a caller that wants to wait for a slow model knows to ask again.
+	ModelInFlight func() bool
 	// Home, Specs, Attention and Profile are what export_replay writes a policy from: the
 	// instance home, the trigger registry's specs, the attention configuration and the
 	// owner's profile of this generation.
@@ -332,7 +335,8 @@ func settleOp(deps func() Deps) lab.OpFunc {
 		if busy != nil {
 			names = append(names, busy.Names...)
 		}
-		return map[string]any{"settled": err == nil, "wall_ms": rep.Wall.Milliseconds(), "busy": names}, nil
+		return map[string]any{"settled": err == nil, "wall_ms": rep.Wall.Milliseconds(), "busy": names,
+			"model_in_flight": err != nil && d.ModelInFlight != nil && d.ModelInFlight()}, nil
 	}
 }
 

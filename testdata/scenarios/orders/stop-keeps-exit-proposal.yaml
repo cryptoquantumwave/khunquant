@@ -1,0 +1,67 @@
+# D-2 / U-T15: /stop must not cancel a pending exit proposal. The owner's own turn proposes a spot
+# sell of 0.01 BTC (an order that only reduces risk) and the card is delivered; the owner sends
+# /stop. The kill flag goes up and the exit proposal stays pending (an exit is never stopped by the
+# flag), the /stop reply says it kept it, and the owner can still press Approve: exactly one sell is
+# placed by exactly one approval.order workflow.
+# clock.resolution is 1s because the verify step of approval.order polls on a 1 s timer, which the
+# default 1-minute quantum breaks (LAB-6).
+version: 1
+scenario: stop-keeps-exit-proposal
+covers: [D-2]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      approvals: { enabled: true, expiry_minutes: 15 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 1000, BTC: 0.05 } }
+llm_script:
+  - id: propose-sell
+    match: { sender: "simchat:owner", prompt_contains: ["trim my btc"] }
+    respond: { tool: propose_order, args: { provider: binance, symbol: BTC/USDT, side: sell, type: market, amount: 0.01, rationale: "Trim spot to cut risk." } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "please trim my btc" }
+timeline:
+  - advance: 1m
+  - chat: { as: owner, text: "/stop" }
+  - advance: 1m
+  - chat.press: { on: { to: "dm:owner", contains: ["SELL 0.01 BTC"] }, action: approve }
+  - advance: 5m
+expect:
+  - id: propose-order-was-reached
+    event: { kind: tool.call, fields: { name: propose_order } }
+    count: 1
+  - id: card-delivered
+    message: { to: owner, contains: ["SELL 0.01 BTC"], buttons: [approve], count: 1 }
+  - id: stop-reply-says-the-exit-was-kept
+    message: { to: owner, contains: ["Kept 1 exit proposal", "so you can still close positions"], count: 1 }
+  - id: exit-proposal-never-cancelled
+    proposal: { kind: order, status: cancelled }
+    count: 0
+    within: { from: "+1m", to: "+7m" }
+  - id: proposal-approved
+    proposal: { kind: order, status: approved }
+    count: 1
+  - id: one-workflow
+    workflow: { kind: approval.order }
+    count: 1
+  - id: one-order-placed
+    order: { venue: binance, symbol: BTC/USDT, side: sell }
+    count: 1
+  - id: one-receipt
+    message: { to: owner, contains: ["executed"], count: 1 }

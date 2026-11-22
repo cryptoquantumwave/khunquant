@@ -43,9 +43,10 @@ type MandateRevoker interface {
 	RevokeAll(ctx context.Context, reason string) (int, error)
 }
 
-// ProposalCanceller cancels every pending proposal and edits its card (*approval.Service).
+// ProposalCanceller cancels the pending proposals that could add risk and edits their
+// cards, and keeps the ones that only reduce risk (*approval.Service).
 type ProposalCanceller interface {
-	CancelPending(ctx context.Context, reason string) ([]approval.Cancelled, error)
+	CancelPending(ctx context.Context, reason string) (approval.PendingOutcome, error)
 }
 
 // FlowOrderer says, for a workflow and its journal, which orders it placed and
@@ -108,7 +109,9 @@ type Kill struct {
 	// Followup sends the owner a message (the outcome of the steps that outlasted the
 	// reply budget); nil sends none.
 	Followup func(ctx context.Context, text string)
-	Clock    journal.Clock
+	// Lang says in which language the summary is worded ("en" or "th"); nil is English.
+	Lang  func(ctx context.Context) string
+	Clock journal.Clock
 
 	ReplyBudget, SettleWait, LateWait, Lookback time.Duration
 	MaxOrders                                   int
@@ -124,7 +127,8 @@ type Kill struct {
 //  3. cancel the non-protective workflows at their next step boundary (a protective
 //     one, an approved exit, and one whose place step has finished keep running: see
 //     broker.FlowOrders);
-//  4. revoke every mandate and cancel every pending proposal;
+//  4. revoke every mandate and cancel the pending proposals that could add risk (the
+//     pending exits and protective closes are kept: they only reduce exposure);
 //  5. withdraw the open orders the agent placed in the last 7 days (found in the
 //     journal, never the owner's own), and name those that may exist;
 //  6. the summary.
@@ -170,6 +174,7 @@ func (k *Kill) busy(ctx context.Context, by, reason string) StopSummary {
 		sum.TurnsCancelled = k.Turns.CancelAllTurns(stopReason)
 	}
 	k.dropQueue()
+	sum.Lang = k.lang(ctx) // last: nothing may come before the flag
 	return sum
 }
 
@@ -262,6 +267,23 @@ func (r *stopRun) guard(step string, f func() error) {
 	}
 }
 
+// lang is the summary language; a panic in the lookup leaves English.
+func (k *Kill) lang(ctx context.Context) (lang string) {
+	lang = "en"
+	if k.Lang == nil {
+		return lang
+	}
+	defer func() {
+		if recover() != nil {
+			lang = "en"
+		}
+	}()
+	if k.Lang(ctx) == "th" {
+		lang = "th"
+	}
+	return lang
+}
+
 func (k *Kill) execute(ctx context.Context, r *stopRun, by, reason string) {
 	// 1. The flag first: from here every executor refuses new acts.
 	if k.Flag != nil {
@@ -276,6 +298,13 @@ func (k *Kill) execute(ctx context.Context, r *stopRun, by, reason string) {
 		// A flag that did not write may still read engaged (a second process set it).
 		r.edit(func(s *StopSummary) { s.Engaged = s.Engaged || k.Flag.Killed() })
 	}
+	// 1b. The language of the summary, after the flag: the lookup may read the profile
+	// from the database, and nothing may come before the flag. A failure leaves English.
+	r.guard("language", func() error {
+		lang := k.lang(ctx)
+		r.edit(func(s *StopSummary) { s.Lang = lang })
+		return nil
+	})
 	// 2. Running turns.
 	if k.Turns != nil {
 		r.guard("turns", func() error {
@@ -306,8 +335,19 @@ func (k *Kill) execute(ctx context.Context, r *stopRun, by, reason string) {
 	}
 	if k.Proposals != nil {
 		r.guard("proposals", func() error {
-			cancelled, err := k.Proposals.CancelPending(ctx, stopReason)
-			r.edit(func(s *StopSummary) { s.ProposalsCancelled = len(cancelled) })
+			out, err := k.Proposals.CancelPending(ctx, stopReason)
+			r.edit(func(s *StopSummary) {
+				s.ProposalsCancelled = len(out.Cancelled)
+				for _, c := range out.Cancelled {
+					if c.Kind != "" {
+						s.ProposalsCancelledKinds = append(s.ProposalsCancelledKinds, string(c.Kind))
+					}
+				}
+				for _, c := range out.Kept {
+					s.ProposalsKept = append(s.ProposalsKept, c.Code)
+				}
+			})
+			logger.WarnCF("control", "Stop proposals", map[string]any{"cancelled": len(out.Cancelled), "kept": len(out.Kept)})
 			return err
 		})
 	}

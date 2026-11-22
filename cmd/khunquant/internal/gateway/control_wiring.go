@@ -82,6 +82,7 @@ func (rt *controlRuntime) attachStop(d assemblyDeps, j *journalRuntime, ns *noti
 		svc = d.Approval.svc
 		if svc != nil {
 			k.Proposals = svc
+			k.Lang = svc.OwnerLang
 		}
 		if d.Approval.mandateStore != nil {
 			k.Mandates = d.Approval.mandateStore

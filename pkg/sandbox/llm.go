@@ -4,24 +4,77 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The environment of a sandbox instance's simulated model. The supervisor sets it in the
 // child (and nowhere else: the key is never written to config, the journal or a log), the
 // gateway reads it. Only KQ_SANDBOX_LLM and the seed are set for scripted and replay.
 const (
-	EnvLLM        = "KQ_SANDBOX_LLM"          // scripted | replay | record | live
-	EnvLLMModel   = "KQ_SANDBOX_LLM_MODEL"    // record/live: <protocol>/<model> of the real model
-	EnvLLMKey     = "KQ_SANDBOX_LLM_KEY"      // record/live: the API key; the child's env only
-	EnvLLMBudget  = "KQ_SANDBOX_LLM_BUDGET"   // record/live: "2USD" or "200000tok"
-	EnvLLMModels  = "KQ_SANDBOX_LLM_MODELS"   // record/live: allowed <protocol>/<model> ids, comma-separated
-	EnvLLMPrices  = "KQ_SANDBOX_LLM_PRICES"   // optional: "[protocol/]model=in:out,..." USD per million tokens
-	EnvLLMAPIBase = "KQ_SANDBOX_LLM_API_BASE" // Go callers only (UpOptions.LLMAPIBase): overrides the protocol's API base
-	EnvSeed       = "KQ_SANDBOX_SEED"         // non-zero int64 seeds the nonce source (pkg/randsrc)
-	EnvAllowHosts = "KQ_SANDBOX_ALLOW_HOSTS"  // the one inner API host, record/live only
+	EnvLLM        = "KQ_SANDBOX_LLM"              // scripted | replay | record | live
+	EnvLLMModel   = "KQ_SANDBOX_LLM_MODEL"        // record/live: <protocol>/<model> of the real model
+	EnvLLMKey     = "KQ_SANDBOX_LLM_KEY"          // record/live: the API key; the child's env only
+	EnvLLMBudget  = "KQ_SANDBOX_LLM_BUDGET"       // record/live: "2USD" or "200000tok"
+	EnvLLMModels  = "KQ_SANDBOX_LLM_MODELS"       // record/live: allowed <protocol>/<model> ids, comma-separated
+	EnvLLMPrices  = "KQ_SANDBOX_LLM_PRICES"       // optional: "[protocol/]model=in:out,..." USD per million tokens
+	EnvLLMAPIBase = "KQ_SANDBOX_LLM_API_BASE"     // Go callers only (UpOptions.LLMAPIBase): overrides the protocol's API base
+	EnvLLMTimeout = "KQ_SANDBOX_LLM_CALL_TIMEOUT" // record/live: wall limit of one model call, a Go duration (default DefaultLLMCallTimeout)
+	EnvSeed       = "KQ_SANDBOX_SEED"             // non-zero int64 seeds the nonce source (pkg/randsrc)
+	EnvAllowHosts = "KQ_SANDBOX_ALLOW_HOSTS"      // the one inner API host, record/live only
 )
+
+// LocalLLMKey is the fixed key a loopback openai base is sent. A local server (an MLX or
+// llama.cpp server) needs none; sending a constant keeps a real key from ever reaching it.
+const LocalLLMKey = "sk-sandbox-local-no-key"
+
+// DefaultLLMCallTimeout is the wall limit of one live or record model call when none is set:
+// a local 26B model answers in 10 to 60 s, so 180 s leaves room and still ends a hung server.
+const DefaultLLMCallTimeout = 180 * time.Second
+
+// LLMAPIBaseLoopback checks the API base a caller may give: an explicit http or https URL
+// whose host is exactly localhost, 127.0.0.1 or ::1, with no user info. Anything else (a
+// remote host, a file: URL, no host, a lookalike such as http://127.0.0.1@evil.example) is
+// an error, so the key-free path can never point at a remote host.
+func LLMAPIBaseLoopback(base string) error {
+	base = strings.TrimSpace(base)
+	u, err := url.Parse(base)
+	if err != nil {
+		return fmt.Errorf("api base %q is not a URL", base)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("api base %q must be an http or https URL", base)
+	}
+	if u.User != nil {
+		return fmt.Errorf("api base %q must not carry user info", base)
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
+	}
+	return fmt.Errorf("api base %q: only a loopback host (localhost, 127.0.0.1 or [::1]) is allowed", base)
+}
+
+// LLMLocalKeyless says whether a model reached through apiBase needs no real key: the
+// openai protocol on a loopback base.
+func LLMLocalKeyless(inner, apiBase string) bool {
+	protocol, _, err := SplitInnerModel(inner)
+	return err == nil && protocol == "openai" && strings.TrimSpace(apiBase) != "" && LLMAPIBaseLoopback(apiBase) == nil
+}
+
+// ParseLLMCallTimeout reads the per-call wall limit ("" is the default).
+func ParseLLMCallTimeout(s string) (time.Duration, error) {
+	if strings.TrimSpace(s) == "" {
+		return DefaultLLMCallTimeout, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(s))
+	if err != nil || d < time.Second {
+		return 0, fmt.Errorf("llm call timeout %q must be a duration of at least 1s, e.g. 180s", s)
+	}
+	return d, nil
+}
 
 // LLMDefaultBase is the API base of each protocol a live or record instance may use: the
 // HTTP clients that run on http.DefaultTransport, which the egress guard replaces. Every

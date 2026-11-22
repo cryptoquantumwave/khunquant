@@ -36,7 +36,7 @@ func TestStop_OwnerGetsTheSummary(t *testing.T) {
 	r.mandates.active = 2
 	ch.say(ownerUser, ownerChat, "/stop", nil)
 	rep := ch.onlyReply(t).Content
-	mustContain(t, "reply", rep, "Stopped.", "Cancelled 1 turn", "revoked 2 mandates", "Use /resume")
+	mustContain(t, "reply", rep, "Stopped.", "Cancelled 1 turn", "revoked 2 mandates", "/resume allows new trades")
 	if cs.runs.Load() != 1 || !r.flag.Killed() {
 		t.Errorf("runs=%d killed=%v", cs.runs.Load(), r.flag.Killed())
 	}

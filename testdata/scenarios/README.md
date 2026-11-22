@@ -117,7 +117,61 @@ llm_script:
 
 To prove that a gate holds even if the model is fully compromised, script the model to do the
 forbidden thing (see `security/confirm-false-still-needs-approval.yaml`) and expect the gate, not
-the model's good behaviour. PR CI runs scripted and replay scenarios only; `llm: live` runs only when someone starts the Sandbox Live workflow by hand (`workflow_dispatch`, with the `SANDBOX_LLM_KEY` secret), or locally with `KQ_SANDBOX_LLM_KEY` and `--llm-budget`.
+the model's good behaviour. PR CI runs scripted and replay scenarios only; `llm: live` runs only when someone starts the Sandbox Live workflow by hand (`workflow_dispatch`, with the `SANDBOX_LLM_KEY` secret), or locally: see "Live runs" below.
+
+## Live runs
+
+`llm: live` talks to a real model. `sandbox run` selects files with `--llm`, which defaults to
+`offline` (scripted and replay), so a live file named on its own is validated, skipped, and the run
+exits 0 having started nothing (it prints a hint). A live run needs all of: `--llm live` (or `all`),
+`--llm-model <protocol>/<model>`, `--llm-budget`, and `KQ_SANDBOX_LLM_MODELS` in the environment of
+whoever runs it, listing that exact `<protocol>/<model>` (the protocol is part of the entry). A file with
+`status: known_bug` also needs `KQ_SCENARIO_KNOWN_BUGS=1`. Run one row, one run first: `--runs 1`
+caps every matrix row, so a file with 2 rows runs 2 instances. Give `--timeout` hours for a slow model
+(it caps all the runs of one scenario; the default is 5 minutes).
+
+**A hosted model, with a key** (`anthropic-messages`, `openai`, `openrouter`; the key is read from the
+environment, never from a flag, and goes only to that protocol's host):
+
+```bash
+KQ_SANDBOX_LLM_KEY=sk-... KQ_SANDBOX_LLM_MODELS=anthropic-messages/claude-sonnet-4.6 \
+  ./build/khunquant sandbox run --llm live --llm-model anthropic-messages/claude-sonnet-4.6 \
+  --llm-budget 5USD --runs 1 --timeout 30m testdata/scenarios/llm/live-smoke-portfolio-question.yaml
+```
+
+A USD budget needs a price for the model (`claude-sonnet-4.6` is built in; add another with
+`KQ_SANDBOX_LLM_PRICES=model=in:out`, USD per million tokens). A token budget (`200000tok`) needs none.
+
+**A local OpenAI-compatible server** (an MLX or llama.cpp server on this machine). It needs no key and
+no price, and the base must be loopback (`localhost`, `127.0.0.1` or `[::1]`; anything else is refused):
+
+```bash
+KQ_SANDBOX_LLM_MODELS='openai/<id>' \
+  ./build/khunquant sandbox run --llm live --llm-model 'openai/<id>' \
+  --llm-api-base http://127.0.0.1:8080/v1 --llm-budget 20000000tok --runs 1 --timeout 2h \
+  testdata/scenarios/llm/live-smoke-portfolio-question.yaml
+```
+
+`<id>` is the `id` field of `curl http://127.0.0.1:8080/v1/models`, written as the server reports it. A
+model whose id is an absolute path gives two slashes after the protocol (`openai//abs/path/to/model`,
+in `--llm-model` and in `KQ_SANDBOX_LLM_MODELS` alike). The instance is sent a fixed placeholder key,
+never one from your environment, may reach only that loopback host, and counts the budget in tokens
+(`--llm-budget` stays required: it is the run-away guard). The same options exist on `sandbox up`
+(`--llm-api-base`, `--llm-call-timeout`) and on the `sandbox_instance` and `sandbox_scenario` MCP tools
+(`llm_model`, `llm_budget`, `llm_api_base`, `llm_call_timeout`, with `sandbox_scenario op=run`).
+
+**A slow model.** A local 26B model takes 10 to 60 seconds a call. The lab waits for a model call in
+flight before it moves the manual clock or reads an expectation: the settle's wall cap does not run
+while a call is in flight (the clock stays put, so a `within` window is judged in simulated time, not
+wall time), and a `run_until` has no wall ceiling on a live run beyond `--timeout`. One call is cut at
+`--llm-call-timeout` (a Go duration, default `180s`); a run with a call that timed out, or that ran
+out of wall time, is infrastructure (exit 3), never a failed expectation. Expect a simulated day at a
+30-minute heartbeat to take a long while: `legacy-heartbeat-no-repeat` is about 45 calls a run.
+
+**Memory.** A 26B model holds a lot of RAM, and the lab refuses to start an instance with less than
+`KQ_SANDBOX_MIN_FREE_MB` (default 1024) free; do not lower it to fit. Run live-model scenarios with the
+owner's own gateway stopped, and one instance at a time (`KQ_SANDBOX_MAX_INSTANCES=1`, one `sandbox run`
+or `go test -p 1`). If a run says "not enough free memory", stop something and run that file alone.
 
 ## Faults and crashes
 

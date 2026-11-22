@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	anthropicmessages "github.com/cryptoquantumwave/khunquant/pkg/providers/anthropic_messages"
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/sim"
@@ -57,8 +58,10 @@ func simInnerFrom(mode, inner string, getenv func(string) string) (*sim.LiveOpti
 	if !ok {
 		price, ok = env.Prices[model]
 	}
-	if !ok {
-		return nil, fmt.Errorf("sim/%s: no price is known for model %q (add it with %s)", mode, model, sandbox.EnvLLMPrices)
+	// A token budget needs no price: the spend is counted in tokens, and the USD figure of a
+	// call is only informational (a local model has none). A USD budget cannot run without one.
+	if !ok && env.BudgetUSD > 0 {
+		return nil, fmt.Errorf("sim/%s: no price is known for model %q (add it with %s, or give a token budget such as 200000tok)", mode, model, sandbox.EnvLLMPrices)
 	}
 	host, err := sandbox.LLMInnerHost(inner, env.APIBase)
 	if err != nil {
@@ -72,11 +75,15 @@ func simInnerFrom(mode, inner string, getenv func(string) string) (*sim.LiveOpti
 	if base == "" {
 		base = sandbox.LLMDefaultBase[protocol]
 	}
+	// The HTTP clients have a timeout of their own (120 s by default), which would end a
+	// slow call before the engine's wall limit and read as an ordinary error: give the
+	// clients a little more than the limit, so the engine's context is what ends a call.
+	clientSecs := int(env.CallTimeout/time.Second) + 10
 	var llm sim.LLM
 	if protocol == "anthropic-messages" {
-		llm = anthropicmessages.NewProviderWithTimeout(env.Key, base, 0)
+		llm = anthropicmessages.NewProviderWithTimeout(env.Key, base, clientSecs)
 	} else {
-		llm = NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(env.Key, base, "", "", 0)
+		llm = NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(env.Key, base, "", "", clientSecs)
 	}
-	return &sim.LiveOptions{Inner: llm, InnerModel: model, Price: price, Key: env.Key}, nil
+	return &sim.LiveOptions{Inner: llm, InnerModel: model, Price: price, Key: env.Key, Timeout: env.CallTimeout}, nil
 }

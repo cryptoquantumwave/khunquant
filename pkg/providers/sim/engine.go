@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/fileutil"
@@ -75,7 +76,8 @@ type Engine struct {
 	callSeq   int64
 	cass      *Cassette // the replay set; nil until cassette_load
 
-	liveMu sync.Mutex // serialises live calls with their accounting; guards bud
+	inflight atomic.Int32 // live calls started and not returned (InFlight)
+	liveMu   sync.Mutex   // serialises live calls with their accounting; guards bud
 	bud    BudgetState
 	budErr error // the saved budget could not be read: every live call is refused (budget_store.go)
 }

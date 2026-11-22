@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes"
 	"github.com/cryptoquantumwave/khunquant/pkg/sandbox"
@@ -16,6 +17,11 @@ import (
 
 // ErrBudget is what a live call gets once the budget would be exceeded.
 var ErrBudget = errors.New("sim: live budget exhausted")
+
+// ErrCallTimeout is what a live call gets when the real model did not answer within the
+// call's wall limit (LiveOptions.Timeout). The journal entry carries timeout:true, which
+// the scenario runner reads as an infrastructure failure, never as the product's.
+var ErrCallTimeout = errors.New("sim: the model call ran past its wall timeout")
 
 // LLM is the inner model of record and live: the Chat of a pkg/providers provider, which
 // this package cannot import.
@@ -41,6 +47,9 @@ type LiveOptions struct {
 	Inner      LLM
 	InnerModel string // the model id the inner provider is called with
 	Price      Price
+	// Timeout is the wall limit of the call to the real model (0: none). It starts when the
+	// call is made, not while it waits its turn for the budget lock.
+	Timeout time.Duration
 	// Key is held only to be removed from the inner provider's errors; it is never
 	// journaled, logged or returned.
 	Key string
@@ -65,6 +74,11 @@ type BudgetState struct {
 	maxTok int
 	maxUSD float64
 }
+
+// InFlight is the number of live model calls that have started and not yet returned,
+// those waiting for the budget lock included. The lab's settle uses it: a model call that
+// takes a minute is work in progress, not a stuck component.
+func (e *Engine) InFlight() int { return int(e.inflight.Load()) }
 
 // Budget reports the budget. Zero limits mean this instance has no live model.
 func (e *Engine) Budget() BudgetState {
@@ -153,6 +167,8 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 	if lo == nil || lo.Inner == nil {
 		return decision{rule: "live", err: errors.New("sim: this provider has no inner model")}
 	}
+	e.inflight.Add(1) // a call waiting for the lock is in flight too: the lab's settle waits for it
+	defer e.inflight.Add(-1)
 	e.liveMu.Lock()
 	defer e.liveMu.Unlock()
 	if e.budErr != nil {
@@ -177,7 +193,13 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 		return decision{rule: "live", err: err, extra: map[string]any{"mode": e.Mode()}}
 	}
 
-	resp, err := lo.Inner.Chat(ctx, msgs, tools, lo.InnerModel, options)
+	callCtx, cancel := ctx, context.CancelFunc(func() {})
+	if lo.Timeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, lo.Timeout)
+	}
+	resp, err := lo.Inner.Chat(callCtx, msgs, tools, lo.InnerModel, options)
+	timedOut := err != nil && ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded)
+	cancel()
 	e.bud.Calls++
 	if err != nil {
 		// The request may have been processed and the model may have produced output before
@@ -187,7 +209,12 @@ func (e *Engine) live(ctx context.Context, lo *LiveOptions, msgs []protocoltypes
 		if serr := e.saveBudgetLocked(e.bud); serr != nil {
 			return decision{rule: "live", err: serr, extra: map[string]any{"mode": e.Mode()}}
 		}
-		return decision{rule: "live", err: scrub(err, lo.Key), extra: map[string]any{"mode": e.Mode(), "spent_usd": e.bud.SpentUSD}}
+		extra := map[string]any{"mode": e.Mode(), "spent_usd": e.bud.SpentUSD}
+		if timedOut {
+			err = fmt.Errorf("%w (%s): %v", ErrCallTimeout, lo.Timeout, err)
+			extra["timeout"] = true
+		}
+		return decision{rule: "live", err: scrub(err, lo.Key), extra: extra}
 	}
 
 	tok, usd, estimated := 0, 0.0, false
@@ -265,6 +292,8 @@ type LiveEnv struct {
 	BudgetTok int
 	Prices    map[string]Price
 	APIBase   string
+	// CallTimeout is the wall limit of one call to the real model.
+	CallTimeout time.Duration
 }
 
 // LiveEnvFrom reads and checks the environment. It never puts the key in an error.
@@ -273,6 +302,10 @@ func LiveEnvFrom(getenv func(string) string) (LiveEnv, error) {
 		APIBase: getenv(sandbox.EnvLLMAPIBase), Prices: map[string]Price{}}
 	for m, p := range DefaultPrices {
 		le.Prices[m] = p
+	}
+	var err error
+	if le.CallTimeout, err = sandbox.ParseLLMCallTimeout(getenv(sandbox.EnvLLMTimeout)); err != nil {
+		return le, fmt.Errorf("%s: %w", sandbox.EnvLLMTimeout, err)
 	}
 	extra, err := sandbox.ParseLLMPrices(getenv(sandbox.EnvLLMPrices))
 	if err != nil {

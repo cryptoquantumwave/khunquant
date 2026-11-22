@@ -37,6 +37,10 @@ func (m *mcpServer) registerScenarioTools() {
 			"inline":{"type":"string","description":"scenario YAML"},
 			"runs":{"type":"integer","description":"run: runs per matrix row (default: the file's runs)"},
 			"known_bugs":{"type":"boolean","description":"run: also run a known_bug scenario"},
+			"llm_model":{"type":"string","description":"run, llm: live files: the real model, <protocol>/<model>; must be in KQ_SANDBOX_LLM_MODELS as written"},
+			"llm_budget":{"type":"string","description":"run, llm: live files: spending cap per instance, e.g. 2USD or 20000000tok (required for live)"},
+			"llm_api_base":{"type":"string","description":"run, llm: live files: base URL of a local OpenAI-compatible model server, loopback only (e.g. http://127.0.0.1:8080/v1); with openai/<model> no KQ_SANDBOX_LLM_KEY is needed"},
+			"llm_call_timeout":{"type":"string","description":"run, llm: live files: wall limit of one model call, a Go duration (default 180s); a call over it makes the run infrastructure"},
 			"export_replay":{"type":"string","description":"run: after the first passing run, write its journal as a replay case to <dir>/<scenario>/ (events.jsonl, policy.json, labels.json, golden.json; labels come from the message expectations); <dir> must lie inside the server's working directory; never overwrites without force"},
 			"force":{"type":"boolean","description":"run: with export_replay, replace a replay case that exists (a directory holding anything else is refused)"},
 			"scenario":{"type":"string","description":"report: the scenario id"},
@@ -64,6 +68,10 @@ type scenarioArgs struct {
 	Instance  string `json:"instance"`
 	Runs      int    `json:"runs"`
 	KnownBugs bool   `json:"known_bugs"`
+	LLMModel  string `json:"llm_model"`
+	LLMBudget string `json:"llm_budget"`
+	LLMBase   string `json:"llm_api_base"`
+	LLMCall   string `json:"llm_call_timeout"`
 	Export    string `json:"export_replay"`
 	Force     bool   `json:"force"`
 	Scenario  string `json:"scenario"`
@@ -165,6 +173,14 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 	if total > maxMCPRuns {
 		return errResult("sandbox_scenario run: %d runs in all (runs x matrix rows); at most %d through MCP (use khunquant sandbox run for more)", total, maxMCPRuns), nil
 	}
+	if a.LLMBase != "" {
+		if err := sandbox.LLMAPIBaseLoopback(a.LLMBase); err != nil {
+			return errResult("sandbox_scenario run: llm_api_base: %v", err), nil
+		}
+	}
+	if _, err := sandbox.ParseLLMCallTimeout(a.LLMCall); err != nil {
+		return errResult("sandbox_scenario run: llm_call_timeout: %v", err), nil
+	}
 	if a.Export != "" {
 		if err := mcpExportDir(a.Export); err != nil {
 			return errResult("sandbox_scenario run: %v", err), nil
@@ -176,7 +192,8 @@ func (m *mcpServer) runOp(ctx context.Context, a scenarioArgs) (*mcp.CallToolRes
 		return errResult("sandbox_scenario run: another run is in progress; one at a time"), nil
 	}
 	defer m.runMu.Unlock()
-	rep, err := (&scenario.Runner{Sup: m.sup, Timeout: cmp.Or(m.runTimeout, defaultTimeout), KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr, ExportDir: a.Export, ExportForce: a.Force}).Run(ctx, f)
+	rep, err := (&scenario.Runner{Sup: m.sup, Timeout: cmp.Or(m.runTimeout, defaultTimeout), KnownBugs: a.KnownBugs || os.Getenv(knownBugsEnv) == "1", Log: os.Stderr, ExportDir: a.Export, ExportForce: a.Force,
+		LLMModel: a.LLMModel, LLMBudget: a.LLMBudget, LLMAPIBase: a.LLMBase, LLMCallTimeout: a.LLMCall}).Run(ctx, f)
 	if err != nil {
 		return errResult("sandbox_scenario run: %v", err), nil
 	}

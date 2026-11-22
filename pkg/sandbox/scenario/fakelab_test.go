@@ -120,7 +120,7 @@ func (f *fakeSup) Up(_ context.Context, o supervisor.UpOptions) (supervisor.Info
 	l.DeclareKinds("chat.out", "clock.step", "settle", "config.reload", "event.*", "exchange.req", "llm.call")
 
 	deps := func() inspect.Deps {
-		return inspect.Deps{SettleWait: l.SettleWait, Snapshot: l.Quiesce.Snapshot, Workflows: f.workflows}
+		return inspect.Deps{SettleWait: l.SettleWait, Snapshot: l.Quiesce.Snapshot, Workflows: f.workflows, ModelInFlight: l.Quiesce.ExternalWait}
 	}
 	groups := []lab.Group{
 		inspect.Group(j, deps), l.ClockGroup(),

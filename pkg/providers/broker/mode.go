@@ -51,7 +51,12 @@ func TradingProviderFor(cfg *config.Config, providerID, account string) (Trading
 		return nil, p, fmt.Errorf("%w: %q", ErrOrderExecutionUnsupported, providerID)
 	}
 	if IsPaperMode(cfg) {
-		return NewSimulationProvider(p), p, nil
+		book, err := PaperBookFor(cfg)
+		if err != nil {
+			// Never fall back to a book that forgets: that is the "order vanished" defect.
+			return nil, p, fmt.Errorf("broker: paper order book unavailable: %w", err)
+		}
+		return NewSimulationProviderWithBook(p, book, AccountKey(cfg, providerID, account)), p, nil
 	}
 	return tp, p, nil
 }

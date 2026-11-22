@@ -302,6 +302,10 @@ func registerLabGroups(l *lab.Lab, shared *sharedResources, cfg *config.Config) 
 	if err := sim.Attach(e); err != nil {
 		return err
 	}
+	// A call to a real model takes seconds to minutes: a settle waits for it (its wall cap does
+	// not run meanwhile) instead of reading the turn as stuck. The model call has its own
+	// wall limit (KQ_SANDBOX_LLM_CALL_TIMEOUT), so the wait is bounded.
+	l.Quiesce.SetExternalWait(func() bool { return e.InFlight() > 0 })
 	l.OnClose(func() error { sim.Detach(e); return nil })
 	if err := l.AddGroup(faultops.Group(l.Faults)); err != nil {
 		return err
@@ -427,6 +431,7 @@ func labDeps(shared *sharedResources) func() inspect.Deps {
 		var d inspect.Deps
 		if shared.lab != nil && shared.lab.Quiesce != nil {
 			d.SettleWait, d.Snapshot = shared.lab.SettleWait, shared.lab.Quiesce.Snapshot
+			d.ModelInFlight = shared.lab.Quiesce.ExternalWait
 		}
 		if rt := s.journalLive.Load(); rt != nil {
 			d.Workflows = rt.engine.List

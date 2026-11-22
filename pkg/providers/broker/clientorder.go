@@ -97,8 +97,8 @@ func ClientOrderID(idemKey string, maxLen int) string {
 //     an outage. It is a ClientIDProbe instead: a hit is the order, and after a
 //     miss the open and closed listings are searched. That the exchange refuses a
 //     repeated client_order_id is NOT ESTABLISHED. It has no futures.
-//   - SimulationProvider (paper mode): never. Its FetchOrder returns an "open"
-//     order for any id, so a lookup would find a ghost, and its listings are empty.
+//   - SimulationProvider (paper mode): never. It places no client order ID on a
+//     paper order; its paper order book is searched by shape like any listing.
 //
 // A futures market has no closed-orders listing in FuturesProvider
 // (FetchFuturesOrder and FetchFuturesOpenOrders only), so a futures adapter that

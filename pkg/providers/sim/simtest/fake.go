@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Request is what the fake received.
@@ -32,6 +33,9 @@ type Fake struct {
 	// FailWith, when non-zero, answers every request with this status and an error body
 	// that echoes the request's credentials back (as a careless API might).
 	FailWith int
+	// Delay makes every answer wait this long first (a slow local model); the wait ends early
+	// when the client gives up.
+	Delay time.Duration
 
 	mu   sync.Mutex
 	reqs []Request
@@ -62,6 +66,13 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	f.reqs = append(f.reqs, Request{Path: r.URL.Path, Header: r.Header.Clone(), Body: body})
 	f.mu.Unlock()
 
+	if f.Delay > 0 {
+		select {
+		case <-time.After(f.Delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if f.FailWith != 0 {
 		w.WriteHeader(f.FailWith)
 		_, _ = w.Write([]byte(`{"error":"denied for ` + r.Header.Get("X-Api-Key") + r.Header.Get("Authorization") + `"}`))

@@ -190,22 +190,44 @@ func advanceTo(ctx context.Context, c *labclient.Client, target time.Time, wall 
 // errMaxWall ends an advance whose caller's wall-time limit passed before the target.
 var errMaxWall = errors.New("max_wall exceeded")
 
-// settle waits for every component to be idle; a settle that fails is a *SettleError.
+// settleOut is what one call of the instance's settle op says.
+type settleOut struct {
+	Settled       bool     `json:"settled"`
+	Busy          []string `json:"busy"`
+	WallMS        int64    `json:"wall_ms"`
+	ModelInFlight bool     `json:"model_in_flight"`
+}
+
+// settle waits for every component to be idle; a settle that fails is a *SettleError. The
+// instance does not count the time a call to a real model is in flight against the cap, but
+// one call of the op lasts at most 25 s, so while a model call is still running when the op
+// gives up, settle asks again: a model that takes a minute is slow, not stuck. The call has
+// its own wall limit in the instance, which bounds the wait.
 func settle(ctx context.Context, c *labclient.Client, wallCap time.Duration) error {
-	raw, err := call(ctx, c, "inspect", "settle", map[string]any{"wall_cap": wallCap.String()})
-	if err != nil {
-		return err
-	}
-	var out struct {
-		Settled bool     `json:"settled"`
-		Busy    []string `json:"busy"`
-		WallMS  int64    `json:"wall_ms"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return err
-	}
-	if !out.Settled {
+	return settleLoop(ctx, func() (settleOut, error) {
+		var out settleOut
+		raw, err := call(ctx, c, "inspect", "settle", map[string]any{"wall_cap": wallCap.String()})
+		if err != nil {
+			return out, err
+		}
+		return out, json.Unmarshal(raw, &out)
+	})
+}
+
+// settleLoop asks once until the instance settles, gives up with the busy components, or
+// the context ends.
+func settleLoop(ctx context.Context, once func() (settleOut, error)) error {
+	for {
+		out, err := once()
+		if err != nil {
+			return err
+		}
+		switch {
+		case out.Settled:
+			return nil
+		case out.ModelInFlight && ctx.Err() == nil:
+			continue
+		}
 		return &SettleError{Busy: out.Busy, Detail: fmt.Sprintf("after %dms", out.WallMS)}
 	}
-	return nil
 }

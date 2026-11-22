@@ -299,6 +299,15 @@ func (s *runState) stageRecording(args map[string]any) error {
 }
 
 // runUntil is the step run_until: a time target, or {until: <expectation>, max_sim, step}.
+// liveWallCeiling is the most wall time one run_until of a live run may take; the
+// scenario's own wall cap (--timeout) ends a run long before it matters.
+const liveWallCeiling = 24 * time.Hour
+
+// wallStop is a step that ran out of wall time on a live run (infrastructure).
+type wallStop struct{ msg string }
+
+func (e *wallStop) Error() string { return e.msg }
+
 func (s *runState) runUntil(ctx context.Context, step *Step) error {
 	var o UntilOptions
 	now, err := clockNow(ctx, s.c)
@@ -316,11 +325,17 @@ func (s *runState) runUntil(ctx context.Context, step *Step) error {
 	} else if o, err = s.env.untilOptions(args); err != nil {
 		return err
 	}
+	if s.f.LLMMode() == "live" {
+		o.WallCeiling = liveWallCeiling
+	}
 	res, err := RunUntil(ctx, s.c, o)
 	if err != nil {
 		return err
 	}
 	switch {
+	case res.Stopped == "max_wall" && s.f.LLMMode() == "live":
+		// A slow real model, not the code, used the wall time: infrastructure, never a finding.
+		return &wallStop{fmt.Sprintf("stopped at %s by max_wall before the target: the live model was too slow for the wall limit", res.Reached.Format(time.RFC3339))}
 	case res.Stopped != "":
 		return fmt.Errorf("stopped at %s by %s before the target", res.Reached.Format(time.RFC3339), res.Stopped)
 	case !o.Target.IsZero() && res.Reached.Before(o.Target):

@@ -50,14 +50,9 @@ func (t *CancelOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(err.Error())
 	}
 
-	p, err := broker.CreateProviderForAccount(providerID, account, t.cfg)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("provider %q: %v", providerID, err))
-	}
-
-	tp, ok := p.(broker.TradingProvider)
-	if !ok {
-		return ErrorResult(fmt.Sprintf("provider %q does not support order management", providerID))
+	tp, paper, fail := orderByIDProvider(t.cfg, providerID, account, orderID)
+	if fail != nil {
+		return fail
 	}
 
 	order, err := tp.CancelOrder(ctx, orderID, symbol)
@@ -72,5 +67,10 @@ func (t *CancelOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if order.Status != nil {
 		status = *order.Status
 	}
-	return UserResult(fmt.Sprintf("Order %s cancelled on %s. Status: %s", orderID, providerID, status))
+	if paper && status == "closed" {
+		// A paper order the market had already crossed: it filled, and cancelling a
+		// filled order changes nothing.
+		return UserResult(paperPrefix(paper) + fmt.Sprintf("Order %s on %s was already filled; nothing to cancel. Status: %s", orderID, providerID, status))
+	}
+	return UserResult(paperPrefix(paper) + fmt.Sprintf("Order %s cancelled on %s. Status: %s", orderID, providerID, status))
 }

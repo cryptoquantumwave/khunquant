@@ -94,8 +94,8 @@ func (d BrokerDesk) Lookup(ctx context.Context, ref broker.OrderRef) (OrderState
 			return OrderState{}, terr
 		}
 		if simulated {
-			// The simulation answers "open" for any id, which proves nothing; the
-			// order is as open as its record says.
+			// The record is what says whether the order is open; the paper order book is
+			// not asked (it may have lost an order placed before it existed).
 			return OrderState{ID: ref.OrderID, Found: ref.OrderID != "", Open: ref.OrderID != "" && !ref.Done, Simulated: true}, nil
 		}
 		provider = tp

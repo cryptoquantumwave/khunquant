@@ -66,6 +66,15 @@ var leverageParamKeys = map[string]bool{
 	"positionside": true,
 }
 
+// quoteSizingParamKeys are the exchange flags that size an order by a quote
+// amount (OKX tgtCcy, Binance quoteOrderQty). They stay refused: the tool does
+// the conversion itself (quote_amount) so it behaves the same on every venue,
+// in paper mode, and under every gate.
+var quoteSizingParamKeys = map[string]bool{
+	"tgtccy":        true,
+	"quoteorderqty": true,
+}
+
 // sanitizeOrderParams filters model-supplied exchange parameters against the
 // configured risk flags.
 //
@@ -102,6 +111,9 @@ func sanitizeOrderParams(raw any, risk config.TradingRiskConfig) (map[string]int
 				continue
 			}
 			out[key] = value
+
+		case quoteSizingParamKeys[lower]:
+			refused = append(refused, fmt.Sprintf("%s (exchange quote-sizing flags are not used: pass the quote_amount argument instead, and the tool converts it to a base amount)", key))
 
 		default:
 			refused = append(refused, fmt.Sprintf("%s (not a recognised order parameter)", key))

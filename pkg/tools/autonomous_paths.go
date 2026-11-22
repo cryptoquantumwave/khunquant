@@ -55,6 +55,7 @@ var autonomousProtectedPaths = []struct {
 	{Path: "memory/delta_neutral", Why: "the delta-neutral plan store (plans, legs, history)"},
 	{Path: "memory/snapshots", Why: "the portfolio snapshot store"},
 	{Path: "memory/proactive", Why: "the proactive-agent store (proactive.db): attention budgets, intents, proposals and the journal that gate what the agent says and does unprompted"},
+	{Path: "memory/paper", Why: "the paper order book (paper_orders.db): the simulated orders paper mode lists, fills and cancels; a planted row would pass for a placed order"},
 	{Path: "memory", Why: "the agent's memory (MEMORY.md and notes): later turns trust it, so only the owner's confirmation may add to it"},
 	{Path: "heartbeat.md", Why: "the heartbeat's own instructions: a background turn must not rewrite them", PromptFile: true},
 	{Path: "sandbox", Why: "sandbox fixtures and the stored Webull session"},

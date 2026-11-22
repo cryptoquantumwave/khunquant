@@ -1,4 +1,4 @@
-{{.ModeTag}}ข้อเสนอ {{.Code}} - {{.SideWord}} {{.Amount}} {{.Unit}} (ประมาณ ${{.USD}}) - {{.TypeWord}}{{if .PriceText}} @ {{.PriceText}}{{end}} - {{.Provider}}/{{.Account}}{{if .ReduceOnly}} - ลดสถานะเท่านั้น{{end}}
+{{.ModeTag}}ข้อเสนอ {{.Code}} - {{.SideWord}} {{.Amount}} {{.Unit}}{{if .QuoteSize}} (จากมูลค่า {{.QuoteSize}}){{end}} (ประมาณ ${{.USD}}) - {{.TypeWord}}{{if .PriceText}} @ {{.PriceText}}{{end}} - {{.Provider}}/{{.Account}}{{if .ReduceOnly}} - ลดสถานะเท่านั้น{{end}}
 {{.PriceLine}}
 {{if .Why}}เหตุผล: {{.Why}}
 {{end}}หมดอายุ {{.Expires}} ({{.Minutes}} นาที)

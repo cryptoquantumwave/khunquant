@@ -41,7 +41,7 @@ func NewCreateOrderTool(cfg *config.Config) *CreateOrderTool {
 func (t *CreateOrderTool) Name() string { return NameCreateOrder }
 
 func (t *CreateOrderTool) Description() string {
-	return "Place a new order on an exchange. Runs 7 safety checks before executing: rate limit, market status, balance preflight, and position size warning. Requires explicit confirmation for live orders."
+	return "Place a new order on an exchange. Runs 7 safety checks before executing: rate limit, market status, balance preflight, and position size warning. Requires explicit confirmation for live orders. Size a spot order with amount (base currency units) or with quote_amount (an amount of the quote currency, e.g. 20 for 'buy 20 USDT of BTC'): give exactly one, and never pass tgtCcy or quoteOrderQty."
 }
 
 func (t *CreateOrderTool) Parameters() map[string]any {
@@ -61,8 +61,9 @@ func (t *CreateOrderTool) Parameters() map[string]any {
 				"enum":        []string{"buy", "sell"},
 				"description": "Order side.",
 			},
-			"amount": map[string]any{"type": "number", "description": "Order quantity in base currency units."},
-			"price":  map[string]any{"type": "number", "description": "Limit price (required for limit orders)."},
+			"amount":       map[string]any{"type": "number", "description": "Order quantity in base currency units. Give exactly one of amount and quote_amount."},
+			"quote_amount": quoteAmountSchema(),
+			"price":        map[string]any{"type": "number", "description": "Limit price (required for limit orders)."},
 			"params": map[string]any{
 				"type": "object",
 				"description": "Extra provider-specific execution parameters (optional), e.g. timeInForce, postOnly, reduceOnly, stopPrice. " +
@@ -74,7 +75,7 @@ func (t *CreateOrderTool) Parameters() map[string]any {
 				"description": "Must be true to actually place the order. Use false to dry-run the safety checks only.",
 			},
 		},
-		"required": []string{"provider", "symbol", "type", "side", "amount", "confirm"},
+		"required": []string{"provider", "symbol", "type", "side", "confirm"},
 	}
 }
 
@@ -86,6 +87,8 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	side, _ := args["side"].(string)
 	amount, _ := args["amount"].(float64)
 	confirm, _ := args["confirm"].(bool)
+	amountGiven := args["amount"] != nil
+	quoteAmount, quoteGiven, quoteErr := quoteAmountArg(args)
 
 	var price *float64
 	if v, ok := args["price"].(float64); ok {
@@ -113,12 +116,27 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if providerID == "" || symbol == "" || orderType == "" || side == "" {
 		return ErrorResult("provider, symbol, type, and side are required")
 	}
+	if quoteGiven && strings.Contains(symbol, ":") {
+		return ErrorResult(quoteAmountContractRefusal(symbol))
+	}
 	if msg := contractSymbolRefusal(symbol); msg != "" {
 		return ErrorResult(msg)
 	}
+	// Exactly one of amount and quote_amount. A quote_amount is converted to a
+	// base amount below, once a provider exists to price it; every gate then
+	// runs on the converted amount.
+	if quoteErr != nil {
+		return ErrorResult(quoteErr.Error())
+	}
+	switch {
+	case amountGiven && quoteGiven:
+		return ErrorResult("give either amount (base currency units) or quote_amount (quote currency), not both")
+	case !amountGiven && !quoteGiven:
+		return ErrorResult("one of amount (base currency units) or quote_amount (quote currency) is required")
+	}
 	// M-7: NaN defeats an ordinary "<= 0" guard, because every comparison
 	// against it is false. It arrives straight from JSON tool arguments.
-	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 {
+	if !quoteGiven && (math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0) {
 		return ErrorResult("amount must be a positive, finite number")
 	}
 	if price != nil && (math.IsNaN(*price) || math.IsInf(*price, 0) || *price <= 0) {
@@ -142,7 +160,7 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	if err := broker.CheckOrderType(t.cfg, orderType); err != nil {
 		return ErrorResult(err.Error())
 	}
-	if price != nil && exchanges.USDLike(broker.SymbolQuote(symbol, providerID)) {
+	if !quoteGiven && price != nil && exchanges.USDLike(broker.SymbolQuote(symbol, providerID)) {
 		if err := broker.CheckRiskNotional(t.cfg, amount*(*price)); err != nil {
 			return ErrorResult(err.Error())
 		}
@@ -174,6 +192,27 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		return ErrorResult(fmt.Sprintf("market %s is currently closed", symbol))
 	}
 
+	md, _ := p.(broker.MarketDataProvider)
+
+	// --- Gate 3a: size a quote_amount order ---
+	// quote_amount / price, rounded down to the market's step and checked against
+	// its minimums; refused when no price can be found. From here on the order is
+	// an ordinary base-amount order: Gate 1c's USD check (which needed an amount)
+	// and Gate 3b onward all run on the converted amount.
+	var sizing *quoteSizing
+	if quoteGiven {
+		s, err := sizeSpotByQuote(ctx, md, symbol, side, price, quoteAmount)
+		if err != nil {
+			return ErrorResult(err.Error()).WithError(err)
+		}
+		sizing, amount = &s, s.Base
+		if price != nil && exchanges.USDLike(broker.SymbolQuote(symbol, providerID)) {
+			if err := broker.CheckRiskNotional(t.cfg, amount*(*price)); err != nil {
+				return ErrorResult(err.Error())
+			}
+		}
+	}
+
 	// --- Gate 3b: price the order ---
 	//
 	// H-3: a market order carries no price, and every downstream check that
@@ -187,7 +226,6 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 	// ceiling set the notional is converted to USD, and an order whose USD
 	// value cannot be determined is refused (fail closed). The conversion
 	// reads the provider's public ticker; it does not touch the rate limiter.
-	md, _ := p.(broker.MarketDataProvider)
 	var nq broker.NotionalQuote
 	priced := false
 	if maxUSD := t.cfg.TradingRisk.MaxOrderValueUSD; maxUSD > 0 {
@@ -248,6 +286,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 			out += fmt.Sprintf(" @ %.8g", *price)
 		}
 		out += fmt.Sprintf(" on %s.", providerID)
+		if sizing != nil {
+			out += " Sized from " + sizing.describe() + "."
+		}
 		if note := usdEstimateNote(nq, providerID); note != "" {
 			out += " Estimated order value " + note + "."
 		}
@@ -312,6 +353,9 @@ func (t *CreateOrderTool) Execute(ctx context.Context, args map[string]any) *Too
 		headline, id, symbol, side, orderType, amount, orderStatus)
 	if price != nil {
 		out += fmt.Sprintf("  Price:  %.8g\n", *price)
+	}
+	if sizing != nil {
+		out += "  Sizing: " + sizing.describe() + "\n"
 	}
 	if note := usdEstimateNote(nq, providerID); note != "" {
 		out += "  Value:  " + note + "\n"

@@ -576,6 +576,9 @@ func (e *dnExchange) Fetch(ctx context.Context, p *deltaneutral.Plan, leg deltan
 		}
 		o, err = fp.FetchFuturesOrder(ctx, id, p.FuturesSymbol)
 	} else {
+		if gerr := broker.RefusePaperIDWhileLive(e.cfg, id); gerr != nil {
+			return deltaneutral.Order{}, gerr
+		}
 		tp, _, terr := e.spot(p)
 		if terr != nil {
 			return deltaneutral.Order{}, terr
@@ -596,6 +599,9 @@ func (e *dnExchange) Cancel(ctx context.Context, p *deltaneutral.Plan, leg delta
 			return err
 		}
 		_, err = fp.CancelFuturesOrder(ctx, id, p.FuturesSymbol)
+		return err
+	}
+	if err := broker.RefusePaperIDWhileLive(e.cfg, id); err != nil {
 		return err
 	}
 	tp, _, err := e.spot(p)

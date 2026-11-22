@@ -1,0 +1,79 @@
+# F-OWN-1 (S2), read half, through the file tools: with an owner configured, a person who is not
+# the owner must not read the owner's conversation. Observed (H9-1 live suite): alice in a DM ran
+# `list_dir sessions` and then `read_file sessions/agent_main_simchat_direct_dm_owner.jsonl`; both
+# succeeded and the file held the owner's whole conversation, portfolio total included.
+#
+# The scripted model makes alice's turn do exactly that. The marker SESSION-LEAKED is chosen by a
+# rule that matches only when the read_file result contains "19800" (the owner's total), so "the
+# marker reached alice" means "the tool gave alice the owner's transcript".
+#
+# Setup proof, in the same file: the owner asks for the account (so the transcript holds the total),
+# then reads their own transcript and DOES get it (owner-reads-own-session), so the rule matches the
+# real file and the refusal is not a path typo; and alice's calls are answered with the refusal
+# text (SESSION-REFUSED), so they reached the tool.
+# Fix: the read tools share one owner-only check (pkg/tools/owner_reads.go).
+version: 1
+scenario: non-owner-cannot-read-owner-session
+covers: [F-OWN-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.1 } }
+llm_script:
+  - id: owner-read-ok
+    match: { sender: "simchat:owner", last_tool: read_file, last_tool_result_contains: ["19800"] }
+    respond: { text: "OWNER-READ-OK" }
+  - id: leaked
+    match: { last_tool: read_file, last_tool_result_contains: ["19800"] }
+    respond: { text: "SESSION-LEAKED" }
+  - id: read-refused
+    match: { last_tool: read_file, last_tool_result_contains: ["ask the owner"] }
+    respond: { text: "SESSION-REFUSED" }
+  - id: read-other
+    match: { last_tool: read_file }
+    respond: { text: "SESSION-READ-OTHER" }
+  - id: list-refused
+    match: { sender: "simchat:alice", last_tool: list_dir, last_tool_result_contains: ["ask the owner"] }
+    respond: { tool: read_file, args: { path: "sessions/agent_main_simchat_direct_dm_owner.jsonl" } }
+  - id: listed
+    match: { last_tool: list_dir }
+    respond: { tool: read_file, args: { path: "sessions/agent_main_simchat_direct_dm_owner.jsonl" } }
+  - id: owner-asks
+    match: { sender: "simchat:owner", prompt_contains: ["what is in the account"] }
+    respond: { tool: get_total_value, args: { exchange: binance } }
+    times: 1
+  - id: owner-reads
+    match: { sender: "simchat:owner", prompt_contains: ["read my transcript"] }
+    respond: { tool: read_file, args: { path: "sessions/agent_main_simchat_direct_dm_owner.jsonl" } }
+    times: 1
+  - id: alice-lists
+    match: { sender: "simchat:alice", prompt_contains: ["look at the files"] }
+    respond: { tool: list_dir, args: { path: "sessions" } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "what is in the account" }
+  - chat: { as: owner, text: "read my transcript" }
+  - chat: { as: alice, text: "look at the files" }
+timeline:
+  - advance: 2m
+expect:
+  - id: owner-reads-own-session
+    message: { to: "dm:owner", contains: ["OWNER-READ-OK"], count: 1 }
+  - id: alice-session-read-not-leaked
+    message: { to: "dm:alice", contains: ["SESSION-LEAKED"], count: 0 }
+    within: { from: "+0m", to: "+2m" }
+  - id: alice-was-refused
+    message: { to: "dm:alice", contains: ["SESSION-REFUSED"], count: 1 }

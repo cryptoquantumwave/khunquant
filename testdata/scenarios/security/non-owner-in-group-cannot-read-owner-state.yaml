@@ -1,0 +1,66 @@
+# F-OWN-1 (S2), read half, group variant: bob in group:team must not list the owner's memory/
+# or read state/state.json through the file tools (H9-1 live run: bob did both).
+#
+# The scripted model lists memory/ and then reads state/state.json. Each result that carries the
+# refusal text ("ask the owner") is answered with a marker; anything else is a leak marker, so a
+# read that succeeds, or fails for any other reason, fails the scenario. The reply BOB-BOTH-REFUSED
+# needs both calls to have been refused by the owner-only rule.
+# Setup proof: the owner's own listing of memory/ in dm:owner is not refused (OWNER-LIST-DONE).
+version: 1
+scenario: non-owner-in-group-cannot-read-owner-state
+covers: [F-OWN-1]
+status: active
+llm: scripted
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+llm_script:
+  - id: owner-refused
+    match: { sender: "simchat:owner", last_tool: list_dir, last_tool_result_contains: ["ask the owner"] }
+    respond: { text: "OWNER-LIST-REFUSED" }
+  - id: owner-listed
+    match: { sender: "simchat:owner", last_tool: list_dir }
+    respond: { text: "OWNER-LIST-DONE" }
+  - id: read-refused
+    match: { last_tool: read_file, last_tool_result_contains: ["ask the owner"] }
+    respond: { text: "BOB-BOTH-REFUSED" }
+  - id: read-leak
+    match: { last_tool: read_file }
+    respond: { text: "BOB-READ-LEAK" }
+  - id: list-refused
+    match: { last_tool: list_dir, last_tool_result_contains: ["ask the owner"] }
+    respond: { tool: read_file, args: { path: "state/state.json" } }
+  - id: list-leak
+    match: { last_tool: list_dir }
+    respond: { text: "BOB-LIST-LEAK" }
+  - id: bob-lists
+    match: { sender: "simchat:bob", prompt_contains: ["check the memory"] }
+    respond: { tool: list_dir, args: { path: "memory" } }
+    times: 1
+  - id: owner-lists
+    match: { sender: "simchat:owner", prompt_contains: ["check the memory"] }
+    respond: { tool: list_dir, args: { path: "memory" } }
+    times: 1
+  - id: any
+    match: {}
+    respond: { text: "ok" }
+setup:
+  - chat: { as: owner, text: "check the memory" }
+  - chat: { as: "bob@group:team", text: "check the memory", mention: true }
+timeline:
+  - advance: 2m
+expect:
+  - id: owner-listing-not-refused
+    message: { to: "dm:owner", contains: ["OWNER-LIST-DONE"], count: 1 }
+  - id: bob-both-refused
+    message: { to: "group:team", contains: ["BOB-BOTH-REFUSED"], count: 1 }
+  - id: no-list-leak-in-group
+    message: { to: "group:team", contains: ["BOB-LIST-LEAK"], count: 0 }
+    within: { from: "+0m", to: "+2m" }
+  - id: no-read-leak-in-group
+    message: { to: "group:team", contains: ["BOB-READ-LEAK"], count: 0 }
+    within: { from: "+0m", to: "+2m" }

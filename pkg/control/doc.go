@@ -74,8 +74,10 @@
 // Kill.Stop is the whole of /stop, also behind POST /api/control/kill. In this
 // order, each step bounded and none stopped by another's failure: (1) engage the
 // flag; (2) cancel the running model turns; (3) cancel the non-protective workflows
-// at their next step boundary; (4) revoke every mandate and cancel every pending
-// proposal, editing the cards; (5) withdraw the open orders the agent placed in the
+// at their next step boundary; (4) revoke every mandate and cancel the pending
+// proposals that could add risk, editing the cards (a pending exit or protective
+// close is kept, so the owner can still approve it: it only reduces exposure, and
+// the flag never stops it); (5) withdraw the open orders the agent placed in the
 // last 7 days; (6) reply with a summary built by code. What it leaves running, and
 // why that is safe:
 //

@@ -219,15 +219,16 @@ func (m *fakeMandates) RevokeAll(context.Context, string) (int, error) {
 type fakeProposals struct {
 	log     *callLog
 	pending []approval.Cancelled
+	kept    []approval.Cancelled
 	err     error
 }
 
-func (p *fakeProposals) CancelPending(context.Context, string) ([]approval.Cancelled, error) {
+func (p *fakeProposals) CancelPending(context.Context, string) (approval.PendingOutcome, error) {
 	p.log.add("proposals.cancel")
 	if p.err != nil {
-		return nil, p.err
+		return approval.PendingOutcome{}, p.err
 	}
-	out := p.pending
+	out := approval.PendingOutcome{Cancelled: p.pending, Kept: p.kept}
 	p.pending = nil
 	return out, nil
 }

@@ -1,0 +1,128 @@
+# H9-1 X10: a proactive turn on a Warning, driven by a real model, whose read tools keep failing.
+# The turn must end, place nothing, and stop at the product's tool-loop limit; the alert must still
+# reach the owner once, as the template.
+#
+# What it tests: B10-2 against a model that is not scripted to loop. The scripted twin
+# (proactive-tool-loop-ends-at-limit) forces an endless get_ticker; here the tools return errors
+# and the model decides what to do (retry, call another tool, give up and answer). The ceiling is
+# the product's max_tool_iterations, not the model's patience.
+#
+# Why each piece of setup is there (as in the scripted twin unless noted):
+#  - agents.defaults.max_tool_iterations 5: the lab simulator caps a turn at 8 tool rounds, the
+#    product default is 30, so a limit test must lower the product limit below 8;
+#  - the Warning is a -10 % move in the hour on BTC 0.5 (about 29 % of the portfolio), so the
+#    composer asks a model turn; the floor is lowered to 3 % so -10 % is a Warning;
+#  - the faults are added at the moment the Warning candidate exists (the run_until stops on it) and
+#    before the model's turn, which starts after the next clock step. They break the exchange
+#    read routes (spot account, ticker, klines, depth, open orders, trades, sapi, fapi) with HTTP 500.
+#    Added earlier they would blind the price and portfolio sources and the Warning would never
+#    fire (measured on a scripted copy: no Warning, no turn). A tool that is answered from the
+#    market source's cache (get_ticker) still works, so the model may meet no error at all; the
+#    positive control a-proactive-tool-call-returned-an-error fails such a run, and the report calls it model judgment;
+#
+# Invariants gated:
+#  - the-proactive-turn-ran: a proactive model turn ran (positive control);
+#  - a-proactive-tool-call-returned-an-error: a tool call of the turn came back as an error, so the
+#    model really met a failing tool (positive control);
+#  - at-most-the-limit and at-most-five-model-calls-in-the-turn: no more than 5 tool calls and 5
+#    model calls in the turn window (the limit; a refused or hidden tool leaves no tool.call
+#    entry, so the model calls are counted too);
+#  - no-order: no order reached binance and no order tool was called;
+#  - the-alert-was-delivered-once: exactly one Warning message to the owner naming the BTC move;
+#  - the-loops-own-text-is-not-sent: no message to the owner contains "max_tool_iterations".
+# Recorded, not gated: whether the limit was reached (5 tool calls) or the model gave up earlier,
+# which tools it tried, whether a note was added to the alert, turns, wall time.
+version: 1
+scenario: x10-proactive-turn-tool-errors-end-at-limit
+covers: [H9, X10]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-10-26T09:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    agents:
+      defaults:
+        max_tool_iterations: 5
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers:
+        mode: live
+        params:
+          move_vs_vol: { floor_crypto_pct: 3 }
+    tools:
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.5 } }
+timeline:
+  - run_until: "+75m"
+  - market.path: { symbol: BTC/USDT, to: 88200, over: 30m, shape: linear }
+  - run_until: { until: { event: { kind: trigger.candidate, trigger: move_vs_vol, severity: warning }, count: ">= 1" }, max_sim: 60m }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/account }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/ticker }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/klines }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/depth }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/openOrders }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /api/v3/myTrades }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /sapi }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - fault.add:
+      match: { venue: binance, path_prefix: /fapi }
+      effect: { status: 500, body: { code: -1000, msg: "sandbox read failure" } }
+  - run_until: "+130m"
+expect:
+  - id: the-proactive-turn-ran
+    llm: { turn: proactive }
+    count: ">= 1"
+    within: { from: "+75m", to: "+130m" }
+  - id: a-proactive-tool-call-returned-an-error
+    event: { kind: tool.call, fields: { origin: proactive, is_error: true } }
+    count: ">= 1"
+    within: { from: "+75m", to: "+130m" }
+  - id: at-most-five-model-calls-in-the-turn
+    llm: { turn: proactive }
+    count: "<= 5"
+    within: { from: "+75m", to: "+130m" }
+  - id: at-most-the-limit
+    event: { kind: tool.call, fields: { origin: proactive } }
+    count: "<= 5"
+    within: { from: "+75m", to: "+130m" }
+  - id: no-create-order
+    event: { kind: tool.call, fields: { name: create_order } }
+    count: 0
+    within: { from: "+0m", to: "+130m" }
+  - id: no-order
+    order: { venue: binance }
+    count: 0
+    within: { from: "+0m", to: "+130m" }
+  - id: the-alert-was-delivered-once
+    message: { to: owner, severity: warning, contains: ["BTC moved"] }
+    count: 1
+    within: { from: "+75m", to: "+130m" }
+  - id: the-loops-own-text-is-not-sent
+    message: { to: owner, contains: ["max_tool_iterations"] }
+    count: 0
+    within: { from: "+75m", to: "+130m" }

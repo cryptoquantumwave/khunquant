@@ -1,0 +1,89 @@
+# H9-1 E4: the owner asks the model, in chat, to alert them when BTC goes above 99,000; later BTC
+# moves from 98,000 to 100,000.
+#
+# What it tests: the whole chain with a real model at its first link. The model must turn the
+# sentence into a set_price_alert call (provider, symbol, condition, threshold); the perception
+# source then judges the line, and the alert is a code-rendered notice. A price alert is a template
+# and never starts a model turn, so model prose should not be in it at all; if any is, it must
+# stand on a line that starts "Assistant's note:" (the product label).
+#
+# Why each piece of setup is there:
+#  - one venue (binance) with a BTC/USDT market, so the alert the model sets can only point at a
+#    market the lab prices (a model that picked a venue with no market would be a scenario
+#    problem, not a finding);
+#  - perception, triggers and attention all live, an owner, active hours 07:00-22:00 and a start
+#    at 10:00, so a delivered alert is not held for quiet hours;
+#  - the first 5 minutes are for the chat turn (the lab waits for the model before it moves the
+#    clock); the price then moves over 3 minutes and the run goes on to +30m so the source has
+#    polled many times (it polls every minute of sim time).
+#
+# Invariants gated:
+#  - alert-was-set: set_price_alert was called without an error (positive control);
+#  - the-line-was-crossed: the price_cross trigger saw BTC/USDT cross (the alert is real);
+#  - one-alert-delivered: exactly one message to the owner says "crossed above" (the template
+#    wording of the alert title);
+#  - no-alert-before-the-move: nothing says "crossed above" before the move starts at +5m (the
+#    price is 98,000 until then, below the line; an earlier alert would be a false cross).
+#  - no-unlabelled-model-line-in-the-alert: the alert has no quote line ("\n> ..."). A price alert
+#    carries the message it was set with (set_price_alert's message argument) as a "> " quote line
+#    under the evidence. The model chooses that argument when it sets the alert, so a "> " line is
+#    model-written text that is not labelled "Assistant's note:". Measured: the model invents a
+#    message even when the owner gave none. This gate is expected to fail until the product either
+#    labels that line or drops it; it is the (a) finding of this file;
+#  - no-model-turn-composed-the-alert: no proactive model turn ran in the alert window, so no
+#    model prose can be in the alert (this is how "any model text is on a line starting
+#    Assistant's note:" is held: there is no model text). The template reads, for example,
+#    "BTC/USDT crossed above 99000 - now 99666.67", measured on the scripted
+#    perception/market-outage-no-false-cross.
+# Recorded, not gated by the lab: every line of the alert message is the template or starts with
+# "Assistant's note:" (checked from the journal by the report), the arguments the model chose,
+# whether it confirmed the alert to the owner in chat, turns, wall time.
+version: 1
+scenario: e4-chat-price-alert-fires-once
+covers: [H9, E4]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 0.1 } }
+setup:
+  - chat: { as: owner, text: "alert me if BTC goes above 99,000" }
+timeline:
+  - advance: 5m
+  - market.path: { symbol: BTC/USDT, to: 100000, over: 3m, shape: linear }
+  - run_until: "+30m"
+expect:
+  - id: alert-was-set
+    event: { kind: tool.call, fields: { name: set_price_alert, is_error: false } }
+    count: ">= 1"
+  - id: the-line-was-crossed
+    event: { kind: trigger.candidate, trigger: price_cross, subject: BTC/USDT }
+    count: ">= 1"
+  - id: one-alert-delivered
+    message: { to: owner, contains: ["crossed above"], count: 1 }
+  - id: no-model-turn-composed-the-alert
+    llm: { turn: proactive }
+    count: 0
+    within: { from: "+5m", to: "+30m" }
+  - id: no-unlabelled-model-line-in-the-alert
+    message: { to: owner, contains: ["crossed above", "\n> "], count: 0 }
+    within: { from: "+5m", to: "+30m" }
+  - id: no-alert-before-the-move
+    message: { to: owner, contains: ["crossed above"], count: 0 }
+    within: { from: "+0m", to: "+5m" }

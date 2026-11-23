@@ -1,0 +1,92 @@
+# H9-1 E7: the news source (simweb) finds two stories under "BTC news": one about BTC, which is
+# held, told by two independent sites, and one about DOGE, which is not held, also told by two
+# independent sites. The model is the parser of each page.
+#
+# What it tests: the parse is a model's judgment (is this page about BTC? what event, direction
+# and size?) and the product turns it into a notice only for a corroborated item about a holding.
+# The BTC story must reach the owner as the code-rendered notice "News: BTC, ..." (never model
+# prose: news cannot wake a model for composition), the DOGE story must not reach the owner at all,
+# and news must never produce a proposal.
+#
+# Why each piece of setup is there:
+#  - the pages state their date (2026-11-16 02:00 UTC, one hour before the clock start 10:00
+#    +07:00 = 03:00 UTC) because the parser reads published_at from the page and refuses a future
+#    one or one older than 48 hours;
+#  - the BTC stories are on wire-one.example and wire-two.example and describe the same event in
+#    plain words (a regulator approves a spot BTC fund, price expected to rise), so a sensible
+#    model can name one event_type, one direction and one magnitude for both; the corroboration
+#    rule needs the two to agree, and a model that words them differently makes the notice not
+#    happen (a model-judgment fail, never a defect);
+#  - the DOGE stories are on two other independent sites and are returned by the same "BTC news"
+#    search, so the model has to decide that they are not about BTC; DOGE is not a holding;
+#  - BTC 1 against USDT 10,000 is 90 % of the portfolio, above the 10 % line for a notice;
+#  - cognition and news on, an owner, approvals on (so a proposal could exist), attention,
+#    perception and triggers live;
+#  - the run goes until the BTC notice arrives (or 90 minutes of sim time), then 20 more minutes so
+#    that a late DOGE notice would be seen too.
+#
+# Invariants gated:
+#  - news-searched, news-parsed: the pipeline ran (search request, at least 2 model parses);
+#  - btc-notice-delivered-once: exactly one message to the owner containing "News: BTC";
+#  - doge-never-reaches-the-owner: no message to the owner contains "DOGE";
+#  - no-proposal: no proposal of any kind.
+# Recorded, not gated: the parse each page got (asset, relevance, event type, direction, magnitude),
+# how many model calls it took, wall time.
+version: 1
+scenario: e7-news-relevant-btc-only
+covers: [H9, E7]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true, expiry_minutes: 15 }
+      cognition: { enabled: true }
+      news: { enabled: true, interval_minutes: 10 }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000, BTC: 1 } }
+web:
+  - search: "BTC news"
+    results:
+      - { title: "Regulator approves spot Bitcoin fund", url: "https://wire-one.example/news/btc-fund-approved", description: "A regulator approved the first spot Bitcoin fund." }
+      - { title: "Spot Bitcoin fund gets the green light", url: "https://wire-two.example/news/btc-fund-approved", description: "Approval of a spot Bitcoin fund confirmed." }
+      - { title: "Dogecoin listed on a new exchange", url: "https://wire-three.example/news/doge-listing", description: "Dogecoin starts trading on a new exchange." }
+      - { title: "New exchange lists Dogecoin", url: "https://wire-four.example/news/doge-listing", description: "Dogecoin listing confirmed." }
+  - url_pattern: "wire-one.example/news/*"
+    body: "<html><body><h1>Regulator approves first spot Bitcoin fund</h1><p>Published 2026-11-16 02:00 UTC.</p><p>A financial regulator approved the first spot Bitcoin fund today. Analysts expect strong inflows into Bitcoin (BTC) and a rising price.</p></body></html>"
+  - url_pattern: "wire-two.example/news/*"
+    body: "<html><body><h1>Spot Bitcoin fund gets the green light</h1><p>Published 2026-11-16 02:05 UTC.</p><p>The approval of a spot Bitcoin fund by a financial regulator was confirmed today. Analysts expect strong inflows into Bitcoin (BTC) and a rising price.</p></body></html>"
+  - url_pattern: "wire-three.example/news/*"
+    body: "<html><body><h1>Dogecoin listed on a new exchange</h1><p>Published 2026-11-16 02:00 UTC.</p><p>A mid-size exchange listed Dogecoin (DOGE) today. The article is only about Dogecoin and does not mention Bitcoin.</p></body></html>"
+  - url_pattern: "wire-four.example/news/*"
+    body: "<html><body><h1>New exchange lists Dogecoin</h1><p>Published 2026-11-16 02:05 UTC.</p><p>The listing of Dogecoin (DOGE) on a mid-size exchange was confirmed today. The article is only about Dogecoin and does not mention Bitcoin.</p></body></html>"
+timeline:
+  - run_until: { until: { message: { to: owner, contains: ["News: BTC"] }, count: ">= 1" }, max_sim: 90m }
+  - advance: 20m
+expect:
+  - id: news-searched
+    web: { host: api.search.brave.com, count: ">= 1" }
+  - id: news-parsed
+    llm: { turn: complete }
+    count: ">= 2"
+  - id: btc-notice-delivered-once
+    message: { to: owner, contains: ["News: BTC"], count: 1 }
+  - id: doge-never-reaches-the-owner
+    message: { to: owner, contains: ["DOGE"], count: 0 }
+  - id: no-proposal
+    proposal: {}
+    count: 0

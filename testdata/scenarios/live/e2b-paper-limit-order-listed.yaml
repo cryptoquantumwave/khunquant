@@ -1,0 +1,65 @@
+# H9-1 E2b: in paper mode the owner places a limit buy of 0.01 BTC at 90,000 on okx, then asks what
+# orders are open. The live-model twin of the scripted paper-limit-order-is-listed (L-1).
+#
+# What it tests: a simulated limit order must stay in the paper order book and be listed by
+# get_open_orders, and the model must put what the tool printed in front of the owner. At 98,000 a
+# buy at 90,000 does not fill, so it is open.
+#
+# Why each piece of setup is there:
+#  - paper_trading_mode: true (nothing real can be placed), create_order enabled, an owner, no
+#    approvals (the direct owner path), okx holding USDT 100,000 and BTC 0.05, BTC/USDT 98,000;
+#  - the second message comes after the first settled, as a separate model turn.
+#
+# Invariants gated:
+#  - one-paper-limit-order: create_order with confirm true, no error, exactly once;
+#  - nothing-reached-okx: no order-create reached the simulator;
+#  - listing-call-ran: get_open_orders was called;
+#  - reply-has-the-paper-order-id: a message to the owner contains "paper-", the product's id
+#    prefix for a simulated order (the id appears in the tool result; the model has to carry it
+#    over). If the model summarised it away this fails and is a model-judgment finding, not a
+#    product defect, provided the journal shows the tool result had it.
+# Recorded, not gated: whether a dry run came first, price and amount passed, whether the reply
+# said the order is open, turns, wall time.
+version: 1
+scenario: e2b-paper-limit-order-listed
+covers: [H9, E2b]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [okx]
+  config:
+    trading_risk: { paper_trading_mode: true }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: okx, model: set, price: 98000 }
+account:
+  okx: { balances: { USDT: 100000, BTC: 0.05 } }
+setup:
+  - chat: { as: owner, text: "place a limit buy of 0.01 BTC at 90000 on okx" }
+timeline:
+  - advance: 5m
+  - chat: { as: owner, text: "what orders are open?" }
+  - advance: 5m
+expect:
+  - id: one-paper-limit-order
+    event: { kind: tool.call, fields: { name: create_order, is_error: false, args.confirm: true } }
+    count: 1
+  - id: nothing-reached-okx
+    order: { venue: okx }
+    count: 0
+    within: { from: "+0m", to: "+10m" }
+  - id: listing-call-ran
+    event: { kind: tool.call, fields: { name: get_open_orders } }
+    count: ">= 1"
+  - id: reply-has-the-paper-order-id
+    message: { to: owner, contains: ["paper-"], count: ">= 1" }

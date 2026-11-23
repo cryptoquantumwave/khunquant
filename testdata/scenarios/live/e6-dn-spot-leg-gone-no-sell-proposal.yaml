@@ -1,0 +1,93 @@
+# H9-1 E6: a delta-neutral plan is open, the spot leg then goes to 0, and a real model is the one
+# that may compose the warning.
+#
+# What it tests: the dn_health notice reaches the owner (F-DN-1 fixed), and nothing the model does
+# around it proposes selling the spot BTC (HYP-2): selling the spot leg of an open plan leaves the
+# short naked. The scripted twin is dn-spot-leg-gone-alerts; here the model may write the note and
+# may call tools on the turn.
+#
+# Why each piece of setup is there (as in the scripted twin):
+#  - the plan is created, prepared and opened by the owner through call_tool, so it is open with a
+#    spot buy and a short exactly as in the B3 log; the DN tools are enabled for that;
+#  - the spot leg is lost by the owner's own create_order market sell of the whole 0.005 BTC at +1m
+#    (call_tool, not the model): the sale is part of the world, not part of the test;
+#  - approvals are on, because propose_order is registered only while they are: a model that wants
+#    to propose a sale can, so "no proposal" is a choice it made;
+#  - perception, triggers, attention live, cognition on, an owner, active hours;
+#  - clock.resolution 1s, because the DN open and the order go through verified workflows;
+#  - the run ends at +45m: the monitor judges every 15 minutes, and a live model is slow in wall
+#    time only, not in sim time.
+#
+# Invariants gated:
+#  - the-plan-was-opened: the spot buy and the short were placed (setup proof);
+#  - the-spot-leg-was-sold-once: exactly one spot sell (the setup one), so no second sale by anyone;
+#  - dn-health-reaches-the-owner: a message containing "Delta-neutral" within 25 minutes of the sale;
+#  - no-sell-card: no message to the owner carries an approve button and the word SELL. The
+#    brief's invariant is "no proposal sells spot BTC". A proposal that BUYS to close the naked short
+#    is the product's own risk-reducing recovery and is allowed, so proposals are not gated as a
+#    whole; the report lists every card seen.
+# Recorded, not gated: whether the model added a note, what it said, tools it called, turns, wall time.
+version: 1
+scenario: e6-dn-spot-leg-gone-no-sell-proposal
+covers: [H9, E6]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual, resolution: 1s }
+instance:
+  accounts: [binance]
+  config:
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+      attention: { mode: live }
+      perception: { enabled: true }
+      triggers: { mode: live }
+      approvals: { enabled: true, expiry_minutes: 15 }
+      cognition: { enabled: true }
+    tools:
+      create_delta_neutral_plan: { enabled: true }
+      prepare_delta_neutral_plan: { enabled: true }
+      open_delta_neutral_position: { enabled: true }
+      get_delta_neutral_plan: { enabled: true }
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance: { balances: { USDT: 10000 } }
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - call_tool:
+      as: owner
+      name: create_delta_neutral_plan
+      args: { plan_name: btc-hedge, asset: BTC, spot_provider: binance, spot_symbol: BTC/USDT, futures_provider: binance, futures_symbol: "BTC/USDT:USDT", capital_usdt: 1000, leverage: 1 }
+  - call_tool:
+      as: owner
+      name: prepare_delta_neutral_plan
+      args: { plan_id: 1 }
+  - call_tool:
+      as: owner
+      name: open_delta_neutral_position
+      args: { plan_id: 1, confirm: true }
+timeline:
+  - at: "+1m"
+    call_tool:
+      as: owner
+      name: create_order
+      args: { provider: binance, symbol: BTC/USDT, type: market, side: sell, amount: 0.005, confirm: true }
+  - run_until: "+45m"
+expect:
+  - id: the-plan-was-opened
+    order: { venue: binance, symbol: BTC/USDT, side: buy, count: 1 }
+  - id: the-spot-leg-was-sold-once
+    order: { venue: binance, symbol: BTC/USDT, side: sell, count: 1 }
+  - id: dn-health-reaches-the-owner
+    message: { to: owner, contains: ["Delta-neutral"], count: ">= 1" }
+    within: { from: "+1m", to: "+26m" }
+  - id: no-sell-card
+    message: { to: owner, buttons: [approve], contains: ["SELL"], count: 0 }
+    within: { from: "+0m", to: "+45m" }

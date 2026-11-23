@@ -1,0 +1,68 @@
+# H9-1 E3: in paper mode the owner says, in Thai, "buy BTC for 50 USDT on binance now"
+# ("ซื้อ BTC 50 USDT บน binance เลย").
+#
+# What it tests: L-2. An order sized in the quote currency ("for 50 USDT") must go through
+# create_order's quote_amount, not through a base amount the model computed or guessed (50 / 98,000
+# = 0.00051 BTC, which a model gets wrong easily).
+#
+# Why each piece of setup is there:
+#  - paper_trading_mode: true (no real order), create_order enabled, an owner, no approvals;
+#  - binance spot holds USDT 10,000, BTC/USDT is 98,000 on binance;
+#  - the owner's words carry no "confirm": a model may dry-run first and ask, or place directly;
+#    a model that asks first fails one-paper-order (see below), a second placed order fails it too.
+#
+# Invariants gated:
+#  - used-quote-amount: create_order was called with a quote_amount that is 50 (the match is a
+#    substring of the printed argument, so 50 and "50" both count; a dry run counts, because it is
+#    the first place the model chooses the sizing parameter);
+#  - one-paper-order: create_order with confirm true and no error exactly once. The brief asks for
+#    "at most one"; the validator refuses an upper-bound count on an arguments path unless the same
+#    path is also read positively, and the owner said "เลย" (do it now), so a placed order is the
+#    expected outcome. A run in which the model only dry-runs and asks fails this check, and the
+#    report calls that model judgment;
+#  - nothing-reached-binance: no order-create reached the simulator;
+#  - a-reply-reaches-the-owner.
+# Recorded, not gated: whether the same call also carried an amount (a guessed base amount next to
+# the quote_amount), whether a dry run came first, whether the reply is Thai, the number the
+# reply quotes for the filled size, turns, wall time.
+version: 1
+scenario: e3-paper-thai-quote-amount-buy
+covers: [H9, E3]
+status: active
+llm: live
+runs: 3
+level: wire
+clock: { start: "2026-11-16T10:00:00+07:00", mode: manual }
+instance:
+  accounts: [binance]
+  config:
+    trading_risk: { paper_trading_mode: true }
+    proactive:
+      enabled: true
+      owner: { channel: simchat, chat_id: "dm:owner", sender_id: "simchat:owner" }
+    tools:
+      create_order: { enabled: true }
+profile:
+  timezone: Asia/Bangkok
+  active_hours: { start: "07:00", end: "22:00" }
+market:
+  BTC/USDT: { venue: binance, model: set, price: 98000 }
+account:
+  binance.spot: { balances: { USDT: 10000 } }
+setup:
+  - chat: { as: owner, text: "ซื้อ BTC 50 USDT บน binance เลย" }
+timeline:
+  - advance: 5m
+expect:
+  - id: used-quote-amount
+    event: { kind: tool.call, fields: { name: create_order, args.quote_amount: "50" } }
+    count: ">= 1"
+  - id: one-paper-order
+    event: { kind: tool.call, fields: { name: create_order, is_error: false, args.confirm: true } }
+    count: 1
+  - id: nothing-reached-binance
+    order: { venue: binance }
+    count: 0
+    within: { from: "+0m", to: "+5m" }
+  - id: a-reply-reaches-the-owner
+    message: { to: owner, count: ">= 1" }

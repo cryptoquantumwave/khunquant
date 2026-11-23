@@ -187,10 +187,9 @@ func guardAutonomousWrite(
 		return outside()
 	}
 	rel = strings.ToLower(filepath.ToSlash(rel))
-	for _, p := range autonomousProtectedPaths {
-		if rel == p.Path || strings.HasPrefix(rel, p.Path+"/") {
-			return protected(p.Path, p.PromptFile, p.Use)
-		}
+	if i := protectedPathIndex(rel); i >= 0 {
+		p := autonomousProtectedPaths[i]
+		return protected(p.Path, p.PromptFile, p.Use)
 	}
 	if !autonomous {
 		return path, nil
@@ -207,6 +206,19 @@ func guardAutonomousWrite(
 		return outside()
 	}
 	return absTarget, nil
+}
+
+// protectedPathIndex returns the index in autonomousProtectedPaths of the first entry
+// that rel (workspace-relative, slash-separated, lower case) is or is under, or -1.
+// The write guard and the owner-only read guard (owner_reads.go) share it, so there
+// is one list and one match rule.
+func protectedPathIndex(rel string) int {
+	for i, p := range autonomousProtectedPaths {
+		if rel == p.Path || strings.HasPrefix(rel, p.Path+"/") {
+			return i
+		}
+	}
+	return -1
 }
 
 // ownerOnlyApplies reports whether the owner-only rule applies to this person's turn:

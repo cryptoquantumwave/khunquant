@@ -53,10 +53,26 @@ func TestControl_NonCommandCostsNothing(t *testing.T) {
 	if n := testing.AllocsPerRun(200, func() { _, _ = d.TryHandle(ctx, in) }); n != 0 {
 		t.Errorf("TryHandle allocates %v times for a message that is not a command", n)
 	}
+	// An owner's reply may point at a pending card, so it costs the one indexed read that
+	// finds out (and nothing else); every other dependency stays untouched.
+	lk := &lookupOnlyDeps{}
+	d = control.New(control.Deps{Cfg: cfgFor("telegram"), Approvals: lk, Sent: x, Attention: x, Kill: &fakeKill{}})
 	reply := in
 	reply.ReplyToMessageID = "42"
 	reply.Text = "thanks, that makes sense"
-	if n := testing.AllocsPerRun(200, func() { _, _ = d.TryHandle(ctx, reply) }); n != 0 {
-		t.Errorf("TryHandle allocates %v times for an ordinary reply", n)
+	if _, ok := d.TryHandle(ctx, reply); ok || lk.lookups != 1 {
+		t.Errorf("an ordinary reply: handled=%v lookups=%d, want false and 1", ok, lk.lookups)
 	}
+}
+
+// lookupOnlyDeps answers "not a card" to a lookup and panics on a decision.
+type lookupOnlyDeps struct{ lookups int }
+
+func (*lookupOnlyDeps) Decide(context.Context, string, string, bool, string) (approval.Proposal, error) {
+	panic("Decide called")
+}
+
+func (l *lookupOnlyDeps) PendingByCard(context.Context, string, string, string) (approval.Proposal, error) {
+	l.lookups++
+	return approval.Proposal{}, approval.ErrNotFound
 }

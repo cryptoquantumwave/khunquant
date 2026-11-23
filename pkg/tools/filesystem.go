@@ -249,8 +249,10 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	fs      fileSystem
-	maxSize int64
+	fs        fileSystem
+	maxSize   int64
+	workspace string
+	restrict  bool
 }
 
 func NewReadFileTool(
@@ -270,8 +272,10 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		fs:      buildFs(workspace, restrict, patterns),
-		maxSize: maxSize,
+		fs:        buildFs(workspace, restrict, patterns),
+		maxSize:   maxSize,
+		workspace: workspace,
+		restrict:  restrict,
 	}
 }
 
@@ -310,6 +314,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
+	}
+
+	if refusal := guardOwnerPrivateRead(ctx, t.Name(), t.workspace, t.restrict, path); refusal != nil {
+		return refusal
 	}
 
 	// offset (optional, default 0)
@@ -541,7 +549,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 }
 
 type ListDirTool struct {
-	fs fileSystem
+	fs        fileSystem
+	workspace string
+	restrict  bool
 }
 
 func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *ListDirTool {
@@ -549,7 +559,7 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &ListDirTool{fs: buildFs(workspace, restrict, patterns)}
+	return &ListDirTool{fs: buildFs(workspace, restrict, patterns), workspace: workspace, restrict: restrict}
 }
 
 func (t *ListDirTool) Name() string {
@@ -579,10 +589,17 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
+	if refusal := guardOwnerPrivateRead(ctx, t.Name(), t.workspace, t.restrict, path); refusal != nil {
+		return refusal
+	}
+
 	entries, err := t.fs.ReadDir(path)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
 	}
+	// A listing of an allowed directory (the workspace root) does not name the
+	// owner-private entries beside the public ones.
+	entries = filterOwnerPrivateEntries(ctx, t.workspace, t.restrict, path, entries)
 	return formatDirEntries(entries)
 }
 

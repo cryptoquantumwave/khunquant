@@ -88,6 +88,12 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
+	// send_file reads the file and posts it to the chat: the same owner-only rule as read_file.
+	// A relative path always resolves against the workspace here (validatePathWithAllowPaths).
+	if refusal := guardOwnerPrivateRead(ctx, NameSendFile, t.workspace, true, path); refusal != nil {
+		return refusal
+	}
+
 	// Prefer context-injected channel/chatID (set by ExecuteWithContext), fall back to SetContext values.
 	channel := ToolChannel(ctx)
 	if channel == "" {

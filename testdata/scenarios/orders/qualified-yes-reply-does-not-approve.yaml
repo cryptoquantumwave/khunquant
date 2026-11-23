@@ -61,3 +61,7 @@ expect:
     within: { from: "+0m", to: "+6m" }
   - id: reply-reached-the-agent
     message: { to: owner, contains: ["heard-half"], count: 1 }
+  # The owner is told the card can still be decided (U-T18): the buttons, /approve CODE,
+  # /reject CODE, or a plain yes/no reply. The hint is one message, apart from the agent's answer.
+  - id: hint-sent
+    message: { to: owner, contains: ["not taken as a decision", "/approve", "/reject"], count: 1 }
